@@ -1,0 +1,148 @@
+cmake_minimum_required(VERSION 3.31)
+project(GCLoader VERSION 1.0.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE INTERNAL "")
+endif()
+find_package(Git REQUIRED)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Set warning level
+if(MSVC)
+    add_compile_options(/W3)
+    # Set the source file encoding to UTF-8
+    add_compile_options(/utf-8)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+add_definitions(-DNOMINMAX)
+
+include(FetchContent)
+
+# Fetch SDL3
+FetchContent_Declare(
+        SDL3
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG 5ac37a8ffcf89da390404c1016833d56e2d67ae4 # v3.2.12
+        # URL https://github.com/libsdl-org/SDL/releases/download/preview-3.1.6/SDL3-3.1.6.tar.gz
+)
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(SDL3)
+
+# Fetch Minhook
+FetchContent_Declare(
+        minhook
+        GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+        GIT_TAG d862245d98fecd56dd7b1ca2f2e5185b75ecc780
+)
+FetchContent_MakeAvailable(minhook)
+
+FetchContent_Declare(
+        tomlplusplus
+        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+        GIT_TAG v3.4.0
+)
+FetchContent_MakeAvailable(tomlplusplus)
+export(TARGETS tomlplusplus_tomlplusplus  FILE "${CMAKE_BINARY_DIR}/tomlplusplus-config.cmake")
+set(tomlplusplus_DIR "${CMAKE_BINARY_DIR}")
+
+FetchContent_Declare(
+        reflectcpp
+        URL https://github.com/getml/reflect-cpp/archive/refs/tags/v0.19.0.zip
+)
+set(REFLECTCPP_TOML ON CACHE BOOL "" FORCE)
+set(REFLECTCPP_XML OFF CACHE BOOL "" FORCE)
+set(REFLECTCPP_USE_VCPKG OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(reflectcpp)
+
+# Fetch plog
+FetchContent_Declare(
+        plog
+        GIT_REPOSITORY https://github.com/SergiusTheBest/plog
+        GIT_TAG 1.1.10
+)
+FetchContent_MakeAvailable(plog)
+
+FetchContent_Declare(imgui_external
+        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b.tar.gz
+        EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(imgui_external)
+
+add_library(imgui
+        ${imgui_external_SOURCE_DIR}/imgui.cpp
+        ${imgui_external_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_external_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_external_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
+        ${imgui_external_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
+)
+
+target_include_directories(imgui PUBLIC ${imgui_external_SOURCE_DIR}
+        ${SDL3_SOURCE_DIR}/include)
+
+set(SOURCES
+        config.cpp
+        dllmain.cpp
+        iDmacDrv32.cpp
+        InputManager.cpp
+        RfidEmu.cpp
+)
+
+set(GUI_SOURCES
+        config.cpp
+        GUI_main.cpp
+)
+
+
+add_library(iDmacDrv32 SHARED ${SOURCES})
+target_include_directories(iDmacDrv32 PRIVATE
+        ${SDL3_SOURCE_DIR}/include
+        ${minhook_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+
+target_link_libraries(iDmacDrv32 PRIVATE
+        SDL3-static
+        ntdll
+        minhook
+        tomlplusplus::tomlplusplus
+        reflectcpp
+)
+
+add_executable(ConfigGUI ${GUI_SOURCES})
+target_include_directories(ConfigGUI PRIVATE
+        ${SDL3_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+target_link_libraries(ConfigGUI PRIVATE
+        SDL3-static
+        ntdll
+        tomlplusplus::tomlplusplus
+        reflectcpp
+        imgui
+)
+
+
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# Define the .def file
+set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/iDmacDrv32.def")
+
+if (MSVC)
+    # Add the .def file to the target properties
+    set_target_properties(iDmacDrv32 PROPERTIES LINK_FLAGS "/DEF:${DEF_FILE}")
+endif()
