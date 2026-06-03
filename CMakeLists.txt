@@ -159,6 +159,21 @@ target_include_directories(CountdownTimerFreezeTests PRIVATE
 )
 add_test(NAME CountdownTimerFreezeTests COMMAND CountdownTimerFreezeTests)
 
+add_executable(ConfigFeatureTests
+        tests/ConfigFeatureTests.cpp
+)
+target_include_directories(ConfigFeatureTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${SDL3_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+target_link_libraries(ConfigFeatureTests PRIVATE
+        tomlplusplus::tomlplusplus
+        reflectcpp
+)
+add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
+
 
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

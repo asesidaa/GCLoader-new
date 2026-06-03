@@ -144,12 +144,18 @@ int main(int argc, char *argv[]) {
             g_config = *load_result;
             SDL_Log("Loaded configuration from %s", g_config_path.c_str());
         } else {
-            SDL_Log("Error parsing %s: %s. Using default config.", g_config_path.c_str(), load_result.error().what());
-            // g_config already has defaults
+            SDL_Log("Error parsing %s: %s", g_config_path.c_str(), load_result.error().what());
+            SDL_DestroyRenderer(g_renderer);
+            SDL_DestroyWindow(g_window);
+            SDL_Quit();
+            return 1;
         }
     } else {
-        SDL_Log("Could not open %s for reading. Using default config.", g_config_path.c_str());
-        // g_config already has defaults
+        SDL_Log("Could not open %s for reading.", g_config_path.c_str());
+        SDL_DestroyRenderer(g_renderer);
+        SDL_DestroyWindow(g_window);
+        SDL_Quit();
+        return 1;
     }
 
 
@@ -402,6 +408,17 @@ int main(int argc, char *argv[]) {
                 "Deadzone for analog sticks (0-32767).\nHigher values require more stick movement to register.");
         }
 
+        ImGui::SeparatorText("Experimental");
+        bool enable_120fps_timer_patches = g_config.experimental().enable_120fps_timer_patches();
+        if (ImGui::Checkbox("120 FPS timer patches", &enable_120fps_timer_patches)) {
+            g_config.experimental().enable_120fps_timer_patches = enable_120fps_timer_patches;
+            g_config_dirty = true;
+        }
+        bool enable_timer_freeze_patches = g_config.experimental().enable_timer_freeze_patches();
+        if (ImGui::Checkbox("Timer freeze patches", &enable_timer_freeze_patches)) {
+            g_config.experimental().enable_timer_freeze_patches = enable_timer_freeze_patches;
+            g_config_dirty = true;
+        }
 
         // --- Mode Specific Settings ---
         if (ImGui::BeginTable("Bindings", 3,
@@ -441,6 +458,7 @@ int main(int argc, char *argv[]) {
                 DrawKeybindingRow("P1 Start", g_config.keyboard().p1_start());
                 DrawKeybindingRow("P2 Start", g_config.keyboard().p2_start());
                 DrawKeybindingRow("P2 Service", g_config.keyboard().p2_service());
+                DrawKeybindingRow("Card Read", g_config.keyboard().card_read());
             } else {
                 // Gamepad Mode
                 ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
@@ -479,6 +497,7 @@ int main(int argc, char *argv[]) {
                 DrawKeybindingRow("P1 Start", g_config.keyboard().p1_start());
                 DrawKeybindingRow("P2 Start", g_config.keyboard().p2_start());
                 DrawKeybindingRow("P2 Service", g_config.keyboard().p2_service());
+                DrawKeybindingRow("Card Read", g_config.keyboard().card_read());
             }
 
             ImGui::EndTable();

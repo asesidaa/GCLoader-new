@@ -1,6 +1,7 @@
 #include "FrameratePatch.h"
 
 #include "CountdownTimerFreeze.h"
+#include "config.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -688,8 +689,23 @@ void FrameratePatchInit() {
         return;
     }
 
-    PLOG_INFO << "GC120FPS: initializing full-120 runtime patches, exe base=" << reinterpret_cast<void*>(exe_base());
-    install_constant_patches();
-    install_safety_hooks();
+    PLOG_INFO << "GC120FPS: initializing framerate runtime config, exe base=" << reinterpret_cast<void*>(exe_base());
+    auto& config = ConfigManager::instance();
+    const bool enable_120fps_timer_patches = config.GetEnable120FpsTimerPatches();
+    const bool enable_timer_freeze_patches = config.GetEnableTimerFreezePatches();
+
+    PLOG_INFO << "GC120FPS: experimental enable_120fps_timer_patches="
+              << enable_120fps_timer_patches
+              << ", enable_timer_freeze_patches="
+              << enable_timer_freeze_patches;
+
+    if (enable_120fps_timer_patches) {
+        install_constant_patches();
+        install_safety_hooks();
+    } else {
+        PLOG_INFO << "GC120FPS: full-120 runtime patches disabled by config";
+    }
+
+    gc::timer_freeze::SetCountdownTimerFreezeEnabled(enable_timer_freeze_patches);
     gc::timer_freeze::CountdownTimerFreezeInit();
 }

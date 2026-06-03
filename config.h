@@ -38,8 +38,14 @@ struct KeyboardConfig
     rfl::Rename<"p1_start", SDL_Keycode> p1_start = SDLK_1;
     rfl::Rename<"p2_start", SDL_Keycode> p2_start = SDLK_2;
     rfl::Rename<"p2_service", SDL_Keycode> p2_service = SDLK_F2; // F2
+    rfl::Rename<"card_read", SDL_Keycode> card_read = SDLK_F4;
 };
 
+struct ExperimentalConfig
+{
+    rfl::Rename<"enable_120fps_timer_patches", bool> enable_120fps_timer_patches = false;
+    rfl::Rename<"enable_timer_freeze_patches", bool> enable_timer_freeze_patches = false;
+};
 
 struct GamepadConfig
 {
@@ -74,6 +80,7 @@ struct InputConfig
     // Nested tables require nested structs
     rfl::Rename<"keyboard", KeyboardConfig> keyboard;
     rfl::Rename<"gamepad", GamepadConfig> gamepad;
+    rfl::Rename<"experimental", ExperimentalConfig> experimental;
 };
 
 
@@ -115,6 +122,7 @@ public:
     SDL_Keycode GetTestKey() const { return config.keyboard.value().test.value(); } // e.g., F3 or from settings
     SDL_Keycode GetP1StartKey() const { return config.keyboard.value().p1_start.value(); } // e.g., 1
     SDL_Keycode GetP2StartKey() const { return config.keyboard.value().p2_start.value(); } // e.g., 2
+    SDL_Keycode GetCardReadKey() const { return config.keyboard.value().card_read.value(); }
 
     SDL_GamepadButton GetP1UpButton() const { return config.gamepad.value().p1_dpad_up.value(); }
     // e.g., SDL_GAMEPAD_BUTTON_DPAD_UP
@@ -152,6 +160,8 @@ public:
     Sint16 GetGamepadAxisThreshold() const { return config.axis_threshold.value(); } // e.g., 16384 or 24000
     int GetGamepadIndex() const { return config.gamepad_index.value(); } // e.g., 0 or 1
     InputMode GetInputMode() const { return config.input_mode.value(); }
+    bool GetEnable120FpsTimerPatches() const { return config.experimental.value().enable_120fps_timer_patches.value(); }
+    bool GetEnableTimerFreezePatches() const { return config.experimental.value().enable_timer_freeze_patches.value(); }
 
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;

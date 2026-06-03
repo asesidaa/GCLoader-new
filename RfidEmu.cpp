@@ -2,8 +2,12 @@
 
 // ORIGINALL BASED ON ttx_monitor, modified for RFID. https://github.com/zxmarcos/ttx_monitor
 
+#include <iomanip>
 #include <queue>
+#include "config.h"
 #include "MinHook.h"
+#include "WinKeyMapping.h"
+#include "plog/Log.h"
 
 
 #define JVS_TRUE				0x01
@@ -45,6 +49,7 @@ typedef unsigned short UINT16;
 HANDLE hConnection = (HANDLE)0x1337;
 
 static const char *Rfid_IO_Id = "TAITO CORP.;RFID CTRL P.C.B.;Ver1.00;";
+static int g_cardReadVirtualKey = VK_F4;
 
 struct jvs_command_def {
 	UINT8 params;
@@ -932,7 +937,7 @@ static DWORD WINAPI InsertCardThread(LPVOID)
 	static bool keyDown;
 	while (true)
 	{
-		if (GetAsyncKeyState(VK_F4))
+		if (g_cardReadVirtualKey != 0 && (GetAsyncKeyState(g_cardReadVirtualKey) & 0x8000) != 0)
 		{
 			if (!keyDown)
 			{
@@ -951,6 +956,19 @@ static DWORD WINAPI InsertCardThread(LPVOID)
 
 void RfidEmuInit()
 {
+	const auto cardReadKey = ConfigManager::instance().GetCardReadKey();
+	g_cardReadVirtualKey = SdlKeycodeToVirtualKey(cardReadKey);
+	if (g_cardReadVirtualKey == 0)
+	{
+		PLOG_WARNING << "RFID: configured card_read key '" << KeycodeToString(cardReadKey)
+		             << "' cannot be mapped to a Win32 virtual key; card toggle disabled";
+	}
+	else
+	{
+		PLOG_INFO << "RFID: card_read key=" << KeycodeToString(cardReadKey)
+		          << " vk=0x" << std::hex << g_cardReadVirtualKey << std::dec;
+	}
+
 	MH_Initialize();
 	CreateDirectoryA("OpenParrot", nullptr);
 	MH_CreateHookApi(L"kernel32.dll", "FindFirstFileA", FindFirstFileAWrap, (void**)&g_origFindFirstFileA);

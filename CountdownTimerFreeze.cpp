@@ -11,7 +11,7 @@
 namespace gc::timer_freeze {
 namespace {
 
-std::atomic_bool g_countdown_timer_freeze_enabled{true};
+std::atomic_bool g_countdown_timer_freeze_enabled{false};
 std::atomic_bool g_countdown_timer_initialized{false};
 std::atomic_bool g_countdown_timer_patches_applied{false};
 
