@@ -3,6 +3,47 @@
 #include "plog/Log.h"
 #include "plog/Initializers/RollingFileInitializer.h"
 #include <vector>
+#include <iomanip>
+
+namespace {
+
+const char* input_mode_name(InputMode mode)
+{
+    switch (mode)
+    {
+    case InputMode::Keyboard:
+        return "Keyboard";
+    case InputMode::Gamepad:
+        return "Gamepad";
+    default:
+        return "Unknown";
+    }
+}
+
+const char* sdl_event_type_name(Uint32 type)
+{
+    switch (type)
+    {
+    case SDL_EVENT_KEY_DOWN:
+        return "KEY_DOWN";
+    case SDL_EVENT_KEY_UP:
+        return "KEY_UP";
+    case SDL_EVENT_GAMEPAD_ADDED:
+        return "GAMEPAD_ADDED";
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        return "GAMEPAD_REMOVED";
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        return "GAMEPAD_BUTTON_DOWN";
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        return "GAMEPAD_BUTTON_UP";
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        return "GAMEPAD_AXIS_MOTION";
+    default:
+        return "OTHER";
+    }
+}
+
+}
 
 InputManager::InputManager()
 {
@@ -67,6 +108,16 @@ void InputManager::LoadConfig()
     m_inputMode = config.GetInputMode();
     
     PLOG_INFO << "Input configuration loaded.\n" ;
+    PLOG_INFO << "GC120FPS_INPUT: mode=" << input_mode_name(m_inputMode)
+              << " gamepad_index=" << m_targetGamepadIndex
+              << " axis_threshold=" << m_axisThreshold
+              << " key_start_p1=" << SDL_GetKeyName(keyP1Start)
+              << " key_start_p2=" << SDL_GetKeyName(keyP2Start)
+              << " key_test=" << SDL_GetKeyName(keyTest)
+              << " key_service1=" << SDL_GetKeyName(keyService1)
+              << " key_service2=" << SDL_GetKeyName(keyService2)
+              << " key_service3=" << SDL_GetKeyName(keyService3)
+              << " key_p1_button1=" << SDL_GetKeyName(keyP1Button1);
     // Log the loaded key codes and button mappings if needed for debugging
 }
 
@@ -181,6 +232,32 @@ void InputManager::ReinitializeGamepad()
 
 void InputManager::HandleEvent(const SDL_Event& event)
 {
+    static uint64_t handled_events = 0;
+    ++handled_events;
+    switch (event.type)
+    {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        PLOG_INFO << "GC120FPS_INPUT: SDL event #" << handled_events
+                  << " type=" << sdl_event_type_name(event.type)
+                  << " key=" << SDL_GetKeyName(event.key.key)
+                  << " repeat=" << static_cast<int>(event.key.repeat)
+                  << " mode=" << input_mode_name(m_inputMode);
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        PLOG_INFO << "GC120FPS_INPUT: SDL event #" << handled_events
+                  << " type=" << sdl_event_type_name(event.type)
+                  << " which=" << event.gdevice.which
+                  << " mode=" << input_mode_name(m_inputMode);
+        break;
+    default:
+        break;
+    }
+
     switch (event.type)
     {
     case SDL_EVENT_GAMEPAD_ADDED:
@@ -248,51 +325,71 @@ void InputManager::HandleEvent(const SDL_Event& event)
 
 void InputManager::UpdateKeyState(SDL_Keycode key, bool pressed)
 {
+    const DWORD before = GetInput();
+    bool matched = false;
+
+    // These are cabinet/system buttons, so they must work in every input mode.
+    if (key == keyService1) { stateService1 = pressed; matched = true; }
+    else if (key == keyService2) { stateService2 = pressed; matched = true; }
+    else if (key == keyService3) { stateService3 = pressed; matched = true; }
+    else if (key == keyP1Start) { stateP1Start = pressed; matched = true; }
+    else if (key == keyP2Start) { stateP2Start = pressed; matched = true; }
+    else if (key == keyTest) { stateTest = pressed; matched = true; }
+    else if (key == keyP2Service) { stateP2Service = pressed; matched = true; }
+
     if (m_inputMode == InputMode::Keyboard)
     {
         // Only update the main control when in kb mode
-        if (key == keyP1Up) stateP1Up = pressed;
-        else if (key == keyP1Down) stateP1Down = pressed;
-        else if (key == keyP1Left) stateP1Left = pressed;
-        else if (key == keyP1Right) stateP1Right = pressed;
-        else if (key == keyP1Button1) stateP1Button1 = pressed;
+        if (key == keyP1Up) { stateP1Up = pressed; matched = true; }
+        else if (key == keyP1Down) { stateP1Down = pressed; matched = true; }
+        else if (key == keyP1Left) { stateP1Left = pressed; matched = true; }
+        else if (key == keyP1Right) { stateP1Right = pressed; matched = true; }
+        else if (key == keyP1Button1) { stateP1Button1 = pressed; matched = true; }
 
-        else if (key == keyP2Up) stateP2Up = pressed;
-        else if (key == keyP2Down) stateP2Down = pressed;
-        else if (key == keyP2Left) stateP2Left = pressed;
-        else if (key == keyP2Right) stateP2Right = pressed;
-        else if (key == keyP2Button1) stateP2Button1 = pressed;
-        return;
+        else if (key == keyP2Up) { stateP2Up = pressed; matched = true; }
+        else if (key == keyP2Down) { stateP2Down = pressed; matched = true; }
+        else if (key == keyP2Left) { stateP2Left = pressed; matched = true; }
+        else if (key == keyP2Right) { stateP2Right = pressed; matched = true; }
+        else if (key == keyP2Button1) { stateP2Button1 = pressed; matched = true; }
     }
-    // Update service/test regardless of modes
-    if (key == keyService1) stateService1 = pressed;
-    else if (key == keyService2) stateService2 = pressed;
-    else if (key == keyService3) stateService3 = pressed;
-    else if (key == keyP1Start) stateP1Start = pressed;
-    else if (key == keyP2Start) stateP2Start = pressed;
-    else if (key == keyTest) stateTest = pressed;
-    else if (key == keyP2Service) stateP2Service = pressed;
+
+    PLOG_INFO << "GC120FPS_INPUT: UpdateKeyState key=" << SDL_GetKeyName(key)
+              << " pressed=" << pressed
+              << " matched=" << matched
+              << " before=0x" << std::hex << before
+              << " after=0x" << GetInput() << std::dec;
 
 }
 
 void InputManager::UpdateButtonState(SDL_GamepadButton button, bool pressed)
 {
+    const DWORD before = GetInput();
+    bool matched = false;
     if (m_inputMode == InputMode::Keyboard)
     {
+        PLOG_INFO << "GC120FPS_INPUT: UpdateButtonState ignored in keyboard mode button="
+                  << static_cast<int>(button)
+                  << " pressed=" << pressed;
         return;
     }
     // P1 Directions (D-Pad)
-    if (button == gpButtonP1Up) stateP1Up = pressed;
-    else if (button == gpButtonP1Down) stateP1Down = pressed;
-    else if (button == gpButtonP1Left) stateP1Left = pressed;
-    else if (button == gpButtonP1Right) stateP1Right = pressed;
-    else if (button == gpButtonP2Up) stateP2Up = pressed;
-    else if (button == gpButtonP2Down) stateP2Down = pressed;
-    else if (button == gpButtonP2Left) stateP2Left = pressed;
-    else if (button == gpButtonP2Right) stateP2Right = pressed;
+    if (button == gpButtonP1Up) { stateP1Up = pressed; matched = true; }
+    else if (button == gpButtonP1Down) { stateP1Down = pressed; matched = true; }
+    else if (button == gpButtonP1Left) { stateP1Left = pressed; matched = true; }
+    else if (button == gpButtonP1Right) { stateP1Right = pressed; matched = true; }
+    else if (button == gpButtonP2Up) { stateP2Up = pressed; matched = true; }
+    else if (button == gpButtonP2Down) { stateP2Down = pressed; matched = true; }
+    else if (button == gpButtonP2Left) { stateP2Left = pressed; matched = true; }
+    else if (button == gpButtonP2Right) { stateP2Right = pressed; matched = true; }
     // P1/P2 Buttons
-    else if (button == gpButtonP1Button1) stateP1Button1 = pressed;
-    else if (button == gpButtonP2Button1) stateP2Button1 = pressed;
+    else if (button == gpButtonP1Button1) { stateP1Button1 = pressed; matched = true; }
+    else if (button == gpButtonP2Button1) { stateP2Button1 = pressed; matched = true; }
+
+    PLOG_INFO << "GC120FPS_INPUT: UpdateButtonState button=" << static_cast<int>(button)
+              << " pressed=" << pressed
+              << " matched=" << matched
+              << " before=0x" << std::hex << before
+              << " after=0x" << GetInput() << std::dec;
 
 }
 
@@ -412,6 +509,14 @@ DWORD InputManager::GetInput() const
     if (stateP2Left) inputState |= InputBits::P2_LEFT;
     if (stateP2Right) inputState |= InputBits::P2_RIGHT;
     if (stateP2Button1) inputState |= InputBits::P2_BUTTON_1;
+
+    static DWORD last_logged_input = 0;
+    if (inputState != last_logged_input)
+    {
+        PLOG_INFO << "GC120FPS_INPUT: GetInput state changed 0x" << std::hex
+                  << last_logged_input << " -> 0x" << inputState << std::dec;
+        last_logged_input = inputState;
+    }
 
     return inputState;
 }

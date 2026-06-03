@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.31)
 project(GCLoader VERSION 1.0.0 LANGUAGES C CXX)
 
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 set(CMAKE_CXX_STANDARD 23)
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE INTERNAL "")
@@ -41,7 +42,7 @@ FetchContent_MakeAvailable(SDL3)
 FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-        GIT_TAG d862245d98fecd56dd7b1ca2f2e5185b75ecc780
+        GIT_TAG 05c06c5bbca226b72ffb40fc0caaef33bcaf6f74
 )
 FetchContent_MakeAvailable(minhook)
 
@@ -53,6 +54,17 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(tomlplusplus)
 export(TARGETS tomlplusplus_tomlplusplus  FILE "${CMAKE_BINARY_DIR}/tomlplusplus-config.cmake")
 set(tomlplusplus_DIR "${CMAKE_BINARY_DIR}")
+
+set(SAFETYHOOK_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(SAFETYHOOK_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(SAFETYHOOK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SAFETYHOOK_FETCH_ZYDIS ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+        safetyhook
+        GIT_REPOSITORY https://github.com/cursey/safetyhook.git
+        GIT_TAG v0.6.9
+)
+FetchContent_MakeAvailable(safetyhook)
 
 FetchContent_Declare(
         reflectcpp
@@ -91,8 +103,10 @@ target_include_directories(imgui PUBLIC ${imgui_external_SOURCE_DIR}
         ${SDL3_SOURCE_DIR}/include)
 
 set(SOURCES
+        CountdownTimerFreeze.cpp
         config.cpp
         dllmain.cpp
+        FrameratePatch.cpp
         iDmacDrv32.cpp
         InputManager.cpp
         RfidEmu.cpp
@@ -116,6 +130,7 @@ target_link_libraries(iDmacDrv32 PRIVATE
         SDL3-static
         ntdll
         minhook
+        safetyhook::safetyhook
         tomlplusplus::tomlplusplus
         reflectcpp
 )
@@ -133,6 +148,16 @@ target_link_libraries(ConfigGUI PRIVATE
         reflectcpp
         imgui
 )
+
+enable_testing()
+
+add_executable(CountdownTimerFreezeTests
+        tests/CountdownTimerFreezeTests.cpp
+)
+target_include_directories(CountdownTimerFreezeTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME CountdownTimerFreezeTests COMMAND CountdownTimerFreezeTests)
 
 
 if(MSVC)

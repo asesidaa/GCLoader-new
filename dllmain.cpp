@@ -5,6 +5,7 @@
 #include "plog/Initializers/RollingFileInitializer.h"
 #include "RfidEmu.h"
 #include "SDL3/SDL.h"
+#include "FrameratePatch.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -25,6 +26,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         
             RfidEmuInit();
             PLOG_DEBUG << "Rfid init complete!" << std::endl;
+
+            FrameratePatchInit();
+            PLOG_DEBUG << "120 FPS runtime patch init complete!" << std::endl;
 
             break;
         }

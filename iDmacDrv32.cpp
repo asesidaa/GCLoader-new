@@ -3,6 +3,7 @@
 #include "plog/Log.h"
 #include "plog/Initializers/RollingFileInitializer.h"
 #include <format>
+#include <cstdint>
 
 #include "SDL3/SDL.h"
 #define SDL_MAIN_NOIMPL
@@ -13,6 +14,51 @@
 inline InputManager manager;
 inline bool inited = false;
 inline SDL_Window *window;
+
+namespace {
+
+const char* register_read_name(DWORD command)
+{
+    switch (static_cast<RegisterReadType>(command))
+    {
+    case RegisterReadType::DMAC_ID:
+        return "DMAC_ID";
+    case RegisterReadType::FIO_NODE_0_STATUS:
+        return "FIO_NODE_0_STATUS";
+    case RegisterReadType::FIO_NODE_1_STATUS:
+        return "FIO_NODE_1_STATUS";
+    case RegisterReadType::FIO_NODE_0_INPUT:
+        return "FIO_NODE_0_INPUT";
+    case RegisterReadType::FIO_NODE0_ANALOG1:
+        return "FIO_NODE0_ANALOG1";
+    case RegisterReadType::FIO_NODE0_ANALOG2:
+        return "FIO_NODE0_ANALOG2";
+    case RegisterReadType::FIO_NODE0_ANALOG3:
+        return "FIO_NODE0_ANALOG3";
+    case RegisterReadType::FIO_NODE_1_INPUT:
+        return "FIO_NODE_1_INPUT";
+    case RegisterReadType::FIO_NODE1_ANALOG1:
+        return "FIO_NODE1_ANALOG1";
+    case RegisterReadType::FIO_NODE1_ANALOG2:
+        return "FIO_NODE1_ANALOG2";
+    case RegisterReadType::FIO_NODE1_ANALOG3:
+        return "FIO_NODE1_ANALOG3";
+    case RegisterReadType::FIO_NODE_0_COINSLOT_1:
+        return "FIO_NODE_0_COINSLOT_1";
+    case RegisterReadType::FIO_NODE_0_COINSLOT_2:
+        return "FIO_NODE_0_COINSLOT_2";
+    case RegisterReadType::FIO_NODE_1_COINSLOT_1:
+        return "FIO_NODE_1_COINSLOT_1";
+    case RegisterReadType::FIO_NODE_1_COINSLOT_2:
+        return "FIO_NODE_1_COINSLOT_2";
+    case RegisterReadType::FIO_HUB_PORT_1:
+        return "FIO_HUB_PORT_1";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+}
 
 extern "C" __declspec(dllexport) DWORD __cdecl iDmacDrvOpen(int deviceId, LPVOID outBuffer, LPVOID lpSomeFlag) {
     PLOG_VERBOSE << "iDmacDrvOpen" << std::endl;
@@ -76,11 +122,23 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvDmaWrite(int a1, void* lp, 
 
 extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, DWORD CommandCode, LPVOID OutBuffer, LPVOID DeviceResult) {
     PLOG_VERBOSE << std::format("iDmacDrvRegisterRead, command {:#x}", CommandCode) << std::endl;
+    static uint64_t total_reads = 0;
+    static uint64_t node0_input_reads = 0;
+    static uint64_t node0_nonzero_reads = 0;
+    static uint64_t sdl_events = 0;
+    static uint64_t unknown_reads = 0;
+    static DWORD last_node0_input = 0;
+
+    ++total_reads;
     auto readType = static_cast<RegisterReadType>(CommandCode);
     DWORD result;
     SDL_Event event;
     if (SDL_PollEvent (&event) != false)
     {
+        ++sdl_events;
+        PLOG_INFO << "GC120FPS_INPUT: idmac SDL_PollEvent hit before command="
+                  << register_read_name(CommandCode)
+                  << " total_events=" << sdl_events;
         manager.HandleEvent(event);
     }
     switch (readType)
@@ -95,7 +153,12 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, 
         result = 0x00FF0000;
         break;
     case RegisterReadType::FIO_NODE_0_INPUT:
+        ++node0_input_reads;
         result = manager.GetInput();
+        if (result != 0)
+        {
+            ++node0_nonzero_reads;
+        }
         break;
     case RegisterReadType::FIO_NODE0_ANALOG1:
         result = 0;
@@ -148,8 +211,32 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, 
         result = 0;
         break;
     default:
+        ++unknown_reads;
         PLOG_DEBUG << std::format("Unknown command for iDmacDrvRegisterRead: {:#x}", CommandCode) << std::endl;
         result = 0;
+    }
+    if (readType == RegisterReadType::FIO_NODE_0_INPUT
+        && (result != last_node0_input || result != 0 || (node0_input_reads % 300) == 0))
+    {
+        PLOG_INFO << std::format(
+            "GC120FPS_INPUT: FIO_NODE_0_INPUT read#{} result={:#010x} changed={} nonzero_reads={} total_reads={} sdl_events={}",
+            node0_input_reads,
+            result,
+            result != last_node0_input,
+            node0_nonzero_reads,
+            total_reads,
+            sdl_events);
+        last_node0_input = result;
+    }
+    if ((total_reads % 2000) == 0)
+    {
+        PLOG_INFO << std::format(
+            "GC120FPS_INPUT: idmac summary total_reads={} node0_input_reads={} node0_nonzero_reads={} sdl_events={} unknown_reads={}",
+            total_reads,
+            node0_input_reads,
+            node0_nonzero_reads,
+            sdl_events,
+            unknown_reads);
     }
     *static_cast<DWORD*>(OutBuffer) = result;
     *static_cast<DWORD*>(DeviceResult) = 0;
