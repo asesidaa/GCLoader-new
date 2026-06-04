@@ -39,6 +39,7 @@ constexpr uintptr_t kRvaAnimMovieClipGotoFrameInternal = 0x000DEA30;
 constexpr uintptr_t kRvaAnimMovieClipAdvanceOneTimelineFrame = 0x000DF940;
 constexpr uintptr_t kRvaNewsTaskUpdateLoadAndStateMachine = 0x00218A50;
 constexpr uintptr_t kRvaNoticeTaskUpdateStateMachine = 0x002544D0;
+constexpr uintptr_t kRvaStage3dClipFrameIndexStore = 0x00244054;
 
 constexpr uintptr_t kRvaIfblIntegerWaitStore = 0x002309D4;
 constexpr uintptr_t kRvaIfblLoopCounterStore = 0x00230AB6;
@@ -65,6 +66,7 @@ safetyhook::InlineHook g_anim_movieclip_goto_frame_hook{};
 safetyhook::InlineHook g_anim_movieclip_advance_hook{};
 safetyhook::InlineHook g_news_task_update_hook{};
 safetyhook::InlineHook g_notice_task_update_hook{};
+safetyhook::MidHook g_stage_3d_clip_frame_index_hook{};
 safetyhook::MidHook g_ifbl_integer_wait_store_hook{};
 safetyhook::MidHook g_ifbl_loop_counter_store_hook{};
 safetyhook::MidHook g_stage_bgm_preload_delay_hook{};
@@ -84,6 +86,8 @@ std::atomic_uint64_t g_news_task_update_calls{0};
 std::atomic_uint64_t g_news_task_update_skips{0};
 std::atomic_uint64_t g_notice_task_update_calls{0};
 std::atomic_uint64_t g_notice_task_update_skips{0};
+std::atomic_uint64_t g_stage_3d_clip_frame_indices{0};
+std::atomic_uint64_t g_stage_3d_clip_frame_halves{0};
 std::atomic_uint64_t g_ifbl_integer_wait_stores{0};
 std::atomic_uint64_t g_ifbl_loop_counter_stores{0};
 std::atomic_uint64_t g_stage_bgm_preload_delay_calls{0};
@@ -369,6 +373,10 @@ void hook_gwmain_update_phase(safetyhook::Context& ctx) {
                   << g_notice_task_update_calls.load(std::memory_order_relaxed)
                   << "/skip="
                   << g_notice_task_update_skips.load(std::memory_order_relaxed)
+                  << " stage3d_clip_frame="
+                  << g_stage_3d_clip_frame_indices.load(std::memory_order_relaxed)
+                  << "/halved="
+                  << g_stage_3d_clip_frame_halves.load(std::memory_order_relaxed)
                   << " ifbl_waits="
                   << g_ifbl_integer_wait_stores.load(std::memory_order_relaxed)
                   << "/loops="
@@ -433,6 +441,13 @@ int __fastcall hook_notice_task_update_state_machine(void* self, void*) {
     }
     g_notice_task_update_calls.fetch_add(1, std::memory_order_relaxed);
     return g_notice_task_update_hook.unsafe_thiscall<int>(self);
+}
+
+void hook_stage_3d_clip_frame_index_store(safetyhook::Context& ctx) {
+    g_stage_3d_clip_frame_indices.fetch_add(1, std::memory_order_relaxed);
+    // Stage *_clip.dat masks are authored at 60Hz; ms-based stage timelines stay unscaled.
+    ctx.ecx /= 2;
+    g_stage_3d_clip_frame_halves.fetch_add(1, std::memory_order_relaxed);
 }
 
 void hook_ifbl_integer_wait_store(safetyhook::Context& ctx) {
@@ -614,6 +629,22 @@ void install_safety_hooks() {
         PLOG_ERROR << "GC120FPS: failed to hook notice task update";
     } else {
         PLOG_INFO << "GC120FPS: hooked optional notice authored-60Hz gate";
+    }
+
+    const uint8_t expected_stage_3d_clip_frame_index_store[] = {0x89, 0x4D, 0xF8};
+    if (!bytes_match(rva_addr(kRvaStage3dClipFrameIndexStore),
+                     expected_stage_3d_clip_frame_index_store,
+                     sizeof(expected_stage_3d_clip_frame_index_store))) {
+        PLOG_ERROR << "GC120FPS: stage 3D clip frame-index store instruction mismatch";
+    } else {
+        g_stage_3d_clip_frame_index_hook = safetyhook::create_mid(
+            rva_ptr(kRvaStage3dClipFrameIndexStore),
+            hook_stage_3d_clip_frame_index_store);
+        if (!g_stage_3d_clip_frame_index_hook) {
+            PLOG_ERROR << "GC120FPS: failed to midhook stage 3D clip frame-index store";
+        } else {
+            PLOG_INFO << "GC120FPS: midhooked stage 3D clip frame index as authored-60Hz";
+        }
     }
 
     g_ifbl_integer_wait_store_hook = safetyhook::create_mid(
