@@ -130,6 +130,16 @@ int expect_vk(int actual, int expected, const char* name) {
     return 1;
 }
 
+int expect_string(const std::string& actual, const std::string& expected, const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+
+    std::cerr << "Expected " << name << " to be '" << expected
+              << "', got '" << actual << "'\n";
+    return 1;
+}
+
 } // namespace
 
 int main() {
@@ -184,6 +194,17 @@ enable_120fps_timer_patches = false
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_A), 'A', "A");
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_UNKNOWN), 0, "unknown");
     failures += expect_vk(SdlKeycodeToVirtualKey(custom.keyboard().card_read()), VK_F8, "custom card_read");
+
+    const auto punctuation = parse_config(
+        std::string(kRequiredConfigPrefix) + R"toml(
+card_read = ';'
+
+[experimental]
+enable_120fps_timer_patches = false
+enable_timer_freeze_patches = false
+)toml");
+    failures += expect_key(punctuation.keyboard().card_read(), SDLK_SEMICOLON, "semicolon card_read");
+    failures += expect_string(KeycodeToString(SDLK_SEMICOLON), ";", "semicolon display name");
 
     return failures == 0 ? 0 : 1;
 }

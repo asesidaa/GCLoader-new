@@ -3,7 +3,14 @@
 #include <SDL3/SDL.h>
 #include <rfl.hpp>
 #include <rfl/parsing/Parser.hpp> // Or specific parser headers if needed
+#include <algorithm>
+#include <cctype>
 #include <string>
+#include <unordered_map>
+
+inline bool IsPrintableAsciiKey(SDL_Keycode keycode) {
+    return keycode >= 0x21 && keycode <= 0x7e;
+}
 
 inline std::string KeycodeToString(SDL_Keycode keycode) {
     static const std::unordered_map<SDL_Keycode, std::string> keycode_map = {
@@ -27,7 +34,13 @@ inline std::string KeycodeToString(SDL_Keycode keycode) {
     };
 
     auto it = keycode_map.find(keycode);
-    return it != keycode_map.end() ? it->second : "unknown";
+    if (it != keycode_map.end()) {
+        return it->second;
+    }
+    if (IsPrintableAsciiKey(keycode)) {
+        return std::string(1, static_cast<char>(keycode));
+    }
+    return "unknown";
 }
 
 inline std::string GamepadButtonToString(SDL_GamepadButton button) {
@@ -152,6 +165,12 @@ inline SDL_Keycode StringToKeycode(const std::string& str) {
     if (lower_str == "insert") return SDLK_INSERT;
     if (lower_str == "printscreen") return SDLK_PRINTSCREEN;
     if (lower_str == "pause") return SDLK_PAUSE;
+    if (lower_str.size() == 1) {
+        const auto character = static_cast<unsigned char>(lower_str.front());
+        if (character >= 0x21 && character <= 0x7e) {
+            return static_cast<SDL_Keycode>(character);
+        }
+    }
 
     return SDLK_UNKNOWN; // Default fallback
 }
