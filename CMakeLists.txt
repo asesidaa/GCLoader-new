@@ -175,6 +175,15 @@ target_link_libraries(ConfigFeatureTests PRIVATE
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
 
+add_executable(NesysServicePatchTests
+        NesysServiceProcess.cpp
+        tests/NesysServicePatchTests.cpp
+)
+target_include_directories(NesysServicePatchTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME NesysServicePatchTests COMMAND NesysServicePatchTests)
+
 add_executable(TestModeStorageRedirectTests
         TestModeStorageRedirect.cpp
         tests/TestModeStorageRedirectTests.cpp
