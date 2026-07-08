@@ -24,5 +24,6 @@ bool ShouldRunGameOnlyInitialization(ProcessRole role);
 const char* ProcessRoleName(ProcessRole role);
 DWORD AddCreateSuspendedFlag(DWORD creation_flags);
 bool WasCreateSuspendedRequested(DWORD creation_flags);
+bool ShouldResumeAfterServiceInjection(bool caller_requested_suspended);
 
 } // namespace gc::nesys_service

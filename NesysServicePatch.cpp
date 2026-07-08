@@ -144,9 +144,9 @@ bool InjectCurrentDllIntoProcess(HANDLE process) {
     const DWORD wait_result = WaitForSingleObject(thread, 5000);
     if (wait_result != WAIT_OBJECT_0) {
         PLOG_ERROR << "NesysServicePatch: injection thread wait failed result=" << wait_result
-                   << " gle=" << GetLastError();
+                   << " gle=" << GetLastError()
+                   << "; leaving remote DLL path allocated because LoadLibraryW may still be reading it";
         CloseHandle(thread);
-        VirtualFreeEx(process, remote_path, 0, MEM_RELEASE);
         return false;
     }
 
@@ -244,7 +244,7 @@ BOOL WINAPI CreateProcessAWrap(
         PLOG_ERROR << "NesysServicePatch: CreateProcessA returned success without process information";
     }
 
-    const bool should_resume = !caller_requested_suspended || !injected;
+    const bool should_resume = ShouldResumeAfterServiceInjection(caller_requested_suspended);
     if (should_resume &&
         lpProcessInformation != nullptr &&
         lpProcessInformation->hThread != nullptr) {
@@ -257,7 +257,11 @@ BOOL WINAPI CreateProcessAWrap(
     }
 
     if (!injected) {
-        PLOG_ERROR << "NesysServicePatch: child DLL injection failed; service resumed fail-open";
+        if (caller_requested_suspended) {
+            PLOG_ERROR << "NesysServicePatch: child DLL injection failed; leaving service suspended per caller request";
+        } else {
+            PLOG_ERROR << "NesysServicePatch: child DLL injection failed; service resumed fail-open";
+        }
     }
 
     SetLastError(create_process_error);

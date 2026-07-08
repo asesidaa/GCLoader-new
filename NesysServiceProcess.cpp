@@ -174,4 +174,8 @@ bool WasCreateSuspendedRequested(DWORD creation_flags) {
     return (creation_flags & CREATE_SUSPENDED) != 0;
 }
 
+bool ShouldResumeAfterServiceInjection(bool caller_requested_suspended) {
+    return !caller_requested_suspended;
+}
+
 } // namespace gc::nesys_service

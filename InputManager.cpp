@@ -1,7 +1,6 @@
 ﻿#include "InputManager.h"
 #include "config.h" // Assuming this exists and is set up
 #include "plog/Log.h"
-#include "plog/Initializers/RollingFileInitializer.h"
 #include <vector>
 #include <iomanip>
 
@@ -47,7 +46,6 @@ const char* sdl_event_type_name(Uint32 type)
 
 InputManager::InputManager()
 {
-    plog::init(plog::info, "loader-log.txt");
     LoadConfig(); // Load mappings from ConfigManager
     ReinitializeGamepad(); // Attempt to open the configured gamepad
 }

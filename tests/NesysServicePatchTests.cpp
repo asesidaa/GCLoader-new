@@ -119,6 +119,12 @@ int main() {
     failures += expect_false(
         gc::nesys_service::WasCreateSuspendedRequested(CREATE_NO_WINDOW),
         "detect caller did not request suspended");
+    failures += expect_true(
+        gc::nesys_service::ShouldResumeAfterServiceInjection(false),
+        "resume service when caller did not request suspended");
+    failures += expect_false(
+        gc::nesys_service::ShouldResumeAfterServiceInjection(true),
+        "preserve caller requested suspended service");
 
     return failures == 0 ? 0 : 1;
 }
