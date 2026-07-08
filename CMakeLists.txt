@@ -109,6 +109,8 @@ set(SOURCES
         FrameratePatch.cpp
         iDmacDrv32.cpp
         InputManager.cpp
+        NesysServicePatch.cpp
+        NesysServiceProcess.cpp
         RfidEmu.cpp
         TestModeStorageRedirect.cpp
 )
