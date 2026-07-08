@@ -58,6 +58,23 @@ std::string next_token(std::string_view command_line, std::size_t& offset) {
     return std::string{command_line.substr(start, offset - start)};
 }
 
+std::string current_process_image_path() {
+    std::string buffer(MAX_PATH, '\0');
+    for (;;) {
+        const DWORD copied = GetModuleFileNameA(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (copied == 0) {
+            return {};
+        }
+
+        if (copied < buffer.size() - 1) {
+            buffer.resize(copied);
+            return buffer;
+        }
+
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
 } // namespace
 
 bool EqualsIgnoreCaseAscii(std::string_view left, std::string_view right) {
@@ -128,9 +145,8 @@ ProcessRole DetectProcessRoleFromImagePathA(std::string_view image_path) {
 }
 
 ProcessRole DetectCurrentProcessRole() {
-    char image_path[MAX_PATH]{};
-    const DWORD copied = GetModuleFileNameA(nullptr, image_path, static_cast<DWORD>(std::size(image_path)));
-    if (copied == 0 || copied >= std::size(image_path)) {
+    const auto image_path = current_process_image_path();
+    if (image_path.empty()) {
         return ProcessRole::Game;
     }
     return DetectProcessRoleFromImagePathA(image_path);

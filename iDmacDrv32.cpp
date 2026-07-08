@@ -11,11 +11,16 @@
 #include "SDL3/SDL_main.h"
 #include "InputManager.h"
 
-inline InputManager manager;
 inline bool inited = false;
 inline SDL_Window *window;
 
 namespace {
+
+InputManager& GetInputManager()
+{
+    static InputManager manager;
+    return manager;
+}
 
 const char* register_read_name(DWORD command)
 {
@@ -133,13 +138,14 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, 
     auto readType = static_cast<RegisterReadType>(CommandCode);
     DWORD result;
     SDL_Event event;
+    InputManager& inputManager = GetInputManager();
     if (SDL_PollEvent (&event) != false)
     {
         ++sdl_events;
         PLOG_INFO << "GC120FPS_INPUT: idmac SDL_PollEvent hit before command="
                   << register_read_name(CommandCode)
                   << " total_events=" << sdl_events;
-        manager.HandleEvent(event);
+        inputManager.HandleEvent(event);
     }
     switch (readType)
     {
@@ -154,7 +160,7 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, 
         break;
     case RegisterReadType::FIO_NODE_0_INPUT:
         ++node0_input_reads;
-        result = manager.GetInput();
+        result = inputManager.GetInput();
         if (result != 0)
         {
             ++node0_nonzero_reads;

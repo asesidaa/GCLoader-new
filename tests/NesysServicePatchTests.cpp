@@ -87,6 +87,13 @@ int main() {
         gc::nesys_service::DetectProcessRoleFromImagePathA("C:\\Games\\GC\\NesysService.exe")
             == gc::nesys_service::ProcessRole::Service,
         "service role from image path");
+    std::string long_service_path = "C:\\Games\\GC\\";
+    long_service_path.append(300, 'x');
+    long_service_path.append("\\NesysService.exe");
+    failures += expect_true(
+        gc::nesys_service::DetectProcessRoleFromImagePathA(long_service_path)
+            == gc::nesys_service::ProcessRole::Service,
+        "service role from long image path");
     failures += expect_true(
         gc::nesys_service::DetectProcessRoleFromImagePathA("C:\\Games\\GC\\game.exe")
             == gc::nesys_service::ProcessRole::Game,
