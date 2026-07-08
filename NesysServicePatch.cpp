@@ -3,6 +3,7 @@
 #include "NesysServiceProcess.h"
 #include "config.h"
 
+#include <Iphlpapi.h>
 #include <Windows.h>
 #include <atomic>
 #include <string>
@@ -27,9 +28,14 @@ using CreateProcessAFn = BOOL(WINAPI*)(
     LPSTARTUPINFOA,
     LPPROCESS_INFORMATION);
 
+using IpReleaseAddressFn = DWORD(WINAPI*)(PIP_ADAPTER_INDEX_MAP);
+using IpRenewAddressFn = DWORD(WINAPI*)(PIP_ADAPTER_INDEX_MAP);
+
 std::atomic_bool g_initialized{false};
 HMODULE g_loader_module = nullptr;
 CreateProcessAFn g_original_create_process_a = nullptr;
+IpReleaseAddressFn g_original_ip_release_address = nullptr;
+IpRenewAddressFn g_original_ip_renew_address = nullptr;
 
 bool EnsureMinHookInitialized() {
     const auto status = MH_Initialize();
@@ -165,6 +171,22 @@ bool InjectCurrentDllIntoProcess(HANDLE process) {
     return true;
 }
 
+DWORD AdapterIndexOrZero(PIP_ADAPTER_INDEX_MAP adapter_info) {
+    return adapter_info != nullptr ? adapter_info->Index : 0;
+}
+
+DWORD WINAPI IpReleaseAddressWrap(PIP_ADAPTER_INDEX_MAP adapter_info) {
+    PLOG_INFO << "NesysServicePatch: suppressed IpReleaseAddress adapter_index="
+              << AdapterIndexOrZero(adapter_info);
+    return NO_ERROR;
+}
+
+DWORD WINAPI IpRenewAddressWrap(PIP_ADAPTER_INDEX_MAP adapter_info) {
+    PLOG_INFO << "NesysServicePatch: suppressed IpRenewAddress adapter_index="
+              << AdapterIndexOrZero(adapter_info);
+    return NO_ERROR;
+}
+
 BOOL WINAPI CreateProcessAWrap(
     LPCSTR lpApplicationName,
     LPSTR lpCommandLine,
@@ -242,6 +264,44 @@ BOOL WINAPI CreateProcessAWrap(
     return result;
 }
 
+bool InstallServiceIpHelperHooks() {
+    if (!EnsureMinHookInitialized()) {
+        return false;
+    }
+
+    const auto release_status = MH_CreateHookApi(
+        L"iphlpapi.dll",
+        "IpReleaseAddress",
+        reinterpret_cast<LPVOID>(&IpReleaseAddressWrap),
+        reinterpret_cast<LPVOID*>(&g_original_ip_release_address));
+    if (release_status != MH_OK && release_status != MH_ERROR_ALREADY_CREATED) {
+        PLOG_ERROR << "NesysServicePatch: MH_CreateHookApi(IpReleaseAddress) failed status="
+                   << static_cast<int>(release_status);
+        return false;
+    }
+
+    const auto renew_status = MH_CreateHookApi(
+        L"iphlpapi.dll",
+        "IpRenewAddress",
+        reinterpret_cast<LPVOID>(&IpRenewAddressWrap),
+        reinterpret_cast<LPVOID*>(&g_original_ip_renew_address));
+    if (renew_status != MH_OK && renew_status != MH_ERROR_ALREADY_CREATED) {
+        PLOG_ERROR << "NesysServicePatch: MH_CreateHookApi(IpRenewAddress) failed status="
+                   << static_cast<int>(renew_status);
+        return false;
+    }
+
+    const auto enable_status = MH_EnableHook(MH_ALL_HOOKS);
+    if (enable_status != MH_OK && enable_status != MH_ERROR_ENABLED) {
+        PLOG_ERROR << "NesysServicePatch: MH_EnableHook(IP Helper hooks) failed status="
+                   << static_cast<int>(enable_status);
+        return false;
+    }
+
+    PLOG_INFO << "NesysServicePatch: service IP Helper hooks installed";
+    return true;
+}
+
 bool InstallGameCreateProcessHook() {
     if (!EnsureMinHookInitialized()) {
         return false;
@@ -291,7 +351,9 @@ void NesysServicePatchInit(HMODULE loader_module) {
     }
 
     if (role == ProcessRole::Service) {
-        PLOG_INFO << "NesysServicePatch: service role recognized";
+        if (!InstallServiceIpHelperHooks()) {
+            PLOG_ERROR << "NesysServicePatch: service IP Helper hook installation failed; continuing unpatched";
+        }
         return;
     }
 
