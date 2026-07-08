@@ -2,10 +2,13 @@
 
 // ORIGINALL BASED ON ttx_monitor, modified for RFID. https://github.com/zxmarcos/ttx_monitor
 
+#include <filesystem>
 #include <iomanip>
 #include <queue>
+#include <string>
 #include "config.h"
 #include "MinHook.h"
+#include "TestModeStorageRedirect.h"
 #include "WinKeyMapping.h"
 #include "plog/Log.h"
 
@@ -50,6 +53,7 @@ HANDLE hConnection = (HANDLE)0x1337;
 
 static const char *Rfid_IO_Id = "TAITO CORP.;RFID CTRL P.C.B.;Ver1.00;";
 static int g_cardReadVirtualKey = VK_F4;
+static bool g_testModeStorageRedirectEnabled = false;
 
 struct jvs_command_def {
 	UINT8 params;
@@ -761,15 +765,75 @@ BOOL __stdcall CloseHandleWrap(HANDLE hObject)
 	return TRUE;
 }
 
-static char moveBuf[256];
+static std::string GetCurrentDirectoryStringA()
+{
+	try
+	{
+		return std::filesystem::current_path().string();
+	}
+	catch (const std::filesystem::filesystem_error& error)
+	{
+		PLOG_WARNING << "Test-mode storage redirect: failed to read current directory: " << error.what();
+		return {};
+	}
+}
+
+static std::wstring GetCurrentDirectoryStringW()
+{
+	try
+	{
+		return std::filesystem::current_path().wstring();
+	}
+	catch (const std::filesystem::filesystem_error& error)
+	{
+		PLOG_WARNING << "Test-mode storage redirect: failed to read current directory: " << error.what();
+		return {};
+	}
+}
+
 LPCSTR ParseFileNamesA(LPCSTR lpFileName)
 {
+	if (!g_testModeStorageRedirectEnabled || lpFileName == nullptr)
+	{
+		return lpFileName;
+	}
+
+	static thread_local std::string redirectedPath;
+	const auto currentDirectory = GetCurrentDirectoryStringA();
+	if (currentDirectory.empty())
+	{
+		return lpFileName;
+	}
+
+	if (auto redirected = gc::testmode_storage::RedirectPathA(lpFileName, currentDirectory))
+	{
+		redirectedPath = *redirected;
+		return redirectedPath.c_str();
+	}
+
 	return lpFileName;
 }
 
-static wchar_t moveBufW[256];
 LPCWSTR ParseFileNamesW(LPCWSTR lpFileName)
 {
+	if (!g_testModeStorageRedirectEnabled || lpFileName == nullptr)
+	{
+		return lpFileName;
+	}
+
+	static thread_local std::wstring redirectedPath;
+	const auto currentDirectory = GetCurrentDirectoryStringW();
+	if (currentDirectory.empty())
+	{
+		return lpFileName;
+	}
+
+	if (auto redirected = gc::testmode_storage::RedirectPathW(lpFileName, currentDirectory))
+	{
+		redirectedPath = *redirected;
+		return redirectedPath.c_str();
+	}
+
 	return lpFileName;
 }
 
@@ -902,6 +966,18 @@ static BOOL __stdcall CreateDirectoryWWrap(
 	return g_origCreateDirectoryW(ParseFileNamesW(lpPathName), lpSecurityAttributes);
 }
 
+static BOOL(__stdcall *g_origDeleteFileA)(LPCSTR lpFileName);
+static BOOL __stdcall DeleteFileAWrap(LPCSTR lpFileName)
+{
+	return g_origDeleteFileA(ParseFileNamesA(lpFileName));
+}
+
+static BOOL(__stdcall *g_origDeleteFileW)(LPCWSTR lpFileName);
+static BOOL __stdcall DeleteFileWWrap(LPCWSTR lpFileName)
+{
+	return g_origDeleteFileW(ParseFileNamesW(lpFileName));
+}
+
 static HANDLE(__stdcall *g_origFindFirstFileA)(LPCSTR lpFileName, LPWIN32_FIND_DATAA lpFindFileData);
 static HANDLE __stdcall FindFirstFileAWrap(
 	LPCSTR             lpFileName,
@@ -958,6 +1034,9 @@ void RfidEmuInit()
 {
 	const auto cardReadKey = ConfigManager::instance().GetCardReadKey();
 	g_cardReadVirtualKey = SdlKeycodeToVirtualKey(cardReadKey);
+	g_testModeStorageRedirectEnabled = ConfigManager::instance().GetEnableTestModeStorageRedirect();
+	PLOG_INFO << "Test-mode storage redirect: "
+	          << (g_testModeStorageRedirectEnabled ? "enabled" : "disabled");
 	if (g_cardReadVirtualKey == 0)
 	{
 		PLOG_WARNING << "RFID: configured card_read key '" << KeycodeToString(cardReadKey)
@@ -975,6 +1054,8 @@ void RfidEmuInit()
 	MH_CreateHookApi(L"kernel32.dll", "FindFirstFileW", FindFirstFileWWrap, (void**)&g_origFindFirstFileW);
 	MH_CreateHookApi(L"kernel32.dll", "CreateDirectoryA", CreateDirectoryAWrap, (void**)&g_origCreateDirectoryA);
 	MH_CreateHookApi(L"kernel32.dll", "CreateDirectoryW", CreateDirectoryWWrap, (void**)&g_origCreateDirectoryW);
+	MH_CreateHookApi(L"kernel32.dll", "DeleteFileA", DeleteFileAWrap, (void**)&g_origDeleteFileA);
+	MH_CreateHookApi(L"kernel32.dll", "DeleteFileW", DeleteFileWWrap, (void**)&g_origDeleteFileW);
 	MH_CreateHookApi(L"kernel32.dll", "GetFileAttributesA", GetFileAttributesAWrap, (void**)&g_origGetFileAttributesA);
 	MH_CreateHookApi(L"kernel32.dll", "GetFileAttributesW", GetFileAttributesWWrap, (void**)&g_origGetFileAttributesW);
 	MH_CreateHookApi(L"kernel32.dll", "CreateFileW", CreateFileWWrap, (void**)&g_origCreateFileW);

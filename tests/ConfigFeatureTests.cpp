@@ -57,6 +57,7 @@ card_read = 'f4'
 
 [experimental]
 enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 )toml";
 
@@ -67,6 +68,7 @@ card_read = 'f4'
 constexpr const char* kDefaultExperimentalTable = R"toml(
 [experimental]
 enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 )toml";
 
@@ -75,6 +77,7 @@ card_read = 'f8'
 
 [experimental]
 enable_120fps_timer_patches = true
+enable_testmode_storage_redirect = true
 enable_timer_freeze_patches = true
 )toml";
 
@@ -155,6 +158,10 @@ int main() {
         upgraded_defaults.experimental().enable_timer_freeze_patches(),
         false,
         "upgraded default enable_timer_freeze_patches");
+    failures += expect_bool(
+        upgraded_defaults.experimental().enable_testmode_storage_redirect(),
+        false,
+        "upgraded default enable_testmode_storage_redirect");
     failures += expect_key(upgraded_defaults.keyboard().card_read(), SDLK_F4, "upgraded default card_read");
 
     const auto custom = parse_config(
@@ -167,6 +174,10 @@ int main() {
         custom.experimental().enable_timer_freeze_patches(),
         true,
         "custom enable_timer_freeze_patches");
+    failures += expect_bool(
+        custom.experimental().enable_testmode_storage_redirect(),
+        true,
+        "custom enable_testmode_storage_redirect");
     failures += expect_key(custom.keyboard().card_read(), SDLK_F8, "custom card_read");
 
     failures += expect_parse_failure(kRequiredConfigPrefix, "missing card_read and experimental table");
@@ -180,14 +191,23 @@ int main() {
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
 enable_timer_freeze_patches = false
+enable_testmode_storage_redirect = false
 )toml",
         "missing enable_120fps_timer_patches");
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
 enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
 )toml",
         "missing enable_timer_freeze_patches");
+    failures += expect_parse_failure(
+        std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
+[experimental]
+enable_120fps_timer_patches = false
+enable_timer_freeze_patches = false
+)toml",
+        "missing enable_testmode_storage_redirect");
 
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F4), VK_F4, "F4");
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F8), VK_F8, "F8");
@@ -201,6 +221,7 @@ card_read = ';'
 
 [experimental]
 enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 )toml");
     failures += expect_key(punctuation.keyboard().card_read(), SDLK_SEMICOLON, "semicolon card_read");

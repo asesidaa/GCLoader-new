@@ -110,6 +110,7 @@ set(SOURCES
         iDmacDrv32.cpp
         InputManager.cpp
         RfidEmu.cpp
+        TestModeStorageRedirect.cpp
 )
 
 set(GUI_SOURCES
@@ -173,6 +174,15 @@ target_link_libraries(ConfigFeatureTests PRIVATE
         reflectcpp
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
+
+add_executable(TestModeStorageRedirectTests
+        TestModeStorageRedirect.cpp
+        tests/TestModeStorageRedirectTests.cpp
+)
+target_include_directories(TestModeStorageRedirectTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME TestModeStorageRedirectTests COMMAND TestModeStorageRedirectTests)
 
 
 if(MSVC)

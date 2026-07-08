@@ -44,6 +44,7 @@ struct KeyboardConfig
 struct ExperimentalConfig
 {
     rfl::Rename<"enable_120fps_timer_patches", bool> enable_120fps_timer_patches = false;
+    rfl::Rename<"enable_testmode_storage_redirect", bool> enable_testmode_storage_redirect = false;
     rfl::Rename<"enable_timer_freeze_patches", bool> enable_timer_freeze_patches = false;
 };
 
@@ -161,6 +162,7 @@ public:
     int GetGamepadIndex() const { return config.gamepad_index.value(); } // e.g., 0 or 1
     InputMode GetInputMode() const { return config.input_mode.value(); }
     bool GetEnable120FpsTimerPatches() const { return config.experimental.value().enable_120fps_timer_patches.value(); }
+    bool GetEnableTestModeStorageRedirect() const { return config.experimental.value().enable_testmode_storage_redirect.value(); }
     bool GetEnableTimerFreezePatches() const { return config.experimental.value().enable_timer_freeze_patches.value(); }
 
     ConfigManager(const ConfigManager&) = delete;

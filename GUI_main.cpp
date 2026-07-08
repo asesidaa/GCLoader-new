@@ -419,6 +419,11 @@ int main(int argc, char *argv[]) {
             g_config.experimental().enable_timer_freeze_patches = enable_timer_freeze_patches;
             g_config_dirty = true;
         }
+        bool enable_testmode_storage_redirect = g_config.experimental().enable_testmode_storage_redirect();
+        if (ImGui::Checkbox("Test-mode storage redirect", &enable_testmode_storage_redirect)) {
+            g_config.experimental().enable_testmode_storage_redirect = enable_testmode_storage_redirect;
+            g_config_dirty = true;
+        }
 
         // --- Mode Specific Settings ---
         if (ImGui::BeginTable("Bindings", 3,
