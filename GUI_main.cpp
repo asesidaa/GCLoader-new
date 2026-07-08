@@ -424,6 +424,11 @@ int main(int argc, char *argv[]) {
             g_config.experimental().enable_testmode_storage_redirect = enable_testmode_storage_redirect;
             g_config_dirty = true;
         }
+        bool enable_nesys_service_adapter_patch = g_config.experimental().enable_nesys_service_adapter_patch();
+        if (ImGui::Checkbox("NESYS service adapter patch", &enable_nesys_service_adapter_patch)) {
+            g_config.experimental().enable_nesys_service_adapter_patch = enable_nesys_service_adapter_patch;
+            g_config_dirty = true;
+        }
 
         // --- Mode Specific Settings ---
         if (ImGui::BeginTable("Bindings", 3,

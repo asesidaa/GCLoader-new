@@ -59,6 +59,7 @@ card_read = 'f4'
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
+enable_nesys_service_adapter_patch = true
 )toml";
 
 constexpr const char* kDefaultCardReadConfig = R"toml(
@@ -70,6 +71,7 @@ constexpr const char* kDefaultExperimentalTable = R"toml(
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
+enable_nesys_service_adapter_patch = true
 )toml";
 
 constexpr const char* kEnabledExperimentalConfig = R"toml(
@@ -79,6 +81,7 @@ card_read = 'f8'
 enable_120fps_timer_patches = true
 enable_testmode_storage_redirect = true
 enable_timer_freeze_patches = true
+enable_nesys_service_adapter_patch = false
 )toml";
 
 InputConfig parse_config(const std::string& toml) {
@@ -162,6 +165,10 @@ int main() {
         upgraded_defaults.experimental().enable_testmode_storage_redirect(),
         false,
         "upgraded default enable_testmode_storage_redirect");
+    failures += expect_bool(
+        upgraded_defaults.experimental().enable_nesys_service_adapter_patch(),
+        true,
+        "upgraded default enable_nesys_service_adapter_patch");
     failures += expect_key(upgraded_defaults.keyboard().card_read(), SDLK_F4, "upgraded default card_read");
 
     const auto custom = parse_config(
@@ -178,6 +185,10 @@ int main() {
         custom.experimental().enable_testmode_storage_redirect(),
         true,
         "custom enable_testmode_storage_redirect");
+    failures += expect_bool(
+        custom.experimental().enable_nesys_service_adapter_patch(),
+        false,
+        "custom enable_nesys_service_adapter_patch");
     failures += expect_key(custom.keyboard().card_read(), SDLK_F8, "custom card_read");
 
     failures += expect_parse_failure(kRequiredConfigPrefix, "missing card_read and experimental table");
@@ -192,6 +203,7 @@ int main() {
 [experimental]
 enable_timer_freeze_patches = false
 enable_testmode_storage_redirect = false
+enable_nesys_service_adapter_patch = true
 )toml",
         "missing enable_120fps_timer_patches");
     failures += expect_parse_failure(
@@ -199,6 +211,7 @@ enable_testmode_storage_redirect = false
 [experimental]
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
+enable_nesys_service_adapter_patch = true
 )toml",
         "missing enable_timer_freeze_patches");
     failures += expect_parse_failure(
@@ -206,8 +219,17 @@ enable_testmode_storage_redirect = false
 [experimental]
 enable_120fps_timer_patches = false
 enable_timer_freeze_patches = false
+enable_nesys_service_adapter_patch = true
 )toml",
         "missing enable_testmode_storage_redirect");
+    failures += expect_parse_failure(
+        std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
+[experimental]
+enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
+enable_timer_freeze_patches = false
+)toml",
+        "missing enable_nesys_service_adapter_patch");
 
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F4), VK_F4, "F4");
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F8), VK_F8, "F8");
@@ -223,6 +245,7 @@ card_read = ';'
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
+enable_nesys_service_adapter_patch = true
 )toml");
     failures += expect_key(punctuation.keyboard().card_read(), SDLK_SEMICOLON, "semicolon card_read");
     failures += expect_string(KeycodeToString(SDLK_SEMICOLON), ";", "semicolon display name");
