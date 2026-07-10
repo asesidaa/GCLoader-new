@@ -186,6 +186,15 @@ target_include_directories(SwitchInputPolicyTests PRIVATE
 )
 add_test(NAME SwitchInputPolicyTests COMMAND SwitchInputPolicyTests)
 
+add_executable(SwitchInputPatchTests
+        SwitchInputPolicy.cpp
+        tests/SwitchInputPatchTests.cpp
+)
+target_include_directories(SwitchInputPatchTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME SwitchInputPatchTests COMMAND SwitchInputPatchTests)
+
 add_executable(NesysServicePatchTests
         NesysServiceProcess.cpp
         tests/NesysServicePatchTests.cpp
