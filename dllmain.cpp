@@ -13,6 +13,7 @@
 #include "FrameratePatch.h"
 #include "NesysServicePatch.h"
 #include "NesysServiceProcess.h"
+#include "SwitchInputPatch.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -89,6 +90,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
                 FrameratePatchInit();
                 PLOG_DEBUG << "120 FPS runtime patch init complete!" << std::endl;
+
+                gc::switch_input::SwitchInputPatchInit();
+                PLOG_DEBUG << "Switch gameplay input patch init complete!" << std::endl;
             } else {
                 PLOG_INFO << "NesysServicePatch: service role skipping game-only RFID/input/framerate initialization";
             }

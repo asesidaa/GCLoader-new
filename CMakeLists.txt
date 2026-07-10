@@ -112,6 +112,8 @@ set(SOURCES
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
         RfidEmu.cpp
+        SwitchInputPolicy.cpp
+        SwitchInputPatch.cpp
         TestModeStorageRedirect.cpp
 )
 
