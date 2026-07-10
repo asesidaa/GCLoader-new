@@ -6,6 +6,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include "rfl/toml.hpp"
 
@@ -15,6 +16,7 @@ constexpr const char* kRequiredConfigPrefix = R"toml(
 axis_threshold = 16384
 gamepad_index = 0
 input_mode = 'Keyboard'
+gameplay_input_style = 'Arcade'
 
 [gamepad]
 p1_axis_horizontal = 'leftx'
@@ -146,6 +148,34 @@ int expect_string(const std::string& actual, const std::string& expected, const 
     return 1;
 }
 
+int expect_style(
+    GameplayInputStyle actual,
+    GameplayInputStyle expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+
+    std::cerr << "Expected " << name << " enum value "
+              << static_cast<int>(expected) << ", got "
+              << static_cast<int>(actual) << "\n";
+    return 1;
+}
+
+std::string replace_once(
+    std::string input,
+    std::string_view needle,
+    std::string_view replacement) {
+    const auto position = input.find(needle);
+    if (position == std::string::npos) {
+        std::cerr << "Test fixture did not contain '" << needle << "'\n";
+        std::exit(1);
+    }
+
+    input.replace(position, needle.size(), replacement);
+    return input;
+}
+
 } // namespace
 
 int main() {
@@ -170,9 +200,20 @@ int main() {
         true,
         "upgraded default enable_nesys_service_adapter_patch");
     failures += expect_key(upgraded_defaults.keyboard().card_read(), SDLK_F4, "upgraded default card_read");
+    failures += expect_style(
+        upgraded_defaults.gameplay_input_style(),
+        GameplayInputStyle::Arcade,
+        "upgraded default gameplay_input_style");
 
-    const auto custom = parse_config(
-        std::string(kRequiredConfigPrefix) + kEnabledExperimentalConfig);
+    const auto switch_prefix = replace_once(
+        kRequiredConfigPrefix,
+        "gameplay_input_style = 'Arcade'",
+        "gameplay_input_style = 'Switch'");
+    const auto custom = parse_config(switch_prefix + kEnabledExperimentalConfig);
+    failures += expect_style(
+        custom.gameplay_input_style(),
+        GameplayInputStyle::Switch,
+        "custom gameplay_input_style");
     failures += expect_bool(
         custom.experimental().enable_120fps_timer_patches(),
         true,
@@ -230,6 +271,28 @@ enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 )toml",
         "missing enable_nesys_service_adapter_patch");
+
+    const auto valid_arcade_config =
+        std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
+    failures += expect_parse_failure(
+        replace_once(
+            valid_arcade_config,
+            "gameplay_input_style = 'Arcade'\n",
+            ""),
+        "missing gameplay_input_style");
+    failures += expect_parse_failure(
+        replace_once(
+            valid_arcade_config,
+            "gameplay_input_style = 'Arcade'",
+            "gameplay_input_style = 'Touch'"),
+        "unsupported gameplay_input_style");
+
+    const auto serialized_switch = rfl::toml::write(custom);
+    const auto reparsed_switch = parse_config(serialized_switch);
+    failures += expect_style(
+        reparsed_switch.gameplay_input_style(),
+        GameplayInputStyle::Switch,
+        "serialized gameplay_input_style");
 
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F4), VK_F4, "F4");
     failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F8), VK_F8, "F8");

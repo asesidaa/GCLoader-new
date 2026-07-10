@@ -16,6 +16,11 @@ enum class InputMode {
     Gamepad
 };
 
+enum class GameplayInputStyle {
+    Arcade,
+    Switch
+};
+
 struct KeyboardConfig
 {
     // Use rfl::Rename to match TOML keys with C++ variable names
@@ -78,6 +83,8 @@ struct InputConfig
     rfl::Rename<"gamepad_index", int> gamepad_index = 0;
     rfl::Rename<"axis_threshold", Sint16> axis_threshold = 16384;
     rfl::Rename<"input_mode", InputMode> input_mode = InputMode::Keyboard; // Default to keyboard
+    rfl::Rename<"gameplay_input_style", GameplayInputStyle> gameplay_input_style =
+        GameplayInputStyle::Arcade;
 
     // Nested tables require nested structs
     rfl::Rename<"keyboard", KeyboardConfig> keyboard;
@@ -162,6 +169,9 @@ public:
     Sint16 GetGamepadAxisThreshold() const { return config.axis_threshold.value(); } // e.g., 16384 or 24000
     int GetGamepadIndex() const { return config.gamepad_index.value(); } // e.g., 0 or 1
     InputMode GetInputMode() const { return config.input_mode.value(); }
+    GameplayInputStyle GetGameplayInputStyle() const {
+        return config.gameplay_input_style.value();
+    }
     bool GetEnable120FpsTimerPatches() const { return config.experimental.value().enable_120fps_timer_patches.value(); }
     bool GetEnableTestModeStorageRedirect() const { return config.experimental.value().enable_testmode_storage_redirect.value(); }
     bool GetEnableTimerFreezePatches() const { return config.experimental.value().enable_timer_freeze_patches.value(); }

@@ -326,6 +326,19 @@ int main(int argc, char *argv[]) {
             g_config_dirty = true;
         }
 
+        const char* gameplay_input_styles[] = {"Arcade", "Switch"};
+        int current_gameplay_input_style =
+            static_cast<int>(g_config.gameplay_input_style());
+        if (ImGui::Combo(
+                "Gameplay Input Style",
+                &current_gameplay_input_style,
+                gameplay_input_styles,
+                IM_ARRAYSIZE(gameplay_input_styles))) {
+            g_config.gameplay_input_style =
+                static_cast<GameplayInputStyle>(current_gameplay_input_style);
+            g_config_dirty = true;
+        }
+
         // Gamepad Index (Only relevant if gamepads exist)
         if (num_joysticks > 0) {
             // Create a list of available gamepad names + indices
