@@ -8,6 +8,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -38,6 +39,14 @@ struct FakeRegistryState {
 };
 
 FakeRegistryState* g_fake = nullptr;
+
+struct HandleReuseControl {
+    HANDLE close_entered;
+    HANDLE allow_close_return;
+    HANDLE reopen_original_returning;
+};
+
+HandleReuseControl* g_handle_reuse = nullptr;
 
 LSTATUS WINAPI fake_open(
     HKEY root,
@@ -78,6 +87,31 @@ LSTATUS WINAPI fake_close(HKEY key) {
     ++g_fake->close_calls;
     g_fake->last_close_handle = key;
     return g_fake->close_status;
+}
+
+LSTATUS WINAPI fake_open_reused_handle(
+    HKEY root,
+    LPCSTR subkey,
+    DWORD options,
+    REGSAM access,
+    PHKEY result) {
+    const LSTATUS status = fake_open(
+        root,
+        subkey,
+        options,
+        access,
+        result);
+    SetEvent(g_handle_reuse->reopen_original_returning);
+    return status;
+}
+
+LSTATUS WINAPI fake_close_with_reuse_barrier(HKEY key) {
+    ++g_fake->close_calls;
+    g_fake->last_close_handle = key;
+    const LSTATUS status = g_fake->close_status;
+    SetEvent(g_handle_reuse->close_entered);
+    WaitForSingleObject(g_handle_reuse->allow_close_return, INFINITE);
+    return status;
 }
 
 int expect(bool value, const char* name) {
@@ -698,6 +732,124 @@ int main() {
         second_handle,
         "Country",
         2);
+
+    const auto raced_handle = reinterpret_cast<HKEY>(0x1003);
+    track(
+        game,
+        state,
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\taito\\typex",
+        0,
+        KEY_READ,
+        raced_handle,
+        &failures);
+    HANDLE close_entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE allow_close_return = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE reopen_original_returning =
+        CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE reopen_completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    failures += expect(close_entered != nullptr, "close-entered event");
+    failures += expect(
+        allow_close_return != nullptr,
+        "allow-close-return event");
+    failures += expect(
+        reopen_original_returning != nullptr,
+        "reopen-original-returning event");
+    failures += expect(
+        reopen_completed != nullptr,
+        "reopen-completed event");
+    if (close_entered != nullptr &&
+        allow_close_return != nullptr &&
+        reopen_original_returning != nullptr &&
+        reopen_completed != nullptr) {
+        HandleReuseControl control{
+            close_entered,
+            allow_close_return,
+            reopen_original_returning,
+        };
+        g_handle_reuse = &control;
+        state.close_status = ERROR_SUCCESS;
+        state.open_status = ERROR_SUCCESS;
+        state.next_handle = raced_handle;
+
+        LSTATUS concurrent_close_status = ERROR_INVALID_FUNCTION;
+        HKEY reopened = nullptr;
+        int reopen_failures = 0;
+        std::thread closing([&] {
+            concurrent_close_status = game.Close(
+                fake_close_with_reuse_barrier,
+                raced_handle);
+        });
+        constexpr DWORD event_wait_milliseconds = 5000;
+        const DWORD close_wait = WaitForSingleObject(
+            close_entered,
+            event_wait_milliseconds);
+        failures += expect(
+            close_wait == WAIT_OBJECT_0,
+            "native close reached reuse barrier");
+        if (close_wait == WAIT_OBJECT_0) {
+            std::thread reopening([&] {
+                reopen_failures += expect_status(
+                    game.Open(
+                        fake_open_reused_handle,
+                        HKEY_LOCAL_MACHINE,
+                        "SOFTWARE\\taito\\typex",
+                        0,
+                        KEY_READ,
+                        &reopened),
+                    ERROR_SUCCESS,
+                    "concurrent reused handle open");
+                SetEvent(reopen_completed);
+            });
+            const DWORD reopen_original_wait = WaitForSingleObject(
+                reopen_original_returning,
+                event_wait_milliseconds);
+            failures += expect(
+                reopen_original_wait == WAIT_OBJECT_0,
+                "reused native open reached dispatcher");
+            constexpr DWORD blocked_open_probe_milliseconds = 1000;
+            const DWORD reopen_completion_wait = WaitForSingleObject(
+                reopen_completed,
+                blocked_open_probe_milliseconds);
+            failures += expect(
+                reopen_completion_wait == WAIT_OBJECT_0 ||
+                    reopen_completion_wait == WAIT_TIMEOUT,
+                "reused overlay open wait result");
+            SetEvent(allow_close_return);
+            closing.join();
+            reopening.join();
+            failures += reopen_failures;
+            failures += expect_status(
+                concurrent_close_status,
+                ERROR_SUCCESS,
+                "concurrent old handle close");
+            failures += expect(
+                reopened == raced_handle,
+                "native open reused numeric handle");
+            failures += expect_dword_override(
+                game,
+                state,
+                raced_handle,
+                "Country",
+                2);
+        } else {
+            SetEvent(allow_close_return);
+            closing.join();
+        }
+        g_handle_reuse = nullptr;
+    }
+    if (reopen_completed != nullptr) {
+        CloseHandle(reopen_completed);
+    }
+    if (reopen_original_returning != nullptr) {
+        CloseHandle(reopen_original_returning);
+    }
+    if (allow_close_return != nullptr) {
+        CloseHandle(allow_close_return);
+    }
+    if (close_entered != nullptr) {
+        CloseHandle(close_entered);
+    }
 
     const auto exports = RegistryOverrideHookExports();
     failures += expect(exports.size() == 3, "exact registry hook count");

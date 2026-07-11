@@ -351,9 +351,9 @@ LSTATUS RegistryConfigOverride::Close(
     if (original == nullptr) {
         return ERROR_INVALID_FUNCTION;
     }
+    std::scoped_lock lock(tracked_mutex_);
     const LSTATUS status = original(key);
     if (status == ERROR_SUCCESS) {
-        std::scoped_lock lock(tracked_mutex_);
         tracked_handles_.erase(key);
     }
     return status;
