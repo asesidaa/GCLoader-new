@@ -7,6 +7,7 @@
 #include "backends/imgui_impl_sdlrenderer3.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "NesysNetworkConfig.h"
+#include "RegistryConfig.h"
 
 #include <rfl/toml.hpp>
 #include <iostream>
@@ -92,6 +93,15 @@ void DrawGamepadAxisBindingRow(const char *label, SDL_GamepadAxis &axis_ref) {
         g_open_bind_popup_requested = true;
     }
     ImGui::PopID();
+}
+
+void DrawInlineValidationError(bool valid, const char* message) {
+    if (!valid) {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+            "%s",
+            message);
+    }
 }
 
 // --- Main Function ---
@@ -436,6 +446,104 @@ int main(int argc, char *argv[]) {
                 "Enter a dotted-decimal IPv4 address without a port.");
         }
 
+        ImGui::SeparatorText("Registry");
+        auto& registry = g_config.registry();
+
+        bool registry_enabled = registry.enabled();
+        if (ImGui::Checkbox(
+                "Registry configuration overrides",
+                &registry_enabled)) {
+            registry.enabled = registry_enabled;
+            g_config_dirty = true;
+        }
+
+        constexpr const char* country_items[] = {
+            "GrooveCoasterJpn - GROOVE COASTER, Japanese branding",
+            "Rhythmvaders - RHYTHMVADERS, English branding",
+            "GrooveCoasterEng - GROOVE COASTER, English branding",
+        };
+        int country_index = static_cast<int>(registry.game().country());
+        if (ImGui::Combo(
+                "Game country",
+                &country_index,
+                country_items,
+                IM_ARRAYSIZE(country_items))) {
+            registry.game().country = static_cast<GameCountry>(country_index);
+            g_config_dirty = true;
+        }
+
+        auto& registry_nesys = registry.nesys();
+        auto& game_kind = registry_nesys.game_kind();
+        if (ImGui::InputScalar(
+                "Registry GameKind",
+                ImGuiDataType_S64,
+                &game_kind)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryDword(game_kind),
+            "Enter an integer from 0 through 4294967295.");
+
+        auto& event_next_time = registry_nesys.event_next_time();
+        if (ImGui::InputScalar(
+                "Registry EventNextTime",
+                ImGuiDataType_S64,
+                &event_next_time)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryDword(event_next_time),
+            "Enter an integer from 0 through 4294967295.");
+
+        auto& condition_time = registry_nesys.condition_time();
+        if (ImGui::InputScalar(
+                "Registry ConditionTime",
+                ImGuiDataType_S64,
+                &condition_time)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryDword(condition_time),
+            "Enter an integer from 0 through 4294967295.");
+
+        auto& log_level = registry_nesys.log_level();
+        if (ImGui::InputScalar(
+                "Registry LogLevel",
+                ImGuiDataType_S64,
+                &log_level)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryLogLevel(log_level),
+            "Enter an integer from 0 through 3.");
+
+        auto& news_path = registry_nesys.news_path();
+        if (ImGui::InputText("Registry NewsPath", &news_path)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryPath(news_path),
+            "Path must contain 1-259 encoded bytes before the terminating NUL.");
+
+        auto& event_path = registry_nesys.event_path();
+        if (ImGui::InputText("Registry EventPath", &event_path)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryPath(event_path),
+            "Path must contain 1-259 encoded bytes before the terminating NUL.");
+
+        auto& log_path = registry_nesys.log_path();
+        if (ImGui::InputText("Registry LogPath", &log_path)) {
+            g_config_dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::registry_config::IsRegistryPath(log_path),
+            "Path must contain 1-259 encoded bytes before the terminating NUL.");
+
+        const auto registry_validation =
+            gc::registry_config::ValidateRegistryConfig(registry);
+
         ImGui::SeparatorText("Experimental");
         bool enable_120fps_timer_patches = g_config.experimental().enable_120fps_timer_patches();
         if (ImGui::Checkbox("120 FPS timer patches", &enable_120fps_timer_patches)) {
@@ -581,7 +689,9 @@ int main(int argc, char *argv[]) {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(0.3f, 0.7f, 0.7f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0.3f, 0.8f, 0.8f));
         }
-        ImGui::BeginDisabled(!nesys_server_ip_valid);
+        const bool configuration_valid =
+            nesys_server_ip_valid && registry_validation.valid();
+        ImGui::BeginDisabled(!configuration_valid);
         if (ImGui::Button("Save Configuration") && g_config_dirty) {
             try {
                 std::string toml_output = rfl::toml::write(g_config);
@@ -589,16 +699,20 @@ int main(int argc, char *argv[]) {
                 if (ofs.is_open()) {
                     ofs << toml_output;
                     ofs.close();
-                    SDL_Log("Configuration saved successfully to %s", g_config_path.c_str());
-                    g_config_dirty = false; // Reset dirty flag
+                    SDL_Log(
+                        "Configuration saved successfully to %s",
+                        g_config_path.c_str());
+                    g_config_dirty = false;
                     g_saved = true;
                 } else {
-                    SDL_Log("Error: Could not open %s for writing.", g_config_path.c_str());
-                    // Optionally show an ImGui error popup here
+                    SDL_Log(
+                        "Error: Could not open %s for writing.",
+                        g_config_path.c_str());
                 }
-            } catch (const std::exception &e) {
-                SDL_Log("Error serializing configuration to TOML: %s", e.what());
-                // Optionally show an ImGui error popup here
+            } catch (const std::exception& error) {
+                SDL_Log(
+                    "Error serializing configuration to TOML: %s",
+                    error.what());
             }
         }
         ImGui::EndDisabled();

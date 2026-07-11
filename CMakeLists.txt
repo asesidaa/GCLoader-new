@@ -68,7 +68,7 @@ FetchContent_MakeAvailable(safetyhook)
 
 FetchContent_Declare(
         reflectcpp
-        URL https://github.com/getml/reflect-cpp/archive/refs/tags/v0.19.0.zip
+        URL https://github.com/getml/reflect-cpp/archive/refs/tags/v0.20.0.zip
 )
 set(REFLECTCPP_TOML ON CACHE BOOL "" FORCE)
 set(REFLECTCPP_XML OFF CACHE BOOL "" FORCE)
@@ -114,6 +114,7 @@ set(SOURCES
         NesysServiceLauncher.cpp
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
+        RegistryConfig.cpp
         RfidEmu.cpp
         ServerAddressOverride.cpp
         SwitchInputPolicy.cpp
@@ -126,6 +127,7 @@ set(GUI_SOURCES
         config.cpp
         GUI_main.cpp
         NesysNetworkConfig.cpp
+        RegistryConfig.cpp
 )
 
 
@@ -172,6 +174,7 @@ add_test(NAME CountdownTimerFreezeTests COMMAND CountdownTimerFreezeTests)
 
 add_executable(ConfigFeatureTests
         NesysNetworkConfig.cpp
+        RegistryConfig.cpp
         tests/ConfigFeatureTests.cpp
 )
 target_include_directories(ConfigFeatureTests PRIVATE

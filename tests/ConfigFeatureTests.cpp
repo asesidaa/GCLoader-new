@@ -56,11 +56,44 @@ service3 = 'p'
 test = 't'
 )toml";
 
+constexpr std::string_view kDefaultRegistryConfig = R"toml(
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
+
+)toml";
+
 constexpr const char* kDefaultExperimentalConfig = R"toml(
 card_read = 'f4'
 
 [nesys]
 server_ip = '127.0.0.1'
+
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
 
 [experimental]
 enable_120fps_timer_patches = false
@@ -74,11 +107,41 @@ card_read = 'f4'
 
 [nesys]
 server_ip = '127.0.0.1'
+
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
 )toml";
 
 constexpr const char* kDefaultExperimentalTable = R"toml(
 [nesys]
 server_ip = '127.0.0.1'
+
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
 
 [experimental]
 enable_120fps_timer_patches = false
@@ -92,6 +155,21 @@ card_read = 'f8'
 
 [nesys]
 server_ip = '127.0.0.1'
+
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
 
 [experimental]
 enable_120fps_timer_patches = true
@@ -187,6 +265,57 @@ int expect_style(
     return 1;
 }
 
+int expect_country(
+    GameCountry actual,
+    GameCountry expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+    std::cerr << "Expected " << name << " country value "
+              << static_cast<std::uint32_t>(expected) << ", got "
+              << static_cast<std::uint32_t>(actual) << "\n";
+    return 1;
+}
+
+int expect_u32(
+    std::uint32_t actual,
+    std::uint32_t expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+    std::cerr << "Expected " << name << " to be " << expected
+              << ", got " << actual << "\n";
+    return 1;
+}
+
+int expect_i64(
+    std::int64_t actual,
+    std::int64_t expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+    std::cerr << "Expected " << name << " to be " << expected
+              << ", got " << actual << "\n";
+    return 1;
+}
+
+int expect_registry_valid(
+    const RegistryConfig& config,
+    bool expected,
+    const char* name) {
+    const bool actual =
+        gc::registry_config::ValidateRegistryConfig(config).valid();
+    if (actual == expected) {
+        return 0;
+    }
+    std::cerr << "Expected " << name << " registry validity to be "
+              << expected << ", got " << actual << "\n";
+    return 1;
+}
+
 std::string replace_once(
     std::string input,
     std::string_view needle,
@@ -228,6 +357,64 @@ int main() {
         true,
         "generated TOML NESYS server field");
 
+    failures += expect_bool(
+        upgraded_defaults.registry().enabled(),
+        false,
+        "default registry enabled");
+    failures += expect_country(
+        upgraded_defaults.registry().game().country(),
+        GameCountry::GrooveCoasterJpn,
+        "default game country");
+    failures += expect_i64(
+        upgraded_defaults.registry().nesys().game_kind(),
+        303801,
+        "default registry game_kind");
+    failures += expect_i64(
+        upgraded_defaults.registry().nesys().event_next_time(),
+        900,
+        "default registry event_next_time");
+    failures += expect_i64(
+        upgraded_defaults.registry().nesys().condition_time(),
+        300,
+        "default registry condition_time");
+    failures += expect_i64(
+        upgraded_defaults.registry().nesys().log_level(),
+        3,
+        "default registry log_level");
+    failures += expect_string(
+        upgraded_defaults.registry().nesys().news_path(),
+        "D:\\system\\DUA\\news",
+        "default registry news_path");
+    failures += expect_string(
+        upgraded_defaults.registry().nesys().event_path(),
+        "D:\\system\\DUA\\event",
+        "default registry event_path");
+    failures += expect_string(
+        upgraded_defaults.registry().nesys().log_path(),
+        "D:\\system\\CmdFile\\log",
+        "default registry log_path");
+    failures += expect_registry_valid(
+        upgraded_defaults.registry(),
+        true,
+        "default registry config");
+
+    failures += expect_bool(
+        generated_toml.find("[registry]") != std::string::npos,
+        true,
+        "generated TOML registry table");
+    failures += expect_bool(
+        generated_toml.find("[registry.game]") != std::string::npos,
+        true,
+        "generated TOML registry.game table");
+    failures += expect_bool(
+        generated_toml.find("[registry.nesys]") != std::string::npos,
+        true,
+        "generated TOML registry.nesys table");
+    failures += expect_bool(
+        generated_toml.find("enabled = false") != std::string::npos,
+        true,
+        "generated TOML registry disabled default");
+
     const auto valid_nesys_config =
         std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
     failures += expect_parse_failure(
@@ -242,6 +429,140 @@ int main() {
             "server_ip = '127.0.0.1'\n",
             ""),
         "missing NESYS server_ip");
+
+    const auto valid_registry_config =
+        std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
+
+    failures += expect_parse_failure(
+        replace_once(
+            valid_registry_config,
+            kDefaultRegistryConfig,
+            ""),
+        "missing registry table tree");
+    failures += expect_parse_failure(
+        replace_once(
+            valid_registry_config,
+            "[registry.game]\ncountry = 'GrooveCoasterJpn'\n\n",
+            ""),
+        "missing registry.game table");
+    failures += expect_parse_failure(
+        replace_once(
+            valid_registry_config,
+            "[registry.nesys]\ngame_kind = 303801\nevent_next_time = 900\n"
+            "condition_time = 300\nlog_level = 3\n"
+            "news_path = 'D:\\system\\DUA\\news'\n"
+            "event_path = 'D:\\system\\DUA\\event'\n"
+            "log_path = 'D:\\system\\CmdFile\\log'\n",
+            ""),
+        "missing registry.nesys table");
+
+    constexpr std::array<std::string_view, 9> required_registry_fields{
+        "enabled = false\n",
+        "country = 'GrooveCoasterJpn'\n",
+        "game_kind = 303801\n",
+        "event_next_time = 900\n",
+        "condition_time = 300\n",
+        "log_level = 3\n",
+        "news_path = 'D:\\system\\DUA\\news'\n",
+        "event_path = 'D:\\system\\DUA\\event'\n",
+        "log_path = 'D:\\system\\CmdFile\\log'\n",
+    };
+    for (const auto field : required_registry_fields) {
+        failures += expect_parse_failure(
+            replace_once(valid_registry_config, field, ""),
+            std::string("missing registry field ").append(field).c_str());
+    }
+
+    failures += expect_parse_failure(
+        replace_once(
+            valid_registry_config,
+            "country = 'GrooveCoasterJpn'",
+            "country = 'UnknownCountry'"),
+        "unknown registry country");
+    failures += expect_parse_failure(
+        replace_once(
+            valid_registry_config,
+            "country = 'GrooveCoasterJpn'",
+            "country = 1"),
+        "numeric registry country");
+
+    struct CountryCase {
+        std::string_view name;
+        GameCountry country;
+        std::uint32_t dword;
+    };
+    constexpr std::array<CountryCase, 3> country_cases{{
+        {"GrooveCoasterJpn", GameCountry::GrooveCoasterJpn, 0},
+        {"Rhythmvaders", GameCountry::Rhythmvaders, 1},
+        {"GrooveCoasterEng", GameCountry::GrooveCoasterEng, 2},
+    }};
+    for (const auto& test : country_cases) {
+        const auto country_text = replace_once(
+            valid_registry_config,
+            "country = 'GrooveCoasterJpn'",
+            std::string("country = '").append(test.name).append("'"));
+        const auto parsed = parse_config(country_text);
+        failures += expect_country(
+            parsed.registry().game().country(),
+            test.country,
+            std::string(test.name).append(" parsed country").c_str());
+        failures += expect_u32(
+            gc::registry_config::GameCountryRegistryDword(test.country),
+            test.dword,
+            std::string(test.name).append(" DWORD").c_str());
+        const auto round_trip = parse_config(rfl::toml::write(parsed));
+        failures += expect_country(
+            round_trip.registry().game().country(),
+            test.country,
+            std::string(test.name).append(" round-trip").c_str());
+    }
+
+    auto zero_timers = upgraded_defaults.registry();
+    zero_timers.nesys().event_next_time = 0;
+    zero_timers.nesys().condition_time = 0;
+    failures += expect_registry_valid(zero_timers, true, "zero timing values");
+
+    auto negative_game_kind = upgraded_defaults.registry();
+    negative_game_kind.nesys().game_kind = -1;
+    failures += expect_registry_valid(
+        negative_game_kind,
+        false,
+        "negative game_kind");
+
+    auto oversized_condition = upgraded_defaults.registry();
+    oversized_condition.nesys().condition_time = 4'294'967'296LL;
+    failures += expect_registry_valid(
+        oversized_condition,
+        false,
+        "condition_time above DWORD range");
+
+    auto invalid_log_level = upgraded_defaults.registry();
+    invalid_log_level.nesys().log_level = 4;
+    failures += expect_registry_valid(
+        invalid_log_level,
+        false,
+        "log_level above 3");
+
+    auto empty_news_path = upgraded_defaults.registry();
+    empty_news_path.nesys().news_path = "";
+    failures += expect_registry_valid(
+        empty_news_path,
+        false,
+        "empty news_path");
+
+    auto maximum_log_path = upgraded_defaults.registry();
+    maximum_log_path.nesys().log_path = std::string(259, 'x');
+    failures += expect_registry_valid(
+        maximum_log_path,
+        true,
+        "259-byte log_path");
+
+    auto oversized_log_path = upgraded_defaults.registry();
+    oversized_log_path.nesys().log_path = std::string(260, 'x');
+    failures += expect_registry_valid(
+        oversized_log_path,
+        false,
+        "260-byte log_path");
 
     constexpr std::array<std::string_view, 5> valid_ipv4{
         "127.0.0.1",
@@ -408,6 +729,21 @@ card_read = ';'
 
 [nesys]
 server_ip = '127.0.0.1'
+
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
 
 [experimental]
 enable_120fps_timer_patches = false

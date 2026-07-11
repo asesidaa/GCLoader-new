@@ -10,6 +10,7 @@
 
 // Make sure parsers are included *before* defining structs that use them
 #include "SdlRflParsers.h"
+#include "RegistryConfig.h"
 
 enum class InputMode {
     Keyboard,
@@ -95,6 +96,7 @@ struct InputConfig
     rfl::Rename<"keyboard", KeyboardConfig> keyboard;
     rfl::Rename<"gamepad", GamepadConfig> gamepad;
     rfl::Rename<"nesys", NesysConfig> nesys;
+    rfl::Rename<"registry", RegistryConfig> registry;
     rfl::Rename<"experimental", ExperimentalConfig> experimental;
 };
 
@@ -184,6 +186,14 @@ public:
     bool GetEnableNesysServiceAdapterPatch() const { return config.experimental.value().enable_nesys_service_adapter_patch.value(); }
     const std::string& GetNesysServerIp() const {
         return config.nesys.value().server_ip.value();
+    }
+
+    bool GetEnableRegistryConfigOverride() const {
+        return config.registry.value().enabled.value();
+    }
+
+    const RegistryConfig& GetRegistryConfig() const {
+        return config.registry.value();
     }
 
     ConfigManager(const ConfigManager&) = delete;

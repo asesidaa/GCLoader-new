@@ -42,6 +42,21 @@ card_read = 'f4'
 [nesys]
 server_ip = '127.0.0.1'
 
+[registry]
+enabled = false
+
+[registry.game]
+country = 'GrooveCoasterJpn'
+
+[registry.nesys]
+game_kind = 303801
+event_next_time = 900
+condition_time = 300
+log_level = 3
+news_path = 'D:\system\DUA\news'
+event_path = 'D:\system\DUA\event'
+log_path = 'D:\system\CmdFile\log'
+
 [experimental]
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false

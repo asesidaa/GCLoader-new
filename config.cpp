@@ -31,6 +31,14 @@ ConfigManager::ConfigManager()
                 "Invalid [nesys].server_ip; expected dotted-decimal IPv4");
         }
 
+        const auto registry_validation =
+            gc::registry_config::ValidateRegistryConfig(result.value().registry());
+        if (!registry_validation.valid()) {
+            throw std::runtime_error(
+                gc::registry_config::FirstRegistryValidationError(
+                    registry_validation));
+        }
+
         config = result.value();
         PLOG_DEBUG << "Config file parsed successfully" << std::endl;
         PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
