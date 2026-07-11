@@ -115,6 +115,7 @@ set(SOURCES
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
         RegistryConfig.cpp
+        RegistryConfigOverride.cpp
         RfidEmu.cpp
         ServerAddressOverride.cpp
         SwitchInputPolicy.cpp
@@ -188,6 +189,23 @@ target_link_libraries(ConfigFeatureTests PRIVATE
         reflectcpp
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
+
+add_executable(RegistryConfigOverrideTests
+        NesysServiceProcess.cpp
+        RegistryConfig.cpp
+        RegistryConfigOverride.cpp
+        tests/RegistryConfigOverrideTests.cpp
+)
+target_include_directories(RegistryConfigOverrideTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+add_test(
+        NAME RegistryConfigOverrideTests
+        COMMAND RegistryConfigOverrideTests
+)
 
 add_executable(NesysHookTransactionTests
         NesysHookTransaction.cpp
