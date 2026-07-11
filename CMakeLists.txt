@@ -110,6 +110,7 @@ set(SOURCES
         iDmacDrv32.cpp
         InputManager.cpp
         NesysNetworkConfig.cpp
+        NesysServiceLauncher.cpp
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
         RfidEmu.cpp
@@ -240,11 +241,14 @@ target_include_directories(SwitchInputPatchTests PRIVATE
 add_test(NAME SwitchInputPatchTests COMMAND SwitchInputPatchTests)
 
 add_executable(NesysServicePatchTests
+        NesysServiceLauncher.cpp
         NesysServiceProcess.cpp
         tests/NesysServicePatchTests.cpp
 )
 target_include_directories(NesysServicePatchTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
 )
 add_test(NAME NesysServicePatchTests COMMAND NesysServicePatchTests)
 
