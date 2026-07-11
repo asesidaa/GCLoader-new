@@ -124,3 +124,6 @@ http-client.private.env.json
 # Apifox Helper cache
 .idea/.cache/.Apifox_Helper
 .idea/ApifoxUploaderProjectSetting.xml
+
+# Local Superpowers agent artifacts
+/.superpowers/
