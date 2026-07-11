@@ -182,6 +182,17 @@ target_link_libraries(ConfigFeatureTests PRIVATE
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
 
+add_executable(NesysHookTransactionTests
+        NesysHookTransaction.cpp
+        tests/NesysHookTransactionTests.cpp
+)
+target_include_directories(NesysHookTransactionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+)
+target_link_libraries(NesysHookTransactionTests PRIVATE minhook)
+add_test(NAME NesysHookTransactionTests COMMAND NesysHookTransactionTests)
+
 add_executable(SwitchInputPolicyTests
         SwitchInputPolicy.cpp
         tests/SwitchInputPolicyTests.cpp
