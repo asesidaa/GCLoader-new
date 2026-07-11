@@ -46,6 +46,11 @@ struct KeyboardConfig
     rfl::Rename<"card_read", SDL_Keycode> card_read = SDLK_F4;
 };
 
+struct NesysConfig
+{
+    rfl::Rename<"server_ip", std::string> server_ip = "127.0.0.1";
+};
+
 struct ExperimentalConfig
 {
     rfl::Rename<"enable_120fps_timer_patches", bool> enable_120fps_timer_patches = false;
@@ -89,6 +94,7 @@ struct InputConfig
     // Nested tables require nested structs
     rfl::Rename<"keyboard", KeyboardConfig> keyboard;
     rfl::Rename<"gamepad", GamepadConfig> gamepad;
+    rfl::Rename<"nesys", NesysConfig> nesys;
     rfl::Rename<"experimental", ExperimentalConfig> experimental;
 };
 
@@ -176,6 +182,9 @@ public:
     bool GetEnableTestModeStorageRedirect() const { return config.experimental.value().enable_testmode_storage_redirect.value(); }
     bool GetEnableTimerFreezePatches() const { return config.experimental.value().enable_timer_freeze_patches.value(); }
     bool GetEnableNesysServiceAdapterPatch() const { return config.experimental.value().enable_nesys_service_adapter_patch.value(); }
+    const std::string& GetNesysServerIp() const {
+        return config.nesys.value().server_ip.value();
+    }
 
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;

@@ -1,7 +1,9 @@
 #include "config.h"
+#include "NesysNetworkConfig.h"
 #include "WinKeyMapping.h"
 
 #include <Windows.h>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -57,6 +59,9 @@ test = 't'
 constexpr const char* kDefaultExperimentalConfig = R"toml(
 card_read = 'f4'
 
+[nesys]
+server_ip = '127.0.0.1'
+
 [experimental]
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
@@ -66,9 +71,15 @@ enable_nesys_service_adapter_patch = true
 
 constexpr const char* kDefaultCardReadConfig = R"toml(
 card_read = 'f4'
+
+[nesys]
+server_ip = '127.0.0.1'
 )toml";
 
 constexpr const char* kDefaultExperimentalTable = R"toml(
+[nesys]
+server_ip = '127.0.0.1'
+
 [experimental]
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
@@ -78,6 +89,9 @@ enable_nesys_service_adapter_patch = true
 
 constexpr const char* kEnabledExperimentalConfig = R"toml(
 card_read = 'f8'
+
+[nesys]
+server_ip = '127.0.0.1'
 
 [experimental]
 enable_120fps_timer_patches = true
@@ -148,6 +162,17 @@ int expect_string(const std::string& actual, const std::string& expected, const 
     return 1;
 }
 
+int expect_ipv4_valid(std::string_view value, bool expected, const char* name) {
+    const bool actual = gc::nesys_service::IsDottedDecimalIpv4(value);
+    if (actual == expected) {
+        return 0;
+    }
+
+    std::cerr << "Expected " << name << " validity to be " << expected
+              << ", got " << actual << "\n";
+    return 1;
+}
+
 int expect_style(
     GameplayInputStyle actual,
     GameplayInputStyle expected,
@@ -183,6 +208,83 @@ int main() {
 
     const auto upgraded_defaults = parse_config(
         std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig);
+    failures += expect_string(
+        upgraded_defaults.nesys().server_ip(),
+        "127.0.0.1",
+        "default NESYS server IPv4");
+
+    InputConfig generated_defaults{};
+    failures += expect_string(
+        generated_defaults.nesys().server_ip(),
+        "127.0.0.1",
+        "constructed ConfigGUI NESYS server IPv4");
+    const auto generated_toml = rfl::toml::write(generated_defaults);
+    failures += expect_bool(
+        generated_toml.find("[nesys]") != std::string::npos,
+        true,
+        "generated TOML NESYS table");
+    failures += expect_bool(
+        generated_toml.find("server_ip") != std::string::npos,
+        true,
+        "generated TOML NESYS server field");
+
+    const auto valid_nesys_config =
+        std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
+    failures += expect_parse_failure(
+        replace_once(
+            valid_nesys_config,
+            "[nesys]\nserver_ip = '127.0.0.1'\n\n",
+            ""),
+        "missing NESYS table");
+    failures += expect_parse_failure(
+        replace_once(
+            valid_nesys_config,
+            "server_ip = '127.0.0.1'\n",
+            ""),
+        "missing NESYS server_ip");
+
+    constexpr std::array<std::string_view, 5> valid_ipv4{
+        "127.0.0.1",
+        "10.23.45.67",
+        "192.168.100.200",
+        "203.0.113.9",
+        "255.255.255.255",
+    };
+    for (const auto value : valid_ipv4) {
+        failures += expect_ipv4_valid(value, true, std::string(value).c_str());
+    }
+
+    constexpr std::array<std::string_view, 13> invalid_ipv4{
+        "",
+        "localhost",
+        "::1",
+        "http://127.0.0.1",
+        "127.0.0.1/path",
+        "127.0.0.1:80",
+        "1.2.3",
+        "1.2.3.4.5",
+        ".1.2.3",
+        "1..2.3",
+        "1.2.3.",
+        "256.1.2.3",
+        "1.2.-3.4",
+    };
+    for (const auto value : invalid_ipv4) {
+        failures += expect_ipv4_valid(value, false, std::string(value).c_str());
+    }
+
+    auto custom_server_text = replace_once(
+        valid_nesys_config,
+        "server_ip = '127.0.0.1'",
+        "server_ip = '10.23.45.67'");
+    const auto custom_server = parse_config(custom_server_text);
+    const auto custom_server_round_trip =
+        parse_config(rfl::toml::write(custom_server));
+    failures += expect_string(
+        custom_server_round_trip.nesys().server_ip(),
+        "10.23.45.67",
+        "custom NESYS server round-trip");
+
     failures += expect_bool(
         upgraded_defaults.experimental().enable_120fps_timer_patches(),
         false,
@@ -303,6 +405,9 @@ enable_timer_freeze_patches = false
     const auto punctuation = parse_config(
         std::string(kRequiredConfigPrefix) + R"toml(
 card_read = ';'
+
+[nesys]
+server_ip = '127.0.0.1'
 
 [experimental]
 enable_120fps_timer_patches = false

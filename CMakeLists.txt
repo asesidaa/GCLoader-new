@@ -109,6 +109,7 @@ set(SOURCES
         FrameratePatch.cpp
         iDmacDrv32.cpp
         InputManager.cpp
+        NesysNetworkConfig.cpp
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
         RfidEmu.cpp
@@ -120,6 +121,7 @@ set(SOURCES
 set(GUI_SOURCES
         config.cpp
         GUI_main.cpp
+        NesysNetworkConfig.cpp
 )
 
 
@@ -165,6 +167,7 @@ target_include_directories(CountdownTimerFreezeTests PRIVATE
 add_test(NAME CountdownTimerFreezeTests COMMAND CountdownTimerFreezeTests)
 
 add_executable(ConfigFeatureTests
+        NesysNetworkConfig.cpp
         tests/ConfigFeatureTests.cpp
 )
 target_include_directories(ConfigFeatureTests PRIVATE

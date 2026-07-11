@@ -5,6 +5,8 @@
 #include "imgui.h"
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
+#include "misc/cpp/imgui_stdlib.h"
+#include "NesysNetworkConfig.h"
 
 #include <rfl/toml.hpp>
 #include <iostream>
@@ -421,6 +423,19 @@ int main(int argc, char *argv[]) {
                 "Deadzone for analog sticks (0-32767).\nHigher values require more stick movement to register.");
         }
 
+        ImGui::SeparatorText("NESYS");
+        auto& nesys_server_ip = g_config.nesys().server_ip();
+        if (ImGui::InputText("NESYS Server IPv4", &nesys_server_ip)) {
+            g_config_dirty = true;
+        }
+        const bool nesys_server_ip_valid =
+            gc::nesys_service::IsDottedDecimalIpv4(nesys_server_ip);
+        if (!nesys_server_ip_valid) {
+            ImGui::TextColored(
+                ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+                "Enter a dotted-decimal IPv4 address without a port.");
+        }
+
         ImGui::SeparatorText("Experimental");
         bool enable_120fps_timer_patches = g_config.experimental().enable_120fps_timer_patches();
         if (ImGui::Checkbox("120 FPS timer patches", &enable_120fps_timer_patches)) {
@@ -566,6 +581,7 @@ int main(int argc, char *argv[]) {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(0.3f, 0.7f, 0.7f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0.3f, 0.8f, 0.8f));
         }
+        ImGui::BeginDisabled(!nesys_server_ip_valid);
         if (ImGui::Button("Save Configuration") && g_config_dirty) {
             try {
                 std::string toml_output = rfl::toml::write(g_config);
@@ -585,6 +601,7 @@ int main(int argc, char *argv[]) {
                 // Optionally show an ImGui error popup here
             }
         }
+        ImGui::EndDisabled();
         if (g_config_dirty) {
             ImGui::PopStyleColor(3);
             ImGui::SameLine();

@@ -1,4 +1,5 @@
 ﻿#include "config.h"
+#include "NesysNetworkConfig.h"
 #include <filesystem>
 #include <fstream>
 #include "rfl/toml.hpp"
@@ -23,6 +24,13 @@ ConfigManager::ConfigManager()
     auto result = rfl::toml::read<InputConfig>(configFile);
     if (result)
     {
+        const auto& server_ip = result.value().nesys().server_ip();
+        if (!gc::nesys_service::IsDottedDecimalIpv4(server_ip))
+        {
+            throw std::runtime_error(
+                "Invalid [nesys].server_ip; expected dotted-decimal IPv4");
+        }
+
         config = result.value();
         PLOG_DEBUG << "Config file parsed successfully" << std::endl;
         PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
