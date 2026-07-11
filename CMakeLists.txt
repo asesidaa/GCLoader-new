@@ -115,6 +115,7 @@ set(SOURCES
         RfidEmu.cpp
         SwitchInputPolicy.cpp
         SwitchInputPatch.cpp
+        SyntheticNetworkAdapter.cpp
         TestModeStorageRedirect.cpp
 )
 
@@ -192,6 +193,17 @@ target_include_directories(NesysHookTransactionTests PRIVATE
 )
 target_link_libraries(NesysHookTransactionTests PRIVATE minhook)
 add_test(NAME NesysHookTransactionTests COMMAND NesysHookTransactionTests)
+
+add_executable(SyntheticNetworkAdapterTests
+        SyntheticNetworkAdapter.cpp
+        tests/SyntheticNetworkAdapterTests.cpp
+)
+target_include_directories(SyntheticNetworkAdapterTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+add_test(NAME SyntheticNetworkAdapterTests COMMAND SyntheticNetworkAdapterTests)
 
 add_executable(SwitchInputPolicyTests
         SwitchInputPolicy.cpp
