@@ -4,7 +4,11 @@
 #include <atomic>
 #include <cstring>
 #include <cwchar>
+#include <iomanip>
 #include <string_view>
+#include <utility>
+
+#include <safetyhook.hpp>
 
 #include "plog/Log.h"
 
@@ -14,6 +18,36 @@ namespace {
 std::atomic_flag g_adapter_query_logged = ATOMIC_FLAG_INIT;
 std::atomic_flag g_notification_logged = ATOMIC_FLAG_INIT;
 std::atomic_flag g_mutation_logged = ATOMIC_FLAG_INIT;
+safetyhook::MidHook g_service_ping_hook{};
+std::atomic_flag g_ping_logged = ATOMIC_FLAG_INIT;
+
+bool read_bytes_safe(
+    std::uintptr_t address,
+    void* output,
+    std::size_t size) noexcept {
+    if (address == 0 || output == nullptr || size == 0) {
+        return false;
+    }
+
+    __try {
+        std::memcpy(output, reinterpret_cast<const void*>(address), size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void service_ping_callback(safetyhook::Context& context) noexcept {
+    ApplyServicePingTarget(&context.eax);
+    if (!g_ping_logged.test_and_set(std::memory_order_relaxed)) {
+        try {
+            PLOG_INFO
+                << "SyntheticNetworkAdapter: first ping-redirection family"
+                << " target=" << kServicePingLoopback;
+        } catch (...) {
+        }
+    }
+}
 
 void log_first(std::atomic_flag& flag, const char* family) noexcept {
     if (flag.test_and_set(std::memory_order_relaxed)) {
@@ -242,6 +276,117 @@ DWORD WINAPI SuppressIpRenewAddress(PIP_ADAPTER_INDEX_MAP) noexcept {
 DWORD WINAPI SuppressFlushIpNetTable(DWORD) noexcept {
     log_first(g_mutation_logged, "mutation-suppression family");
     return NO_ERROR;
+}
+
+bool ValidateServicePingSignature(
+    std::span<const std::uint8_t> bytes) noexcept {
+    return bytes.size() >= kServicePingSignature.size() &&
+        std::equal(
+            kServicePingSignature.begin(),
+            kServicePingSignature.end(),
+            bytes.begin());
+}
+
+void ApplyServicePingTarget(std::uintptr_t* saved_eax) noexcept {
+    static_assert(sizeof(void*) == sizeof(std::uint32_t));
+    if (saved_eax != nullptr) {
+        *saved_eax =
+            reinterpret_cast<std::uintptr_t>(kServicePingLoopback);
+    }
+}
+
+bool PreflightServicePingRedirect(
+    std::uintptr_t module_base) noexcept {
+    std::array<std::uint8_t, kServicePingSignature.size()> actual{};
+    const std::uintptr_t target = module_base + kServicePingRva;
+    if (!read_bytes_safe(target, actual.data(), actual.size())) {
+        try {
+            PLOG_ERROR
+                << "SyntheticNetworkAdapter: ping signature read failed"
+                << " rva=0x" << std::hex << kServicePingRva << std::dec;
+        } catch (...) {
+        }
+        return false;
+    }
+
+    if (ValidateServicePingSignature(actual)) {
+        return true;
+    }
+
+    std::size_t mismatch = 0;
+    while (mismatch < actual.size() &&
+           actual[mismatch] == kServicePingSignature[mismatch]) {
+        ++mismatch;
+    }
+    try {
+        PLOG_ERROR
+            << "SyntheticNetworkAdapter: ping signature mismatch"
+            << " rva=0x" << std::hex << kServicePingRva
+            << " offset=0x" << mismatch
+            << " expected=0x"
+            << static_cast<unsigned>(kServicePingSignature[mismatch])
+            << " actual=0x" << static_cast<unsigned>(actual[mismatch])
+            << std::dec;
+    } catch (...) {
+    }
+    return false;
+}
+
+bool PrepareServicePingRedirect(
+    std::uintptr_t module_base) noexcept {
+    try {
+        auto created = safetyhook::MidHook::create(
+            reinterpret_cast<void*>(module_base + kServicePingRva),
+            service_ping_callback,
+            safetyhook::MidHook::StartDisabled);
+        if (!created.has_value()) {
+            PLOG_ERROR
+                << "SyntheticNetworkAdapter: ping hook creation failed"
+                << " rva=0x" << std::hex << kServicePingRva << std::dec;
+            return false;
+        }
+        g_service_ping_hook = std::move(*created);
+        return static_cast<bool>(g_service_ping_hook) &&
+            !g_service_ping_hook.enabled();
+    } catch (...) {
+        try {
+            PLOG_ERROR
+                << "SyntheticNetworkAdapter: ping hook threw during creation";
+        } catch (...) {
+        }
+        return false;
+    }
+}
+
+bool ActivateServicePingRedirect() noexcept {
+    try {
+        if (!g_service_ping_hook) {
+            return false;
+        }
+        const auto enabled = g_service_ping_hook.enable();
+        if (!enabled.has_value()) {
+            g_service_ping_hook.reset();
+            return false;
+        }
+        PLOG_INFO
+            << "SyntheticNetworkAdapter: service ping hook active"
+            << " rva=0x" << std::hex << kServicePingRva << std::dec;
+        return true;
+    } catch (...) {
+        try {
+            PLOG_ERROR
+                << "SyntheticNetworkAdapter: ping hook threw during enable";
+        } catch (...) {
+        }
+        return false;
+    }
+}
+
+void RollbackServicePingRedirect() noexcept {
+    try {
+        g_service_ping_hook.reset();
+    } catch (...) {
+    }
 }
 
 std::span<const char* const> SyntheticAdapterHookExports(

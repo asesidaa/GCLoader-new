@@ -311,6 +311,45 @@ int main() {
             SuppressFlushIpNetTable(map.Index) == NO_ERROR,
         "mutation suppression success");
 
+    auto exact_ping_signature = kServicePingSignature;
+    failures += expect(
+        ValidateServicePingSignature(exact_ping_signature),
+        "exact ping signature");
+
+    auto changed_ping_signature = exact_ping_signature;
+    changed_ping_signature[17] ^= 0x01;
+    failures += expect(
+        !ValidateServicePingSignature(changed_ping_signature),
+        "changed target byte rejects ping hook");
+
+    std::vector<std::uint8_t> fake_image(
+        kServicePingRva + kServicePingSignature.size() + 32,
+        0x5A);
+    std::copy(
+        kServicePingSignature.begin(),
+        kServicePingSignature.end(),
+        fake_image.begin() + kServicePingRva);
+    auto target_bytes = std::span<const std::uint8_t>{
+        fake_image.data() + kServicePingRva,
+        kServicePingSignature.size(),
+    };
+    failures += expect(
+        ValidateServicePingSignature(target_bytes),
+        "matching target accepts arbitrary surrounding image");
+    fake_image[0x20] ^= 0xFF;
+    failures += expect(
+        ValidateServicePingSignature(target_bytes),
+        "unrelated executable change ignored");
+
+    std::uintptr_t saved_eax = 0x12345678;
+    ApplyServicePingTarget(&saved_eax);
+    failures += expect(
+        saved_eax == reinterpret_cast<std::uintptr_t>(kServicePingLoopback),
+        "ping target becomes process-lifetime loopback");
+    failures += expect(
+        std::strcmp(kServicePingLoopback, "127.0.0.1") == 0,
+        "ping loopback text");
+
     const auto game_exports =
         SyntheticAdapterHookExports(ProcessRole::Game);
     const auto service_exports =

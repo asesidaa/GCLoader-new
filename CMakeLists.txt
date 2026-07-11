@@ -203,6 +203,9 @@ target_include_directories(SyntheticNetworkAdapterTests PRIVATE
         ${minhook_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
+target_link_libraries(SyntheticNetworkAdapterTests PRIVATE
+        safetyhook::safetyhook
+)
 add_test(NAME SyntheticNetworkAdapterTests COMMAND SyntheticNetworkAdapterTests)
 
 add_executable(SwitchInputPolicyTests
