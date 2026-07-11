@@ -113,6 +113,7 @@ set(SOURCES
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
         RfidEmu.cpp
+        ServerAddressOverride.cpp
         SwitchInputPolicy.cpp
         SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
@@ -207,6 +208,18 @@ target_link_libraries(SyntheticNetworkAdapterTests PRIVATE
         safetyhook::safetyhook
 )
 add_test(NAME SyntheticNetworkAdapterTests COMMAND SyntheticNetworkAdapterTests)
+
+add_executable(ServerAddressOverrideTests
+        NesysNetworkConfig.cpp
+        ServerAddressOverride.cpp
+        tests/ServerAddressOverrideTests.cpp
+)
+target_include_directories(ServerAddressOverrideTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+add_test(NAME ServerAddressOverrideTests COMMAND ServerAddressOverrideTests)
 
 add_executable(SwitchInputPolicyTests
         SwitchInputPolicy.cpp
