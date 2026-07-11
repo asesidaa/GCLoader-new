@@ -1,0 +1,49 @@
+axis_threshold = 16384
+gamepad_index = 0
+input_mode = 'Keyboard'
+gameplay_input_style = 'Arcade'
+
+[gamepad]
+p1_axis_horizontal = 'leftx'
+p1_axis_vertical = 'lefty'
+p1_button1 = 'south'
+p1_dpad_down = 'dpad_down'
+p1_dpad_left = 'dpad_left'
+p1_dpad_right = 'dpad_right'
+p1_dpad_up = 'dpad_up'
+p2_axis_horizontal = 'rightx'
+p2_axis_vertical = 'righty'
+p2_button1 = 'east'
+p2_button_down = 'invalid'
+p2_button_left = 'invalid'
+p2_button_right = 'invalid'
+p2_button_up = 'invalid'
+
+[keyboard]
+p1_button1 = 'space'
+p1_down = 's'
+p1_left = 'a'
+p1_right = 'd'
+p1_start = '1'
+p1_up = 'w'
+p2_button1 = 'k'
+p2_down = 'down'
+p2_left = 'left'
+p2_right = 'right'
+p2_service = 'f2'
+p2_start = '2'
+p2_up = 'up'
+service1 = 'f1'
+service2 = 'i'
+service3 = 'p'
+test = 't'
+card_read = 'f4'
+
+[nesys]
+server_ip = '127.0.0.1'
+
+[experimental]
+enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
+enable_timer_freeze_patches = false
+enable_nesys_service_adapter_patch = true
