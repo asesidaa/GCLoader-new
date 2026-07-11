@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -11,6 +12,19 @@ enum class ProcessRole {
     Game,
     Service,
 };
+
+struct NesysFeaturePlan {
+    bool enabled{false};
+    bool synthetic_adapter{false};
+    bool server_address_override{false};
+    bool service_launcher{false};
+    bool service_ping_redirect{false};
+    std::size_t api_hook_count{0};
+};
+
+NesysFeaturePlan ResolveNesysFeaturePlan(
+    ProcessRole role,
+    bool enabled) noexcept;
 
 bool EqualsIgnoreCaseAscii(std::string_view left, std::string_view right);
 std::string FileNameOfPathA(std::string_view path);

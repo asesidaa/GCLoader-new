@@ -1,9 +1,14 @@
 #pragma once
 
+#include <WinSock2.h>
 #include <Windows.h>
+
+#include "NesysServiceProcess.h"
 
 namespace gc::nesys_service {
 
-void NesysServicePatchInit(HMODULE loader_module);
+bool NesysServicePatchInit(
+    HMODULE loader_module,
+    ProcessRole role) noexcept;
 
 } // namespace gc::nesys_service

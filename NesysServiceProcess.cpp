@@ -178,4 +178,30 @@ bool ShouldResumeAfterServiceInjection(bool caller_requested_suspended) {
     return !caller_requested_suspended;
 }
 
+NesysFeaturePlan ResolveNesysFeaturePlan(
+    ProcessRole role,
+    bool enabled) noexcept {
+    if (!enabled) {
+        return {};
+    }
+    if (role == ProcessRole::Game) {
+        return {
+            true,
+            true,
+            true,
+            true,
+            false,
+            6,
+        };
+    }
+    return {
+        true,
+        true,
+        true,
+        false,
+        true,
+        10,
+    };
+}
+
 } // namespace gc::nesys_service

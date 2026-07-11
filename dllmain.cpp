@@ -78,27 +78,41 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         {
             DisableThreadLibraryCalls(hModule);
             InitSharedLog();
-        
+
             PLOG_DEBUG << "DLL attach!" << std::endl;
 
-            const auto role = gc::nesys_service::DetectCurrentProcessRole();
-            PLOG_INFO << "NesysServicePatch: process role=" << gc::nesys_service::ProcessRoleName(role);
+            const auto role =
+                gc::nesys_service::DetectCurrentProcessRole();
+            PLOG_INFO
+                << "NesysServicePatch: process role="
+                << gc::nesys_service::ProcessRoleName(role);
+
+            if (!gc::nesys_service::NesysServicePatchInit(
+                    hModule,
+                    role)) {
+                PLOG_ERROR
+                    << "NesysServicePatch: fail-closed DLL attach";
+                return FALSE;
+            }
 
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
                 RfidEmuInit();
                 PLOG_DEBUG << "Rfid init complete!" << std::endl;
 
                 FrameratePatchInit();
-                PLOG_DEBUG << "120 FPS runtime patch init complete!" << std::endl;
+                PLOG_DEBUG
+                    << "120 FPS runtime patch init complete!"
+                    << std::endl;
 
                 gc::switch_input::SwitchInputPatchInit();
-                PLOG_DEBUG << "Switch gameplay input patch init complete!" << std::endl;
+                PLOG_DEBUG
+                    << "Switch gameplay input patch init complete!"
+                    << std::endl;
             } else {
-                PLOG_INFO << "NesysServicePatch: service role skipping game-only RFID/input/framerate initialization";
+                PLOG_INFO
+                    << "NesysServicePatch: service role skipping"
+                    << " game-only RFID/input/framerate initialization";
             }
-
-            gc::nesys_service::NesysServicePatchInit(hModule);
-
             break;
         }
     case DLL_PROCESS_DETACH:

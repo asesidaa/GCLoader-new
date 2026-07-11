@@ -109,6 +109,7 @@ set(SOURCES
         FrameratePatch.cpp
         iDmacDrv32.cpp
         InputManager.cpp
+        NesysHookTransaction.cpp
         NesysNetworkConfig.cpp
         NesysServiceLauncher.cpp
         NesysServicePatch.cpp

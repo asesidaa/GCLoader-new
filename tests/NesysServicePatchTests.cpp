@@ -252,5 +252,44 @@ int main() {
             resume_failure.close_calls == 2,
         "resume failure fails closed");
 
+    const auto disabled_game =
+        gc::nesys_service::ResolveNesysFeaturePlan(
+            gc::nesys_service::ProcessRole::Game,
+            false);
+    failures += expect_true(
+        !disabled_game.enabled &&
+            !disabled_game.synthetic_adapter &&
+            !disabled_game.server_address_override &&
+            !disabled_game.service_launcher &&
+            !disabled_game.service_ping_redirect &&
+            disabled_game.api_hook_count == 0,
+        "disabled game installs nothing");
+
+    const auto game_plan =
+        gc::nesys_service::ResolveNesysFeaturePlan(
+            gc::nesys_service::ProcessRole::Game,
+            true);
+    failures += expect_true(
+        game_plan.enabled &&
+            game_plan.synthetic_adapter &&
+            game_plan.server_address_override &&
+            game_plan.service_launcher &&
+            !game_plan.service_ping_redirect &&
+            game_plan.api_hook_count == 6,
+        "enabled game component plan");
+
+    const auto service_plan =
+        gc::nesys_service::ResolveNesysFeaturePlan(
+            gc::nesys_service::ProcessRole::Service,
+            true);
+    failures += expect_true(
+        service_plan.enabled &&
+            service_plan.synthetic_adapter &&
+            service_plan.server_address_override &&
+            !service_plan.service_launcher &&
+            service_plan.service_ping_redirect &&
+            service_plan.api_hook_count == 10,
+        "enabled service component plan");
+
     return failures == 0 ? 0 : 1;
 }
