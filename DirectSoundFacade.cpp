@@ -283,7 +283,9 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::CreateSoundBuffer(
     if ((descriptor->dwFlags & DSBCAPS_PRIMARYBUFFER) != 0) {
         if (descriptor->dwFlags != DSBCAPS_PRIMARYBUFFER ||
             descriptor->dwBufferBytes != 0 ||
-            descriptor->lpwfxFormat != nullptr) {
+            descriptor->dwReserved != 0 ||
+            descriptor->lpwfxFormat != nullptr ||
+            !IsEqualGUID(descriptor->guid3DAlgorithm, GUID_NULL)) {
             return DSERR_INVALIDPARAM;
         }
         auto* primary = new (std::nothrow) PrimarySoundBuffer();

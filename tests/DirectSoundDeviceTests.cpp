@@ -264,6 +264,44 @@ int TestPrimaryValidationAndIdentity() {
             DSERR_INVALIDPARAM,
         "primary source format rejection");
 
+    auto nonzero_reserved = valid;
+    nonzero_reserved.dwReserved = 1;
+    created = reinterpret_cast<IDirectSoundBuffer*>(1);
+    const auto reserved_result = device->CreateSoundBuffer(
+        &nonzero_reserved,
+        &created,
+        nullptr);
+    failures += Expect(
+        reserved_result == DSERR_INVALIDPARAM && created == nullptr,
+        "primary nonzero reserved field rejection with null output");
+    if (reserved_result != DSERR_INVALIDPARAM) {
+        std::cerr << "Observed nonzero dwReserved HRESULT "
+                  << reserved_result << ", output null "
+                  << (created == nullptr) << '\n';
+    }
+    if (SUCCEEDED(reserved_result) && created != nullptr) {
+        created->Release();
+    }
+
+    auto nonnull_3d_algorithm = valid;
+    nonnull_3d_algorithm.guid3DAlgorithm = IID_IUnknown;
+    created = reinterpret_cast<IDirectSoundBuffer*>(1);
+    const auto algorithm_result = device->CreateSoundBuffer(
+        &nonnull_3d_algorithm,
+        &created,
+        nullptr);
+    failures += Expect(
+        algorithm_result == DSERR_INVALIDPARAM && created == nullptr,
+        "primary non-null 3D algorithm rejection with null output");
+    if (algorithm_result != DSERR_INVALIDPARAM) {
+        std::cerr << "Observed non-null guid3DAlgorithm HRESULT "
+                  << algorithm_result << ", output null "
+                  << (created == nullptr) << '\n';
+    }
+    if (SUCCEEDED(algorithm_result) && created != nullptr) {
+        created->Release();
+    }
+
     IDirectSoundBuffer8* primary{};
     failures += Expect(
         CreatePrimaryBuffer(device, valid, &primary) == DS_OK &&
