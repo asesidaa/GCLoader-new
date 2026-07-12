@@ -92,8 +92,9 @@ Create `tests/DirectSoundDeviceTests.cpp` with a fake engine-services object tha
 
 ```cpp
 std::unique_ptr<MixerVoice> CreateVoice(
-    const NormalizedSourceFormat&, AudioSnapshot&,
-    AudioCursorTimeline&, VoiceUsage, ma_result*) noexcept override;
+    const NormalizedSourceFormat&, std::shared_ptr<AudioSnapshot>,
+    std::shared_ptr<AudioCursorTimeline>, VoiceUsage,
+    ma_result*) noexcept override;
 std::optional<std::uint64_t> CurrentOutputFrame() noexcept override;
 std::uint32_t endpoint_buffer_frames() const noexcept override;
 void CountCursorTimelineFailure() noexcept override;

@@ -131,6 +131,7 @@ target_include_directories(imgui PUBLIC ${imgui_external_SOURCE_DIR}
 set(SOURCES
         AudioCursorTimeline.cpp
         AudioSnapshot.cpp
+        DirectSoundFacade.cpp
         MiniaudioMixer.cpp
         CountdownTimerFreeze.cpp
         config.cpp
@@ -173,6 +174,8 @@ target_include_directories(iDmacDrv32 PRIVATE
 
 target_link_libraries(iDmacDrv32 PRIVATE
         SDL3-static
+        dsound
+        dxguid
         ntdll
         minhook
         miniaudio
@@ -238,6 +241,24 @@ target_include_directories(MiniaudioMixerTests PRIVATE
 )
 target_link_libraries(MiniaudioMixerTests PRIVATE miniaudio)
 add_test(NAME MiniaudioMixerTests COMMAND MiniaudioMixerTests)
+
+add_executable(SecondarySoundBufferTests
+        WasapiAudioTypes.cpp
+        AudioSnapshot.cpp
+        AudioCursorTimeline.cpp
+        MiniaudioMixer.cpp
+        DirectSoundFacade.cpp
+        tests/SecondarySoundBufferTests.cpp
+)
+target_include_directories(SecondarySoundBufferTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(SecondarySoundBufferTests PRIVATE
+        miniaudio
+        dsound
+        dxguid
+)
+add_test(NAME SecondarySoundBufferTests COMMAND SecondarySoundBufferTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp

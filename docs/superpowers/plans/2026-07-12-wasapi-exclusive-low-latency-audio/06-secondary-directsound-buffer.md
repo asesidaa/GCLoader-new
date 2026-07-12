@@ -4,7 +4,7 @@
 
 **Goal:** Implement the complete `IDirectSoundBuffer8` ABI for game secondary buffers, with functional storage, playback, gain, looping, seeking, status, and endpoint-clock cursor behavior.
 
-**Architecture:** `SecondarySoundBuffer` owns the normalized source format, `AudioSnapshot`, `AudioCursorTimeline`, and one `MixerVoice`. A narrow engine-services interface supplies voice creation, current hardware output frame, endpoint period, and cursor-failure counting without coupling COM code to the production engine.
+**Architecture:** `SecondarySoundBuffer` owns the normalized source format, shared `AudioSnapshot` and `AudioCursorTimeline` sources, and one custom-node `MixerVoice`. It passes those shared owners through the voice-creation boundary so voice state structurally retains its render sources without copying `shared_ptr` values on the render path. A narrow engine-services interface supplies voice creation, current hardware output frame, endpoint period, and cursor-failure counting without coupling COM code to the production engine.
 
 **Tech Stack:** C++23, DirectSound 8 COM ABI, Plans 02-05, miniaudio, CTest.
 
@@ -40,8 +40,9 @@ class IAudioEngineServices {
 public:
     virtual ~IAudioEngineServices() = default;
     virtual std::unique_ptr<MixerVoice> CreateVoice(
-        const NormalizedSourceFormat&, AudioSnapshot&,
-        AudioCursorTimeline&, VoiceUsage, ma_result*) noexcept = 0;
+        const NormalizedSourceFormat&, std::shared_ptr<AudioSnapshot>,
+        std::shared_ptr<AudioCursorTimeline>, VoiceUsage,
+        ma_result*) noexcept = 0;
     virtual std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept = 0;
     virtual std::uint32_t endpoint_buffer_frames() const noexcept = 0;
@@ -139,7 +140,7 @@ constexpr DWORD kSupportedSecondaryFlags =
     DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER;
 ```
 
-Normalize the format, require `dwBufferBytes % block_align == 0`, allocate the object, then create its voice. Map allocation/miniaudio initialization failure to `DSERR_OUTOFMEMORY` and never return a half-created object.
+Normalize the format, require `dwBufferBytes % block_align == 0`, allocate shared snapshot/timeline owners, then create the object and pass those owners through `CreateVoice`. The buffer and voice state retain shared ownership; render code continues to use one scoped, nonmoving `AudioSnapshot::RenderView` and does not copy `shared_ptr` values. Map allocation/miniaudio initialization failure to `DSERR_OUTOFMEMORY` and never return a half-created object.
 
 Classify usage from both format and the two observed descriptor patterns:
 

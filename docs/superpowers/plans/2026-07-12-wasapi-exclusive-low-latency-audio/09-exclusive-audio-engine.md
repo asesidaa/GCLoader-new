@@ -67,8 +67,9 @@ public:
         const ma_allocation_callbacks* mixer_allocations,
         AudioStartupFailure*) noexcept;
     std::unique_ptr<MixerVoice> CreateVoice(
-        const NormalizedSourceFormat&, AudioSnapshot&,
-        AudioCursorTimeline&, VoiceUsage, ma_result*) noexcept override;
+        const NormalizedSourceFormat&, std::shared_ptr<AudioSnapshot>,
+        std::shared_ptr<AudioCursorTimeline>, VoiceUsage,
+        ma_result*) noexcept override;
     std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept override;
     std::uint32_t endpoint_buffer_frames() const noexcept override;
@@ -231,7 +232,7 @@ The monitor waits on `fatal_event_` with a 30,000 ms timeout:
 
 - [ ] **Step 7: Implement `IAudioEngineServices`**
 
-- `CreateVoice` forwards format, snapshot, timeline, `VoiceUsage`, and result pointer unchanged to initialized `mixer_`.
+- `CreateVoice` accepts shared snapshot/timeline owners and forwards those owners, the format, `VoiceUsage`, and result pointer to initialized `mixer_`. Voice state retains the owners; the render path does not copy `shared_ptr` values.
 - `endpoint_buffer_frames` returns authoritative endpoint frames.
 - `CountCursorTimelineFailure` atomically increments the counter.
 - `CurrentOutputFrame` calls `endpoint_->ReadClock` and maps through `clock_mapper_`. A failed endpoint HRESULT calls `RecordRuntimeFailure` before returning `nullopt`; an unmappable but successful clock sample returns `nullopt` without an endpoint failure. The buffer caller then increments the cursor-timeline counter. It never logs.
