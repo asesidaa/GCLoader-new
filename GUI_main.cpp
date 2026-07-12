@@ -565,6 +565,22 @@ int main(int argc, char *argv[]) {
             g_config.experimental().enable_nesys_service_adapter_patch = enable_nesys_service_adapter_patch;
             g_config_dirty = true;
         }
+        bool enable_wasapi_exclusive_audio =
+            g_config.experimental().enable_wasapi_exclusive_audio();
+        if (ImGui::Checkbox(
+                "WASAPI exclusive low-latency audio",
+                &enable_wasapi_exclusive_audio)) {
+            g_config.experimental().enable_wasapi_exclusive_audio =
+                enable_wasapi_exclusive_audio;
+            g_config_dirty = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Uses the default console endpoint in exclusive 44.1 kHz PCM16 mode.\n"
+                "Disable this option if exclusive endpoint initialization fails.");
+        }
 
         // --- Mode Specific Settings ---
         if (ImGui::BeginTable("Bindings", 3,

@@ -62,3 +62,4 @@ enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false

@@ -58,6 +58,7 @@ struct ExperimentalConfig
     rfl::Rename<"enable_testmode_storage_redirect", bool> enable_testmode_storage_redirect = false;
     rfl::Rename<"enable_timer_freeze_patches", bool> enable_timer_freeze_patches = false;
     rfl::Rename<"enable_nesys_service_adapter_patch", bool> enable_nesys_service_adapter_patch = true;
+    rfl::Rename<"enable_wasapi_exclusive_audio", bool> enable_wasapi_exclusive_audio = false;
 };
 
 struct GamepadConfig
@@ -184,6 +185,9 @@ public:
     bool GetEnableTestModeStorageRedirect() const { return config.experimental.value().enable_testmode_storage_redirect.value(); }
     bool GetEnableTimerFreezePatches() const { return config.experimental.value().enable_timer_freeze_patches.value(); }
     bool GetEnableNesysServiceAdapterPatch() const { return config.experimental.value().enable_nesys_service_adapter_patch.value(); }
+    bool GetEnableWasapiExclusiveAudio() const {
+        return config.experimental.value().enable_wasapi_exclusive_audio.value();
+    }
     const std::string& GetNesysServerIp() const {
         return config.nesys.value().server_ip.value();
     }

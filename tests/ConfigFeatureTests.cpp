@@ -100,6 +100,7 @@ enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false
 )toml";
 
 constexpr const char* kDefaultCardReadConfig = R"toml(
@@ -148,6 +149,7 @@ enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false
 )toml";
 
 constexpr const char* kEnabledExperimentalConfig = R"toml(
@@ -176,6 +178,7 @@ enable_120fps_timer_patches = true
 enable_testmode_storage_redirect = true
 enable_timer_freeze_patches = true
 enable_nesys_service_adapter_patch = false
+enable_wasapi_exclusive_audio = true
 )toml";
 
 InputConfig parse_config(const std::string& toml) {
@@ -622,6 +625,15 @@ int main() {
         upgraded_defaults.experimental().enable_nesys_service_adapter_patch(),
         true,
         "upgraded default enable_nesys_service_adapter_patch");
+    failures += expect_bool(
+        upgraded_defaults.experimental().enable_wasapi_exclusive_audio(),
+        false,
+        "upgraded default enable_wasapi_exclusive_audio");
+    failures += expect_bool(
+        generated_toml.find("enable_wasapi_exclusive_audio = false") !=
+            std::string::npos,
+        true,
+        "ConfigGUI default WASAPI field serialization");
     failures += expect_key(upgraded_defaults.keyboard().card_read(), SDLK_F4, "upgraded default card_read");
     failures += expect_style(
         upgraded_defaults.gameplay_input_style(),
@@ -653,6 +665,16 @@ int main() {
         custom.experimental().enable_nesys_service_adapter_patch(),
         false,
         "custom enable_nesys_service_adapter_patch");
+    failures += expect_bool(
+        custom.experimental().enable_wasapi_exclusive_audio(),
+        true,
+        "custom enable_wasapi_exclusive_audio");
+    const auto serialized_wasapi = rfl::toml::write(custom);
+    const auto reparsed_wasapi = parse_config(serialized_wasapi);
+    failures += expect_bool(
+        reparsed_wasapi.experimental().enable_wasapi_exclusive_audio(),
+        true,
+        "WASAPI field TOML round trip");
     failures += expect_key(custom.keyboard().card_read(), SDLK_F8, "custom card_read");
 
     failures += expect_parse_failure(kRequiredConfigPrefix, "missing card_read and experimental table");
@@ -668,6 +690,7 @@ int main() {
 enable_timer_freeze_patches = false
 enable_testmode_storage_redirect = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false
 )toml",
         "missing enable_120fps_timer_patches");
     failures += expect_parse_failure(
@@ -676,6 +699,7 @@ enable_nesys_service_adapter_patch = true
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false
 )toml",
         "missing enable_timer_freeze_patches");
     failures += expect_parse_failure(
@@ -684,6 +708,7 @@ enable_nesys_service_adapter_patch = true
 enable_120fps_timer_patches = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false
 )toml",
         "missing enable_testmode_storage_redirect");
     failures += expect_parse_failure(
@@ -692,8 +717,18 @@ enable_nesys_service_adapter_patch = true
 enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
+enable_wasapi_exclusive_audio = false
 )toml",
         "missing enable_nesys_service_adapter_patch");
+    failures += expect_parse_failure(
+        std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
+[experimental]
+enable_120fps_timer_patches = false
+enable_testmode_storage_redirect = false
+enable_timer_freeze_patches = false
+enable_nesys_service_adapter_patch = true
+)toml",
+        "missing enable_wasapi_exclusive_audio");
 
     const auto valid_arcade_config =
         std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
@@ -750,6 +785,7 @@ enable_120fps_timer_patches = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
+enable_wasapi_exclusive_audio = false
 )toml");
     failures += expect_key(punctuation.keyboard().card_read(), SDLK_SEMICOLON, "semicolon card_read");
     failures += expect_string(KeycodeToString(SDLK_SEMICOLON), ";", "semicolon display name");
