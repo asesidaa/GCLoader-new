@@ -32,6 +32,28 @@ int expect_dword(DWORD actual, DWORD expected, const char* name) {
     return 1;
 }
 
+int expect_plan(
+    const gc::nesys_service::NesysFeaturePlan& actual,
+    const gc::nesys_service::NesysFeaturePlan& expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+    std::cerr
+        << "Feature plan mismatch for " << name
+        << ": enabled=" << actual.enabled
+        << " network=" << actual.network_virtualization
+        << " registry=" << actual.registry_virtualization
+        << " synthetic_adapter=" << actual.synthetic_adapter
+        << " server_address_override=" << actual.server_address_override
+        << " registry_override=" << actual.registry_config_override
+        << " launcher=" << actual.service_launcher
+        << " ping=" << actual.service_ping_redirect
+        << " hooks=" << actual.api_hook_count
+        << "\n";
+    return 1;
+}
+
 LPSTR mutable_command_line(std::string& value) {
     return value.empty() ? nullptr : value.data();
 }
@@ -252,44 +274,51 @@ int main() {
             resume_failure.close_calls == 2,
         "resume failure fails closed");
 
-    const auto disabled_game =
-        gc::nesys_service::ResolveNesysFeaturePlan(
-            gc::nesys_service::ProcessRole::Game,
-            false);
-    failures += expect_true(
-        !disabled_game.enabled &&
-            !disabled_game.synthetic_adapter &&
-            !disabled_game.server_address_override &&
-            !disabled_game.service_launcher &&
-            !disabled_game.service_ping_redirect &&
-            disabled_game.api_hook_count == 0,
-        "disabled game installs nothing");
+    using gc::nesys_service::NesysFeaturePlan;
+    using gc::nesys_service::ProcessRole;
+    using gc::nesys_service::ResolveNesysFeaturePlan;
 
-    const auto game_plan =
-        gc::nesys_service::ResolveNesysFeaturePlan(
-            gc::nesys_service::ProcessRole::Game,
-            true);
-    failures += expect_true(
-        game_plan.enabled &&
-            game_plan.synthetic_adapter &&
-            game_plan.server_address_override &&
-            game_plan.service_launcher &&
-            !game_plan.service_ping_redirect &&
-            game_plan.api_hook_count == 6,
-        "enabled game component plan");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Game, false, false),
+        NesysFeaturePlan{
+            false, false, false, false, false, false, false, false, 0},
+        "game network-off registry-off");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Game, false, true),
+        NesysFeaturePlan{
+            true, false, true, false, false, true, true, false, 4},
+        "game registry-only");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Game, true, false),
+        NesysFeaturePlan{
+            true, true, false, true, true, false, true, false, 6},
+        "game network-only");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Game, true, true),
+        NesysFeaturePlan{
+            true, true, true, true, true, true, true, false, 9},
+        "game combined");
 
-    const auto service_plan =
-        gc::nesys_service::ResolveNesysFeaturePlan(
-            gc::nesys_service::ProcessRole::Service,
-            true);
-    failures += expect_true(
-        service_plan.enabled &&
-            service_plan.synthetic_adapter &&
-            service_plan.server_address_override &&
-            !service_plan.service_launcher &&
-            service_plan.service_ping_redirect &&
-            service_plan.api_hook_count == 10,
-        "enabled service component plan");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Service, false, false),
+        NesysFeaturePlan{
+            false, false, false, false, false, false, false, false, 0},
+        "service network-off registry-off");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Service, false, true),
+        NesysFeaturePlan{
+            true, false, true, false, false, true, false, false, 3},
+        "service registry-only");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Service, true, false),
+        NesysFeaturePlan{
+            true, true, false, true, true, false, false, true, 10},
+        "service network-only");
+    failures += expect_plan(
+        ResolveNesysFeaturePlan(ProcessRole::Service, true, true),
+        NesysFeaturePlan{
+            true, true, true, true, true, true, false, true, 13},
+        "service combined");
 
     return failures == 0 ? 0 : 1;
 }

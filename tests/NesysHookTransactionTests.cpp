@@ -149,6 +149,37 @@ int main() {
             contains(apply_failure.disabled, second),
         "apply failure disables every owned target");
 
+    const auto registry_open = reinterpret_cast<LPVOID>(0x3000);
+    const auto registry_query = reinterpret_cast<LPVOID>(0x3100);
+    const auto registry_close = reinterpret_cast<LPVOID>(0x3200);
+    const auto network_hook = reinterpret_cast<LPVOID>(0x3300);
+    const std::vector<ResolvedApiHook> combined_hooks{
+        hook(registry_open),
+        hook(network_hook),
+        hook(registry_query),
+        hook(registry_close),
+    };
+
+    FakeState combined_failure{};
+    combined_failure.fail_queue_call = 2;
+    g_fake = &combined_failure;
+    OwnedMinHookTransaction combined_rollback(fake_api());
+    failures += expect(
+        combined_rollback.Initialize(),
+        "combined failure init");
+    failures += expect(
+        combined_rollback.CreateAll(combined_hooks),
+        "combined failure creates every owned hook");
+    failures += expect(
+        !combined_rollback.Commit(),
+        "combined queue failure");
+    failures += expect(
+        contains(combined_failure.removed, registry_open) &&
+            contains(combined_failure.removed, network_hook) &&
+            contains(combined_failure.removed, registry_query) &&
+            contains(combined_failure.removed, registry_close),
+        "combined failure removes every network and registry target");
+
     failures += expect(
         !contains(create_failure.removed, unrelated) &&
             !contains(queue_failure.removed, unrelated) &&

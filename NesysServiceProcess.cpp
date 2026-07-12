@@ -180,28 +180,35 @@ bool ShouldResumeAfterServiceInjection(bool caller_requested_suspended) {
 
 NesysFeaturePlan ResolveNesysFeaturePlan(
     ProcessRole role,
-    bool enabled) noexcept {
-    if (!enabled) {
-        return {};
+    bool network_enabled,
+    bool registry_enabled) noexcept {
+    NesysFeaturePlan plan{};
+    plan.enabled = network_enabled || registry_enabled;
+    plan.network_virtualization = network_enabled;
+    plan.registry_virtualization = registry_enabled;
+
+    if (network_enabled) {
+        plan.synthetic_adapter = true;
+        plan.server_address_override = true;
+        if (role == ProcessRole::Game) {
+            plan.api_hook_count += 5;
+        } else {
+            plan.api_hook_count += 10;
+            plan.service_ping_redirect = true;
+        }
     }
-    if (role == ProcessRole::Game) {
-        return {
-            true,
-            true,
-            true,
-            true,
-            false,
-            6,
-        };
+
+    if (registry_enabled) {
+        plan.registry_config_override = true;
+        plan.api_hook_count += 3;
     }
-    return {
-        true,
-        true,
-        true,
-        false,
-        true,
-        10,
-    };
+
+    if (role == ProcessRole::Game && plan.enabled) {
+        plan.service_launcher = true;
+        ++plan.api_hook_count;
+    }
+
+    return plan;
 }
 
 } // namespace gc::nesys_service

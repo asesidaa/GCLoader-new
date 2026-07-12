@@ -15,16 +15,22 @@ enum class ProcessRole {
 
 struct NesysFeaturePlan {
     bool enabled{false};
+    bool network_virtualization{false};
+    bool registry_virtualization{false};
     bool synthetic_adapter{false};
     bool server_address_override{false};
+    bool registry_config_override{false};
     bool service_launcher{false};
     bool service_ping_redirect{false};
     std::size_t api_hook_count{0};
+
+    bool operator==(const NesysFeaturePlan&) const = default;
 };
 
 NesysFeaturePlan ResolveNesysFeaturePlan(
     ProcessRole role,
-    bool enabled) noexcept;
+    bool network_enabled,
+    bool registry_enabled) noexcept;
 
 bool EqualsIgnoreCaseAscii(std::string_view left, std::string_view right);
 std::string FileNameOfPathA(std::string_view path);

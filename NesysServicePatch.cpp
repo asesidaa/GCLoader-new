@@ -2,6 +2,7 @@
 
 #include "NesysHookTransaction.h"
 #include "NesysServiceLauncher.h"
+#include "RegistryConfigOverride.h"
 #include "ServerAddressOverride.h"
 #include "SyntheticNetworkAdapter.h"
 #include "config.h"
@@ -66,30 +67,49 @@ void log_hook_error(const HookInstallError& error) noexcept {
     }
 }
 
-bool initialize_enabled_feature(
+bool initialize_feature_plan(
     HMODULE loader_module,
     ProcessRole role,
-    const NesysFeaturePlan& plan) {
-    const auto& configured_ip =
-        ConfigManager::instance().GetNesysServerIp();
-    if (!InitializeServerAddressOverride(configured_ip)) {
+    const NesysFeaturePlan& plan,
+    const ConfigManager& config) {
+    if (plan.server_address_override &&
+        !InitializeServerAddressOverride(config.GetNesysServerIp())) {
         PLOG_ERROR
             << "NesysServicePatch: invalid NESYS server IPv4";
         return false;
     }
 
-    const auto executable_base = reinterpret_cast<std::uintptr_t>(
-        GetModuleHandleW(nullptr));
-    if (executable_base == 0) {
+    if (plan.registry_config_override &&
+        !InitializeRegistryConfigOverride(
+            role,
+            config.GetRegistryConfig())) {
         PLOG_ERROR
-            << "NesysServicePatch: main executable module unavailable";
+            << "NesysServicePatch: registry override state initialization failed";
         return false;
+    }
+
+    std::uintptr_t executable_base = 0;
+    if (plan.service_ping_redirect) {
+        executable_base = reinterpret_cast<std::uintptr_t>(
+            GetModuleHandleW(nullptr));
+        if (executable_base == 0) {
+            PLOG_ERROR
+                << "NesysServicePatch: main executable module unavailable";
+            return false;
+        }
     }
 
     std::vector<ApiHookRequest> requests;
     requests.reserve(plan.api_hook_count);
-    AppendSyntheticAdapterHookRequests(role, requests);
-    AppendServerAddressHookRequests(role, requests);
+    if (plan.synthetic_adapter) {
+        AppendSyntheticAdapterHookRequests(role, requests);
+    }
+    if (plan.server_address_override) {
+        AppendServerAddressHookRequests(role, requests);
+    }
+    if (plan.registry_config_override) {
+        AppendRegistryOverrideHookRequests(requests);
+    }
     if (plan.service_launcher) {
         AppendNesysServiceLauncherHookRequest(requests);
     }
@@ -149,12 +169,22 @@ bool initialize_enabled_feature(
 
     g_owned_hooks = std::move(transaction);
     try {
-        PLOG_INFO
-            << "NesysServicePatch: component active"
-            << " name=synthetic_network_adapter";
-        PLOG_INFO
-            << "NesysServicePatch: component active"
-            << " name=server_address_override";
+        if (plan.synthetic_adapter) {
+            PLOG_INFO
+                << "NesysServicePatch: component active"
+                << " name=synthetic_network_adapter";
+        }
+        if (plan.server_address_override) {
+            PLOG_INFO
+                << "NesysServicePatch: component active"
+                << " name=server_address_override";
+        }
+        if (plan.registry_config_override) {
+            PLOG_INFO
+                << "NesysServicePatch: component active"
+                << " name=registry_config_override"
+                << " owned_api_hooks=3";
+        }
         if (plan.service_launcher) {
             PLOG_INFO
                 << "NesysServicePatch: component active"
@@ -168,14 +198,20 @@ bool initialize_enabled_feature(
         PLOG_INFO
             << "NesysServicePatch: all role hooks active"
             << " role=" << ProcessRoleName(role)
-            << " api_hooks=" << plan.api_hook_count
-            << " synthetic_name=" << kSyntheticAdapterName
-            << " synthetic_mac=DE-AD-BE-EF-00-01"
-            << " synthetic_index=0x" << std::hex
-            << kSyntheticInterfaceIndex
-            << " synthetic_ipv4=" << kSyntheticIpv4
-            << " link_state=up"
-            << std::dec;
+            << " network=" << plan.network_virtualization
+            << " registry=" << plan.registry_virtualization
+            << " api_hooks=" << plan.api_hook_count;
+        if (plan.synthetic_adapter) {
+            PLOG_INFO
+                << "NesysServicePatch: synthetic adapter"
+                << " name=" << kSyntheticAdapterName
+                << " mac=DE-AD-BE-EF-00-01"
+                << " index=0x" << std::hex
+                << kSyntheticInterfaceIndex
+                << " ipv4=" << kSyntheticIpv4
+                << " link_state=up"
+                << std::dec;
+        }
     } catch (...) {
     }
     return true;
@@ -197,24 +233,30 @@ bool NesysServicePatchInit(
 
     bool success = false;
     try {
-        const bool enabled = ConfigManager::instance()
-            .GetEnableNesysServiceAdapterPatch();
-        const auto plan = ResolveNesysFeaturePlan(role, enabled);
+        const auto& config = ConfigManager::instance();
+        const bool network_enabled =
+            config.GetEnableNesysServiceAdapterPatch();
+        const bool registry_enabled =
+            config.GetEnableRegistryConfigOverride();
+        const auto plan = ResolveNesysFeaturePlan(
+            role,
+            network_enabled,
+            registry_enabled);
         PLOG_INFO
             << "NesysServicePatch: init"
             << " role=" << ProcessRoleName(role)
-            << " enabled=" << enabled
-            << " configured_server_ipv4="
-            << ConfigManager::instance().GetNesysServerIp();
+            << " network=" << network_enabled
+            << " registry=" << registry_enabled;
 
         success = !plan.enabled ||
-            initialize_enabled_feature(
+            initialize_feature_plan(
                 loader_module,
                 role,
-                plan);
+                plan,
+                config);
         if (!plan.enabled) {
             PLOG_INFO
-                << "NesysServicePatch: disabled; installed no hooks";
+                << "NesysServicePatch: all policies disabled; installed no hooks";
         }
     } catch (const std::exception& error) {
         try {
