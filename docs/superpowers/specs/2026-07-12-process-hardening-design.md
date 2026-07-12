@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-12
 
-**Status:** Approved conversational design; written review pending
+**Status:** Approved design
 
 ## Context
 
