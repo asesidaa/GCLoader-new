@@ -129,6 +129,7 @@ target_include_directories(imgui PUBLIC ${imgui_external_SOURCE_DIR}
         ${SDL3_SOURCE_DIR}/include)
 
 set(SOURCES
+        AudioSnapshot.cpp
         CountdownTimerFreeze.cpp
         config.cpp
         dllmain.cpp
@@ -203,6 +204,15 @@ target_include_directories(AudioFormatTests PRIVATE
 )
 target_link_libraries(AudioFormatTests PRIVATE miniaudio)
 add_test(NAME AudioFormatTests COMMAND AudioFormatTests)
+
+add_executable(AudioSnapshotTests
+        AudioSnapshot.cpp
+        tests/AudioSnapshotTests.cpp
+)
+target_include_directories(AudioSnapshotTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME AudioSnapshotTests COMMAND AudioSnapshotTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
