@@ -16,6 +16,7 @@
 - Implement every vtable entry; pan, frequency, 3D, effects, and notification controls remain unsupported.
 - `SetVolume` uses DirectSound hundredths-of-dB conversion with no smoothing.
 - `Stop` preserves the last hardware-clock cursor.
+- A naturally ended nonlooping voice remains game-visible as playing while the endpoint clock is inside its final queued half-open span; this hardware-drain status does not change mixer active accounting.
 - `SetCurrentPosition` increments the epoch, seeks source frames, and rejects unaligned/out-of-range bytes.
 - `Restore` succeeds and performs non-RT retired-snapshot reclamation.
 
@@ -76,6 +77,7 @@ In `tests/SecondarySoundBufferTests.cpp`, assert:
 - write cursor is one endpoint period ahead in original bytes;
 - missing clock/timeline returns the last good cursor and increments the diagnostic counter;
 - `Stop` clears playing status and preserves the last cursor;
+- a nonlooping source ending inside one endpoint period publishes a final queued output end, resolves the hardware-mapped cursor without fallback while inside it, reports `PLAYING` until that exclusive end, preserves the cursor through `Stop`, and remains stopped with the last good cursor at/after the end;
 - seek byte 2 and byte 16 fail for a 16-byte/stereo buffer; byte 4 succeeds and changes epoch;
 - `Restore` succeeds;
 - `SetPan`, `SetFrequency`, `SetFX`, `AcquireResources`, and `GetObjectInPath` return `DSERR_CONTROLUNAVAIL`;
@@ -162,7 +164,7 @@ Use atomic COM references beginning at one. Delete only when `fetch_sub(...) - 1
 
 - [ ] **Step 5: Implement functional methods**
 
-`GetCurrentPosition` resolves the current output frame through the timeline and current epoch. On failure:
+`GetCurrentPosition` resolves the current output frame through the timeline and current epoch while the voice is either logically mixing or the endpoint clock is strictly before its final queued output end. Once the endpoint reaches/passes that exclusive boundary, return the last good cursor without treating normal drain completion as a timeline failure. On a real clock/timeline failure:
 
 ```cpp
 engine_.CountCursorTimelineFailure();
@@ -171,7 +173,7 @@ return last_reported_source_frame_.load(std::memory_order_acquire);
 
 Convert play and projected write frames with `SourceFrameToByte`.
 
-`Play` requires both reserved arguments zero and allows only `DSBPLAY_LOOPING`. `Stop` resolves/stores cursor before stopping. `SetCurrentPosition` performs:
+`Play` requires both reserved arguments zero and allows only `DSBPLAY_LOOPING`. `Stop` resolves/stores the cursor before telling the voice to clear its drain boundary. `GetStatus` combines logical `voice.playing()` with `CurrentOutputFrame() < audible_until_output_frame`; it never reports `LOOPING` for terminal drain because looped voices have no terminal boundary. Each operation reads the endpoint clock at most once. `SetCurrentPosition` performs:
 
 ```cpp
 const auto source_frame = position / format_.block_align;

@@ -290,7 +290,10 @@ std::uint64_t detail::VoicePlaybackStateMachine::CapturePlayingRun()
 }
 
 bool detail::VoicePlaybackStateMachine::playing() const noexcept {
-    return CapturePlayingRun() != 0;
+    const auto phase = PlaybackPhase(
+        packed_state_.load(std::memory_order_seq_cst));
+    return phase == VoicePlaybackPhase::Playing ||
+        phase == VoicePlaybackPhase::Ending;
 }
 
 struct MixerVoiceState {
@@ -347,6 +350,7 @@ struct MixerVoiceState {
     detail::VoicePlaybackStateMachine playback;
     std::atomic_bool looping{};
     std::atomic_bool ended{};
+    std::atomic_uint64_t audible_until_output_frame{};
     std::mutex control_mutex;
     std::uint64_t epoch{1};
     std::uint64_t epoch_source_start{};
@@ -397,10 +401,15 @@ struct MixerVoiceState {
         return true;
     }
 
-    void EndPlayback(std::uint64_t run_token) noexcept {
+    void EndPlayback(
+        std::uint64_t run_token,
+        std::uint64_t final_output_end) noexcept {
         if (!playback.BeginEnd(run_token)) {
             return;
         }
+        audible_until_output_frame.store(
+            final_output_end,
+            std::memory_order_seq_cst);
         ma_node_set_state(&node.base, ma_node_state_stopped);
         ended.store(true, std::memory_order_seq_cst);
         mixer->VoiceStopped();
@@ -701,20 +710,24 @@ void VoiceNodeProcess(
     const auto published_output = std::min<std::uint64_t>(
         represented_output,
         remaining_output);
+    std::uint64_t final_output_end{};
     if (published_output != 0) {
         const auto output_begin = render->output_frame_begin +
             voice.render_output_offset;
-        PublishMappedSpans(
+        const auto published = PublishMappedSpans(
             voice,
             output_begin,
             published_output,
             loop_wrapped,
             source_ended);
+        if (published && source_ended) {
+            final_output_end = output_begin + published_output;
+        }
     }
 
     voice.render_output_offset += requested;
     if (source_ended) {
-        voice.EndPlayback(playback_run);
+        voice.EndPlayback(playback_run, final_output_end);
     }
 }
 
@@ -737,6 +750,9 @@ HRESULT MixerVoice::Play(
 
     std::lock_guard control_lock(state_->control_mutex);
     ma_node_set_state(&state_->node.base, ma_node_state_stopped);
+    state_->audible_until_output_frame.store(
+        0,
+        std::memory_order_seq_cst);
 
     const auto play = state_->playback.BeginPlay();
 
@@ -781,6 +797,9 @@ void MixerVoice::Stop() noexcept {
         state_->mixer->VoiceStopped();
         state_->playback.CompleteStop(stopped_run);
     }
+    state_->audible_until_output_frame.store(
+        0,
+        std::memory_order_seq_cst);
 }
 
 HRESULT MixerVoice::Seek(
@@ -793,6 +812,9 @@ HRESULT MixerVoice::Seek(
         return DSERR_INVALIDPARAM;
     }
     state_->seek_mailbox.Publish(source_frame, epoch);
+    state_->audible_until_output_frame.store(
+        0,
+        std::memory_order_seq_cst);
     return DS_OK;
 }
 
@@ -815,6 +837,18 @@ bool MixerVoice::looping() const noexcept {
 bool MixerVoice::at_end() const noexcept {
     return state_ != nullptr &&
         state_->ended.load(std::memory_order_seq_cst);
+}
+
+std::optional<std::uint64_t>
+MixerVoice::audible_until_output_frame() const noexcept {
+    if (state_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto output_end = state_->audible_until_output_frame.load(
+        std::memory_order_seq_cst);
+    return output_end == 0
+        ? std::nullopt
+        : std::optional<std::uint64_t>(output_end);
 }
 
 MiniaudioMixer::MiniaudioMixer(

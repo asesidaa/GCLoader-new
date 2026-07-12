@@ -560,6 +560,88 @@ int TestVolumePlaybackAndCursors() {
     return failures;
 }
 
+int TestNonLoopingFinalSpanDrainsByEndpointClock() {
+    MixerEngineServices engine;
+    auto wave = PcmFormat();
+    auto descriptor = BufferDescription(&wave, 8);
+    IDirectSoundBuffer8* buffer{};
+    int failures = Expect(
+        CreateBuffer(engine, descriptor, &buffer) == DS_OK,
+        "short nonlooping buffer creation");
+    if (buffer == nullptr) {
+        return failures + 1;
+    }
+
+    const std::array<std::int16_t, 4> samples{
+        1000, 1000, 2000, 2000,
+    };
+    failures += Expect(
+        FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, 0) == DS_OK,
+        "short nonlooping publication and play");
+    std::array<float, 8> output{};
+    failures += Expect(
+        engine.Render(700, output).result == MA_SUCCESS,
+        "short nonlooping final-period render");
+    const auto diagnostics = engine.diagnostics();
+    failures += Expect(
+        diagnostics.active_voices == 0,
+        "logical mixer activity ends after final span publication");
+
+    const auto timeline = engine.observed_timeline.lock();
+    failures += Expect(
+        timeline != nullptr &&
+            timeline->ResolveSourceFrame(701, 1, 2) == 1 &&
+            !timeline->ResolveSourceFrame(702, 1, 2).has_value(),
+        "mixer publishes half-open final span ending at output frame 702");
+
+    engine.output_frame = 701;
+    DWORD cursor{};
+    DWORD status{};
+    failures += Expect(
+        buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 4 && engine.cursor_failures == 0,
+        "queued final span resolves hardware-mapped source bytes");
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK &&
+            status == DSBSTATUS_PLAYING,
+        "queued final span remains game-visible as playing");
+
+    engine.output_frame = 702;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK && status == 0,
+        "status stops at the final queued output boundary");
+    failures += Expect(
+        buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 4 && engine.cursor_failures == 0,
+        "cursor remains last good after final queued output drains");
+    buffer->Release();
+
+    MixerEngineServices stop_engine;
+    buffer = nullptr;
+    failures += Expect(
+        CreateBuffer(stop_engine, descriptor, &buffer) == DS_OK &&
+            FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, 0) == DS_OK,
+        "short nonlooping stop-case setup");
+    output.fill(0.0F);
+    failures += Expect(
+        stop_engine.Render(800, output).result == MA_SUCCESS,
+        "short nonlooping stop-case final render");
+    stop_engine.output_frame = 801;
+    failures += Expect(
+        buffer->Stop() == DS_OK,
+        "explicit Stop during queued final span succeeds");
+    stop_engine.output_frame = 802;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK && status == 0 &&
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 4 && stop_engine.cursor_failures == 0,
+        "Stop preserves hardware-mapped cursor and clears drain state");
+    buffer->Release();
+    return failures;
+}
+
 int TestSeekRestoreUnsupportedAndLifetime() {
     MixerEngineServices engine;
     auto wave = PcmFormat();
@@ -655,6 +737,7 @@ int main() {
     failures += TestCapsAndFormats();
     failures += TestLockUnlockPublication();
     failures += TestVolumePlaybackAndCursors();
+    failures += TestNonLoopingFinalSpanDrainsByEndpointClock();
     failures += TestSeekRestoreUnsupportedAndLifetime();
     return failures == 0 ? 0 : 1;
 }

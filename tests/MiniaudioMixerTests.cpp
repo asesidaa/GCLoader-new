@@ -710,6 +710,9 @@ int main() {
         mono->timeline->ResolveSourceFrame(104, 1, 4) == 0 &&
             mono->timeline->ResolveSourceFrame(107, 1, 4) == 3,
         "loop span crosses source length in the unwrapped domain");
+    failures += Expect(
+        !mono_voice->audible_until_output_frame().has_value(),
+        "looping voice never publishes a terminal drain boundary");
 
     mono_voice->SetGain(0.5F);
     failures += ExpectRender(*mixer, output, 108, "next-block gain render");
@@ -722,7 +725,10 @@ int main() {
         probe.End() == 0,
         "steady-state render invokes zero allocator callbacks");
     mono_voice->Stop();
-    failures += Expect(!mono_voice->playing(), "stopped mono is not playing");
+    failures += Expect(
+        !mono_voice->playing() &&
+            !mono_voice->audible_until_output_frame().has_value(),
+        "stopped mono is not playing and has no drain boundary");
 
     stereo_voice_a->SetGain(0.75F);
     stereo_voice_b->SetGain(0.75F);
@@ -763,10 +769,21 @@ int main() {
         pcm24_voice->at_end() && !pcm24_voice->playing(),
         "nonlooping exact-block source ends after exposing final data");
     failures += Expect(
-        pcm24_voice->Play(false, 5) == DS_OK,
-        "ended native PCM24 voice replays");
+        pcm24_voice->audible_until_output_frame() == 308,
+        "nonlooping voice exposes final queued output end");
+    failures += Expect(
+        pcm24_voice->Play(false, 5) == DS_OK &&
+            !pcm24_voice->audible_until_output_frame().has_value(),
+        "ended native PCM24 replay clears drain boundary");
     failures += ExpectRender(*mixer, output, 308, "native PCM24 replay render");
     failures += ExpectNear(output[0], 0.5F, "replay restarts at source frame zero");
+    failures += Expect(
+        pcm24_voice->audible_until_output_frame() == 316,
+        "replayed nonlooping voice publishes its new queued end");
+    failures += Expect(
+        pcm24_voice->Seek(0, 6) == DS_OK &&
+            !pcm24_voice->audible_until_output_frame().has_value(),
+        "seek clears prior terminal drain boundary");
 
     failures += Expect(
         rate_22050_voice->Play(false, 10) == DS_OK,

@@ -155,13 +155,20 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
 std::uint64_t SecondarySoundBuffer::ResolveCurrentSourceFrame() noexcept {
     const auto last = last_reported_source_frame_.load(
         std::memory_order_acquire);
-    if (!voice_->playing()) {
+    const auto mixing = voice_->playing();
+    const auto audible_until = voice_->audible_until_output_frame();
+    if (!mixing && !audible_until.has_value()) {
         return last;
     }
 
     const auto output_frame = engine_.CurrentOutputFrame();
     if (!output_frame.has_value()) {
         engine_.CountCursorTimelineFailure();
+        return last;
+    }
+    const auto draining = audible_until.has_value() &&
+        *output_frame < *audible_until;
+    if (!mixing && !draining) {
         return last;
     }
     const auto source_frame = timeline_->ResolveSourceFrame(
@@ -242,7 +249,20 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) {
         return DSERR_INVALIDPARAM;
     }
     *status = 0;
-    if (voice_->playing()) {
+    auto audible = voice_->playing();
+    if (!audible) {
+        const auto audible_until = voice_->audible_until_output_frame();
+        if (audible_until.has_value()) {
+            const auto output_frame = engine_.CurrentOutputFrame();
+            if (output_frame.has_value()) {
+                audible = *output_frame < *audible_until;
+            } else {
+                engine_.CountCursorTimelineFailure();
+                audible = true;
+            }
+        }
+    }
+    if (audible) {
         *status |= DSBSTATUS_PLAYING;
         if (voice_->looping()) {
             *status |= DSBSTATUS_LOOPING;

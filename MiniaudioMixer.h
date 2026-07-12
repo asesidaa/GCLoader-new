@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace gc::audio {
@@ -73,6 +74,8 @@ public:
     bool playing() const noexcept;
     bool looping() const noexcept;
     bool at_end() const noexcept;
+    std::optional<std::uint64_t>
+        audible_until_output_frame() const noexcept;
 
 private:
     friend class MiniaudioMixer;
