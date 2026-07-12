@@ -3,13 +3,38 @@
 #include <Windows.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <new>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
+
+std::atomic_bool g_fail_next_allocation{false};
+
+void* operator new(std::size_t size) {
+    if (g_fail_next_allocation.exchange(
+            false,
+            std::memory_order_relaxed)) {
+        throw std::bad_alloc{};
+    }
+    if (void* memory = std::malloc(size == 0 ? 1 : size)) {
+        return memory;
+    }
+    throw std::bad_alloc{};
+}
+
+void operator delete(void* memory) noexcept {
+    std::free(memory);
+}
+
+void operator delete(void* memory, std::size_t) noexcept {
+    std::free(memory);
+}
 
 namespace {
 
@@ -39,6 +64,34 @@ struct FakeRegistryState {
 };
 
 FakeRegistryState* g_fake = nullptr;
+
+struct AllocationFailureState {
+    HKEY opened_handle{reinterpret_cast<HKEY>(0x5001)};
+    int open_calls{0};
+    int close_calls{0};
+    HKEY closed_handle{nullptr};
+};
+
+AllocationFailureState* g_allocation_failure = nullptr;
+
+LSTATUS WINAPI fake_open_for_allocation_failure(
+    HKEY,
+    LPCSTR,
+    DWORD,
+    REGSAM,
+    PHKEY result) {
+    ++g_allocation_failure->open_calls;
+    if (result != nullptr) {
+        *result = g_allocation_failure->opened_handle;
+    }
+    return ERROR_SUCCESS;
+}
+
+LSTATUS WINAPI fake_close_for_allocation_failure(HKEY key) {
+    ++g_allocation_failure->close_calls;
+    g_allocation_failure->closed_handle = key;
+    return ERROR_SUCCESS;
+}
 
 struct HandleReuseControl {
     HANDLE close_entered;
@@ -897,6 +950,44 @@ int main() {
                 requests[index].original != nullptr,
             "registry request has detour and trampoline slot");
     }
+
+    failures += expect(
+        InitializeRegistryConfigOverride(ProcessRole::Game, config),
+        "initialize allocation-failure detour state");
+    std::vector<ApiHookRequest> allocation_requests;
+    AppendRegistryOverrideHookRequests(allocation_requests);
+    *allocation_requests[0].original = reinterpret_cast<LPVOID>(
+        &fake_open_for_allocation_failure);
+    *allocation_requests[2].original = reinterpret_cast<LPVOID>(
+        &fake_close_for_allocation_failure);
+
+    AllocationFailureState allocation_failure{};
+    g_allocation_failure = &allocation_failure;
+    HKEY allocation_result = nullptr;
+    g_fail_next_allocation.store(true, std::memory_order_relaxed);
+    const auto open_detour = reinterpret_cast<RegOpenKeyExAFn>(
+        allocation_requests[0].detour);
+    failures += expect_status(
+        open_detour(
+            HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\taito\\typex",
+            0,
+            KEY_READ,
+            &allocation_result),
+        ERROR_NOT_ENOUGH_MEMORY,
+        "tracking allocation failure");
+    failures += expect(
+        allocation_failure.open_calls == 1,
+        "allocation failure opened physical key once");
+    failures += expect(
+        allocation_failure.close_calls == 1 &&
+            allocation_failure.closed_handle ==
+                allocation_failure.opened_handle,
+        "allocation failure closes exact physical handle");
+    failures += expect(
+        allocation_result == nullptr,
+        "allocation failure clears caller handle");
+    g_allocation_failure = nullptr;
 
     RegistryConfig invalid = config;
     invalid.nesys().log_path = std::string(260, 'x');

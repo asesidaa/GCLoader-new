@@ -178,6 +178,13 @@ LSTATUS WINAPI reg_open_key_ex_a_detour(
             access,
             result);
     } catch (...) {
+        if (result != nullptr && *result != nullptr) {
+            const HKEY opened_handle = *result;
+            *result = nullptr;
+            if (g_original_reg_close_key != nullptr) {
+                g_original_reg_close_key(opened_handle);
+            }
+        }
         return ERROR_NOT_ENOUGH_MEMORY;
     }
 }
