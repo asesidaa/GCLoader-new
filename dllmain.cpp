@@ -4,16 +4,13 @@
 #include <string>
 #include "InputManager.h"
 #include "plog/Log.h"
-#include "plog/Appenders/IAppender.h"
-#include "plog/Converters/NativeEOLConverter.h"
-#include "plog/Converters/UTF8Converter.h"
-#include "plog/Formatters/TxtFormatter.h"
 #include "plog/Init.h"
 #include "RfidEmu.h"
 #include "SDL3/SDL.h"
 #include "FrameratePatch.h"
 #include "NesysServicePatch.h"
 #include "NesysServiceProcess.h"
+#include "SessionLog.h"
 #include "SwitchInputPatch.h"
 
 #ifndef _M_IX86
@@ -22,52 +19,10 @@
 
 namespace {
 
-class SharedWin32LogAppender final : public plog::IAppender
-{
-public:
-    explicit SharedWin32LogAppender(LPCWSTR fileName)
-        : file_(CreateFileW(
-              fileName,
-              FILE_APPEND_DATA,
-              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-              nullptr,
-              OPEN_ALWAYS,
-              FILE_ATTRIBUTE_NORMAL,
-              nullptr))
-    {
-    }
-
-    ~SharedWin32LogAppender() override
-    {
-        if (file_ != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(file_);
-        }
-    }
-
-    void write(const plog::Record& record) override
-    {
-        if (file_ == INVALID_HANDLE_VALUE)
-        {
-            return;
-        }
-
-        const auto message = plog::NativeEOLConverter<plog::UTF8Converter>::convert(
-            plog::TxtFormatter::format(record));
-        plog::util::MutexLock lock(mutex_);
-        DWORD written = 0;
-        WriteFile(file_, message.data(), static_cast<DWORD>(message.size()), &written, nullptr);
-    }
-
-private:
-    HANDLE file_;
-    plog::util::Mutex mutex_;
-};
-
-void InitSharedLog()
-{
-    static SharedWin32LogAppender loaderLogAppender(L"loader-log.txt");
-    plog::init(plog::info, &loaderLogAppender);
+void InitProcessLog(gc::nesys_service::ProcessRole role) {
+    static gc::session_log::SessionLogAppender loader_log_appender(
+        gc::session_log::ProcessLogFileName(role));
+    plog::init(plog::info, &loader_log_appender);
 }
 
 }
@@ -77,13 +32,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     {
     case DLL_PROCESS_ATTACH:
         {
-            DisableThreadLibraryCalls(hModule);
-            InitSharedLog();
-
-            PLOG_DEBUG << "DLL attach!" << std::endl;
-
             const auto role =
                 gc::nesys_service::DetectCurrentProcessRole();
+            InitProcessLog(role);
+
+            PLOG_DEBUG << "DLL attach!" << std::endl;
             PLOG_INFO
                 << "NesysServicePatch: process role="
                 << gc::nesys_service::ProcessRoleName(role);

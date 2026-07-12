@@ -118,6 +118,7 @@ set(SOURCES
         RegistryConfigOverride.cpp
         RfidEmu.cpp
         ServerAddressOverride.cpp
+        SessionLog.cpp
         SwitchInputPolicy.cpp
         SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
@@ -206,6 +207,16 @@ add_test(
         NAME RegistryConfigOverrideTests
         COMMAND RegistryConfigOverrideTests
 )
+
+add_executable(SessionLogTests
+        SessionLog.cpp
+        tests/SessionLogTests.cpp
+)
+target_include_directories(SessionLogTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${plog_SOURCE_DIR}/include
+)
+add_test(NAME SessionLogTests COMMAND SessionLogTests)
 
 add_executable(NesysHookTransactionTests
         NesysHookTransaction.cpp
