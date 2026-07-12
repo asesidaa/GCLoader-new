@@ -15,20 +15,6 @@ AudioSnapshot::RenderView::~RenderView() {
     Release();
 }
 
-AudioSnapshot::RenderView::RenderView(RenderView&& other) noexcept
-    : owner_(std::exchange(other.owner_, nullptr)),
-      snapshot_(std::exchange(other.snapshot_, nullptr)) {}
-
-AudioSnapshot::RenderView& AudioSnapshot::RenderView::operator=(
-    RenderView&& other) noexcept {
-    if (this != &other) {
-        Release();
-        owner_ = std::exchange(other.owner_, nullptr);
-        snapshot_ = std::exchange(other.snapshot_, nullptr);
-    }
-    return *this;
-}
-
 std::span<const std::byte>
 AudioSnapshot::RenderView::bytes() const noexcept {
     if (snapshot_ == nullptr) {
@@ -149,11 +135,11 @@ HRESULT AudioSnapshot::Unlock(
 }
 
 AudioSnapshot::RenderView AudioSnapshot::AcquireForRender() const noexcept {
-    const Snapshot* candidate = nullptr;
-    do {
-        candidate = published_.load(std::memory_order_seq_cst);
-        render_hazard_.store(candidate, std::memory_order_seq_cst);
-    } while (candidate != published_.load(std::memory_order_seq_cst));
+    const auto* candidate = detail::CaptureSingleReaderSnapshot(
+        published_, render_hazard_);
+    if (candidate == nullptr) {
+        return {};
+    }
     return RenderView(this, candidate);
 }
 

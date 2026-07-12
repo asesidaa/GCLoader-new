@@ -13,6 +13,7 @@
 #include <new>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 
 namespace allocation_probe {
 
@@ -159,6 +160,13 @@ namespace {
 
 using gc::audio::AudioLockRegions;
 using gc::audio::AudioSnapshot;
+
+static_assert(
+    !std::is_move_constructible_v<AudioSnapshot::RenderView>,
+    "RenderView must remain scoped and non-move-constructible");
+static_assert(
+    !std::is_move_assignable_v<AudioSnapshot::RenderView>,
+    "RenderView must not expose the unsafe active-view move assignment");
 
 int Expect(bool condition, std::string_view name) {
     if (condition) {
@@ -344,32 +352,34 @@ int TestLockContract() {
 int TestImmutablePublicationAndReclamation() {
     int failures = 0;
     AudioSnapshot snapshot(16, 4);
-    auto held = snapshot.AcquireForRender();
 
-    AudioLockRegions regions{};
-    failures += Expect(
-        snapshot.Lock(0, 16, 0, &regions) == DS_OK,
-        "immutable publication lock succeeds");
-    FillRegions(regions, 0x7f, 0);
-    failures += Expect(
-        snapshot.Unlock(
-            regions.first,
-            regions.first_bytes,
-            regions.second,
-            regions.second_bytes) == DS_OK,
-        "immutable publication unlock succeeds");
-    failures += Expect(
-        held.generation() == 0 && EveryByte(held, std::byte{0}),
-        "held render view remains immutable after publication");
+    {
+        auto held = snapshot.AcquireForRender();
 
-    allocation_probe::Begin();
-    snapshot.ReclaimRetired();
-    const auto while_held = allocation_probe::End();
-    failures += Expect(
-        while_held.deallocations == 0,
-        "hazard retains the one retired snapshot");
+        AudioLockRegions regions{};
+        failures += Expect(
+            snapshot.Lock(0, 16, 0, &regions) == DS_OK,
+            "immutable publication lock succeeds");
+        FillRegions(regions, 0x7f, 0);
+        failures += Expect(
+            snapshot.Unlock(
+                regions.first,
+                regions.first_bytes,
+                regions.second,
+                regions.second_bytes) == DS_OK,
+            "immutable publication unlock succeeds");
+        failures += Expect(
+            held.generation() == 0 && EveryByte(held, std::byte{0}),
+            "held render view remains immutable after publication");
 
-    held = {};
+        allocation_probe::Begin();
+        snapshot.ReclaimRetired();
+        const auto while_held = allocation_probe::End();
+        failures += Expect(
+            while_held.deallocations == 0,
+            "hazard retains the one retired snapshot");
+    }
+
     allocation_probe::Begin();
     snapshot.ReclaimRetired();
     const auto after_release = allocation_probe::End();
@@ -417,6 +427,239 @@ int TestRenderViewDoesNotAllocateOrFree() {
     return failures;
 }
 
+int TestSecondAcquireFailsWithoutDisturbingActiveView() {
+    int failures = 0;
+    AudioSnapshot snapshot(16, 4);
+
+    {
+        auto active = snapshot.AcquireForRender();
+        auto rejected = snapshot.AcquireForRender();
+        failures += Expect(
+            active.size() == 16 && active.generation() == 0,
+            "first render acquire remains active");
+        failures += Expect(
+            rejected.bytes().empty() && rejected.size() == 0 &&
+                rejected.generation() == 0,
+            "second render acquire returns an empty view");
+
+        AudioLockRegions regions{};
+        failures += Expect(
+            snapshot.Lock(0, 16, 0, &regions) == DS_OK,
+            "publication with one active view locks");
+        FillRegions(regions, 0x6a, 0);
+        failures += Expect(
+            snapshot.Unlock(
+                regions.first,
+                regions.first_bytes,
+                regions.second,
+                regions.second_bytes) == DS_OK,
+            "publication with one active view unlocks");
+        failures += Expect(
+            active.generation() == 0 &&
+                EveryByte(active, std::byte{0}),
+            "rejected acquire does not disturb active view protection");
+
+        allocation_probe::Begin();
+        snapshot.ReclaimRetired();
+        const auto while_active = allocation_probe::End();
+        failures += Expect(
+            while_active.deallocations == 0,
+            "active view still retains the retired snapshot");
+    }
+
+    allocation_probe::Begin();
+    snapshot.ReclaimRetired();
+    const auto after_scope = allocation_probe::End();
+    failures += Expect(
+        after_scope.deallocations == 2,
+        "scoped view destruction permits retired snapshot reclamation");
+    return failures;
+}
+
+class SequencedPublishedPointer {
+public:
+    using value_type = const int*;
+
+    SequencedPublishedPointer(
+        value_type first,
+        value_type replacement) noexcept
+        : first_(first), replacement_(replacement) {}
+
+    value_type load(std::memory_order) noexcept {
+        const auto load = load_count_++;
+        return load == 0 ? first_ : replacement_;
+    }
+
+    std::size_t load_count() const noexcept {
+        return load_count_;
+    }
+
+private:
+    value_type first_;
+    value_type replacement_;
+    std::size_t load_count_{};
+};
+
+class RecordingHazardPointer {
+public:
+    using value_type = const int*;
+
+    bool compare_exchange_strong(
+        value_type& expected,
+        value_type desired,
+        std::memory_order,
+        std::memory_order) noexcept {
+        ++protect_count_;
+        if (current_ != expected) {
+            expected = current_;
+            return false;
+        }
+        current_ = desired;
+        return true;
+    }
+
+    void store(value_type pointer, std::memory_order) noexcept {
+        current_ = pointer;
+        if (pointer == nullptr) {
+            ++clear_count_;
+        }
+    }
+
+    value_type current() const noexcept {
+        return current_;
+    }
+
+    std::size_t protect_count() const noexcept {
+        return protect_count_;
+    }
+
+    std::size_t clear_count() const noexcept {
+        return clear_count_;
+    }
+
+private:
+    value_type current_{};
+    std::size_t protect_count_{};
+    std::size_t clear_count_{};
+};
+
+int TestCaptureRetriesWhenPublicationChangesInProtectionWindow() {
+    // Drive the exact helper used by AcquireForRender through the race order.
+    const int old_snapshot = 1;
+    const int new_snapshot = 2;
+    SequencedPublishedPointer published(&old_snapshot, &new_snapshot);
+    RecordingHazardPointer hazard;
+
+    const auto* captured =
+        gc::audio::detail::CaptureSingleReaderSnapshot(published, hazard);
+
+    int failures = 0;
+    failures += Expect(
+        captured == &new_snapshot,
+        "capture retries to the replacement publication");
+    failures += Expect(
+        hazard.current() == &new_snapshot,
+        "replacement publication remains hazard-protected");
+    failures += Expect(
+        published.load_count() == 4 && hazard.protect_count() == 2 &&
+            hazard.clear_count() == 1,
+        "capture performs load, protect, recheck, clear, and retry");
+    return failures;
+}
+
+int TestRepeatedAcquireDuringPublication() {
+    constexpr std::uint32_t publication_count = 4096;
+    constexpr std::uint32_t minimum_reads = publication_count * 2;
+    AudioSnapshot snapshot(64, 4);
+    std::atomic<bool> reader_ready{};
+    std::atomic<bool> writer_ready{};
+    std::atomic<bool> start{};
+    std::atomic<bool> writer_done{};
+    std::atomic<bool> failed{};
+    std::atomic<bool> reader_observed_publication{};
+    std::atomic<std::uint32_t> read_count{};
+
+    std::thread reader([&] {
+        reader_ready.store(true, std::memory_order_release);
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        while (!writer_done.load(std::memory_order_acquire) ||
+               read_count.load(std::memory_order_relaxed) < minimum_reads) {
+            {
+                auto view = snapshot.AcquireForRender();
+                const auto generation = view.generation();
+                const auto expected = static_cast<std::byte>(
+                    static_cast<unsigned char>(generation));
+                if (view.size() != 64 || !EveryByte(view, expected)) {
+                    failed.store(true, std::memory_order_relaxed);
+                }
+                if (generation != 0) {
+                    reader_observed_publication.store(
+                        true, std::memory_order_release);
+                }
+            }
+            read_count.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    std::thread writer([&] {
+        writer_ready.store(true, std::memory_order_release);
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        for (std::uint32_t iteration = 1;
+             iteration <= publication_count;
+             ++iteration) {
+            AudioLockRegions regions{};
+            if (snapshot.Lock(0, 64, 0, &regions) != DS_OK) {
+                failed.store(true, std::memory_order_relaxed);
+                break;
+            }
+            FillRegions(
+                regions,
+                static_cast<unsigned char>(iteration),
+                0);
+            if (snapshot.Unlock(
+                    regions.first,
+                    regions.first_bytes,
+                    regions.second,
+                    regions.second_bytes) != DS_OK) {
+                failed.store(true, std::memory_order_relaxed);
+                break;
+            }
+            if (iteration == 1) {
+                while (!reader_observed_publication.load(
+                    std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+            }
+        }
+        writer_done.store(true, std::memory_order_release);
+    });
+
+    while (!reader_ready.load(std::memory_order_acquire) ||
+           !writer_ready.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+    reader.join();
+    writer.join();
+
+    int failures = 0;
+    failures += Expect(
+        !failed.load(std::memory_order_relaxed),
+        "repeated acquisition observes only coherent publications");
+    failures += Expect(
+        snapshot.generation() == publication_count &&
+            read_count.load(std::memory_order_relaxed) >= minimum_reads &&
+            reader_observed_publication.load(std::memory_order_relaxed),
+        "repeated acquisition overlaps every publication run");
+    return failures;
+}
+
 int TestConcurrentPublicationKeepsHeldViewStable() {
     constexpr std::uint32_t publication_count = 128;
     AudioSnapshot snapshot(64, 4);
@@ -429,25 +672,26 @@ int TestConcurrentPublicationKeepsHeldViewStable() {
         for (std::uint32_t iteration = 1;
              iteration <= publication_count;
              ++iteration) {
-            auto view = snapshot.AcquireForRender();
-            const auto expected_generation = iteration - 1;
-            const auto expected_byte = static_cast<std::byte>(
-                static_cast<unsigned char>(expected_generation));
-            if (view.generation() != expected_generation ||
-                !EveryByte(view, expected_byte)) {
-                failed.store(true, std::memory_order_relaxed);
-            }
+            {
+                auto view = snapshot.AcquireForRender();
+                const auto expected_generation = iteration - 1;
+                const auto expected_byte = static_cast<std::byte>(
+                    static_cast<unsigned char>(expected_generation));
+                if (view.generation() != expected_generation ||
+                    !EveryByte(view, expected_byte)) {
+                    failed.store(true, std::memory_order_relaxed);
+                }
 
-            view_held.store(iteration, std::memory_order_release);
-            while (published.load(std::memory_order_acquire) < iteration) {
-                std::this_thread::yield();
-            }
+                view_held.store(iteration, std::memory_order_release);
+                while (published.load(std::memory_order_acquire) < iteration) {
+                    std::this_thread::yield();
+                }
 
-            if (view.generation() != expected_generation ||
-                !EveryByte(view, expected_byte)) {
-                failed.store(true, std::memory_order_relaxed);
+                if (view.generation() != expected_generation ||
+                    !EveryByte(view, expected_byte)) {
+                    failed.store(true, std::memory_order_relaxed);
+                }
             }
-            view = {};
             view_released.store(iteration, std::memory_order_release);
         }
     });
@@ -505,6 +749,9 @@ int main() {
     failures += TestLockContract();
     failures += TestImmutablePublicationAndReclamation();
     failures += TestRenderViewDoesNotAllocateOrFree();
+    failures += TestSecondAcquireFailsWithoutDisturbingActiveView();
+    failures += TestCaptureRetriesWhenPublicationChangesInProtectionWindow();
+    failures += TestRepeatedAcquireDuringPublication();
     failures += TestConcurrentPublicationKeepsHeldViewStable();
     return failures == 0 ? 0 : 1;
 }

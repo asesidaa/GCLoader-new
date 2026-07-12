@@ -4,7 +4,7 @@
 
 **Goal:** Give every future secondary buffer one copy-on-write PCM store whose `Lock`/`Unlock` behavior is game-compatible and whose render reads never block, allocate, or free.
 
-**Architecture:** Game/streaming threads clone the latest snapshot and publish only after a matching `Unlock`. The single render thread protects one raw snapshot pointer with a hazard slot; replaced snapshots retire and are reclaimed only by non-real-time callers.
+**Architecture:** Game/streaming threads clone the latest snapshot and publish only after a matching `Unlock`. The single render thread protects exactly one scoped raw snapshot view with a hazard slot; replaced snapshots retire and are reclaimed only by non-real-time callers.
 
 **Tech Stack:** C++23 atomics, `std::unique_ptr`, `std::vector<std::byte>`, DirectSound lock flags/HRESULTs, CTest.
 
@@ -15,6 +15,8 @@
 - Offsets and lengths must be nonzero/in-range/block-aligned; wrapped locks return exactly two regions.
 - A mismatched `Unlock` returns `DSERR_INVALIDPARAM`, publishes nothing, and leaves the correct unlock retry possible.
 - Render acquire/release performs no allocation, deletion, copy, mutex wait, or logging.
+- Exactly one `RenderView` may be live per `AudioSnapshot`; a second acquire returns an empty view without disturbing the occupied hazard.
+- `RenderView` is scoped, noncopyable, and nonmovable. C++23 guaranteed prvalue elision supplies the return-by-value construction needed by `AcquireForRender`.
 - Render never observes bytes from an incomplete write.
 - Snapshot destruction/reclamation occurs on a non-real-time thread.
 
@@ -72,7 +74,11 @@ AudioSnapshot snapshot(16, 4);
 // Retrying that Unlock with exact regions succeeds.
 ```
 
-Hold a `RenderView`, publish different bytes, and assert the held view remains unchanged. Assert one retired object remains while the hazard is set; move-assign `{}` into the view, call `ReclaimRetired`, and assert the retired count becomes zero.
+Hold a `RenderView` in an inner scope, publish different bytes, and assert the held view remains unchanged. Assert one retired object remains while the scope keeps the hazard set; exit the scope, call `ReclaimRetired`, and assert the retired count becomes zero.
+
+While that view is live, call `AcquireForRender` again and assert the second call returns an empty view without changing the first view or its reclamation protection. Statically assert that `RenderView` is neither move-constructible nor move-assignable.
+
+Drive the exact production load/protect/recheck helper with a deterministic publication sequence that changes after the first hazard claim; assert it clears, retries, and returns the replacement. Pair this with repeated real `AudioSnapshot` acquisition while another thread publishes through `Lock`/`Unlock`.
 
 Override global test `operator new/delete` or use an equivalent allocation probe. Enable it only around `AcquireForRender`, `bytes()[0]`, and view destruction; assert zero calls.
 
@@ -114,7 +120,7 @@ std::unique_ptr<WritableLock> outstanding_;
 std::vector<std::unique_ptr<Snapshot>> retired_;
 ```
 
-`RenderView` is noncopyable, movable, and exposes only `std::span<const std::byte> bytes()`, `size()`, and `generation()`. Its destructor clears `render_hazard_` with sequential consistency and does not reclaim.
+`RenderView` is default-constructible as an empty result, noncopyable, nonmovable, and exposes only `std::span<const std::byte> bytes()`, `size()`, and `generation()`. Its destructor clears `render_hazard_` with sequential consistency and does not reclaim. Its only non-empty construction is the guaranteed-elided prvalue returned by `AcquireForRender`.
 
 - [ ] **Step 4: Implement lock validation and publication**
 
@@ -142,16 +148,27 @@ Do not mutate `published_owner_` until `Unlock` arguments exactly equal the reco
 
 - [ ] **Step 5: Implement hazard acquisition and non-RT reclaim**
 
-Use the standard single-reader loop:
+Use the standard single-reader load/protect/recheck loop through one narrow `detail` helper shared verbatim by production and deterministic protocol coverage:
 
 ```cpp
-const Snapshot* candidate = nullptr;
-do {
-    candidate = published_.load(std::memory_order_seq_cst);
-    render_hazard_.store(candidate, std::memory_order_seq_cst);
-} while (candidate != published_.load(std::memory_order_seq_cst));
-return RenderView(this, candidate);
+for (;;) {
+    const Snapshot* candidate =
+        published_.load(std::memory_order_seq_cst);
+    const Snapshot* empty = nullptr;
+    if (!render_hazard_.compare_exchange_strong(
+            empty, candidate,
+            std::memory_order_seq_cst,
+            std::memory_order_seq_cst)) {
+        return RenderView{};
+    }
+    if (candidate == published_.load(std::memory_order_seq_cst)) {
+        return RenderView(this, candidate);
+    }
+    render_hazard_.store(nullptr, std::memory_order_seq_cst);
+}
 ```
+
+The failed compare-exchange is the occupied-hazard case: it returns an empty view and does not write the hazard. If publication changes after the candidate load, clear only the hazard claimed by this acquisition and retry before dereferencing the candidate.
 
 Reclamation erases every retired owner except the pointer currently in `render_hazard_`. It is called only by `Lock`, successful `Unlock`, `Restore`, or other non-render control paths.
 
@@ -172,4 +189,4 @@ git commit -m "feat: publish immutable DirectSound PCM snapshots"
 
 ## Completion Gate
 
-No later plan may replace the hazard publisher with `std::shared_ptr` on the render path: releasing the last shared owner could free memory on that thread.
+No later plan may replace the hazard publisher with `std::shared_ptr` on the render path: releasing the last shared owner could free memory on that thread. Consumers must keep the acquired view in one render-read scope and must not attempt a nested or overlapping acquisition from the same `AudioSnapshot`.

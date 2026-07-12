@@ -13,6 +13,36 @@
 
 namespace gc::audio {
 
+namespace detail {
+
+template <typename PublishedPointer, typename HazardPointer>
+auto CaptureSingleReaderSnapshot(
+    PublishedPointer& published,
+    HazardPointer& hazard) noexcept
+    -> decltype(published.load(std::memory_order_seq_cst)) {
+    using Pointer = decltype(
+        published.load(std::memory_order_seq_cst));
+
+    for (;;) {
+        const Pointer candidate =
+            published.load(std::memory_order_seq_cst);
+        Pointer empty = nullptr;
+        if (!hazard.compare_exchange_strong(
+                empty,
+                candidate,
+                std::memory_order_seq_cst,
+                std::memory_order_seq_cst)) {
+            return nullptr;
+        }
+        if (candidate == published.load(std::memory_order_seq_cst)) {
+            return candidate;
+        }
+        hazard.store(nullptr, std::memory_order_seq_cst);
+    }
+}
+
+} // namespace detail
+
 struct AudioLockRegions {
     void* first{};
     DWORD first_bytes{};
@@ -40,8 +70,8 @@ public:
 
         RenderView(const RenderView&) = delete;
         RenderView& operator=(const RenderView&) = delete;
-        RenderView(RenderView&&) noexcept;
-        RenderView& operator=(RenderView&&) noexcept;
+        RenderView(RenderView&&) = delete;
+        RenderView& operator=(RenderView&&) = delete;
 
         std::span<const std::byte> bytes() const noexcept;
         std::size_t size() const noexcept;
