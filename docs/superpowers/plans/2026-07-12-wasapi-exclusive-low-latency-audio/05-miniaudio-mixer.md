@@ -4,7 +4,7 @@
 
 **Goal:** Mix all secondary-buffer voices into preallocated 44,100 Hz stereo float blocks without a miniaudio device, then convert those blocks to saturating PCM16 for WASAPI.
 
-**Architecture:** Each voice owns a custom miniaudio data source backed by `AudioSnapshot`; the callback copies immutable source frames, self-manages loop/seek state, and publishes cursor spans. A no-device `ma_engine` performs PCM16/PCM24 conversion, mono duplication, mixing, and linear conversion only for 22.05/48 kHz sources.
+**Architecture:** Each voice owns a custom zero-input/one-output miniaudio node attached to a no-device engine endpoint plus a preinitialized `ma_data_converter`. The node callback captures one immutable `AudioSnapshot` view, fills fixed input scratch, converts PCM16/PCM24 mono/stereo to 44.1 kHz stereo float, and publishes cursor spans. Native-rate voices take miniaudio's format/channels-only path; only 22.05/48 kHz sources use the linear resampler.
 
 **Tech Stack:** C++23, miniaudio 0.11.25 no-device engine, Tasks 02-04 types/storage/timeline, CTest.
 
@@ -12,12 +12,16 @@
 
 - Engine output is 44,100 Hz, 2-channel float; endpoint conversion is float→interleaved PCM16 at the same rate.
 - Set `noDevice = MA_TRUE`, `periodSizeInFrames = actual endpoint frames`, `defaultVolumeSmoothTimeInPCMFrames = 0`, and mono mode `duplicate`.
-- Create sounds with `MA_SOUND_FLAG_NO_PITCH | MA_SOUND_FLAG_NO_SPATIALIZATION`.
+- Do not create `ma_sound` objects or access their fields; voices are project custom `ma_node` objects.
 - Native 44.1 kHz voices must bypass sample-rate conversion.
 - Exceptional 22.05/48 kHz voices use miniaudio's linear converter.
 - Render makes no allocator callback, snapshot clone, log call, or mutex wait.
-- Source callbacks use only the snapshot view captured for that read.
-- All allocations and node attachment/detachment occur on non-render threads.
+- Node callbacks use one local lexical-scope, nonmoving snapshot view per process call.
+- Converter/node heaps and fixed input scratch are allocated off-render. Size scratch from `ma_data_converter_get_required_input_frame_count(period_frames)` plus reported input latency so every linear-resampler phase fits.
+- All node initialization, attachment, detachment, and uninitialization occur on non-render threads.
+- Render accepts exactly one configured period so the graph and converter never retain an unreported short-block surplus.
+- Seek uses a latest-wins mailbox with mutex-serialized control writers and a seq_cst atomic sequence/payload publication. Render never locks; an in-progress or incoherent publication makes that voice output silence for the block.
+- Before producing a new seek epoch, the render callback resets cursor/unwrapped/end/span context and calls `ma_data_converter_reset()`. The pinned linear resampler's bounded cleared-zero startup transient is expected; no pre-seek sample may survive it.
 
 ---
 
@@ -97,9 +101,9 @@ Use synthetic snapshots to assert:
 3. Two stereo voices at `0.75` mix above `1.0F`; `ConvertFloatToPcm16` clips them to `32767`.
 4. A `-1.0F` sample converts to `-32768`.
 5. Native PCM24 renders without a sample-rate conversion count.
-6. 22.05 kHz and 48 kHz sources produce monotonic linear-conversion samples and increment only the sample-rate-converted count.
+6. 22.05 kHz and 48 kHz sources produce the pinned linear converter's bounded reset transient followed by monotonic current-region samples, continue correctly across a second block, and increment only the sample-rate-converted count.
 7. A looping four-frame source publishes a span whose unwrapped end crosses the source length.
-8. Seek changes the published epoch, resets the source position, and clears exceptional-rate converter history so the first post-seek samples do not contain pre-seek state.
+8. For both exceptional rates, cover stopped seek then `Play`, seek-and-play reset, resynchronization while playing, and multiple seeks before one render. The latest request wins, the span starts at the requested source position/epoch, and the first post-seek block contains only the reset transient plus samples from the new region—never pre-seek converter state.
 9. After one warm render, enable the allocator probe around `Render`; the callback count remains zero.
 
 Pass `GameplayNativeCandidate` for the mono native PCM16 and two stereo native PCM16 voices, and `General` for PCM24 and both exceptional-rate voices. Use this exact diagnostics expectation:
@@ -135,38 +139,47 @@ add_test(NAME MiniaudioMixerTests COMMAND MiniaudioMixerTests)
 
 Append `MiniaudioMixer.cpp` to `SOURCES`. Reconfigure and build; expect missing `MiniaudioMixer.h`.
 
-- [ ] **Step 3: Implement the custom data-source state**
+- [ ] **Step 3: Implement the custom node, converter, and seek-mailbox state**
 
-Use one namespace-scope implementation struct whose first member is `ma_data_source_base`:
+Use a namespace-scope node wrapper whose first member is `ma_node_base` and whose project state owns the converter and fixed scratch:
 
 ```cpp
-struct SnapshotDataSource {
-    ma_data_source_base base{};
+struct VoiceNode {
+    ma_node_base base{};
+    MixerVoiceState* state{};
+};
+
+struct MixerVoiceState {
+    VoiceNode node{};
+    ma_data_converter converter{};
     NormalizedSourceFormat format{};
     AudioSnapshot* snapshot{};
     AudioCursorTimeline* timeline{};
+    std::vector<std::byte> input_scratch;
     std::atomic_uint64_t cursor{};
-    std::atomic_uint64_t epoch{1};
     std::atomic_bool looping{};
     std::atomic_bool ended{};
+    // Mutex-serialized writers; seq_cst sequence/frame/epoch payload.
+    SeekMailbox seek_mailbox{};
     std::uint64_t unwrapped_cursor{};  // render thread only
     std::uint64_t last_render_id{};    // render thread only
     std::uint64_t render_output_offset{};
 };
 ```
 
-The vtable implements read, seek, format, cursor, length, and looping; set `MA_DATA_SOURCE_SELF_MANAGED_RANGE_AND_LOOP_POINT`.
+The node vtable has zero input buses and one stereo output bus. Initialize a linear `ma_data_converter` from the accepted source format/rate/channels to f32 stereo 44.1 kHz. Matching rates must report no resampler; exceptional rates use the stock linear resampler with no LPF. Allocate converter heap and scratch before attachment. Scratch capacity is the queried period requirement plus converter input latency, which covers phase-dependent 48 kHz requirements after the first block.
 
-- [ ] **Step 4: Implement bounded snapshot reads and span publication**
+- [ ] **Step 4: Implement bounded node processing, seek reset, and span publication**
 
-The read callback must:
+At the start of node processing, read the seek mailbox with a stable seq_cst sequence/payload/sequence snapshot. If the sequence is odd or changed, emit silence without advancing the voice. For a new stable version, reset source cursor, unwrapped cursor, ended/render-span state, and `ma_data_converter_reset()` before reading any new-epoch frame.
+
+The node callback acquires exactly one local nonmoving view, copies at most the converter's required input frames into fixed scratch, and never retains the view:
 
 ```cpp
 const auto view = source.snapshot->AcquireForRender();
-while (*frames_read < requested_frames) {
+while (copied < required_input_frames) {
     if (position == source_length) {
         if (!source.looping.load(std::memory_order_relaxed)) {
-            reached_end = true;
             break;
         }
         position = 0;
@@ -174,22 +187,19 @@ while (*frames_read < requested_frames) {
     }
     const auto chunk = std::min<std::uint64_t>(
         source_length - position,
-        requested_frames - *frames_read);
+        required_input_frames - copied);
     std::memcpy(
-        destination + *frames_read * source.format.block_align,
+        input_scratch + copied * source.format.block_align,
         view.bytes().data() + position * source.format.block_align,
         static_cast<std::size_t>(chunk * source.format.block_align));
     position += chunk;
-    *frames_read += chunk;
-    source.unwrapped_cursor += chunk;
+    copied += chunk;
 }
 ```
 
-Within the current render context, convert consumed source frames to represented output frames with ceiling division, clamp to the remaining output block, and publish `AudioRenderSpan`. Return `MA_AT_END` only after the final nonlooping data has been exposed; otherwise return `MA_SUCCESS`.
+Call `ma_data_converter_process_pcm_frames`, advance only by the input frames it actually consumed, zero any short output remainder, convert consumed source frames to represented output frames with ceiling division, clamp to the remaining fixed output block, and publish `AudioRenderSpan`. Mark a nonlooping voice ended only after its final source frame has been exposed. Reject control seeks where `frame >= length` before mailbox publication.
 
-The seek callback rejects `frame >= length`, then resets cursor, unwrapped cursor, `ended`, render id, and render offset.
-
-- [ ] **Step 5: Initialize the no-device engine and voices**
+- [ ] **Step 5: Initialize the no-device engine and attach voices**
 
 Use:
 
@@ -206,9 +216,9 @@ if (callbacks != nullptr) {
 }
 ```
 
-Initialize a voice with `ma_data_source_init`, then `ma_sound_config_init_2`, the two no-pitch/no-spatialization flags, zero smoothing, and an end callback that changes only atomics/counters.
+Initialize each voice's converter, fixed scratch, and stopped custom node off-render. Attach the node's single stereo output bus to `ma_node_graph_get_endpoint(ma_engine_get_node_graph(&engine))`. Destruction detaches and uninitializes the node/converter before engine teardown.
 
-`Play`, `Stop`, `Seek`, and `SetGain` call only miniaudio's atomic/synchronized control APIs and maintain `active_voices` without underflow.
+`Play`/`Stop` use supported atomic node-state APIs, and `SetGain` uses `ma_node_set_output_bus_volume`. `Seek` only validates and publishes to the coherent mailbox. Maintain `active_voices` without underflow; render-side natural end changes only node/project atomics and counters.
 
 `CreateVoice` increments `native_gameplay_buffers` only when `usage == VoiceUsage::GameplayNativeCandidate` and `format.native_rate_pcm16` is true. This count is a format/use-pattern diagnostic candidate; filenames are unavailable and Plan 11 remains authoritative.
 

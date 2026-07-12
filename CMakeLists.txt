@@ -131,6 +131,7 @@ target_include_directories(imgui PUBLIC ${imgui_external_SOURCE_DIR}
 set(SOURCES
         AudioCursorTimeline.cpp
         AudioSnapshot.cpp
+        MiniaudioMixer.cpp
         CountdownTimerFreeze.cpp
         config.cpp
         dllmain.cpp
@@ -224,6 +225,19 @@ target_include_directories(AudioCursorTimelineTests PRIVATE
 )
 target_link_libraries(AudioCursorTimelineTests PRIVATE miniaudio)
 add_test(NAME AudioCursorTimelineTests COMMAND AudioCursorTimelineTests)
+
+add_executable(MiniaudioMixerTests
+        WasapiAudioTypes.cpp
+        AudioSnapshot.cpp
+        AudioCursorTimeline.cpp
+        MiniaudioMixer.cpp
+        tests/MiniaudioMixerTests.cpp
+)
+target_include_directories(MiniaudioMixerTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(MiniaudioMixerTests PRIVATE miniaudio)
+add_test(NAME MiniaudioMixerTests COMMAND MiniaudioMixerTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
