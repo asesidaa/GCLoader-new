@@ -14,6 +14,27 @@ namespace gc::audio {
 
 namespace detail {
 
+struct AudibleDrainRecord {
+    std::uint64_t exclusive_end_output_frame{};
+    std::uint64_t run_token{};
+    std::uint64_t epoch{};
+};
+
+class AudibleDrainPublication {
+public:
+    // The render callback is the sole publisher; readers never wait.
+    void Publish(const AudibleDrainRecord&) noexcept;
+    std::optional<std::uint64_t> Observe(
+        std::uint64_t current_draining_run,
+        std::uint64_t latest_accepted_epoch) const noexcept;
+
+private:
+    std::atomic_uint64_t sequence_{};
+    std::atomic_uint64_t exclusive_end_output_frame_{};
+    std::atomic_uint64_t run_token_{};
+    std::atomic_uint64_t epoch_{};
+};
+
 struct VoicePlayTransition {
     std::uint64_t run_token{};
     bool needs_active_increment{};
@@ -28,6 +49,7 @@ public:
     bool BeginEnd(std::uint64_t run_token) noexcept;
     void CompleteEnd(std::uint64_t run_token) noexcept;
     std::uint64_t CapturePlayingRun() const noexcept;
+    std::uint64_t CaptureDrainingRun() const noexcept;
     bool playing() const noexcept;
 
 private:

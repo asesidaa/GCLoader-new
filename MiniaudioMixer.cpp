@@ -132,6 +132,47 @@ struct MiniaudioMixerState {
     }
 };
 
+void detail::AudibleDrainPublication::Publish(
+    const AudibleDrainRecord& record) noexcept {
+    const auto stable = sequence_.load(std::memory_order_seq_cst);
+    const auto writing = (stable & 1U) == 0 ? stable + 1 : stable + 2;
+    sequence_.store(writing, std::memory_order_seq_cst);
+    exclusive_end_output_frame_.store(
+        record.exclusive_end_output_frame,
+        std::memory_order_seq_cst);
+    run_token_.store(record.run_token, std::memory_order_seq_cst);
+    epoch_.store(record.epoch, std::memory_order_seq_cst);
+    sequence_.store(writing + 1, std::memory_order_seq_cst);
+}
+
+std::optional<std::uint64_t>
+detail::AudibleDrainPublication::Observe(
+    std::uint64_t current_draining_run,
+    std::uint64_t latest_accepted_epoch) const noexcept {
+    if (current_draining_run == 0 || latest_accepted_epoch == 0) {
+        return std::nullopt;
+    }
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto before = sequence_.load(std::memory_order_seq_cst);
+        if ((before & 1U) != 0) {
+            continue;
+        }
+        const auto output_end = exclusive_end_output_frame_.load(
+            std::memory_order_seq_cst);
+        const auto run_token = run_token_.load(std::memory_order_seq_cst);
+        const auto epoch = epoch_.load(std::memory_order_seq_cst);
+        const auto after = sequence_.load(std::memory_order_seq_cst);
+        if (before != after || (after & 1U) != 0) {
+            continue;
+        }
+        return output_end != 0 && run_token == current_draining_run &&
+                epoch == latest_accepted_epoch
+            ? std::optional<std::uint64_t>(output_end)
+            : std::nullopt;
+    }
+    return std::nullopt;
+}
+
 namespace {
 
 enum class VoicePlaybackPhase : std::uint8_t {
@@ -221,9 +262,20 @@ std::uint64_t detail::VoicePlaybackStateMachine::BeginStop() noexcept {
     for (;;) {
         auto current = packed_state_.load(std::memory_order_seq_cst);
         const auto phase = PlaybackPhase(current);
-        if (phase == VoicePlaybackPhase::Stopped ||
-            phase == VoicePlaybackPhase::Ended) {
+        if (phase == VoicePlaybackPhase::Stopped) {
             return 0;
+        }
+        if (phase == VoicePlaybackPhase::Ended) {
+            if (packed_state_.compare_exchange_weak(
+                    current,
+                    PackPlaybackState(
+                        VoicePlaybackPhase::Stopped,
+                        PlaybackRun(current)),
+                    std::memory_order_seq_cst,
+                    std::memory_order_seq_cst)) {
+                return 0;
+            }
+            continue;
         }
         if (phase == VoicePlaybackPhase::Playing) {
             const auto run_token = PlaybackRun(current);
@@ -289,6 +341,16 @@ std::uint64_t detail::VoicePlaybackStateMachine::CapturePlayingRun()
         : 0;
 }
 
+std::uint64_t detail::VoicePlaybackStateMachine::CaptureDrainingRun()
+    const noexcept {
+    const auto current = packed_state_.load(std::memory_order_seq_cst);
+    const auto phase = PlaybackPhase(current);
+    return phase == VoicePlaybackPhase::Ending ||
+            phase == VoicePlaybackPhase::Ended
+        ? PlaybackRun(current)
+        : 0;
+}
+
 bool detail::VoicePlaybackStateMachine::playing() const noexcept {
     const auto phase = PlaybackPhase(
         packed_state_.load(std::memory_order_seq_cst));
@@ -350,7 +412,8 @@ struct MixerVoiceState {
     detail::VoicePlaybackStateMachine playback;
     std::atomic_bool looping{};
     std::atomic_bool ended{};
-    std::atomic_uint64_t audible_until_output_frame{};
+    std::atomic_uint64_t accepted_epoch{1};
+    detail::AudibleDrainPublication audible_drain;
     std::mutex control_mutex;
     std::uint64_t epoch{1};
     std::uint64_t epoch_source_start{};
@@ -407,9 +470,11 @@ struct MixerVoiceState {
         if (!playback.BeginEnd(run_token)) {
             return;
         }
-        audible_until_output_frame.store(
+        audible_drain.Publish({
             final_output_end,
-            std::memory_order_seq_cst);
+            run_token,
+            epoch,
+        });
         ma_node_set_state(&node.base, ma_node_state_stopped);
         ended.store(true, std::memory_order_seq_cst);
         mixer->VoiceStopped();
@@ -750,9 +815,6 @@ HRESULT MixerVoice::Play(
 
     std::lock_guard control_lock(state_->control_mutex);
     ma_node_set_state(&state_->node.base, ma_node_state_stopped);
-    state_->audible_until_output_frame.store(
-        0,
-        std::memory_order_seq_cst);
 
     const auto play = state_->playback.BeginPlay();
 
@@ -767,6 +829,7 @@ HRESULT MixerVoice::Play(
         fallback,
         epoch,
         state_->applied_seek_sequence.load(std::memory_order_seq_cst));
+    state_->accepted_epoch.store(epoch, std::memory_order_seq_cst);
     if (play.needs_active_increment) {
         state_->mixer->VoiceStarted();
     }
@@ -797,9 +860,6 @@ void MixerVoice::Stop() noexcept {
         state_->mixer->VoiceStopped();
         state_->playback.CompleteStop(stopped_run);
     }
-    state_->audible_until_output_frame.store(
-        0,
-        std::memory_order_seq_cst);
 }
 
 HRESULT MixerVoice::Seek(
@@ -812,9 +872,7 @@ HRESULT MixerVoice::Seek(
         return DSERR_INVALIDPARAM;
     }
     state_->seek_mailbox.Publish(source_frame, epoch);
-    state_->audible_until_output_frame.store(
-        0,
-        std::memory_order_seq_cst);
+    state_->accepted_epoch.store(epoch, std::memory_order_seq_cst);
     return DS_OK;
 }
 
@@ -844,11 +902,9 @@ MixerVoice::audible_until_output_frame() const noexcept {
     if (state_ == nullptr) {
         return std::nullopt;
     }
-    const auto output_end = state_->audible_until_output_frame.load(
-        std::memory_order_seq_cst);
-    return output_end == 0
-        ? std::nullopt
-        : std::optional<std::uint64_t>(output_end);
+    return state_->audible_drain.Observe(
+        state_->playback.CaptureDrainingRun(),
+        state_->accepted_epoch.load(std::memory_order_seq_cst));
 }
 
 MiniaudioMixer::MiniaudioMixer(

@@ -16,7 +16,7 @@
 - Implement every vtable entry; pan, frequency, 3D, effects, and notification controls remain unsupported.
 - `SetVolume` uses DirectSound hundredths-of-dB conversion with no smoothing.
 - `Stop` preserves the last hardware-clock cursor.
-- A naturally ended nonlooping voice remains game-visible as playing while the endpoint clock is inside its final queued half-open span; this hardware-drain status does not change mixer active accounting.
+- A naturally ended nonlooping voice remains game-visible as playing while the endpoint clock is inside its final queued half-open span and the coherent drain record matches the current playback run and latest accepted seek epoch; this hardware-drain status does not change mixer active accounting. Replay, seek, and stop make stale records unobservable.
 - `SetCurrentPosition` increments the epoch, seeks source frames, and rejects unaligned/out-of-range bytes.
 - `Restore` succeeds and performs non-RT retired-snapshot reclamation.
 
@@ -78,6 +78,7 @@ In `tests/SecondarySoundBufferTests.cpp`, assert:
 - missing clock/timeline returns the last good cursor and increments the diagnostic counter;
 - `Stop` clears playing status and preserves the last cursor;
 - a nonlooping source ending inside one endpoint period publishes a final queued output end, resolves the hardware-mapped cursor without fallback while inside it, reports `PLAYING` until that exclusive end, preserves the cursor through `Stop`, and remains stopped with the last good cursor at/after the end;
+- after replay advances the playback run or `SetCurrentPosition` accepts a new epoch, a stale terminal record cannot revive COM playing status, resolve an old timeline span, or increment cursor-failure diagnostics; only a matching new terminal record may drive drain behavior;
 - seek byte 2 and byte 16 fail for a 16-byte/stereo buffer; byte 4 succeeds and changes epoch;
 - `Restore` succeeds;
 - `SetPan`, `SetFrequency`, `SetFX`, `AcquireResources`, and `GetObjectInPath` return `DSERR_CONTROLUNAVAIL`;
@@ -173,7 +174,7 @@ return last_reported_source_frame_.load(std::memory_order_acquire);
 
 Convert play and projected write frames with `SourceFrameToByte`.
 
-`Play` requires both reserved arguments zero and allows only `DSBPLAY_LOOPING`. `Stop` resolves/stores the cursor before telling the voice to clear its drain boundary. `GetStatus` combines logical `voice.playing()` with `CurrentOutputFrame() < audible_until_output_frame`; it never reports `LOOPING` for terminal drain because looped voices have no terminal boundary. Each operation reads the endpoint clock at most once. `SetCurrentPosition` performs:
+`Play` requires both reserved arguments zero and allows only `DSBPLAY_LOOPING`. `Stop` resolves/stores the cursor before transitioning the voice to a nondraining stopped state. `GetStatus` combines logical `voice.playing()` with `CurrentOutputFrame() < audible_until_output_frame`; the voice method returns a boundary only from a coherent record whose run matches the current draining playback state and whose epoch matches the latest accepted seek epoch. It never reports `LOOPING` for terminal drain because looped voices have no terminal record. Each operation reads the endpoint clock at most once. `SetCurrentPosition` performs:
 
 ```cpp
 const auto source_frame = position / format_.block_align;

@@ -26,7 +26,7 @@
 - The render callback may use `.get()` from stable state-held shared owners but must never copy, move, reset, acquire, or release a `shared_ptr`.
 - Cursor spans derive source positions from the overflow-safe epoch-cumulative mapping `epoch_source_start + floor(total_output_frames * source_rate / 44100)`. Publish bounded rational segments where one span cannot represent every output-frame phase exactly.
 - Active accounting is controlled by a lock-free per-voice transitional state machine whose phase and monotonic playback-run token share one packed atomic. Control writers may serialize/wait off-render; natural end CASes the exact `Playing(run)` captured at callback entry, so a stale render cannot end a newer run. Render never waits or takes the control mutex.
-- Logical mixer activity and hardware audibility are distinct at nonlooping end-of-source. After publishing the final span, a voice exposes its half-open queued output end through a lock-free observable before logical `playing()` becomes false. The active-voice counter still drops at logical end; it is not held open for endpoint drain. Looped voices never publish a terminal drain boundary.
+- Logical mixer activity and hardware audibility are distinct at nonlooping end-of-source. After publishing the final span, a voice atomically publishes a coherent `{exclusive_end_output_frame, run_token, epoch}` drain record before logical `playing()` becomes false. Observation succeeds only when the record's run is the current `Ending`/`Ended` run and its epoch is the latest accepted seek epoch, so delayed publications from an old replay run or seek epoch remain unobservable. The active-voice counter still drops at logical end; it is not held open for endpoint drain. `Stop` changes the playback phase to invalidate any record, and looped voices never publish one.
 
 ---
 
@@ -116,7 +116,7 @@ Use synthetic snapshots to assert:
 11. Drop caller snapshot/timeline owners, render and resolve the timeline through the voice-held owners, then prove both owners expire after voice destruction. No shared ownership operation occurs in render.
 12. Assert exact multi-block cumulative phase (`22.05 kHz: 412→6, 415→7`; `48 kHz: 512→13, 515→16`) and stress concurrent `Play`/`Stop`/natural-end so a single voice never reports active/max above one and finishes stopped.
 13. Capture an old render's playback-run token, stop and start a new run, then prove the stale token cannot win natural end or decrement the new run's active count.
-14. A nonlooping source that ends in one period publishes its exact final queued output end even though `playing()` and `active_voices` become false/zero; replay and seek clear that boundary, explicit stop clears it, and a looped voice never publishes one.
+14. A nonlooping source that ends in one period publishes its exact final queued output end even though `playing()` and `active_voices` become false/zero. Deterministically publish an old run after replay has advanced the run token and an old epoch after a new seek epoch has been accepted; both records remain unobservable until the current run/epoch publishes its own coherent record. Explicit stop invalidates the current record immediately, and a looped voice never publishes one.
 
 Pass `GameplayNativeCandidate` for the mono native PCM16 and two stereo native PCM16 voices, and `General` for PCM24 and both exceptional-rate voices. Use this exact diagnostics expectation:
 
@@ -172,7 +172,8 @@ struct MixerVoiceState {
     std::atomic_uint64_t cursor{};
     std::atomic_bool looping{};
     std::atomic_bool ended{};
-    std::atomic_uint64_t audible_until_output_frame{};
+    std::atomic_uint64_t accepted_epoch{1};
+    detail::AudibleDrainPublication audible_drain; // atomic record: end/run/epoch
     detail::VoicePlaybackStateMachine playback; // packed phase + run token
     std::mutex control_mutex; // control threads only; render never locks it
     // Mutex-serialized writers; seq_cst sequence/frame/epoch payload.
@@ -216,7 +217,7 @@ while (copied < required_input_frames) {
 }
 ```
 
-Call `ma_data_converter_process_pcm_frames`, advance the physical input cursor only by frames actually consumed, and zero any short output remainder. Independently derive every published unwrapped source position from the overflow-safe cumulative rational mapping `epoch_source_start + floor(total_output_frames * source_rate / 44100)`. Split the block into a bounded number of exact rational segments when one `AudioRenderSpan` interpolation would lose phase. Clamp to the remaining fixed output block. Mark a nonlooping voice ended only after its final source frame has been exposed. When final span publication succeeds, store its exclusive output end in the lock-free audible-until observable before completing the logical-playing transition; do not publish this boundary for loops. `Play`, replay, and accepted `Seek` clear the prior boundary, and explicit `Stop` clears it after its caller has had an opportunity to sample the hardware cursor. Reject control seeks where `frame >= length` before mailbox publication.
+Call `ma_data_converter_process_pcm_frames`, advance the physical input cursor only by frames actually consumed, and zero any short output remainder. Independently derive every published unwrapped source position from the overflow-safe cumulative rational mapping `epoch_source_start + floor(total_output_frames * source_rate / 44100)`. Split the block into a bounded number of exact rational segments when one `AudioRenderSpan` interpolation would lose phase. Clamp to the remaining fixed output block. Mark a nonlooping voice ended only after its final source frame has been exposed. When final span publication succeeds, use a single-render-writer atomic sequence to publish the coherent terminal record `{exclusive output end, captured playback run, render epoch}` before completing the logical-playing transition; do not publish a record for loops. Readers accept only a stable record whose run matches the current draining playback state and whose epoch matches `accepted_epoch`. Replay advances the run, accepted `Seek` advances the epoch, and explicit `Stop` leaves no draining playback state, so stale records need no racy destructive clear and cannot become observable again. Reject control seeks where `frame >= length` before mailbox publication.
 
 - [ ] **Step 5: Initialize the no-device engine and attach voices**
 
@@ -237,7 +238,7 @@ if (callbacks != nullptr) {
 
 Initialize each voice's converter, fixed scratch, and stopped custom node off-render. Attach the node's single stereo output bus to `ma_node_graph_get_endpoint(ma_engine_get_node_graph(&engine))`. Voice destruction detaches and uninitializes the node/converter, then releases source and engine shared owners; engine teardown happens exactly once after the final mixer/voice owner.
 
-`Play`/`Stop` use supported atomic node-state APIs, and `SetGain` uses `ma_node_set_output_bus_volume`. `Seek` only validates and publishes to the coherent mailbox. Serialize control transitions outside render and use lock-free `Stopped/Starting/Playing/Stopping/Ending/Ended` states packed with a monotonic playback-run token. Only the transition owner updates the global active count. The callback captures its run token on entry, and natural end must win an exact `Playing(run)→Ending(run)` CAS before publishing the terminal boundary and decrementing; stop/end cannot double-decrement, race a delayed start increment, or let an old callback end a replayed voice. The short `Ending` transition remains logically playing until the boundary is visible; endpoint drain after `Ended` does not keep the mixer active counter elevated.
+`Play`/`Stop` use supported atomic node-state APIs, and `SetGain` uses `ma_node_set_output_bus_volume`. `Seek` only validates and publishes to the coherent mailbox. Serialize control transitions outside render and use lock-free `Stopped/Starting/Playing/Stopping/Ending/Ended` states packed with a monotonic playback-run token. Only the transition owner updates the global active count. The callback captures its run token on entry, and natural end must win an exact `Playing(run)→Ending(run)` CAS before publishing the terminal record and decrementing; stop/end cannot double-decrement, race a delayed start increment, or let an old callback end a replayed voice. The short `Ending` transition remains logically playing until the qualified record is visible; endpoint drain after `Ended` does not keep the mixer active counter elevated. `Stop` from `Ended` atomically transitions to `Stopped` without decrementing again, immediately invalidating the record through playback-state qualification.
 
 `CreateVoice` increments `native_gameplay_buffers` only when `usage == VoiceUsage::GameplayNativeCandidate` and `format.native_rate_pcm16` is true. This count is a format/use-pattern diagnostic candidate; filenames are unavailable and Plan 11 remains authoritative.
 

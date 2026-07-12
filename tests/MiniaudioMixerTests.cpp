@@ -579,6 +579,56 @@ int TestStaleRenderCannotEndNewPlaybackRun() {
     return failures;
 }
 
+int TestAudibleDrainPublicationRejectsStaleRunAndEpoch() {
+    gc::audio::detail::AudibleDrainPublication publication;
+    gc::audio::detail::VoicePlaybackStateMachine playback;
+    int failures = 0;
+
+    const auto old_play = playback.BeginPlay();
+    playback.CommitPlay(old_play.run_token);
+    failures += Expect(
+        playback.BeginEnd(old_play.run_token),
+        "old playback run enters ending state");
+    playback.CompleteEnd(old_play.run_token);
+    const auto replay = playback.BeginPlay();
+    playback.CommitPlay(replay.run_token);
+
+    publication.Publish({120, old_play.run_token, 3});
+    failures += Expect(
+        replay.run_token != old_play.run_token &&
+            !publication.Observe(replay.run_token, 3).has_value(),
+        "old ending run published after replay is unobservable");
+
+    publication.Publish({180, replay.run_token, 3});
+    failures += Expect(
+        publication.Observe(replay.run_token, 3) == 180,
+        "matching run and epoch observe coherent drain boundary");
+
+    publication.Publish({220, replay.run_token, 4});
+    failures += Expect(
+        !publication.Observe(replay.run_token, 5).has_value(),
+        "old seek epoch published after accepted seek is unobservable");
+    publication.Publish({240, replay.run_token, 5});
+    failures += Expect(
+        publication.Observe(replay.run_token, 5) == 240,
+        "new seek epoch final span becomes observable");
+
+    failures += Expect(
+        playback.BeginEnd(replay.run_token),
+        "terminal drain run enters ending state");
+    playback.CompleteEnd(replay.run_token);
+    failures += Expect(
+        playback.CaptureDrainingRun() == replay.run_token &&
+            publication.Observe(playback.CaptureDrainingRun(), 5) == 240,
+        "ended playback exposes only its terminal drain run");
+    const auto stopped_run = playback.BeginStop();
+    failures += Expect(
+        stopped_run == 0 && playback.CaptureDrainingRun() == 0 &&
+            !publication.Observe(playback.CaptureDrainingRun(), 5).has_value(),
+        "stopped playback invalidates current drain record");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -919,6 +969,7 @@ int main() {
     failures += TestVoiceRetainsMixerState();
     failures += TestConcurrentVoiceStateAccounting();
     failures += TestStaleRenderCannotEndNewPlaybackRun();
+    failures += TestAudibleDrainPublicationRejectsStaleRunAndEpoch();
 
     return failures == 0 ? 0 : 1;
 }

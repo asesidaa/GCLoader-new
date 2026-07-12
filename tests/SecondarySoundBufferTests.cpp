@@ -632,12 +632,69 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     failures += Expect(
         buffer->Stop() == DS_OK,
         "explicit Stop during queued final span succeeds");
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK && status == 0,
+        "explicit Stop immediately invalidates queued drain status");
     stop_engine.output_frame = 802;
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK && status == 0 &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
             cursor == 4 && stop_engine.cursor_failures == 0,
         "Stop preserves hardware-mapped cursor and clears drain state");
+    buffer->Release();
+    return failures;
+}
+
+int TestResetBufferIgnoresStaleFinalDrainRecord() {
+    MixerEngineServices engine;
+    auto wave = PcmFormat();
+    auto descriptor = BufferDescription(&wave, 8);
+    IDirectSoundBuffer8* buffer{};
+    int failures = Expect(
+        CreateBuffer(engine, descriptor, &buffer) == DS_OK,
+        "stale-drain COM buffer creation");
+    if (buffer == nullptr) {
+        return failures + 1;
+    }
+
+    const std::array<std::int16_t, 4> samples{
+        1000, 1000, 2000, 2000,
+    };
+    failures += Expect(
+        FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, 0) == DS_OK,
+        "stale-drain old epoch setup");
+    std::array<float, 8> output{};
+    failures += Expect(
+        engine.Render(900, output).result == MA_SUCCESS &&
+            buffer->SetCurrentPosition(0) == DS_OK,
+        "accepted seek invalidates old final drain epoch");
+
+    engine.output_frame = 901;
+    DWORD cursor = 99;
+    DWORD status = 99;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK && status == 0,
+        "stale old-epoch drain cannot report COM playing status");
+    failures += Expect(
+        buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 0 && engine.cursor_failures == 0,
+        "stale old-epoch drain cannot resolve old span or add fallback failure");
+
+    failures += Expect(
+        buffer->Play(0, 0, 0) == DS_OK,
+        "new epoch playback starts without stale drain");
+    output.fill(0.0F);
+    failures += Expect(
+        engine.Render(904, output).result == MA_SUCCESS,
+        "new epoch final span render");
+    engine.output_frame = 905;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK &&
+            status == DSBSTATUS_PLAYING &&
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 4 && engine.cursor_failures == 0,
+        "new epoch final drain alone drives COM status and cursor");
     buffer->Release();
     return failures;
 }
@@ -738,6 +795,7 @@ int main() {
     failures += TestLockUnlockPublication();
     failures += TestVolumePlaybackAndCursors();
     failures += TestNonLoopingFinalSpanDrainsByEndpointClock();
+    failures += TestResetBufferIgnoresStaleFinalDrainRecord();
     failures += TestSeekRestoreUnsupportedAndLifetime();
     return failures == 0 ? 0 : 1;
 }
