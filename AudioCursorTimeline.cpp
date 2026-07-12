@@ -23,6 +23,11 @@ struct ModularSum {
     std::uint64_t quotient;
 };
 
+struct ModularProduct {
+    std::uint64_t quotient;
+    std::uint64_t remainder;
+};
+
 ModularSum AddModulo(
     std::uint64_t left,
     std::uint64_t right,
@@ -33,15 +38,16 @@ ModularSum AddModulo(
     return {left + right, 0};
 }
 
-std::uint64_t MultiplyProperFractionsFloor(
+ModularProduct MultiplyProperFractions(
     std::uint64_t left,
     std::uint64_t right,
     std::uint64_t denominator) noexcept {
     if (left == 0 || right == 0) {
-        return 0;
+        return {};
     }
     if (left <= std::numeric_limits<std::uint64_t>::max() / right) {
-        return (left * right) / denominator;
+        const auto product = left * right;
+        return {product / denominator, product % denominator};
     }
 
     std::uint64_t quotient{};
@@ -58,7 +64,7 @@ std::uint64_t MultiplyProperFractionsFloor(
             quotient += added.quotient;
         }
     }
-    return quotient;
+    return {quotient, remainder};
 }
 
 bool CheckedMultiply(
@@ -105,26 +111,51 @@ std::optional<std::uint64_t> ScaleFloor(
         return std::nullopt;
     }
 
-    const auto fractional = MultiplyProperFractionsFloor(
+    const auto fractional = MultiplyProperFractions(
         value_remainder,
         numerator_remainder,
         denominator);
-    if (!CheckedAdd(result, fractional, &result)) {
+    if (!CheckedAdd(result, fractional.quotient, &result)) {
         return std::nullopt;
     }
     return result;
+}
+
+std::optional<std::uint64_t> ScaleCeil(
+    std::uint64_t value,
+    std::uint64_t numerator,
+    std::uint64_t denominator) noexcept {
+    const auto floor = ScaleFloor(value, numerator, denominator);
+    if (!floor.has_value() || denominator == 0) {
+        return std::nullopt;
+    }
+
+    const auto fractional = MultiplyProperFractions(
+        value % denominator,
+        numerator % denominator,
+        denominator);
+    if (fractional.remainder == 0) {
+        return floor;
+    }
+
+    std::uint64_t ceiling{};
+    if (!CheckedAdd(*floor, 1, &ceiling)) {
+        return std::nullopt;
+    }
+    return ceiling;
 }
 
 template <typename Value>
 void StoreSpanValue(Value& destination, Value value) noexcept {
     std::atomic_ref<Value>(destination).store(
         value,
-        std::memory_order_relaxed);
+        detail::kRenderSpanAtomicOrder);
 }
 
 template <typename Value>
 Value LoadSpanValue(Value& source) noexcept {
-    return std::atomic_ref<Value>(source).load(std::memory_order_relaxed);
+    return std::atomic_ref<Value>(source).load(
+        detail::kRenderSpanAtomicOrder);
 }
 
 void StoreSpan(
@@ -161,10 +192,12 @@ void AudioCursorTimeline::Publish(const AudioRenderSpan& span) noexcept {
     const auto generation = writer_generation_++;
     auto& slot = slots_[generation % kRenderSpanCapacity];
     const auto writing = generation * 2 + 1;
-    slot.sequence.store(writing, std::memory_order_release);
+    slot.sequence.store(writing, detail::kRenderSpanAtomicOrder);
     StoreSpan(slot.span, span);
-    slot.sequence.store(writing + 1, std::memory_order_release);
-    published_generation_.store(generation + 1, std::memory_order_release);
+    slot.sequence.store(writing + 1, detail::kRenderSpanAtomicOrder);
+    published_generation_.store(
+        generation + 1,
+        detail::kRenderSpanAtomicOrder);
 }
 
 std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
@@ -175,8 +208,8 @@ std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
         return std::nullopt;
     }
 
-    const auto published =
-        published_generation_.load(std::memory_order_acquire);
+    const auto published = published_generation_.load(
+        detail::kRenderSpanAtomicOrder);
     const auto available = std::min<std::uint64_t>(
         published,
         kRenderSpanCapacity);
@@ -189,14 +222,14 @@ std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
         std::optional<AudioRenderSpan> stable_span;
         for (int attempt = 0; attempt < 3; ++attempt) {
             const auto before =
-                slot.sequence.load(std::memory_order_acquire);
+                slot.sequence.load(detail::kRenderSpanAtomicOrder);
             if (before != expected_sequence || (before & 1U) != 0) {
                 continue;
             }
 
             const auto candidate = LoadSpan(slot.span);
             const auto after =
-                slot.sequence.load(std::memory_order_acquire);
+                slot.sequence.load(detail::kRenderSpanAtomicOrder);
             if (before == after && after == expected_sequence) {
                 stable_span = candidate;
                 break;
@@ -264,6 +297,12 @@ std::optional<std::uint64_t> EndpointClockMapper::ToOutputFrame(
 std::uint64_t SourceFrameToByte(
     std::uint64_t source_frame,
     std::uint16_t block_alignment) noexcept {
+    constexpr auto max_direct_sound_bytes =
+        std::numeric_limits<std::uint32_t>::max();
+    if (block_alignment == 0 ||
+        source_frame > max_direct_sound_bytes / block_alignment) {
+        return 0;
+    }
     return source_frame * block_alignment;
 }
 
@@ -276,11 +315,18 @@ std::uint64_t ProjectWriteCursorFrame(
         return 0;
     }
 
-    const auto source_frames_ahead =
-        (static_cast<std::uint64_t>(endpoint_buffer_frames) * source_rate +
-         kOutputSampleRate - 1) /
-        kOutputSampleRate;
-    return (play_frame + source_frames_ahead) % source_length_frames;
+    const auto source_frames_ahead = ScaleCeil(
+        endpoint_buffer_frames,
+        source_rate,
+        kOutputSampleRate);
+    if (!source_frames_ahead.has_value()) {
+        return 0;
+    }
+
+    return AddModulo(
+        play_frame % source_length_frames,
+        *source_frames_ahead % source_length_frames,
+        source_length_frames).remainder;
 }
 
 } // namespace gc::audio

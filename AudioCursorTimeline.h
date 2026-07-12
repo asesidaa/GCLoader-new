@@ -8,6 +8,15 @@
 
 namespace gc::audio {
 
+namespace detail {
+
+// Sequence values and every slot payload scalar share this total order. A
+// reader cannot accept two stale sequence observations around newer payload.
+inline constexpr std::memory_order kRenderSpanAtomicOrder =
+    std::memory_order_seq_cst;
+
+} // namespace detail
+
 inline constexpr std::size_t kRenderSpanCapacity = 32;
 
 struct AudioRenderSpan {
@@ -54,6 +63,8 @@ private:
     std::uint64_t origin_output_frame_{};
 };
 
+// DirectSound cursor byte offsets occupy the DWORD domain. Returns zero when
+// block_alignment is zero or the converted offset exceeds that domain.
 std::uint64_t SourceFrameToByte(
     std::uint64_t source_frame,
     std::uint16_t block_alignment) noexcept;

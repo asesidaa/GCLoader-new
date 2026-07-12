@@ -6,9 +6,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <new>
 #include <string_view>
 #include <thread>
+
+static_assert(
+    gc::audio::detail::kRenderSpanAtomicOrder ==
+        std::memory_order_seq_cst,
+    "render-span sequence and payload operations require one seq_cst order");
 
 namespace allocation_probe {
 
@@ -238,16 +244,52 @@ int TestNewestSpanAndBoundedCapacity() {
 }
 
 int TestCursorHelpers() {
+    constexpr auto max_dword =
+        std::numeric_limits<std::uint32_t>::max();
+    constexpr auto max_uint64 =
+        std::numeric_limits<std::uint64_t>::max();
     int failures = 0;
     failures += Expect(
         gc::audio::SourceFrameToByte(25, 4) == 100,
         "source frame 25 at block alignment 4 to become byte 100");
+    failures += Expect(
+        gc::audio::SourceFrameToByte(max_dword / 4, 4) == 4294967292ULL,
+        "last four-byte-aligned frame in the DWORD byte domain to convert");
+    failures += Expect(
+        gc::audio::SourceFrameToByte(max_dword / 4 + 1, 4) == 0 &&
+            gc::audio::SourceFrameToByte(max_uint64, 2) == 0 &&
+            gc::audio::SourceFrameToByte(25, 0) == 0,
+        "zero alignment and source-byte overflow to return zero safely");
     failures += Expect(
         gc::audio::ProjectWriteCursorFrame(90, 133, 44100, 100) == 23,
         "one 44.1 kHz endpoint period to project to write frame 23");
     failures += Expect(
         gc::audio::ProjectWriteCursorFrame(90, 133, 22050, 100) == 57,
         "one endpoint period at 22.05 kHz to project to write frame 57");
+    failures += Expect(
+        gc::audio::ProjectWriteCursorFrame(
+            0,
+            max_dword,
+            max_dword,
+            max_uint64) == 418293516215865ULL,
+        "maximum declared endpoint and source rates to ceil without overflow");
+    failures += Expect(
+        gc::audio::ProjectWriteCursorFrame(
+            max_uint64 - 1,
+            2,
+            44100,
+            max_uint64) == 1,
+        "write-frame modular addition to survive uint64 wrap");
+    failures += Expect(
+        gc::audio::ProjectWriteCursorFrame(
+            max_uint64 - 17,
+            max_dword,
+            max_dword,
+            max_uint64 - 3) == 418293516215851ULL,
+        "maximum-rate write projection to add modulo without overflow");
+    failures += Expect(
+        gc::audio::ProjectWriteCursorFrame(90, 133, 44100, 0) == 0,
+        "zero source length projection to return zero safely");
     return failures;
 }
 
