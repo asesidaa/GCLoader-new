@@ -260,6 +260,24 @@ target_link_libraries(SecondarySoundBufferTests PRIVATE
 )
 add_test(NAME SecondarySoundBufferTests COMMAND SecondarySoundBufferTests)
 
+add_executable(DirectSoundDeviceTests
+        WasapiAudioTypes.cpp
+        AudioSnapshot.cpp
+        AudioCursorTimeline.cpp
+        MiniaudioMixer.cpp
+        DirectSoundFacade.cpp
+        tests/DirectSoundDeviceTests.cpp
+)
+target_include_directories(DirectSoundDeviceTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(DirectSoundDeviceTests PRIVATE
+        miniaudio
+        dsound
+        dxguid
+)
+add_test(NAME DirectSoundDeviceTests COMMAND DirectSoundDeviceTests)
+
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
 )
