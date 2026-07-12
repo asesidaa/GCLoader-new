@@ -4,11 +4,36 @@
 #include "AudioSnapshot.h"
 #include "WasapiAudioTypes.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
 
 namespace gc::audio {
+
+namespace detail {
+
+struct VoicePlayTransition {
+    std::uint64_t run_token{};
+    bool needs_active_increment{};
+};
+
+class VoicePlaybackStateMachine {
+public:
+    VoicePlayTransition BeginPlay() noexcept;
+    void CommitPlay(std::uint64_t run_token) noexcept;
+    std::uint64_t BeginStop() noexcept;
+    void CompleteStop(std::uint64_t run_token) noexcept;
+    bool BeginEnd(std::uint64_t run_token) noexcept;
+    void CompleteEnd(std::uint64_t run_token) noexcept;
+    std::uint64_t CapturePlayingRun() const noexcept;
+    bool playing() const noexcept;
+
+private:
+    std::atomic_uint64_t packed_state_{};
+};
+
+} // namespace detail
 
 struct MixerDiagnosticsSnapshot {
     std::uint64_t native_rate_buffers{};
@@ -72,8 +97,8 @@ public:
         ma_result* result) noexcept;
     std::unique_ptr<MixerVoice> CreateVoice(
         const NormalizedSourceFormat& format,
-        AudioSnapshot& snapshot,
-        AudioCursorTimeline& timeline,
+        std::shared_ptr<AudioSnapshot> snapshot,
+        std::shared_ptr<AudioCursorTimeline> timeline,
         VoiceUsage usage,
         ma_result* result) noexcept;
     MixerRenderResult Render(
@@ -83,9 +108,9 @@ public:
 
 private:
     explicit MiniaudioMixer(
-        std::unique_ptr<MiniaudioMixerState>) noexcept;
+        std::shared_ptr<MiniaudioMixerState>) noexcept;
 
-    std::unique_ptr<MiniaudioMixerState> state_;
+    std::shared_ptr<MiniaudioMixerState> state_;
 };
 
 void ConvertFloatToPcm16(

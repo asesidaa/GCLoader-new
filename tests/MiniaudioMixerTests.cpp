@@ -1,6 +1,7 @@
 #include "MiniaudioMixer.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -81,11 +83,12 @@ struct TestSource {
         const NormalizedSourceFormat& source_format,
         std::span<const std::byte> bytes)
         : format(source_format),
-          snapshot(
+          snapshot(std::make_shared<AudioSnapshot>(
               static_cast<std::uint32_t>(bytes.size()),
-              source_format.block_align) {
+              source_format.block_align)),
+          timeline(std::make_shared<AudioCursorTimeline>()) {
         AudioLockRegions regions{};
-        const auto lock_result = snapshot.Lock(
+        const auto lock_result = snapshot->Lock(
             0,
             static_cast<DWORD>(bytes.size()),
             DSBLOCK_ENTIREBUFFER,
@@ -102,7 +105,7 @@ struct TestSource {
                 bytes.data() + regions.first_bytes,
                 regions.second_bytes);
         }
-        initialized = snapshot.Unlock(
+        initialized = snapshot->Unlock(
             regions.first,
             regions.first_bytes,
             regions.second,
@@ -110,8 +113,8 @@ struct TestSource {
     }
 
     NormalizedSourceFormat format{};
-    AudioSnapshot snapshot;
-    AudioCursorTimeline timeline;
+    std::shared_ptr<AudioSnapshot> snapshot;
+    std::shared_ptr<AudioCursorTimeline> timeline;
     bool initialized{};
 };
 
@@ -191,6 +194,64 @@ struct AllocationProbe {
     std::uint64_t End() noexcept {
         enabled.store(false, std::memory_order_seq_cst);
         return callback_count.load(std::memory_order_relaxed);
+    }
+};
+
+struct OwnershipAllocationProbe {
+    std::array<void*, 256> live{};
+    std::size_t live_count{};
+    bool invalid_release{};
+
+    static void* Allocate(std::size_t size, void* user_data) {
+        auto& probe = *static_cast<OwnershipAllocationProbe*>(user_data);
+        void* pointer = std::malloc(size == 0 ? 1 : size);
+        if (pointer == nullptr || probe.live_count == probe.live.size()) {
+            return pointer;
+        }
+        probe.live[probe.live_count++] = pointer;
+        return pointer;
+    }
+
+    static void* Reallocate(
+        void* pointer,
+        std::size_t size,
+        void* user_data) {
+        auto& probe = *static_cast<OwnershipAllocationProbe*>(user_data);
+        const auto replacement = std::realloc(pointer, size == 0 ? 1 : size);
+        if (replacement == nullptr) {
+            return nullptr;
+        }
+        if (pointer == nullptr) {
+            if (probe.live_count < probe.live.size()) {
+                probe.live[probe.live_count++] = replacement;
+            }
+            return replacement;
+        }
+        for (std::size_t index = 0; index < probe.live_count; ++index) {
+            if (probe.live[index] == pointer) {
+                probe.live[index] = replacement;
+                return replacement;
+            }
+        }
+        probe.invalid_release = true;
+        return replacement;
+    }
+
+    static void Free(void* pointer, void* user_data) {
+        auto& probe = *static_cast<OwnershipAllocationProbe*>(user_data);
+        for (std::size_t index = 0; index < probe.live_count; ++index) {
+            if (probe.live[index] == pointer) {
+                probe.live[index] = probe.live[--probe.live_count];
+                std::free(pointer);
+                return;
+            }
+        }
+        probe.invalid_release = pointer != nullptr;
+        std::free(pointer);
+    }
+
+    ma_allocation_callbacks Callbacks() noexcept {
+        return {this, Allocate, Reallocate, Free};
     }
 };
 
@@ -284,6 +345,238 @@ std::vector<std::int16_t> RadicalRegions(
         }
     }
     return samples;
+}
+
+int TestVoiceRetainsSourceOwners() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "source-owner mixer creation");
+
+    const auto bytes = Pcm16Bytes({
+        16384, 8192, 4096, 2048,
+        1024, 512, 256, 128,
+    });
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "source-owner PCM16 normalization");
+    std::weak_ptr<AudioSnapshot> snapshot_weak = source->snapshot;
+    std::weak_ptr<AudioCursorTimeline> timeline_weak = source->timeline;
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "source-owner voice creation");
+    source.reset();
+
+    failures += Expect(
+        !snapshot_weak.expired() && !timeline_weak.expired(),
+        "voice keeps snapshot and timeline alive after caller release");
+    failures += Expect(
+        voice->Play(false, 70) == DS_OK,
+        "retained-source voice play");
+    std::vector<float> output(kPeriodFrames * 2);
+    failures += ExpectRender(
+        *mixer,
+        output,
+        700,
+        "retained-source render after caller release");
+    failures += ExpectNear(
+        output[0],
+        0.5F,
+        "retained snapshot supplies audio");
+    {
+        const auto timeline = timeline_weak.lock();
+        failures += Expect(
+            timeline != nullptr &&
+                timeline->ResolveSourceFrame(700, 70, 8) == 0,
+            "retained timeline receives render span");
+    }
+
+    voice.reset();
+    failures += Expect(
+        snapshot_weak.expired() && timeline_weak.expired(),
+        "source owners release after voice destruction");
+    return failures;
+}
+
+int TestVoiceRetainsMixerState() {
+    int failures = 0;
+    OwnershipAllocationProbe probe;
+    const auto callbacks = probe.Callbacks();
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames,
+        &callbacks,
+        &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "mixer-owner mixer creation");
+
+    const auto bytes = Pcm16Bytes({16384, 8192, 4096, 2048});
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "mixer-owner PCM16 normalization");
+    std::weak_ptr<AudioSnapshot> snapshot_weak = source->snapshot;
+    std::weak_ptr<AudioCursorTimeline> timeline_weak = source->timeline;
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "mixer-owner voice creation");
+    failures += Expect(
+        voice->Play(true, 80) == DS_OK,
+        "mixer-owner voice play");
+    source.reset();
+
+    const auto live_before_public_mixer_release = probe.live_count;
+    mixer.reset();
+    failures += Expect(
+        live_before_public_mixer_release != 0 &&
+            probe.live_count == live_before_public_mixer_release &&
+            !probe.invalid_release,
+        "voice retains engine allocations after public mixer destruction");
+    failures += Expect(
+        !snapshot_weak.expired() && !timeline_weak.expired(),
+        "voice retains source owners with public mixer gone");
+
+    voice->Stop();
+    voice.reset();
+    failures += Expect(
+        probe.live_count == 0 && !probe.invalid_release,
+        "final voice release destroys each miniaudio allocation exactly once");
+    failures += Expect(
+        snapshot_weak.expired() && timeline_weak.expired(),
+        "final voice release destroys retained source state");
+    return failures;
+}
+
+int TestConcurrentVoiceStateAccounting() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "concurrent-state mixer creation");
+    const auto bytes = Pcm16Bytes({
+        16384, 8192, 4096, 2048,
+        1024, 512, 256, 128,
+    });
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "concurrent-state PCM16 normalization");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "concurrent-state voice creation");
+
+    constexpr std::uint32_t iterations = 100000;
+    std::atomic_uint32_t ready{};
+    std::atomic_uint32_t done{};
+    std::atomic_bool start{};
+    std::atomic_bool failed{};
+    const auto controller = [&](std::uint64_t epoch_base) {
+        ready.fetch_add(1, std::memory_order_release);
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        for (std::uint32_t index = 0; index < iterations; ++index) {
+            if (voice->Play(false, epoch_base + index) != DS_OK) {
+                failed.store(true, std::memory_order_relaxed);
+            }
+            if ((index & 7U) == 0) {
+                std::this_thread::yield();
+            }
+            voice->Stop();
+        }
+        done.fetch_add(1, std::memory_order_release);
+    };
+
+    std::thread first(controller, 1000);
+    std::thread second(controller, 1000000);
+    while (ready.load(std::memory_order_acquire) != 2) {
+        std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+
+    std::vector<float> output(kPeriodFrames * 2);
+    std::uint64_t output_frame{};
+    while (done.load(std::memory_order_acquire) != 2) {
+        const auto rendered = mixer->Render(output, output_frame);
+        output_frame += kPeriodFrames;
+        const auto diagnostics = mixer->diagnostics();
+        if (rendered.result != MA_SUCCESS ||
+            diagnostics.active_voices > 1 ||
+            diagnostics.maximum_simultaneous_voices > 1) {
+            failed.store(true, std::memory_order_relaxed);
+        }
+    }
+    first.join();
+    second.join();
+    voice->Stop();
+
+    const auto diagnostics = mixer->diagnostics();
+    failures += Expect(
+        !failed.load(std::memory_order_relaxed),
+        "concurrent play/stop/end never overflows one-voice accounting");
+    failures += Expect(
+        diagnostics.active_voices == 0 &&
+            diagnostics.maximum_simultaneous_voices == 1 &&
+            !voice->playing(),
+        "concurrent voice finishes in one coherent stopped state");
+    return failures;
+}
+
+int TestStaleRenderCannotEndNewPlaybackRun() {
+    int failures = 0;
+    gc::audio::detail::VoicePlaybackStateMachine playback;
+    std::uint32_t active{};
+
+    const auto first = playback.BeginPlay();
+    active += first.needs_active_increment ? 1U : 0U;
+    playback.CommitPlay(first.run_token);
+    const auto stale_render_run = playback.CapturePlayingRun();
+
+    const auto stopped_run = playback.BeginStop();
+    failures += Expect(
+        stopped_run == first.run_token,
+        "first playback run enters its own stop transition");
+    if (stopped_run != 0) {
+        --active;
+        playback.CompleteStop(stopped_run);
+    }
+
+    const auto second = playback.BeginPlay();
+    active += second.needs_active_increment ? 1U : 0U;
+    playback.CommitPlay(second.run_token);
+
+    const auto stale_end_won = playback.BeginEnd(stale_render_run);
+    failures += Expect(
+        !stale_end_won && active == 1 &&
+            playback.CapturePlayingRun() == second.run_token,
+        "stale render completion cannot end or decrement the new run");
+
+    const auto current_end_won = playback.BeginEnd(second.run_token);
+    if (current_end_won) {
+        --active;
+        playback.CompleteEnd(second.run_token);
+    }
+    failures += Expect(
+        current_end_won && active == 0 && !playback.playing(),
+        "current render completion ends exactly its own playback run");
+    return failures;
 }
 
 } // namespace
@@ -414,8 +707,8 @@ int main() {
     failures += ExpectStereoMono(output, "mono duplication to equal L/R");
     failures += ExpectNear(output[0], 0.5F, "first mono sample near 0.5");
     failures += Expect(
-        mono->timeline.ResolveSourceFrame(104, 1, 4) == 0 &&
-            mono->timeline.ResolveSourceFrame(107, 1, 4) == 3,
+        mono->timeline->ResolveSourceFrame(104, 1, 4) == 0 &&
+            mono->timeline->ResolveSourceFrame(107, 1, 4) == 3,
         "loop span crosses source length in the unwrapped domain");
 
     mono_voice->SetGain(0.5F);
@@ -493,6 +786,10 @@ int main() {
         output,
         false,
         "22.05 kHz steady converter phase remains monotonic");
+    failures += Expect(
+        rate_22050->timeline->ResolveSourceFrame(412, 10, 32) == 6 &&
+            rate_22050->timeline->ResolveSourceFrame(415, 10, 32) == 7,
+        "22.05 kHz cumulative phase maps the second block exactly");
     rate_22050_voice->Stop();
     failures += Expect(
         rate_22050_voice->Seek(16, 11) == DS_OK &&
@@ -505,8 +802,8 @@ int main() {
         true,
         "22.05 kHz reset transient then only new positive epoch");
     failures += Expect(
-        rate_22050->timeline.ResolveSourceFrame(416, 11, 32) == 16 &&
-            !rate_22050->timeline.ResolveSourceFrame(416, 10, 32).has_value(),
+        rate_22050->timeline->ResolveSourceFrame(416, 11, 32) == 16 &&
+            !rate_22050->timeline->ResolveSourceFrame(416, 10, 32).has_value(),
         "22.05 kHz seek changes published epoch and position");
     failures += Expect(
         rate_22050_voice->Seek(0, 12) == DS_OK,
@@ -528,8 +825,8 @@ int main() {
         true,
         "22.05 kHz latest seek wins before one render");
     failures += Expect(
-        rate_22050->timeline.ResolveSourceFrame(432, 14, 32) == 16 &&
-            !rate_22050->timeline.ResolveSourceFrame(432, 13, 32).has_value(),
+        rate_22050->timeline->ResolveSourceFrame(432, 14, 32) == 16 &&
+            !rate_22050->timeline->ResolveSourceFrame(432, 13, 32).has_value(),
         "22.05 kHz latest epoch is the only published seek epoch");
     rate_22050_voice->Stop();
 
@@ -552,6 +849,10 @@ int main() {
         false,
         "48 kHz steady converter phase remains monotonic");
     failures += Expect(
+        rate_48000->timeline->ResolveSourceFrame(512, 20, 64) == 13 &&
+            rate_48000->timeline->ResolveSourceFrame(515, 20, 64) == 16,
+        "48 kHz cumulative phase maps the second block exactly");
+    failures += Expect(
         rate_48000_voice->Seek(32, 21) == DS_OK,
         "48 kHz resync while playing");
     failures += ExpectRender(*mixer, output, 516, "48 kHz live-resync render");
@@ -561,8 +862,8 @@ int main() {
         true,
         "48 kHz reset transient then only new positive epoch");
     failures += Expect(
-        rate_48000->timeline.ResolveSourceFrame(516, 21, 64) == 32 &&
-            !rate_48000->timeline.ResolveSourceFrame(516, 20, 64).has_value(),
+        rate_48000->timeline->ResolveSourceFrame(516, 21, 64) == 32 &&
+            !rate_48000->timeline->ResolveSourceFrame(516, 20, 64).has_value(),
         "48 kHz seek changes published epoch and position");
     rate_48000_voice->Stop();
     failures += Expect(
@@ -577,8 +878,8 @@ int main() {
         false,
         "48 kHz latest stopped seek emits no prior positive history");
     failures += Expect(
-        rate_48000->timeline.ResolveSourceFrame(524, 23, 64) == 0 &&
-            !rate_48000->timeline.ResolveSourceFrame(524, 22, 64).has_value(),
+        rate_48000->timeline->ResolveSourceFrame(524, 23, 64) == 0 &&
+            !rate_48000->timeline->ResolveSourceFrame(524, 22, 64).has_value(),
         "48 kHz latest stopped-seek epoch is published");
     failures += Expect(
         rate_48000_voice->Seek(64, 24) == DSERR_INVALIDPARAM,
@@ -596,6 +897,11 @@ int main() {
     failures += Expect(
         rejected.result == MA_INVALID_ARGS && rejected.frames_read == 0,
         "non-period render span is rejected");
+
+    failures += TestVoiceRetainsSourceOwners();
+    failures += TestVoiceRetainsMixerState();
+    failures += TestConcurrentVoiceStateAccounting();
+    failures += TestStaleRenderCannotEndNewPlaybackRun();
 
     return failures == 0 ? 0 : 1;
 }

@@ -4,7 +4,7 @@
 
 **Goal:** Mix all secondary-buffer voices into preallocated 44,100 Hz stereo float blocks without a miniaudio device, then convert those blocks to saturating PCM16 for WASAPI.
 
-**Architecture:** Each voice owns a custom zero-input/one-output miniaudio node attached to a no-device engine endpoint plus a preinitialized `ma_data_converter`. The node callback captures one immutable `AudioSnapshot` view, fills fixed input scratch, converts PCM16/PCM24 mono/stereo to 44.1 kHz stereo float, and publishes cursor spans. Native-rate voices take miniaudio's format/channels-only path; only 22.05/48 kHz sources use the linear resampler.
+**Architecture:** Each voice owns a custom zero-input/one-output miniaudio node attached to a no-device engine endpoint plus a preinitialized `ma_data_converter`. Mixer and voices share the engine-state owner, while each voice retains shared snapshot/timeline owners. The node callback uses raw pointers from those stable owners, captures one immutable `AudioSnapshot` view, fills fixed input scratch, converts PCM16/PCM24 mono/stereo to 44.1 kHz stereo float, and publishes epoch-cumulative cursor spans. Native-rate voices take miniaudio's format/channels-only path; only 22.05/48 kHz sources use the linear resampler.
 
 **Tech Stack:** C++23, miniaudio 0.11.25 no-device engine, Tasks 02-04 types/storage/timeline, CTest.
 
@@ -22,6 +22,10 @@
 - Render accepts exactly one configured period so the graph and converter never retain an unreported short-block surplus.
 - Seek uses a latest-wins mailbox with mutex-serialized control writers and a seq_cst atomic sequence/payload publication. Render never locks; an in-progress or incoherent publication makes that voice output silence for the block.
 - Before producing a new seek epoch, the render callback resets cursor/unwrapped/end/span context and calls `ma_data_converter_reset()`. The pinned linear resampler's bounded cleared-zero startup transient is expected; no pre-seek sample may survive it.
+- `MiniaudioMixer` and every voice share ownership of engine state. Voices also own `shared_ptr<AudioSnapshot>` and `shared_ptr<AudioCursorTimeline>`; caller release order cannot invalidate render or teardown.
+- The render callback may use `.get()` from stable state-held shared owners but must never copy, move, reset, acquire, or release a `shared_ptr`.
+- Cursor spans derive source positions from the overflow-safe epoch-cumulative mapping `epoch_source_start + floor(total_output_frames * source_rate / 44100)`. Publish bounded rational segments where one span cannot represent every output-frame phase exactly.
+- Active accounting is controlled by a lock-free per-voice transitional state machine whose phase and monotonic playback-run token share one packed atomic. Control writers may serialize/wait off-render; natural end CASes the exact `Playing(run)` captured at callback entry, so a stale render cannot end a newer run. Render never waits or takes the control mutex.
 
 ---
 
@@ -75,8 +79,8 @@ public:
         ma_result*) noexcept;
     std::unique_ptr<MixerVoice> CreateVoice(
         const NormalizedSourceFormat&,
-        AudioSnapshot&,
-        AudioCursorTimeline&,
+        std::shared_ptr<AudioSnapshot>,
+        std::shared_ptr<AudioCursorTimeline>,
         VoiceUsage,
         ma_result*) noexcept;
     MixerRenderResult Render(
@@ -105,6 +109,10 @@ Use synthetic snapshots to assert:
 7. A looping four-frame source publishes a span whose unwrapped end crosses the source length.
 8. For both exceptional rates, cover stopped seek then `Play`, seek-and-play reset, resynchronization while playing, and multiple seeks before one render. The latest request wins, the span starts at the requested source position/epoch, and the first post-seek block contains only the reset transient plus samples from the new region—never pre-seek converter state.
 9. After one warm render, enable the allocator probe around `Render`; the callback count remains zero.
+10. Destroy the public mixer before its voice, then stop/destroy the voice safely and prove all callback allocations are released exactly once by the last shared engine owner.
+11. Drop caller snapshot/timeline owners, render and resolve the timeline through the voice-held owners, then prove both owners expire after voice destruction. No shared ownership operation occurs in render.
+12. Assert exact multi-block cumulative phase (`22.05 kHz: 412→6, 415→7`; `48 kHz: 512→13, 515→16`) and stress concurrent `Play`/`Stop`/natural-end so a single voice never reports active/max above one and finishes stopped.
+13. Capture an old render's playback-run token, stop and start a new run, then prove the stale token cannot win natural end or decrement the new run's active count.
 
 Pass `GameplayNativeCandidate` for the mono native PCM16 and two stereo native PCM16 voices, and `General` for PCM24 and both exceptional-rate voices. Use this exact diagnostics expectation:
 
@@ -152,16 +160,20 @@ struct VoiceNode {
 struct MixerVoiceState {
     VoiceNode node{};
     ma_data_converter converter{};
+    std::shared_ptr<MiniaudioMixerState> mixer;
     NormalizedSourceFormat format{};
-    AudioSnapshot* snapshot{};
-    AudioCursorTimeline* timeline{};
+    std::shared_ptr<AudioSnapshot> snapshot;
+    std::shared_ptr<AudioCursorTimeline> timeline;
     std::vector<std::byte> input_scratch;
     std::atomic_uint64_t cursor{};
     std::atomic_bool looping{};
     std::atomic_bool ended{};
+    detail::VoicePlaybackStateMachine playback; // packed phase + run token
+    std::mutex control_mutex; // control threads only; render never locks it
     // Mutex-serialized writers; seq_cst sequence/frame/epoch payload.
     SeekMailbox seek_mailbox{};
-    std::uint64_t unwrapped_cursor{};  // render thread only
+    std::uint64_t epoch_source_start{}; // render thread only
+    std::uint64_t epoch_output_frames{}; // render thread only
     std::uint64_t last_render_id{};    // render thread only
     std::uint64_t render_output_offset{};
 };
@@ -169,9 +181,11 @@ struct MixerVoiceState {
 
 The node vtable has zero input buses and one stereo output bus. Initialize a linear `ma_data_converter` from the accepted source format/rate/channels to f32 stereo 44.1 kHz. Matching rates must report no resampler; exceptional rates use the stock linear resampler with no LPF. Allocate converter heap and scratch before attachment. Scratch capacity is the queried period requirement plus converter input latency, which covers phase-dependent 48 kHz requirements after the first block.
 
+`MiniaudioMixer` stores `shared_ptr<MiniaudioMixerState>` and copies that owner into each voice. `CreateVoice` accepts and stores shared snapshot/timeline owners. The callback takes raw pointers with `.get()` only while the state-held shared owners remain unchanged. All last-owner destruction remains off-render. Plan 06 must allocate buffers/timelines as shared owners and pass them directly to this API.
+
 - [ ] **Step 4: Implement bounded node processing, seek reset, and span publication**
 
-At the start of node processing, read the seek mailbox with a stable seq_cst sequence/payload/sequence snapshot. If the sequence is odd or changed, emit silence without advancing the voice. For a new stable version, reset source cursor, unwrapped cursor, ended/render-span state, and `ma_data_converter_reset()` before reading any new-epoch frame.
+At the start of node processing, read the seek mailbox with a stable seq_cst sequence/payload/sequence snapshot. If the sequence is odd or changed, emit silence without advancing the voice. For a new stable version, reset source cursor, epoch source start, cumulative represented output count, ended/render-span state, and `ma_data_converter_reset()` before reading any new-epoch frame.
 
 The node callback acquires exactly one local nonmoving view, copies at most the converter's required input frames into fixed scratch, and never retains the view:
 
@@ -197,7 +211,7 @@ while (copied < required_input_frames) {
 }
 ```
 
-Call `ma_data_converter_process_pcm_frames`, advance only by the input frames it actually consumed, zero any short output remainder, convert consumed source frames to represented output frames with ceiling division, clamp to the remaining fixed output block, and publish `AudioRenderSpan`. Mark a nonlooping voice ended only after its final source frame has been exposed. Reject control seeks where `frame >= length` before mailbox publication.
+Call `ma_data_converter_process_pcm_frames`, advance the physical input cursor only by frames actually consumed, and zero any short output remainder. Independently derive every published unwrapped source position from the overflow-safe cumulative rational mapping `epoch_source_start + floor(total_output_frames * source_rate / 44100)`. Split the block into a bounded number of exact rational segments when one `AudioRenderSpan` interpolation would lose phase. Clamp to the remaining fixed output block. Mark a nonlooping voice ended only after its final source frame has been exposed. Reject control seeks where `frame >= length` before mailbox publication.
 
 - [ ] **Step 5: Initialize the no-device engine and attach voices**
 
@@ -216,9 +230,9 @@ if (callbacks != nullptr) {
 }
 ```
 
-Initialize each voice's converter, fixed scratch, and stopped custom node off-render. Attach the node's single stereo output bus to `ma_node_graph_get_endpoint(ma_engine_get_node_graph(&engine))`. Destruction detaches and uninitializes the node/converter before engine teardown.
+Initialize each voice's converter, fixed scratch, and stopped custom node off-render. Attach the node's single stereo output bus to `ma_node_graph_get_endpoint(ma_engine_get_node_graph(&engine))`. Voice destruction detaches and uninitializes the node/converter, then releases source and engine shared owners; engine teardown happens exactly once after the final mixer/voice owner.
 
-`Play`/`Stop` use supported atomic node-state APIs, and `SetGain` uses `ma_node_set_output_bus_volume`. `Seek` only validates and publishes to the coherent mailbox. Maintain `active_voices` without underflow; render-side natural end changes only node/project atomics and counters.
+`Play`/`Stop` use supported atomic node-state APIs, and `SetGain` uses `ma_node_set_output_bus_volume`. `Seek` only validates and publishes to the coherent mailbox. Serialize control transitions outside render and use lock-free `Stopped/Starting/Playing/Stopping/Ending/Ended` states packed with a monotonic playback-run token. Only the transition owner updates the global active count. The callback captures its run token on entry, and natural end must win an exact `Playing(run)→Ending(run)` CAS before decrementing; stop/end cannot double-decrement, race a delayed start increment, or let an old callback end a replayed voice.
 
 `CreateVoice` increments `native_gameplay_buffers` only when `usage == VoiceUsage::GameplayNativeCandidate` and `format.native_rate_pcm16` is true. This count is a format/use-pattern diagnostic candidate; filenames are unavailable and Plan 11 remains authoritative.
 

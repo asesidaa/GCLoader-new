@@ -8,6 +8,8 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <numeric>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -67,6 +69,30 @@ std::uint64_t CeilScale(
     return (value * numerator + denominator - 1) / denominator;
 }
 
+bool ScaleFloor(
+    std::uint64_t value,
+    std::uint64_t numerator,
+    std::uint64_t denominator,
+    std::uint64_t* result) noexcept {
+    if (denominator == 0 || result == nullptr) {
+        return false;
+    }
+    const auto quotient = value / denominator;
+    const auto remainder = value % denominator;
+    if (numerator != 0 && quotient >
+        std::numeric_limits<std::uint64_t>::max() / numerator) {
+        return false;
+    }
+    const auto whole = quotient * numerator;
+    const auto fractional = (remainder * numerator) / denominator;
+    if (fractional >
+        std::numeric_limits<std::uint64_t>::max() - whole) {
+        return false;
+    }
+    *result = whole + fractional;
+    return true;
+}
+
 } // namespace
 
 struct MiniaudioMixerState {
@@ -105,6 +131,167 @@ struct MiniaudioMixerState {
         active_voices.fetch_sub(1, std::memory_order_seq_cst);
     }
 };
+
+namespace {
+
+enum class VoicePlaybackPhase : std::uint8_t {
+    Stopped,
+    Starting,
+    Playing,
+    Stopping,
+    Ending,
+    Ended,
+};
+
+constexpr std::uint64_t kPlaybackPhaseBits = 3;
+constexpr std::uint64_t kPlaybackPhaseMask =
+    (std::uint64_t{1} << kPlaybackPhaseBits) - 1;
+constexpr std::uint64_t kMaximumPlaybackRun =
+    std::numeric_limits<std::uint64_t>::max() >> kPlaybackPhaseBits;
+
+static_assert(
+    static_cast<std::uint64_t>(VoicePlaybackPhase::Ended) <=
+    kPlaybackPhaseMask);
+static_assert(std::atomic_uint64_t::is_always_lock_free);
+
+constexpr std::uint64_t PackPlaybackState(
+    VoicePlaybackPhase phase,
+    std::uint64_t run_token) noexcept {
+    return (run_token << kPlaybackPhaseBits) |
+        static_cast<std::uint64_t>(phase);
+}
+
+constexpr VoicePlaybackPhase PlaybackPhase(
+    std::uint64_t packed) noexcept {
+    return static_cast<VoicePlaybackPhase>(packed & kPlaybackPhaseMask);
+}
+
+constexpr std::uint64_t PlaybackRun(std::uint64_t packed) noexcept {
+    return packed >> kPlaybackPhaseBits;
+}
+
+constexpr std::uint64_t NextPlaybackRun(
+    std::uint64_t current) noexcept {
+    return current == kMaximumPlaybackRun ? 1 : current + 1;
+}
+
+} // namespace
+
+detail::VoicePlayTransition
+detail::VoicePlaybackStateMachine::BeginPlay() noexcept {
+    for (;;) {
+        auto current = packed_state_.load(std::memory_order_seq_cst);
+        const auto phase = PlaybackPhase(current);
+        if (phase == VoicePlaybackPhase::Playing ||
+            phase == VoicePlaybackPhase::Stopped ||
+            phase == VoicePlaybackPhase::Ended) {
+            const auto run_token = NextPlaybackRun(PlaybackRun(current));
+            const auto starting = PackPlaybackState(
+                VoicePlaybackPhase::Starting,
+                run_token);
+            if (packed_state_.compare_exchange_weak(
+                    current,
+                    starting,
+                    std::memory_order_seq_cst,
+                    std::memory_order_seq_cst)) {
+                return {
+                    run_token,
+                    phase != VoicePlaybackPhase::Playing,
+                };
+            }
+            continue;
+        }
+        std::this_thread::yield();
+    }
+}
+
+void detail::VoicePlaybackStateMachine::CommitPlay(
+    std::uint64_t run_token) noexcept {
+    auto expected = PackPlaybackState(
+        VoicePlaybackPhase::Starting,
+        run_token);
+    packed_state_.compare_exchange_strong(
+        expected,
+        PackPlaybackState(VoicePlaybackPhase::Playing, run_token),
+        std::memory_order_seq_cst,
+        std::memory_order_seq_cst);
+}
+
+std::uint64_t detail::VoicePlaybackStateMachine::BeginStop() noexcept {
+    for (;;) {
+        auto current = packed_state_.load(std::memory_order_seq_cst);
+        const auto phase = PlaybackPhase(current);
+        if (phase == VoicePlaybackPhase::Stopped ||
+            phase == VoicePlaybackPhase::Ended) {
+            return 0;
+        }
+        if (phase == VoicePlaybackPhase::Playing) {
+            const auto run_token = PlaybackRun(current);
+            if (packed_state_.compare_exchange_weak(
+                    current,
+                    PackPlaybackState(
+                        VoicePlaybackPhase::Stopping,
+                        run_token),
+                    std::memory_order_seq_cst,
+                    std::memory_order_seq_cst)) {
+                return run_token;
+            }
+            continue;
+        }
+        std::this_thread::yield();
+    }
+}
+
+void detail::VoicePlaybackStateMachine::CompleteStop(
+    std::uint64_t run_token) noexcept {
+    auto expected = PackPlaybackState(
+        VoicePlaybackPhase::Stopping,
+        run_token);
+    packed_state_.compare_exchange_strong(
+        expected,
+        PackPlaybackState(VoicePlaybackPhase::Stopped, run_token),
+        std::memory_order_seq_cst,
+        std::memory_order_seq_cst);
+}
+
+bool detail::VoicePlaybackStateMachine::BeginEnd(
+    std::uint64_t run_token) noexcept {
+    if (run_token == 0) {
+        return false;
+    }
+    auto expected = PackPlaybackState(
+        VoicePlaybackPhase::Playing,
+        run_token);
+    return packed_state_.compare_exchange_strong(
+        expected,
+        PackPlaybackState(VoicePlaybackPhase::Ending, run_token),
+        std::memory_order_seq_cst,
+        std::memory_order_seq_cst);
+}
+
+void detail::VoicePlaybackStateMachine::CompleteEnd(
+    std::uint64_t run_token) noexcept {
+    auto expected = PackPlaybackState(
+        VoicePlaybackPhase::Ending,
+        run_token);
+    packed_state_.compare_exchange_strong(
+        expected,
+        PackPlaybackState(VoicePlaybackPhase::Ended, run_token),
+        std::memory_order_seq_cst,
+        std::memory_order_seq_cst);
+}
+
+std::uint64_t detail::VoicePlaybackStateMachine::CapturePlayingRun()
+    const noexcept {
+    const auto current = packed_state_.load(std::memory_order_seq_cst);
+    return PlaybackPhase(current) == VoicePlaybackPhase::Playing
+        ? PlaybackRun(current)
+        : 0;
+}
+
+bool detail::VoicePlaybackStateMachine::playing() const noexcept {
+    return CapturePlayingRun() != 0;
+}
 
 struct MixerVoiceState {
     struct SeekMailbox {
@@ -148,20 +335,22 @@ struct MixerVoiceState {
 
     VoiceNode node{};
     ma_data_converter converter{};
-    MiniaudioMixerState* mixer{};
+    std::shared_ptr<MiniaudioMixerState> mixer;
     NormalizedSourceFormat format{};
-    AudioSnapshot* snapshot{};
-    AudioCursorTimeline* timeline{};
+    std::shared_ptr<AudioSnapshot> snapshot;
+    std::shared_ptr<AudioCursorTimeline> timeline;
     std::vector<std::byte> input_scratch;
     std::uint64_t input_scratch_frames{};
     std::uint64_t source_length_frames{};
     std::atomic_uint64_t cursor{};
     std::atomic_uint64_t applied_seek_sequence{};
-    std::atomic_bool playing{};
+    detail::VoicePlaybackStateMachine playback;
     std::atomic_bool looping{};
     std::atomic_bool ended{};
+    std::mutex control_mutex;
     std::uint64_t epoch{1};
-    std::uint64_t unwrapped_cursor{};
+    std::uint64_t epoch_source_start{};
+    std::uint64_t epoch_output_frames{};
     std::uint64_t last_render_id{};
     std::uint64_t render_output_offset{};
     bool converter_initialized{};
@@ -208,12 +397,14 @@ struct MixerVoiceState {
         return true;
     }
 
-    void EndPlayback() noexcept {
-        ended.store(true, std::memory_order_seq_cst);
-        ma_node_set_state(&node.base, ma_node_state_stopped);
-        if (playing.exchange(false, std::memory_order_seq_cst)) {
-            mixer->VoiceStopped();
+    void EndPlayback(std::uint64_t run_token) noexcept {
+        if (!playback.BeginEnd(run_token)) {
+            return;
         }
+        ma_node_set_state(&node.base, ma_node_state_stopped);
+        ended.store(true, std::memory_order_seq_cst);
+        mixer->VoiceStopped();
+        playback.CompleteEnd(run_token);
     }
 };
 
@@ -221,6 +412,135 @@ namespace {
 
 void Silence(float* output, std::uint32_t frames) noexcept {
     std::fill_n(output, static_cast<std::size_t>(frames) * kOutputChannels, 0.0F);
+}
+
+bool MappedSourceFrame(
+    const MixerVoiceState& voice,
+    std::uint64_t epoch_output_frame,
+    std::uint64_t* source_frame) noexcept {
+    std::uint64_t scaled{};
+    if (!ScaleFloor(
+            epoch_output_frame,
+            voice.format.sample_rate,
+            kOutputSampleRate,
+            &scaled) ||
+        scaled > std::numeric_limits<std::uint64_t>::max() -
+            voice.epoch_source_start) {
+        return false;
+    }
+    *source_frame = voice.epoch_source_start + scaled;
+    return true;
+}
+
+bool SegmentMatchesCumulativeMapping(
+    const MixerVoiceState& voice,
+    std::uint64_t epoch_output_begin,
+    std::uint64_t length) noexcept {
+    std::uint64_t source_begin{};
+    std::uint64_t source_end{};
+    if (length == 0 || epoch_output_begin >
+            std::numeric_limits<std::uint64_t>::max() - length ||
+        !MappedSourceFrame(voice, epoch_output_begin, &source_begin) ||
+        !MappedSourceFrame(
+            voice,
+            epoch_output_begin + length,
+            &source_end)) {
+        return false;
+    }
+    const auto source_length = source_end - source_begin;
+    for (std::uint64_t offset = 1; offset < length; ++offset) {
+        std::uint64_t expected{};
+        std::uint64_t interpolated{};
+        if (!MappedSourceFrame(
+                voice,
+                epoch_output_begin + offset,
+                &expected) ||
+            !ScaleFloor(
+                offset,
+                source_length,
+                length,
+                &interpolated) ||
+            expected != source_begin + interpolated) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool PublishMappedSpans(
+    MixerVoiceState& voice,
+    std::uint64_t output_begin,
+    std::uint64_t output_frames,
+    bool loop_wrapped,
+    bool source_ended) noexcept {
+    const auto divisor = std::gcd<std::uint64_t>(
+        voice.format.sample_rate,
+        kOutputSampleRate);
+    const auto reduced_output_period = kOutputSampleRate / divisor;
+    std::uint64_t output_offset{};
+
+    while (output_offset < output_frames) {
+        if (voice.epoch_output_frames >
+            std::numeric_limits<std::uint64_t>::max() - output_offset) {
+            return false;
+        }
+        const auto cumulative_begin =
+            voice.epoch_output_frames + output_offset;
+        const auto remaining = output_frames - output_offset;
+        const auto phase = cumulative_begin % reduced_output_period;
+
+        std::uint64_t segment_length{};
+        if (phase == 0 && remaining >= reduced_output_period) {
+            segment_length = remaining -
+                remaining % reduced_output_period;
+        } else {
+            segment_length = std::min<std::uint64_t>(
+                remaining,
+                phase == 0
+                    ? reduced_output_period - 1
+                    : reduced_output_period - phase);
+            while (segment_length > 1 &&
+                   !SegmentMatchesCumulativeMapping(
+                       voice,
+                       cumulative_begin,
+                       segment_length)) {
+                --segment_length;
+            }
+        }
+
+        std::uint64_t source_begin{};
+        std::uint64_t source_end{};
+        if (segment_length == 0 ||
+            !MappedSourceFrame(
+                voice,
+                cumulative_begin,
+                &source_begin) ||
+            !MappedSourceFrame(
+                voice,
+                cumulative_begin + segment_length,
+                &source_end)) {
+            return false;
+        }
+
+        auto* const timeline = voice.timeline.get();
+        timeline->Publish({
+            output_begin + output_offset,
+            output_begin + output_offset + segment_length,
+            source_begin,
+            source_end,
+            voice.epoch,
+            loop_wrapped,
+            source_ended && segment_length == remaining,
+        });
+        output_offset += segment_length;
+    }
+
+    if (voice.epoch_output_frames >
+        std::numeric_limits<std::uint64_t>::max() - output_frames) {
+        return false;
+    }
+    voice.epoch_output_frames += output_frames;
+    return true;
 }
 
 void VoiceNodeProcess(
@@ -235,7 +555,13 @@ void VoiceNodeProcess(
     auto& voice = *reinterpret_cast<VoiceNode*>(node)->state;
     const auto requested = *frame_count_out;
     auto* output = frames_out[0];
+    const auto playback_run = voice.playback.CapturePlayingRun();
     Silence(output, requested);
+
+    if (playback_run == 0) {
+        voice.render_output_offset += requested;
+        return;
+    }
 
     const auto* render = current_render_context;
     if (render == nullptr || requested > render->frame_count) {
@@ -267,7 +593,8 @@ void VoiceNodeProcess(
             return;
         }
         voice.cursor.store(seek_frame, std::memory_order_seq_cst);
-        voice.unwrapped_cursor = seek_frame;
+        voice.epoch_source_start = seek_frame;
+        voice.epoch_output_frames = 0;
         voice.epoch = seek_epoch;
         voice.ended.store(false, std::memory_order_seq_cst);
         voice.last_render_id = render->id;
@@ -293,15 +620,15 @@ void VoiceNodeProcess(
     }
 
     const auto source_begin = voice.cursor.load(std::memory_order_seq_cst);
-    const auto unwrapped_begin = voice.unwrapped_cursor;
     const bool is_looping = voice.looping.load(std::memory_order_seq_cst);
     std::uint64_t copied{};
     auto position = source_begin;
     bool copied_wrap{};
 
     {
-        const auto view = voice.snapshot->AcquireForRender();
-        if (view.size() < voice.snapshot->byte_length()) {
+        auto* const snapshot = voice.snapshot.get();
+        const auto view = snapshot->AcquireForRender();
+        if (view.size() < snapshot->byte_length()) {
             voice.render_output_offset += requested;
             return;
         }
@@ -361,7 +688,6 @@ void VoiceNodeProcess(
             voice.source_length_frames);
     }
     voice.cursor.store(new_position, std::memory_order_seq_cst);
-    voice.unwrapped_cursor += consumed;
 
     const bool source_ended =
         !is_looping && new_position == voice.source_length_frames;
@@ -378,20 +704,17 @@ void VoiceNodeProcess(
     if (published_output != 0) {
         const auto output_begin = render->output_frame_begin +
             voice.render_output_offset;
-        voice.timeline->Publish({
+        PublishMappedSpans(
+            voice,
             output_begin,
-            output_begin + published_output,
-            unwrapped_begin,
-            unwrapped_begin + consumed,
-            voice.epoch,
+            published_output,
             loop_wrapped,
-            source_ended,
-        });
+            source_ended);
     }
 
     voice.render_output_offset += requested;
     if (source_ended) {
-        voice.EndPlayback();
+        voice.EndPlayback(playback_run);
     }
 }
 
@@ -412,23 +735,37 @@ HRESULT MixerVoice::Play(
         return DSERR_UNINITIALIZED;
     }
 
+    std::lock_guard control_lock(state_->control_mutex);
+    ma_node_set_state(&state_->node.base, ma_node_state_stopped);
+
+    const auto play = state_->playback.BeginPlay();
+
     state_->looping.store(should_loop, std::memory_order_seq_cst);
-    const auto fallback = state_->ended.load(std::memory_order_seq_cst)
+    const auto cursor = state_->cursor.load(std::memory_order_seq_cst);
+    const auto fallback =
+        state_->ended.load(std::memory_order_seq_cst) ||
+            cursor >= state_->source_length_frames
         ? 0
-        : state_->cursor.load(std::memory_order_seq_cst);
+        : cursor;
     state_->seek_mailbox.PublishForPlay(
         fallback,
         epoch,
         state_->applied_seek_sequence.load(std::memory_order_seq_cst));
+    if (play.needs_active_increment) {
+        state_->mixer->VoiceStarted();
+    }
+    state_->playback.CommitPlay(play.run_token);
 
     const auto result = ma_node_set_state(
         &state_->node.base,
         ma_node_state_started);
     if (result != MA_SUCCESS) {
+        const auto stopped_run = state_->playback.BeginStop();
+        if (stopped_run != 0) {
+            state_->mixer->VoiceStopped();
+            state_->playback.CompleteStop(stopped_run);
+        }
         return ResultToHresult(result);
-    }
-    if (!state_->playing.exchange(true, std::memory_order_seq_cst)) {
-        state_->mixer->VoiceStarted();
     }
     return DS_OK;
 }
@@ -437,9 +774,12 @@ void MixerVoice::Stop() noexcept {
     if (state_ == nullptr) {
         return;
     }
+    std::lock_guard control_lock(state_->control_mutex);
     ma_node_set_state(&state_->node.base, ma_node_state_stopped);
-    if (state_->playing.exchange(false, std::memory_order_seq_cst)) {
+    const auto stopped_run = state_->playback.BeginStop();
+    if (stopped_run != 0) {
         state_->mixer->VoiceStopped();
+        state_->playback.CompleteStop(stopped_run);
     }
 }
 
@@ -464,7 +804,7 @@ void MixerVoice::SetGain(float gain) noexcept {
 
 bool MixerVoice::playing() const noexcept {
     return state_ != nullptr &&
-        state_->playing.load(std::memory_order_seq_cst);
+        state_->playback.playing();
 }
 
 bool MixerVoice::looping() const noexcept {
@@ -478,7 +818,7 @@ bool MixerVoice::at_end() const noexcept {
 }
 
 MiniaudioMixer::MiniaudioMixer(
-    std::unique_ptr<MiniaudioMixerState> state) noexcept
+    std::shared_ptr<MiniaudioMixerState> state) noexcept
     : state_(std::move(state)) {}
 
 MiniaudioMixer::~MiniaudioMixer() = default;
@@ -495,7 +835,7 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
     }
 
     try {
-        auto state = std::make_unique<MiniaudioMixerState>();
+        auto state = std::make_shared<MiniaudioMixerState>();
         state->period_frames = period_frames;
 
         auto config = ma_engine_config_init();
@@ -534,27 +874,27 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
 
 std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
     const NormalizedSourceFormat& format,
-    AudioSnapshot& snapshot,
-    AudioCursorTimeline& timeline,
+    std::shared_ptr<AudioSnapshot> snapshot,
+    std::shared_ptr<AudioCursorTimeline> timeline,
     VoiceUsage usage,
     ma_result* result) noexcept {
     if (result != nullptr) {
         *result = MA_INVALID_ARGS;
     }
-    if (state_ == nullptr || format.block_align == 0 ||
-        snapshot.byte_length() == 0 ||
-        snapshot.byte_length() % format.block_align != 0) {
+    if (state_ == nullptr || snapshot == nullptr || timeline == nullptr ||
+        format.block_align == 0 || snapshot->byte_length() == 0 ||
+        snapshot->byte_length() % format.block_align != 0) {
         return nullptr;
     }
 
     try {
         auto voice_state = std::make_unique<MixerVoiceState>();
-        voice_state->mixer = state_.get();
+        voice_state->mixer = state_;
         voice_state->format = format;
-        voice_state->snapshot = &snapshot;
-        voice_state->timeline = &timeline;
+        voice_state->snapshot = std::move(snapshot);
+        voice_state->timeline = std::move(timeline);
         voice_state->source_length_frames =
-            snapshot.byte_length() / format.block_align;
+            voice_state->snapshot->byte_length() / format.block_align;
         voice_state->node.state = voice_state.get();
 
         auto converter_config = ma_data_converter_config_init(
