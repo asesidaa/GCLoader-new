@@ -1,0 +1,66 @@
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+
+namespace gc::audio {
+
+inline constexpr std::size_t kRenderSpanCapacity = 32;
+
+struct AudioRenderSpan {
+    std::uint64_t output_frame_begin{};
+    std::uint64_t output_frame_end{};
+    std::uint64_t source_frame_begin_unwrapped{};
+    std::uint64_t source_frame_end_unwrapped{};
+    std::uint64_t epoch{};
+    bool loop_wrapped{};
+    bool source_ended{};
+};
+
+class AudioCursorTimeline {
+public:
+    void Publish(const AudioRenderSpan&) noexcept;
+    std::optional<std::uint64_t> ResolveSourceFrame(
+        std::uint64_t output_frame,
+        std::uint64_t epoch,
+        std::uint64_t source_length_frames) const noexcept;
+
+private:
+    struct Slot {
+        std::atomic<std::uint64_t> sequence{};
+        mutable AudioRenderSpan span{};
+    };
+
+    std::array<Slot, kRenderSpanCapacity> slots_{};
+    std::atomic<std::uint64_t> published_generation_{};
+    std::uint64_t writer_generation_{};
+};
+
+class EndpointClockMapper {
+public:
+    void Reset(
+        std::uint64_t position,
+        std::uint64_t frequency,
+        std::uint64_t output_frame) noexcept;
+    std::optional<std::uint64_t> ToOutputFrame(
+        std::uint64_t position) const noexcept;
+
+private:
+    std::uint64_t origin_position_{};
+    std::uint64_t frequency_{};
+    std::uint64_t origin_output_frame_{};
+};
+
+std::uint64_t SourceFrameToByte(
+    std::uint64_t source_frame,
+    std::uint16_t block_alignment) noexcept;
+std::uint64_t ProjectWriteCursorFrame(
+    std::uint64_t play_frame,
+    std::uint32_t endpoint_buffer_frames,
+    std::uint32_t source_rate,
+    std::uint64_t source_length_frames) noexcept;
+
+} // namespace gc::audio
