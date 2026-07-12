@@ -46,6 +46,32 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
+set(MINIAUDIO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_INSTALL OFF CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_EXTRA_NODES ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_LIBVORBIS ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_LIBOPUS ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_DEVICEIO ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_DECODING ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_ENCODING ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_RESOURCE_MANAGER ON CACHE BOOL "" FORCE)
+set(MINIAUDIO_NO_GENERATION ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+        miniaudio
+        GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+        GIT_TAG 9634bedb5b5a2ca38c1ee7108a9358a4e233f14d
+)
+FetchContent_MakeAvailable(miniaudio)
+target_compile_definitions(miniaudio PUBLIC
+        MA_NO_DEVICE_IO
+        MA_NO_DECODING
+        MA_NO_ENCODING
+        MA_NO_RESOURCE_MANAGER
+        MA_NO_GENERATION
+)
+
 FetchContent_Declare(
         tomlplusplus
         GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
@@ -123,6 +149,7 @@ set(SOURCES
         SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
         TestModeStorageRedirect.cpp
+        WasapiAudioTypes.cpp
 )
 
 set(GUI_SOURCES
@@ -145,6 +172,7 @@ target_link_libraries(iDmacDrv32 PRIVATE
         SDL3-static
         ntdll
         minhook
+        miniaudio
         safetyhook::safetyhook
         tomlplusplus::tomlplusplus
         reflectcpp
@@ -165,6 +193,16 @@ target_link_libraries(ConfigGUI PRIVATE
 )
 
 enable_testing()
+
+add_executable(AudioFormatTests
+        WasapiAudioTypes.cpp
+        tests/AudioFormatTests.cpp
+)
+target_include_directories(AudioFormatTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(AudioFormatTests PRIVATE miniaudio)
+add_test(NAME AudioFormatTests COMMAND AudioFormatTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
