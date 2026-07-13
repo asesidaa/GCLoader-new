@@ -4,7 +4,7 @@
 
 **Goal:** Run the no-device mixer continuously into the strict WASAPI endpoint, expose endpoint-clock services to DirectSound buffers, and hand runtime failures to a non-real-time monitor.
 
-**Architecture:** A process-lifetime `ExclusiveAudioEngine` owns one audio thread, one monitor thread, the endpoint, mixer, allocator-callback owner, preallocated float/PCM16 blocks, clock mapper, atomic counters, initialization/startup-publication events, and fatal event. A non-render endpoint-service gate protects caller clock reads from owner-thread teardown. An observer performs all formatting/logging/UI/termination outside the render thread.
+**Architecture:** A process-lifetime `ExclusiveAudioEngine` owns one audio thread, one monitor thread, the endpoint, mixer, allocator-callback owner, preallocated float/PCM16 blocks, clock mapper, atomic counters, initialization/startup-publication events, and fatal event. Mixer creation transfers a copy of the aliasing callback owner into the shared mixer state so surviving voices retain it through their teardown. A non-render endpoint-service gate protects caller clock reads from owner-thread teardown. An observer performs all formatting/logging/UI/termination outside the render thread.
 
 **Tech Stack:** C++23 threads/atomics, Win32 events, Plans 02-08, miniaudio, WASAPI, CTest.
 
@@ -13,6 +13,7 @@
 - Clamp every caller-supplied initialization wait to at most 10,000 ms.
 - Retain allocator callbacks through `std::shared_ptr<const ma_allocation_callbacks>` for the engine's complete lifetime, including a deliberately abandoned startup-timeout object; an aliasing owner may retain the callback `pUserData` context.
 - Declare the owning allocator callback member before `mixer_`, so reverse member destruction destroys the mixer and performs its final callback frees before releasing callback/user-state ownership.
+- Pass the shared callback owner to the owning `MiniaudioMixer::Create` overload, never only `.get()`. The shared `MiniaudioMixerState` retained by voices must keep that owner alive through node/converter teardown and final `ma_engine_uninit`, even after `ExclusiveAudioEngine` destruction.
 - Endpoint and mixer initialization occur on the audio thread, outside loader lock.
 - Allocate both render vectors after receiving actual endpoint frames and before `WasapiEndpoint::Start`.
 - Keep the endpoint running and submit silence with zero active voices.
@@ -112,6 +113,7 @@ Assert:
 18. timeout abandonment remains allocator-safe after all caller owners are dropped, and long endpoint identities survive a later allocator failure exactly;
 19. startup timeout values above 10,000 ms clamp to 10,000 ms in a direct fast helper test;
 20. two concurrent `CreateVoice` calls both return usable voices; fake fixed arrays release-publish completed records before readers acquire their counts.
+21. create a voice, drop every external callback owner, and destroy the engine before the voice; the alias owner remains live until voice destruction completes node/converter/final-engine frees, then releases with zero callbacks afterward.
 
 - [ ] **Step 2: Register and verify red**
 
@@ -179,7 +181,7 @@ if (frames > SIZE_MAX / kOutputChannels) {
     return;
 }
 mixer_ = MiniaudioMixer::Create(
-    frames, mixer_allocations_.get(), &mixer_result);
+    frames, mixer_allocations_, &mixer_result);
 if (!mixer_) {
     failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
     endpoint_->ShutdownOnInitializingThread();
@@ -202,6 +204,8 @@ Read initial clock position/frequency, reset the mapper to output frame zero, se
 Any failure after endpoint creation, including initial clock setup, first captures the attempted metadata, then calls `ShutdownOnInitializingThread()` and resets `endpoint_` before signaling startup failure and returning from the audio thread. A failure inside `WasapiEndpoint::Create` is already cleaned by its same-thread destructor fallback. The bounded caller-timeout path remains deliberate fail-fast abandonment because the audio thread may be stuck inside a system call; it must never destroy or release the endpoint from the waiting caller thread.
 
 Wrap mixer creation and both vector resizes in `try/catch (const std::bad_alloc&)`; report `InitializeMixer/E_OUTOFMEMORY` by moving the attempted endpoint metadata. Require `EndpointInitialization` and `AudioStartupFailure` to be nothrow move-constructible/assignable, make the publication helper consume metadata by value, and move the stored startup failure into the waiting caller. No allocation exception may escape the audio-thread entry point.
+
+The owning mixer overload moves its callback-owner copy into `MiniaudioMixerState` before `ma_engine_init`. Public engine/mixer destruction can therefore release their copies while any `MixerVoiceState` still holds the shared mixer state. The last voice uninitializes its node/converter, then the state uninitializes `ma_engine`, and only afterward releases the callback owner.
 
 - [ ] **Step 4: Implement the steady-state render cycle**
 

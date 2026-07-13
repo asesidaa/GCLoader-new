@@ -202,7 +202,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
 
         ma_result mixer_result = MA_ERROR;
         mixer_ = MiniaudioMixer::Create(
-            frames, mixer_allocations_.get(), &mixer_result);
+            frames, mixer_allocations_, &mixer_result);
         if (mixer_ == nullptr) {
             failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
             CleanupEndpointOnAudioThread();

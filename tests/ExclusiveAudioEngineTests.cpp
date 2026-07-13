@@ -803,7 +803,7 @@ int TestBoundedInitializationTimeout() {
     return failures;
 }
 
-int TestAllocatorOwnerOutlivesMixerDestruction() {
+int TestAllocatorOwnerOutlivesEngineThroughVoiceDestruction() {
     int failures = 0;
     EngineFixture fixture;
     fixture.callbacks.reset();
@@ -822,21 +822,42 @@ int TestAllocatorOwnerOutlivesMixerDestruction() {
     fixture.api->allocations = &retained_owner->probe;
 
     auto engine = fixture.Start();
-    failures += Expect(engine != nullptr, "allocator-order engine startup");
+    failures += Expect(engine != nullptr, "allocator-state engine startup");
+    auto source = MakeConstantSource(failures);
+    ma_result voice_result = MA_ERROR;
+    auto voice = engine->CreateVoice(
+        source.format,
+        source.snapshot,
+        source.timeline,
+        VoiceUsage::General,
+        &voice_result);
+    failures += Expect(
+        voice != nullptr && voice_result == MA_SUCCESS,
+        "allocator-state voice creation");
+
     fixture.callbacks.reset();
     fixture.allocation_owner.reset();
     lifetime->caller_owners_dropped.store(true, std::memory_order_release);
+    const auto callbacks_before_engine_destruction =
+        retained_owner->probe.lifetime_callbacks.load(
+            std::memory_order_acquire);
     engine.reset();
 
     failures += Expect(
-        lifetime->callbacks_after_caller_drop.load(
-                std::memory_order_acquire) != 0,
-        "mixer destruction uses the retained allocator after caller release");
+        !lifetime->owner_destroyed.load(std::memory_order_acquire) &&
+            retained_owner->probe.lifetime_callbacks.load(
+                std::memory_order_acquire) ==
+                callbacks_before_engine_destruction,
+        "voice-retained mixer state keeps allocator owner after engine destruction");
+
+    voice.reset();
     failures += Expect(
         lifetime->owner_destroyed.load(std::memory_order_acquire) &&
+            lifetime->callbacks_after_caller_drop.load(
+                std::memory_order_acquire) != 0 &&
             lifetime->callbacks_after_owner_release.load(
                 std::memory_order_acquire) == 0,
-        "allocator owner releases only after mixer destruction callbacks");
+        "voice teardown frees node converter and engine before allocator release");
     delete retained_owner;
     return failures;
 }
@@ -1387,7 +1408,7 @@ int main() {
     int failures = 0;
     failures += TestProductionRenderFinalizationAndStartupTimeoutClamp();
     failures += TestBoundedInitializationTimeout();
-    failures += TestAllocatorOwnerOutlivesMixerDestruction();
+    failures += TestAllocatorOwnerOutlivesEngineThroughVoiceDestruction();
     failures += TestStartupFailuresAndStartOrdering();
     failures += TestStartupCallbackPrecedesImmediateRuntimeFailure();
     failures += TestEndpointServiceGateProtectsCallerClockRead();

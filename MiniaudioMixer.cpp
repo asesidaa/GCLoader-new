@@ -96,6 +96,7 @@ bool ScaleFloor(
 } // namespace
 
 struct MiniaudioMixerState {
+    std::shared_ptr<const ma_allocation_callbacks> allocation_callbacks_owner;
     ma_engine engine{};
     std::uint32_t period_frames{};
     std::atomic_uint64_t render_id{};
@@ -917,6 +918,26 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
     std::uint32_t period_frames,
     const ma_allocation_callbacks* callbacks,
     ma_result* result) noexcept {
+    return CreateWithOwner(period_frames, callbacks, {}, result);
+}
+
+std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
+    std::uint32_t period_frames,
+    std::shared_ptr<const ma_allocation_callbacks> callbacks,
+    ma_result* result) noexcept {
+    const auto* const borrowed_callbacks = callbacks.get();
+    return CreateWithOwner(
+        period_frames,
+        borrowed_callbacks,
+        std::move(callbacks),
+        result);
+}
+
+std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
+    std::uint32_t period_frames,
+    const ma_allocation_callbacks* callbacks,
+    std::shared_ptr<const ma_allocation_callbacks> callback_owner,
+    ma_result* result) noexcept {
     if (result != nullptr) {
         *result = MA_INVALID_ARGS;
     }
@@ -926,6 +947,7 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
 
     try {
         auto state = std::make_shared<MiniaudioMixerState>();
+        state->allocation_callbacks_owner = std::move(callback_owner);
         state->period_frames = period_frames;
 
         auto config = ma_engine_config_init();
