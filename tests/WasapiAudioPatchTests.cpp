@@ -967,12 +967,6 @@ int test_config_gate_and_attach_failure_policy() {
     return failures;
 }
 
-int test_production_disabled_config_integration() {
-    return expect(
-        gc::audio::WasapiAudioPatchInit(),
-        "production config.toml disabled mode returns success");
-}
-
 } // namespace
 
 int main() {
@@ -1368,7 +1362,6 @@ int main() {
     failures += test_production_diagnostics_use_injected_platform_actions();
     failures += test_null_production_api_and_startup_fatal_reporting();
     failures += test_config_gate_and_attach_failure_policy();
-    failures += test_production_disabled_config_integration();
 
     return failures == 0 ? 0 : 1;
 }

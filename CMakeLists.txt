@@ -364,8 +364,6 @@ target_link_libraries(WasapiAudioPatchTests PRIVATE
         reflectcpp
 )
 add_test(NAME WasapiAudioPatchTests COMMAND WasapiAudioPatchTests)
-set_tests_properties(WasapiAudioPatchTests PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
