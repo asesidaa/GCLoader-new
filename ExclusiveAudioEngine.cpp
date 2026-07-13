@@ -1,8 +1,10 @@
 #include "ExclusiveAudioEngine.h"
+#include "ExclusiveAudioEngineInternal.h"
 
 #include <algorithm>
-#include <limits>
 #include <new>
+#include <type_traits>
+#include <utility>
 
 namespace gc::audio {
 
@@ -17,6 +19,11 @@ constexpr DWORD kSummaryIntervalMs = 30'000;
 
 constexpr DWORD kRenderWaitMs = 2'000;
 
+static_assert(std::is_nothrow_move_constructible_v<EndpointInitialization>);
+static_assert(std::is_nothrow_move_assignable_v<EndpointInitialization>);
+static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
+static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
+
 HRESULT LastErrorResult() noexcept {
     const auto error = GetLastError();
     return HRESULT_FROM_WIN32(error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error);
@@ -27,10 +34,10 @@ HRESULT LastErrorResult() noexcept {
 ExclusiveAudioEngine::ExclusiveAudioEngine(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
-    const ma_allocation_callbacks* mixer_allocations) noexcept
+    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations) noexcept
     : pending_api_(std::move(api)),
       observer_(std::move(observer)),
-      mixer_allocations_(mixer_allocations) {}
+      mixer_allocations_(std::move(mixer_allocations)) {}
 
 ExclusiveAudioEngine::~ExclusiveAudioEngine() {
     if (shutdown_event_ != nullptr) {
@@ -59,7 +66,7 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
     DWORD timeout_ms,
-    const ma_allocation_callbacks* mixer_allocations,
+    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     AudioStartupFailure* startup_failure) noexcept {
     if (startup_failure != nullptr) {
         *startup_failure = {};
@@ -74,7 +81,9 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
 
     auto engine = std::unique_ptr<ExclusiveAudioEngine>(
         new (std::nothrow) ExclusiveAudioEngine(
-            std::move(api), std::move(observer), mixer_allocations));
+            std::move(api),
+            std::move(observer),
+            std::move(mixer_allocations)));
     if (engine == nullptr) {
         if (startup_failure != nullptr) {
             startup_failure->failure = {
@@ -84,13 +93,14 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
     }
     if (!engine->CreateControlEvents() || !engine->StartThreads()) {
         if (startup_failure != nullptr) {
-            *startup_failure = engine->startup_failure_;
+            *startup_failure = std::move(engine->startup_failure_);
         }
         return nullptr;
     }
 
     const auto wait = WaitForSingleObject(
-        engine->initialization_event_, timeout_ms);
+        engine->initialization_event_,
+        detail::ClampExclusiveAudioStartupTimeout(timeout_ms));
     if (wait == WAIT_TIMEOUT) {
         if (startup_failure != nullptr) {
             startup_failure->failure = {
@@ -115,21 +125,24 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
 
     if (!engine->initialization_succeeded_.load(std::memory_order_acquire)) {
         if (startup_failure != nullptr) {
-            *startup_failure = engine->startup_failure_;
+            *startup_failure = std::move(engine->startup_failure_);
         }
         return nullptr;
     }
 
     engine->observer_->StartupSucceeded(engine->initialization_);
+    SetEvent(engine->startup_reported_event_);
     return engine;
 }
 
 bool ExclusiveAudioEngine::CreateControlEvents() noexcept {
     initialization_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    startup_reported_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     fatal_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     shutdown_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     audio_exited_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (initialization_event_ != nullptr && fatal_event_ != nullptr &&
+    if (initialization_event_ != nullptr &&
+        startup_reported_event_ != nullptr && fatal_event_ != nullptr &&
         shutdown_event_ != nullptr && audio_exited_event_ != nullptr) {
         return true;
     }
@@ -162,26 +175,39 @@ bool ExclusiveAudioEngine::StartThreads() noexcept {
 void ExclusiveAudioEngine::AudioThreadMain() noexcept {
     AudioFailure failure{};
     EndpointInitialization attempted{};
+    bool endpoint_initialized = false;
     try {
         endpoint_ = WasapiEndpoint::Create(
             std::move(pending_api_), &attempted, &failure);
         if (endpoint_ == nullptr) {
-            SignalInitializationFailure(failure, attempted);
+            SignalInitializationFailure(
+                failure, std::move(attempted));
             SetEvent(audio_exited_event_);
             return;
         }
 
-        initialization_ = endpoint_->initialization();
+        initialization_ = std::move(attempted);
+        endpoint_initialized = true;
         const auto frames = initialization_.actual_buffer_frames;
         endpoint_buffer_frames_.store(frames, std::memory_order_release);
 
+        if (!detail::CanAddressOutputSamples(frames)) {
+            failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
+            CleanupEndpointOnAudioThread();
+            SignalInitializationFailure(
+                failure, std::move(initialization_));
+            SetEvent(audio_exited_event_);
+            return;
+        }
+
         ma_result mixer_result = MA_ERROR;
         mixer_ = MiniaudioMixer::Create(
-            frames, mixer_allocations_, &mixer_result);
+            frames, mixer_allocations_.get(), &mixer_result);
         if (mixer_ == nullptr) {
             failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
             CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(failure, initialization_);
+            SignalInitializationFailure(
+                failure, std::move(initialization_));
             SetEvent(audio_exited_event_);
             return;
         }
@@ -192,18 +218,18 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             static_cast<std::size_t>(frames) * kOutputChannels);
 
         if (FAILED(endpoint_->Start(&failure))) {
-            const auto failed_initialization = endpoint_->initialization();
             CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(failure, failed_initialization);
+            SignalInitializationFailure(
+                failure, std::move(initialization_));
             SetEvent(audio_exited_event_);
             return;
         }
 
         EndpointClockPosition initial_clock{};
         if (FAILED(endpoint_->ReadClock(&initial_clock, &failure))) {
-            const auto failed_initialization = endpoint_->initialization();
             CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(failure, failed_initialization);
+            SignalInitializationFailure(
+                failure, std::move(initialization_));
             SetEvent(audio_exited_event_);
             return;
         }
@@ -211,6 +237,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             initial_clock.position,
             initialization_.clock_frequency,
             0);
+        submitted_frames_.store(frames, std::memory_order_release);
         last_qpc_100ns_ = initial_clock.qpc_100ns;
         actual_period_100ns_ = FramesToReferenceTime(
             frames, kOutputSampleRate);
@@ -221,18 +248,20 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         CleanupEndpointOnAudioThread();
     } catch (const std::bad_alloc&) {
         failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
-        const auto failed_initialization = endpoint_ != nullptr
-            ? endpoint_->initialization()
-            : attempted;
         CleanupEndpointOnAudioThread();
-        SignalInitializationFailure(failure, failed_initialization);
+        SignalInitializationFailure(
+            failure,
+            endpoint_initialized
+                ? std::move(initialization_)
+                : std::move(attempted));
     } catch (...) {
         failure = {AudioFailureStage::InitializeMixer, E_UNEXPECTED};
-        const auto failed_initialization = endpoint_ != nullptr
-            ? endpoint_->initialization()
-            : attempted;
         CleanupEndpointOnAudioThread();
-        SignalInitializationFailure(failure, failed_initialization);
+        SignalInitializationFailure(
+            failure,
+            endpoint_initialized
+                ? std::move(initialization_)
+                : std::move(attempted));
     }
     SetEvent(audio_exited_event_);
 }
@@ -265,28 +294,8 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
 
         const auto begin = submitted_frames_.load(std::memory_order_relaxed);
         auto rendered = mixer_->Render(float_mix_, begin);
-#if defined(GC_EXCLUSIVE_AUDIO_ENGINE_TESTING)
-        // The real mixer always requests a complete fixed period. The fake
-        // endpoint uses this impossible clock position to exercise the
-        // defensive successful-short-read branch deterministically.
-        if (clock.position == std::numeric_limits<std::uint64_t>::max() &&
-            rendered.result == MA_SUCCESS) {
-            rendered.frames_read = frames / 2;
-        }
-#endif
-        if (rendered.result != MA_SUCCESS) {
-            std::fill(float_mix_.begin(), float_mix_.end(), 0.0F);
-            silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
-        } else if (rendered.frames_read != frames) {
-            const auto bounded_frames = std::min<std::uint64_t>(
-                rendered.frames_read, frames);
-            const auto first_missing =
-                static_cast<std::size_t>(bounded_frames) * kOutputChannels;
-            std::fill(
-                float_mix_.begin() +
-                    static_cast<std::ptrdiff_t>(first_missing),
-                float_mix_.end(),
-                0.0F);
+        if (detail::FinalizeMixerRenderBlock(
+                float_mix_, frames, rendered)) {
             silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
         }
         ConvertFloatToPcm16(float_mix_, pcm16_mix_);
@@ -302,6 +311,16 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
 void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
     if (WaitForSingleObject(initialization_event_, INFINITE) != WAIT_OBJECT_0 ||
         !initialization_succeeded_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    const HANDLE startup_controls[]{startup_reported_event_, shutdown_event_};
+    const auto startup_wait = WaitForMultipleObjects(
+        static_cast<DWORD>(std::size(startup_controls)),
+        startup_controls,
+        FALSE,
+        INFINITE);
+    if (startup_wait != WAIT_OBJECT_0) {
         return;
     }
 
@@ -332,6 +351,7 @@ void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
 }
 
 void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept {
+    std::lock_guard lock(endpoint_service_mutex_);
     if (endpoint_ == nullptr) {
         return;
     }
@@ -340,9 +360,10 @@ void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept {
 }
 
 void ExclusiveAudioEngine::SignalInitializationFailure(
-    const AudioFailure& failure,
-    const EndpointInitialization& attempted) noexcept {
-    startup_failure_ = {failure, attempted};
+    AudioFailure failure,
+    EndpointInitialization attempted) noexcept {
+    startup_failure_.failure = failure;
+    startup_failure_.attempted = std::move(attempted);
     initialization_succeeded_.store(false, std::memory_order_release);
     SetEvent(initialization_event_);
 }
@@ -396,14 +417,15 @@ bool ExclusiveAudioEngine::ShutdownRequested() const noexcept {
 
 void ExclusiveAudioEngine::CloseControlEvents() noexcept {
     const HANDLE handles[]{
-        initialization_event_, fatal_event_, shutdown_event_,
-        audio_exited_event_};
+        initialization_event_, startup_reported_event_, fatal_event_,
+        shutdown_event_, audio_exited_event_};
     for (const auto handle : handles) {
         if (handle != nullptr) {
             CloseHandle(handle);
         }
     }
     initialization_event_ = nullptr;
+    startup_reported_event_ = nullptr;
     fatal_event_ = nullptr;
     shutdown_event_ = nullptr;
     audio_exited_event_ = nullptr;
@@ -431,6 +453,7 @@ std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
 
 std::optional<std::uint64_t>
 ExclusiveAudioEngine::CurrentOutputFrame() noexcept {
+    std::lock_guard lock(endpoint_service_mutex_);
     if (endpoint_ == nullptr) {
         return std::nullopt;
     }

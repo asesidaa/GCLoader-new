@@ -16,6 +16,7 @@
 - On `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`, call `GetBufferSize`, release the failed client, activate a new client, recalculate duration, and retry once.
 - After retry, actual frames must equal the alignment frame count. Without retry, actual frames must not exceed `ReferenceTimeToFramesCeil(minimum_period, 44100)`.
 - A successful aligned-size query, actual-size query, or clock-frequency query that returns zero is invalid at that query's existing failure stage. Zero aligned/actual frames use `AUDCLNT_E_BUFFER_SIZE_ERROR`; zero frequency uses `E_UNEXPECTED`.
+- On x86, reject aligned or actual frame counts greater than `SIZE_MAX / kOutputChannels` before any sample-count multiplication. Use the query's existing `GetAlignedBufferSize` or `GetActualBufferSize` stage with `AUDCLNT_E_BUFFER_SIZE_ERROR`.
 - Register the event before `Start`, prefill the complete endpoint buffer with silence, and require render/clock services.
 - Require MMCSS task `Pro Audio` and `AVRT_PRIORITY_CRITICAL`; failure is fatal.
 - Runtime buffer/clock methods allocate nothing and log nothing.
@@ -171,6 +172,7 @@ Add rejection cases:
 - closest/unsupported format (`S_FALSE` or `AUDCLNT_E_UNSUPPORTED_FORMAT`);
 - a second alignment error on retry;
 - successful zero aligned frames, zero actual frames, and zero clock frequency at `GetAlignedBufferSize`, `GetActualBufferSize`, and `GetClockFrequency` respectively;
+- successful aligned and direct actual frame counts that cannot address `frames * kOutputChannels` samples on x86, with exact query stage, `AUDCLNT_E_BUFFER_SIZE_ERROR`, and owner-thread cleanup;
 - failure at event, services, clock frequency, prefill, MMCSS registration, priority, and start.
 
 For each failure assert both `AudioFailureStage` and HRESULT.
@@ -210,7 +212,8 @@ if (hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
     if (FAILED(hr)) {
         return fail(AudioFailureStage::GetAlignedBufferSize, hr);
     }
-    if (aligned_frames == 0) {
+    if (aligned_frames == 0 ||
+        aligned_frames > SIZE_MAX / kOutputChannels) {
         return fail(AudioFailureStage::GetAlignedBufferSize,
                     AUDCLNT_E_BUFFER_SIZE_ERROR);
     }
@@ -243,7 +246,7 @@ if (!alignment_retry && actual_frames >
 }
 ```
 
-Reject `actual_frames == 0` at `GetActualBufferSize` with `AUDCLNT_E_BUFFER_SIZE_ERROR`. After successful `GetClockFrequency`, reject a zero result at `GetClockFrequency` with `E_UNEXPECTED`. These checks occur before any render-buffer acquisition.
+Reject `actual_frames == 0` or `actual_frames > SIZE_MAX / kOutputChannels` at `GetActualBufferSize` with `AUDCLNT_E_BUFFER_SIZE_ERROR`. After successful `GetClockFrequency`, reject a zero result at `GetClockFrequency` with `E_UNEXPECTED`. These checks occur before any render-buffer acquisition and make later `actual_buffer_frames * kOutputChannels` sample-count calculations addressable on x86.
 
 Then perform event, services, clock, silent prefill, MMCSS, and priority in the tested order. Return the initialized-but-not-started endpoint.
 

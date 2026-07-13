@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -49,7 +50,7 @@ public:
         std::unique_ptr<IWasapiApi>,
         std::shared_ptr<IAudioEngineObserver>,
         DWORD timeout_ms,
-        const ma_allocation_callbacks* mixer_allocations,
+        std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
         AudioStartupFailure*) noexcept;
 
     std::unique_ptr<MixerVoice> CreateVoice(
@@ -66,7 +67,7 @@ private:
     ExclusiveAudioEngine(
         std::unique_ptr<IWasapiApi>,
         std::shared_ptr<IAudioEngineObserver>,
-        const ma_allocation_callbacks*) noexcept;
+        std::shared_ptr<const ma_allocation_callbacks>) noexcept;
 
     bool CreateControlEvents() noexcept;
     bool StartThreads() noexcept;
@@ -75,8 +76,8 @@ private:
     void RenderLoop() noexcept;
     void CleanupEndpointOnAudioThread() noexcept;
     void SignalInitializationFailure(
-        const AudioFailure&,
-        const EndpointInitialization&) noexcept;
+        AudioFailure,
+        EndpointInitialization) noexcept;
     void RecordRuntimeFailure(const AudioFailure&) noexcept;
     void CountLateWake(std::uint64_t qpc_100ns) noexcept;
     AudioRuntimeCountersSnapshot SnapshotCounters() const noexcept;
@@ -85,15 +86,17 @@ private:
 
     std::unique_ptr<IWasapiApi> pending_api_;
     std::unique_ptr<WasapiEndpoint> endpoint_;
-    std::unique_ptr<MiniaudioMixer> mixer_;
     std::shared_ptr<IAudioEngineObserver> observer_;
-    const ma_allocation_callbacks* mixer_allocations_{};
+    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
+    std::unique_ptr<MiniaudioMixer> mixer_;
+    std::mutex endpoint_service_mutex_;
     std::vector<float> float_mix_;
     std::vector<std::int16_t> pcm16_mix_;
     EndpointClockMapper clock_mapper_;
     std::thread audio_thread_;
     std::thread monitor_thread_;
     HANDLE initialization_event_{};
+    HANDLE startup_reported_event_{};
     HANDLE fatal_event_{};
     HANDLE shutdown_event_{};
     HANDLE audio_exited_event_{};

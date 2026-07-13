@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -603,6 +604,59 @@ int TestSuccessfulZeroOutputsAreRejected() {
     return failures;
 }
 
+int TestUnaddressableOutputSizesAreRejected() {
+    if constexpr (
+        std::numeric_limits<std::size_t>::max() /
+                kOutputChannels >=
+            std::numeric_limits<std::uint32_t>::max()) {
+        return 0;
+    }
+
+    const auto unaddressable_frames = static_cast<std::uint32_t>(
+        std::numeric_limits<std::size_t>::max() /
+            kOutputChannels +
+        1);
+    int failures = 0;
+    {
+        auto shutdown_calls = std::make_shared<std::uint32_t>();
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->minimum_period = FramesToReferenceTime(
+            unaddressable_frames, kOutputSampleRate);
+        api->actual_frames = unaddressable_frames;
+        api->shutdown_call_count = shutdown_calls;
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api), &attempted, &failure);
+        failures += Expect(
+            endpoint == nullptr &&
+                failure.stage == AudioFailureStage::GetActualBufferSize &&
+                failure.result == AUDCLNT_E_BUFFER_SIZE_ERROR &&
+                *shutdown_calls == 1,
+            "x86 direct actual size overflow rejects with owner cleanup");
+    }
+    {
+        auto shutdown_calls = std::make_shared<std::uint32_t>();
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->first_initialize_result =
+            AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
+        api->aligned_frames = unaddressable_frames;
+        api->actual_frames = unaddressable_frames;
+        api->shutdown_call_count = shutdown_calls;
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api), &attempted, &failure);
+        failures += Expect(
+            endpoint == nullptr &&
+                failure.stage == AudioFailureStage::GetAlignedBufferSize &&
+                failure.result == AUDCLNT_E_BUFFER_SIZE_ERROR &&
+                *shutdown_calls == 1,
+            "x86 aligned size overflow rejects with owner cleanup");
+    }
+    return failures;
+}
+
 int TestStartAndRuntimeFailures() {
     int failures = 0;
     {
@@ -736,6 +790,7 @@ int main() {
     failures += TestAlignmentRetryUsesAuthoritativeFrames();
     failures += TestInitializationRejectionsAndStages();
     failures += TestSuccessfulZeroOutputsAreRejected();
+    failures += TestUnaddressableOutputSizesAreRejected();
     failures += TestStartAndRuntimeFailures();
     failures += TestOwnerThreadShutdownIsIdempotent();
     return failures == 0 ? 0 : 1;

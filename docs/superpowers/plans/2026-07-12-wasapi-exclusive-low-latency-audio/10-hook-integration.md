@@ -141,8 +141,18 @@ auto api = CreateProductionWasapiApi();
 auto observer = std::make_shared<ProductionAudioObserver>();
 AudioStartupFailure startup_failure{};
 auto engine = ExclusiveAudioEngine::StartAndWait(
-    std::move(api), observer, 10'000, nullptr, &startup_failure);
+    std::move(api),
+    observer,
+    10'000,
+    std::shared_ptr<const ma_allocation_callbacks>{},
+    &startup_failure);
 ```
+
+When custom miniaudio callbacks are supplied, pass an owning
+`std::shared_ptr<const ma_allocation_callbacks>`. An aliasing shared pointer may
+retain a containing allocation context so both the callback table and its
+`pUserData` remain valid even if startup times out and the engine is deliberately
+abandoned during fatal process termination.
 
 On success, move the engine into process-lifetime global ownership and publish `Succeeded`. On failure or timeout, publish the exact failure and `Failed`; the production reporter logs and terminates the process. A timed-out engine object is intentionally abandoned to process cleanup because the next action is fatal process termination; do not block indefinitely joining an initialization thread.
 

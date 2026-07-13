@@ -1,4 +1,5 @@
 #include "ExclusiveAudioEngine.h"
+#include "ExclusiveAudioEngineInternal.h"
 
 #include <audioclient.h>
 
@@ -18,6 +19,7 @@
 #include <span>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 
 namespace {
 
@@ -36,6 +38,11 @@ using gc::audio::IWasapiApi;
 using gc::audio::NormalizedSourceFormat;
 using gc::audio::VoiceUsage;
 
+static_assert(std::is_nothrow_move_constructible_v<EndpointInitialization>);
+static_assert(std::is_nothrow_move_assignable_v<EndpointInitialization>);
+static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
+static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
+
 constexpr std::uint32_t kFrames = 8;
 constexpr std::size_t kSamples = kFrames * gc::audio::kOutputChannels;
 constexpr std::uint64_t kClockFrequency = 10'000'000;
@@ -51,6 +58,52 @@ int Expect(bool condition, std::string_view name) {
     return 1;
 }
 
+int TestProductionRenderFinalizationAndStartupTimeoutClamp() {
+    int failures = 0;
+    failures += Expect(
+        gc::audio::detail::ClampExclusiveAudioStartupTimeout(10'001) ==
+                10'000 &&
+            gc::audio::detail::ClampExclusiveAudioStartupTimeout(10'000) ==
+                10'000 &&
+            gc::audio::detail::ClampExclusiveAudioStartupTimeout(0) == 0,
+        "startup timeout is capped at ten seconds");
+
+    std::array<float, kSamples> short_block{};
+    short_block.fill(0.5F);
+    failures += Expect(
+        gc::audio::detail::FinalizeMixerRenderBlock(
+            short_block,
+            kFrames,
+            {MA_SUCCESS, kFrames / 2}),
+        "successful short mixer read reports silence fallback");
+    failures += Expect(
+        std::all_of(
+            short_block.begin(),
+            short_block.begin() +
+                static_cast<std::ptrdiff_t>(kSamples / 2),
+            [](float sample) { return sample == 0.5F; }) &&
+            std::all_of(
+                short_block.begin() +
+                    static_cast<std::ptrdiff_t>(kSamples / 2),
+                short_block.end(),
+                [](float sample) { return sample == 0.0F; }),
+        "successful short mixer read zero-fills only the missing suffix");
+
+    std::array<float, kSamples> failed_block{};
+    failed_block.fill(0.5F);
+    failures += Expect(
+        gc::audio::detail::FinalizeMixerRenderBlock(
+            failed_block,
+            kFrames,
+            {MA_ERROR, 0}) &&
+            std::all_of(
+                failed_block.begin(),
+                failed_block.end(),
+                [](float sample) { return sample == 0.0F; }),
+        "mixer error zero-fills the complete production block");
+    return failures;
+}
+
 template <typename Predicate>
 bool WaitUntil(Predicate predicate, std::chrono::milliseconds timeout = 2s) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -64,15 +117,41 @@ bool WaitUntil(Predicate predicate, std::chrono::milliseconds timeout = 2s) {
 }
 
 struct AllocationProbe {
+    struct LifetimeState {
+        std::atomic_bool caller_owners_dropped{};
+        std::atomic_bool owner_destroyed{};
+        std::atomic_uint64_t callbacks_after_caller_drop{};
+        std::atomic_uint64_t callbacks_after_owner_release{};
+    };
+
+    std::shared_ptr<LifetimeState> lifetime;
     std::atomic_bool enabled{};
     std::atomic_uint64_t active_callbacks{};
     std::atomic_uint64_t lifetime_callbacks{};
+    std::atomic_bool fail_allocations{};
+
+    void RecordCallback() noexcept {
+        lifetime_callbacks.fetch_add(1, std::memory_order_relaxed);
+        if (lifetime != nullptr &&
+            lifetime->caller_owners_dropped.load(std::memory_order_acquire)) {
+            lifetime->callbacks_after_caller_drop.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+        if (lifetime != nullptr &&
+            lifetime->owner_destroyed.load(std::memory_order_acquire)) {
+            lifetime->callbacks_after_owner_release.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+        if (enabled.load(std::memory_order_relaxed)) {
+            active_callbacks.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 
     static void* Allocate(std::size_t size, void* user_data) {
         auto& probe = *static_cast<AllocationProbe*>(user_data);
-        probe.lifetime_callbacks.fetch_add(1, std::memory_order_relaxed);
-        if (probe.enabled.load(std::memory_order_relaxed)) {
-            probe.active_callbacks.fetch_add(1, std::memory_order_relaxed);
+        probe.RecordCallback();
+        if (probe.fail_allocations.load(std::memory_order_relaxed)) {
+            return nullptr;
         }
         return std::malloc(size == 0 ? 1 : size);
     }
@@ -80,19 +159,16 @@ struct AllocationProbe {
     static void* Reallocate(
         void* pointer, std::size_t size, void* user_data) {
         auto& probe = *static_cast<AllocationProbe*>(user_data);
-        probe.lifetime_callbacks.fetch_add(1, std::memory_order_relaxed);
-        if (probe.enabled.load(std::memory_order_relaxed)) {
-            probe.active_callbacks.fetch_add(1, std::memory_order_relaxed);
+        probe.RecordCallback();
+        if (probe.fail_allocations.load(std::memory_order_relaxed)) {
+            return nullptr;
         }
         return std::realloc(pointer, size == 0 ? 1 : size);
     }
 
     static void Free(void* pointer, void* user_data) {
         auto& probe = *static_cast<AllocationProbe*>(user_data);
-        probe.lifetime_callbacks.fetch_add(1, std::memory_order_relaxed);
-        if (probe.enabled.load(std::memory_order_relaxed)) {
-            probe.active_callbacks.fetch_add(1, std::memory_order_relaxed);
-        }
+        probe.RecordCallback();
         std::free(pointer);
     }
 
@@ -109,6 +185,20 @@ struct AllocationProbe {
         enabled.store(false, std::memory_order_release);
         return active_callbacks.load(std::memory_order_relaxed);
     }
+};
+
+struct AllocationOwner {
+    explicit AllocationOwner(
+        std::shared_ptr<AllocationProbe::LifetimeState> lifetime_state)
+        : probe{.lifetime = std::move(lifetime_state)},
+          callbacks(probe.Callbacks()) {}
+
+    ~AllocationOwner() {
+        probe.lifetime->owner_destroyed.store(true, std::memory_order_release);
+    }
+
+    AllocationProbe probe;
+    ma_allocation_callbacks callbacks{};
 };
 
 enum class ApiCall : std::uint8_t {
@@ -141,6 +231,11 @@ struct CallRecord {
     DWORD thread_id{};
 };
 
+struct CallSlot {
+    CallRecord record{};
+    std::atomic_bool ready{};
+};
+
 struct WaitAction {
     HRESULT result{S_OK};
 };
@@ -152,7 +247,7 @@ struct ClockAction {
 };
 
 struct FakeWasapiState {
-    std::array<CallRecord, 256> calls{};
+    std::array<CallSlot, 256> calls{};
     std::atomic_size_t call_count{};
     std::array<WaitAction, 64> waits{};
     std::size_t wait_read{};
@@ -165,11 +260,16 @@ struct FakeWasapiState {
     std::array<std::byte, kSamples * sizeof(std::int16_t)> render_bytes{};
     std::mutex mutex;
     std::condition_variable condition;
+    std::mutex game_clock_mutex;
+    std::condition_variable game_clock_condition;
     std::atomic_bool block_initialize{};
     std::atomic_bool release_initialize{};
     std::atomic_bool started{};
     std::atomic_bool render_probe{};
     std::atomic_bool mixer_observed_before_start{};
+    std::atomic_bool block_game_clock{};
+    std::atomic_bool game_clock_entered{};
+    std::atomic_bool release_game_clock{};
     std::atomic_uint32_t shutdown_calls{};
     std::atomic_uint32_t destroy_calls{};
     std::atomic<DWORD> audio_thread_id{};
@@ -180,11 +280,14 @@ struct FakeWasapiState {
     std::uint32_t failure_occurrence{1};
     std::uint32_t matching_calls{};
     AllocationProbe* allocations{};
+    std::wstring endpoint_name{L"Fake Speakers"};
+    std::wstring endpoint_id{L"fake-endpoint-id"};
 
     void Record(ApiCall call) noexcept {
         const auto index = call_count.fetch_add(1, std::memory_order_relaxed);
         if (index < calls.size()) {
-            calls[index] = {call, GetCurrentThreadId()};
+            calls[index].record = {call, GetCurrentThreadId()};
+            calls[index].ready.store(true, std::memory_order_release);
         }
     }
 
@@ -223,7 +326,10 @@ struct FakeWasapiState {
         const auto count = std::min(call_count.load(), calls.size());
         std::size_t found{};
         for (std::size_t index = 0; index < count; ++index) {
-            found += calls[index].call == wanted ? 1 : 0;
+            found += calls[index].ready.load(std::memory_order_acquire) &&
+                    calls[index].record.call == wanted
+                ? 1
+                : 0;
         }
         return found;
     }
@@ -255,8 +361,8 @@ public:
     HRESULT OpenDefaultConsoleEndpoint(
         std::wstring* name, std::wstring* id) noexcept override {
         state_->Record(ApiCall::OpenDefaultConsoleEndpoint);
-        *name = L"Fake Speakers";
-        *id = L"fake-endpoint-id";
+        *name = state_->endpoint_name;
+        *id = state_->endpoint_id;
         return state_->MaybeFail(ApiCall::OpenDefaultConsoleEndpoint);
     }
 
@@ -350,12 +456,15 @@ public:
             return E_INVALIDARG;
         }
         if (state_->started.load() && flags == 0) {
-            const auto index = state_->submission_count.fetch_add(1);
+            const auto index = state_->submission_count.load(
+                std::memory_order_relaxed);
             if (index < state_->submissions.size()) {
                 std::memcpy(
                     state_->submissions[index].data(),
                     state_->render_bytes.data(),
                     state_->render_bytes.size());
+                state_->submission_count.store(
+                    index + 1, std::memory_order_release);
             }
         }
         return S_OK;
@@ -398,12 +507,25 @@ public:
     HRESULT GetClockPosition(
         std::uint64_t* position,
         std::uint64_t* qpc_100ns) noexcept override {
-        state_->Record(ApiCall::GetClockPosition);
-        std::lock_guard lock(state_->mutex);
+        const auto state = state_;
+        state->Record(ApiCall::GetClockPosition);
         ClockAction action{};
-        if (state_->clock_read != state_->clock_write) {
-            action = state_->clocks[
-                state_->clock_read++ % state_->clocks.size()];
+        {
+            std::lock_guard lock(state->mutex);
+            if (state->clock_read != state->clock_write) {
+                action = state->clocks[
+                    state->clock_read++ % state->clocks.size()];
+            }
+        }
+        if (state->block_game_clock.load(std::memory_order_acquire) &&
+            GetCurrentThreadId() != state->audio_thread_id.load()) {
+            std::unique_lock lock(state->game_clock_mutex);
+            state->game_clock_entered.store(true, std::memory_order_release);
+            state->game_clock_condition.notify_all();
+            state->game_clock_condition.wait(lock, [&] {
+                return state->release_game_clock.load(
+                    std::memory_order_acquire);
+            });
         }
         *position = action.position;
         *qpc_100ns = action.qpc_100ns;
@@ -439,6 +561,15 @@ struct ObserverState {
     std::atomic<DWORD> summary_thread_id{};
     std::atomic<DWORD> fatal_thread_id{};
     std::atomic_bool* render_probe{};
+    std::mutex startup_barrier_mutex;
+    std::condition_variable startup_barrier_condition;
+    std::atomic_bool block_startup{};
+    std::atomic_bool startup_entered{};
+    std::atomic_bool release_startup{};
+    std::atomic_bool startup_completed{};
+    std::atomic_uint32_t callback_sequence{};
+    std::atomic_uint32_t startup_completed_sequence{};
+    std::atomic_uint32_t fatal_sequence{};
 };
 
 class FakeObserver final : public IAudioEngineObserver {
@@ -449,12 +580,25 @@ public:
     void StartupSucceeded(
         const EndpointInitialization& initialization) noexcept override {
         CallbackProbe();
+        if (state_->block_startup.load(std::memory_order_acquire)) {
+            std::unique_lock lock(state_->startup_barrier_mutex);
+            state_->startup_entered.store(true, std::memory_order_release);
+            state_->startup_barrier_condition.notify_all();
+            state_->startup_barrier_condition.wait(lock, [&] {
+                return state_->release_startup.load(
+                    std::memory_order_acquire);
+            });
+        }
         {
             std::lock_guard lock(state_->mutex);
             state_->startup = initialization;
             state_->startup_thread_id.store(GetCurrentThreadId());
             state_->startup_count.fetch_add(1);
         }
+        state_->startup_completed_sequence.store(
+            state_->callback_sequence.fetch_add(1) + 1,
+            std::memory_order_release);
+        state_->startup_completed.store(true, std::memory_order_release);
         state_->condition.notify_all();
     }
 
@@ -474,13 +618,16 @@ public:
         const AudioFailure& failure,
         const AudioRuntimeCountersSnapshot& counters) noexcept override {
         CallbackProbe();
+        const auto sequence = state_->callback_sequence.fetch_add(1) + 1;
         {
             std::lock_guard lock(state_->mutex);
             state_->fatal_failure = failure;
             state_->fatal_counters = counters;
             state_->fatal_thread_id.store(GetCurrentThreadId());
-            state_->fatal_count.fetch_add(1);
+            state_->fatal_sequence.store(
+                sequence, std::memory_order_relaxed);
         }
+        state_->fatal_count.fetch_add(1, std::memory_order_release);
         state_->condition.notify_all();
     }
 
@@ -503,11 +650,15 @@ struct EngineFixture {
         std::make_shared<ObserverState>();
     std::shared_ptr<FakeObserver> observer =
         std::make_shared<FakeObserver>(observer_state);
-    AllocationProbe allocations;
-    ma_allocation_callbacks callbacks = allocations.Callbacks();
+    std::shared_ptr<AllocationProbe::LifetimeState> allocation_lifetime =
+        std::make_shared<AllocationProbe::LifetimeState>();
+    std::shared_ptr<AllocationOwner> allocation_owner =
+        std::make_shared<AllocationOwner>(allocation_lifetime);
+    std::shared_ptr<const ma_allocation_callbacks> callbacks{
+        allocation_owner, &allocation_owner->callbacks};
 
     EngineFixture() {
-        api->allocations = &allocations;
+        api->allocations = &allocation_owner->probe;
         observer_state->render_probe = &api->render_probe;
         api->PushClock(S_OK, kInitialClock, kInitialClock);
     }
@@ -519,7 +670,7 @@ struct EngineFixture {
             std::make_unique<FakeWasapiApi>(api),
             observer,
             timeout_ms,
-            &callbacks,
+            callbacks,
             failure);
     }
 };
@@ -627,11 +778,66 @@ int TestBoundedInitializationTimeout() {
     failures += Expect(
         fixture.api->shutdown_calls.load() == 0,
         "timeout caller deliberately does not destroy stuck endpoint");
+    const std::weak_ptr<AllocationOwner> weak_allocations =
+        fixture.allocation_owner;
+    fixture.callbacks.reset();
+    fixture.allocation_owner.reset();
+    fixture.allocation_lifetime->caller_owners_dropped.store(
+        true, std::memory_order_release);
+    failures += Expect(
+        !weak_allocations.expired() &&
+            !fixture.allocation_lifetime->owner_destroyed.load(
+                std::memory_order_acquire),
+        "timed-out engine owns allocator callbacks and user state");
     fixture.api->release_initialize.store(true);
     fixture.api->condition.notify_all();
     failures += Expect(
         WaitUntil([&] { return fixture.api->destroy_calls.load() == 1; }),
         "abandoned timeout object eventually performs owner-thread cleanup");
+    failures += Expect(
+        fixture.allocation_lifetime->callbacks_after_caller_drop.load(
+            std::memory_order_acquire) != 0 &&
+            !fixture.allocation_lifetime->owner_destroyed.load(
+                std::memory_order_acquire),
+        "abandoned initialization safely uses retained allocator state");
+    return failures;
+}
+
+int TestAllocatorOwnerOutlivesMixerDestruction() {
+    int failures = 0;
+    EngineFixture fixture;
+    fixture.callbacks.reset();
+    fixture.allocation_owner.reset();
+
+    auto lifetime = std::make_shared<AllocationProbe::LifetimeState>();
+    auto* retained_owner = new AllocationOwner(lifetime);
+    fixture.allocation_lifetime = lifetime;
+    fixture.allocation_owner = std::shared_ptr<AllocationOwner>(
+        retained_owner,
+        [lifetime](AllocationOwner*) {
+            lifetime->owner_destroyed.store(true, std::memory_order_release);
+        });
+    fixture.callbacks = {
+        fixture.allocation_owner, &retained_owner->callbacks};
+    fixture.api->allocations = &retained_owner->probe;
+
+    auto engine = fixture.Start();
+    failures += Expect(engine != nullptr, "allocator-order engine startup");
+    fixture.callbacks.reset();
+    fixture.allocation_owner.reset();
+    lifetime->caller_owners_dropped.store(true, std::memory_order_release);
+    engine.reset();
+
+    failures += Expect(
+        lifetime->callbacks_after_caller_drop.load(
+                std::memory_order_acquire) != 0,
+        "mixer destruction uses the retained allocator after caller release");
+    failures += Expect(
+        lifetime->owner_destroyed.load(std::memory_order_acquire) &&
+            lifetime->callbacks_after_owner_release.load(
+                std::memory_order_acquire) == 0,
+        "allocator owner releases only after mixer destruction callbacks");
+    delete retained_owner;
     return failures;
 }
 
@@ -686,6 +892,123 @@ int TestStartupFailuresAndStartOrdering() {
         failures += ExpectOwnerThreadCleanup(
             fixture, "initial clock failure audio thread");
     }
+    {
+        EngineFixture fixture;
+        fixture.api->endpoint_name.assign(2'048, L'N');
+        fixture.api->endpoint_id.assign(2'048, L'I');
+        fixture.allocation_owner->probe.fail_allocations.store(true);
+        AudioStartupFailure failure{};
+        auto engine = fixture.Start(&failure);
+        failures += Expect(engine == nullptr, "post-identity mixer failure");
+        failures += Expect(
+            failure.failure.stage == AudioFailureStage::InitializeMixer &&
+                failure.failure.result == E_OUTOFMEMORY &&
+                failure.attempted.endpoint_name == fixture.api->endpoint_name &&
+                failure.attempted.endpoint_id == fixture.api->endpoint_id,
+            "long endpoint metadata moves through allocation failure");
+        failures += ExpectOwnerThreadCleanup(
+            fixture, "long metadata failure audio thread");
+    }
+    return failures;
+}
+
+int TestStartupCallbackPrecedesImmediateRuntimeFailure() {
+    int failures = 0;
+    EngineFixture fixture;
+    fixture.observer_state->block_startup.store(true);
+    fixture.api->PushWait(E_ABORT);
+    AudioStartupFailure failure{};
+    std::unique_ptr<ExclusiveAudioEngine> engine;
+    std::thread starter([&] { engine = fixture.Start(&failure); });
+
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.observer_state->startup_entered.load(
+                std::memory_order_acquire);
+        }),
+        "startup observer enters its caller-side publication barrier");
+    const auto fatal_while_startup_blocked = WaitUntil(
+        [&] {
+            return fixture.observer_state->fatal_count.load(
+                       std::memory_order_acquire) != 0;
+        },
+        100ms);
+    failures += Expect(
+        !fatal_while_startup_blocked,
+        "immediate runtime fatal waits for startup publication");
+
+    fixture.observer_state->release_startup.store(
+        true, std::memory_order_release);
+    fixture.observer_state->startup_barrier_condition.notify_all();
+    starter.join();
+    failures += Expect(engine != nullptr, "startup returns the initialized engine");
+    failures += Expect(
+        WaitForFatal(fixture),
+        "immediate runtime failure publishes after startup");
+    failures += Expect(
+        fixture.observer_state->startup_completed_sequence.load(
+                std::memory_order_acquire) != 0 &&
+            fixture.observer_state->startup_completed_sequence.load(
+                std::memory_order_acquire) <
+                fixture.observer_state->fatal_sequence.load(
+                    std::memory_order_acquire),
+        "startup observer completion precedes fatal observer entry");
+    engine.reset();
+    failures += ExpectOwnerThreadCleanup(
+        fixture, "startup ordering audio thread");
+    return failures;
+}
+
+int TestEndpointServiceGateProtectsCallerClockRead() {
+    int failures = 0;
+    EngineFixture fixture;
+    auto engine = fixture.Start();
+    failures += Expect(engine != nullptr, "service-gate engine startup");
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->Count(ApiCall::WaitForRender) != 0;
+        }),
+        "audio thread enters render wait before caller clock read");
+
+    fixture.api->block_game_clock.store(true, std::memory_order_release);
+    fixture.api->PushClock(E_ACCESSDENIED);
+    std::optional<std::uint64_t> caller_frame;
+    std::thread caller([&] { caller_frame = engine->CurrentOutputFrame(); });
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->game_clock_entered.load(
+                std::memory_order_acquire);
+        }),
+        "caller clock read blocks inside endpoint service call");
+
+    fixture.api->PushWait(E_ABORT);
+    failures += Expect(
+        WaitForFatal(fixture),
+        "audio wait failure is reported while caller clock is blocked");
+    failures += Expect(
+        fixture.api->shutdown_calls.load(std::memory_order_acquire) == 0,
+        "endpoint cleanup waits for in-flight caller service access");
+
+    fixture.api->release_game_clock.store(true, std::memory_order_release);
+    fixture.api->game_clock_condition.notify_all();
+    caller.join();
+    failures += Expect(
+        !caller_frame.has_value(),
+        "blocked caller clock failure returns no output frame");
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->destroy_calls.load(std::memory_order_acquire) ==
+                1;
+        }),
+        "endpoint cleanup resumes after caller service access exits");
+    failures += Expect(
+        fixture.observer_state->fatal_failure.stage ==
+                AudioFailureStage::WaitRenderEvent &&
+            fixture.observer_state->fatal_failure.result == E_ABORT,
+        "simultaneous caller failure preserves the first audio-thread failure");
+    engine.reset();
+    failures += ExpectOwnerThreadCleanup(
+        fixture, "service-gate owner audio thread");
     return failures;
 }
 
@@ -710,7 +1033,10 @@ int TestSilenceRuntimeFailureAndCleanup() {
         fixture.api->PushWait();
     }
     failures += Expect(
-        WaitUntil([&] { return fixture.api->submission_count.load() == 3; }),
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) == 3;
+        }),
         "three silence submissions complete");
     for (std::size_t block = 0; block < 3; ++block) {
         failures += Expect(
@@ -768,7 +1094,10 @@ int TestVoiceClockSummaryAndRenderSafety() {
     fixture.api->PushClock(kInitialClock + kPeriod, late_qpc);
     fixture.api->PushWait();
     failures += Expect(
-        WaitUntil([&] { return fixture.api->submission_count.load() >= 1; }),
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) >= 1;
+        }),
         "nonzero voice render");
     failures += Expect(
         std::any_of(
@@ -777,23 +1106,41 @@ int TestVoiceClockSummaryAndRenderSafety() {
             [](std::int16_t sample) { return sample != 0; }),
         "voice produces nonzero PCM16");
 
+    constexpr auto kFirstRenderedBlockClockTicks =
+        (kFrames * kClockFrequency + gc::audio::kOutputSampleRate - 1) /
+        gc::audio::kOutputSampleRate;
     fixture.api->PushClock(
-        std::numeric_limits<std::uint64_t>::max(),
+        kInitialClock + kFirstRenderedBlockClockTicks,
+        late_qpc);
+    const auto first_rendered_frame = engine->CurrentOutputFrame();
+    failures += Expect(
+        first_rendered_frame == kFrames &&
+            source.timeline->ResolveSourceFrame(
+                *first_rendered_frame,
+                1,
+                kFrames) == 0,
+        "clock mapping resolves the first post-prefill frame to source zero");
+
+    fixture.api->PushClock(
+        kInitialClock + 2 * kPeriod,
         late_qpc + kPeriod);
     fixture.api->PushWait();
     failures += Expect(
-        WaitUntil([&] { return fixture.api->submission_count.load() >= 2; }),
-        "forced short-read render");
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) >= 2;
+        }),
+        "second voice render");
     failures += Expect(
-        std::all_of(
-            fixture.api->submissions[1].begin() + kSamples / 2,
+        std::any_of(
+            fixture.api->submissions[1].begin(),
             fixture.api->submissions[1].end(),
-            [](std::int16_t sample) { return sample == 0; }),
-        "short-read remainder is zero-filled");
+            [](std::int16_t sample) { return sample != 0; }),
+        "second voice render remains nonzero");
 
     const auto callbacks_before =
         fixture.observer_state->callback_count.load();
-    fixture.allocations.Begin();
+    fixture.allocation_owner->probe.Begin();
     fixture.api->render_probe.store(true, std::memory_order_release);
     for (std::uint64_t index = 0; index < 2; ++index) {
         fixture.api->PushClock(
@@ -802,11 +1149,14 @@ int TestVoiceClockSummaryAndRenderSafety() {
         fixture.api->PushWait();
     }
     failures += Expect(
-        WaitUntil([&] { return fixture.api->submission_count.load() >= 4; }),
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) >= 4;
+        }),
         "two warmed render events");
     fixture.api->render_probe.store(false, std::memory_order_release);
     failures += Expect(
-        fixture.allocations.End() == 0,
+        fixture.allocation_owner->probe.End() == 0,
         "zero mixer allocation/free callbacks in warmed render events");
     failures += Expect(
         fixture.observer_state->callback_count.load() == callbacks_before &&
@@ -814,10 +1164,12 @@ int TestVoiceClockSummaryAndRenderSafety() {
         "no observer callback in warmed render events");
 
     failures += Expect(
-        source.timeline->ResolveSourceFrame(0, 1, kFrames).has_value() &&
+        !source.timeline->ResolveSourceFrame(0, 1, kFrames).has_value() &&
             source.timeline->ResolveSourceFrame(kFrames, 1, kFrames)
+                .has_value() &&
+            source.timeline->ResolveSourceFrame(2 * kFrames, 1, kFrames)
                 .has_value(),
-        "voice timeline advances by actual submitted endpoint frames");
+        "voice timeline starts after silent prefill and advances by periods");
 
     fixture.api->PushClock(
         kInitialClock + kClockFrequency,
@@ -840,7 +1192,7 @@ int TestVoiceClockSummaryAndRenderSafety() {
             return fixture.observer_state->summary_count.load() != 0 &&
                 counters.render_callbacks >= 4 &&
                 counters.late_event_wakes == 1 &&
-                counters.silence_fallbacks == 1 &&
+                counters.silence_fallbacks == 0 &&
                 counters.cursor_timeline_failures == 1;
         }),
         "periodic summary includes final render counters");
@@ -870,6 +1222,70 @@ int TestVoiceClockSummaryAndRenderSafety() {
     engine.reset();
     voice.reset();
     failures += ExpectOwnerThreadCleanup(fixture, "voice runtime audio thread");
+    return failures;
+}
+
+int TestConcurrentVoiceCreation() {
+    int failures = 0;
+    EngineFixture fixture;
+    auto engine = fixture.Start();
+    failures += Expect(engine != nullptr, "concurrent-voice engine startup");
+    auto source = MakeConstantSource(failures);
+    std::array<std::unique_ptr<gc::audio::MixerVoice>, 2> voices{};
+    std::array<ma_result, 2> results{MA_ERROR, MA_ERROR};
+    std::array<std::thread, 2> creators{
+        std::thread([&] {
+            voices[0] = engine->CreateVoice(
+                source.format,
+                source.snapshot,
+                source.timeline,
+                VoiceUsage::GameplayNativeCandidate,
+                &results[0]);
+        }),
+        std::thread([&] {
+            voices[1] = engine->CreateVoice(
+                source.format,
+                source.snapshot,
+                source.timeline,
+                VoiceUsage::GameplayNativeCandidate,
+                &results[1]);
+        })};
+    for (auto& creator : creators) {
+        creator.join();
+    }
+    failures += Expect(
+        voices[0] != nullptr && voices[1] != nullptr &&
+            results[0] == MA_SUCCESS && results[1] == MA_SUCCESS,
+        "concurrent CreateVoice calls both publish valid voices");
+    failures += Expect(
+        voices[0]->Play(true, 1) == DS_OK &&
+            voices[1]->Play(true, 1) == DS_OK,
+        "concurrently created voices both start");
+    fixture.api->PushClock(
+        kInitialClock + kPeriod,
+        kInitialClock + kPeriod);
+    fixture.api->PushWait();
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) != 0;
+        }) &&
+            std::any_of(
+                fixture.api->submissions[0].begin(),
+                fixture.api->submissions[0].end(),
+                [](std::int16_t sample) { return sample != 0; }),
+        "concurrently created voices render through the shared mixer");
+    for (auto& voice : voices) {
+        voice->Stop();
+        voice.reset();
+    }
+    fixture.api->PushWait(E_ABORT);
+    failures += Expect(
+        WaitForFatal(fixture),
+        "concurrent-voice engine reaches deterministic fatal exit");
+    engine.reset();
+    failures += ExpectOwnerThreadCleanup(
+        fixture, "concurrent-voice owner audio thread");
     return failures;
 }
 
@@ -969,10 +1385,15 @@ int TestExplicitTestShutdown() {
 
 int main() {
     int failures = 0;
+    failures += TestProductionRenderFinalizationAndStartupTimeoutClamp();
     failures += TestBoundedInitializationTimeout();
+    failures += TestAllocatorOwnerOutlivesMixerDestruction();
     failures += TestStartupFailuresAndStartOrdering();
+    failures += TestStartupCallbackPrecedesImmediateRuntimeFailure();
+    failures += TestEndpointServiceGateProtectsCallerClockRead();
     failures += TestSilenceRuntimeFailureAndCleanup();
     failures += TestVoiceClockSummaryAndRenderSafety();
+    failures += TestConcurrentVoiceCreation();
     failures += TestExactRuntimeFailureStages();
     failures += TestExplicitTestShutdown();
     if (failures == 0) {

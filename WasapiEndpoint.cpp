@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 
 #include <cstring>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -24,6 +25,11 @@ WAVEFORMATEX OutputFormat() noexcept {
         .wBitsPerSample = kOutputBitsPerSample,
         .cbSize = 0,
     };
+}
+
+constexpr bool CanAddressOutputBuffer(std::uint32_t frames) noexcept {
+    return frames <=
+        std::numeric_limits<std::size_t>::max() / kOutputChannels;
 }
 
 HRESULT LastErrorAsHresult() noexcept {
@@ -463,7 +469,8 @@ HRESULT WasapiEndpoint::Initialize(
                 attempted,
                 failure);
         }
-        if (aligned_frames == 0) {
+        if (aligned_frames == 0 ||
+            !CanAddressOutputBuffer(aligned_frames)) {
             return Fail(
                 AudioFailureStage::GetAlignedBufferSize,
                 AUDCLNT_E_BUFFER_SIZE_ERROR,
@@ -514,6 +521,7 @@ HRESULT WasapiEndpoint::Initialize(
             failure);
     }
     if (initialization_.actual_buffer_frames == 0 ||
+        !CanAddressOutputBuffer(initialization_.actual_buffer_frames) ||
         (initialization_.alignment_retry &&
          initialization_.actual_buffer_frames != aligned_frames) ||
         (!initialization_.alignment_retry &&

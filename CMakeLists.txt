@@ -315,7 +315,6 @@ target_include_directories(ExclusiveAudioEngineTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_compile_definitions(ExclusiveAudioEngineTests PRIVATE
-        GC_EXCLUSIVE_AUDIO_ENGINE_TESTING=1
         GC_EXCLUSIVE_AUDIO_ENGINE_SUMMARY_INTERVAL_MS=250
 )
 target_link_libraries(ExclusiveAudioEngineTests PRIVATE
