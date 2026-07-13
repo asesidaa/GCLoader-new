@@ -132,6 +132,7 @@ set(SOURCES
         AudioCursorTimeline.cpp
         AudioSnapshot.cpp
         DirectSoundFacade.cpp
+        ExclusiveAudioEngine.cpp
         MiniaudioMixer.cpp
         CountdownTimerFreeze.cpp
         config.cpp
@@ -299,6 +300,34 @@ target_link_libraries(WasapiEndpointTests PRIVATE
         propsys
 )
 add_test(NAME WasapiEndpointTests COMMAND WasapiEndpointTests)
+
+add_executable(ExclusiveAudioEngineTests
+        WasapiAudioTypes.cpp
+        AudioSnapshot.cpp
+        AudioCursorTimeline.cpp
+        MiniaudioMixer.cpp
+        DirectSoundFacade.cpp
+        WasapiEndpoint.cpp
+        ExclusiveAudioEngine.cpp
+        tests/ExclusiveAudioEngineTests.cpp
+)
+target_include_directories(ExclusiveAudioEngineTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(ExclusiveAudioEngineTests PRIVATE
+        GC_EXCLUSIVE_AUDIO_ENGINE_TESTING=1
+        GC_EXCLUSIVE_AUDIO_ENGINE_SUMMARY_INTERVAL_MS=250
+)
+target_link_libraries(ExclusiveAudioEngineTests PRIVATE
+        miniaudio
+        dsound
+        dxguid
+        ole32
+        uuid
+        avrt
+        propsys
+)
+add_test(NAME ExclusiveAudioEngineTests COMMAND ExclusiveAudioEngineTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
