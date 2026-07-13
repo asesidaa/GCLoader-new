@@ -12,10 +12,10 @@
 
 - Automated success is not acceptance.
 - Never commit runtime `H:\gc` files.
-- Do not overwrite unrelated operator settings in `H:\gc\config.toml`; add/change only `enable_wasapi_exclusive_audio`.
+- Do not overwrite unrelated operator settings in `H:\gc\config.toml`; add/change only `enable_wasapi_exclusive_audio` and `wasapi_exclusive_buffer_ms`.
 - Keep a recoverable copy of the currently deployed DLL/config outside the repository before deployment.
 - First prove original DirectSound behavior with the flag false.
-- Enabled mode must report exact 44,100 Hz stereo PCM16, exclusive event mode, driver-aligned minimum frames, and successful MMCSS.
+- Enabled mode must report exact 44,100 Hz stereo PCM16, exclusive event mode, the configured/requested/actual buffer durations, and successful MMCSS.
 - Any endpoint HRESULT failure, sustained silence fallback, sustained late wake, missing BGM/SHOT, desynchronization, bad seek/fade/transition, or worse perceived hit response fails acceptance.
 - Do not claim physical input-to-speaker latency; no loopback/microphone measurement is part of this plan.
 
@@ -31,7 +31,7 @@
 - Do not change production source in this plan.
 - Read `CMakeLists.txt` only to confirm the expected product and test targets remain registered.
 - Build and test from `build-msvc32-latest/` inside the repository.
-- Temporarily update only `H:\gc\iDmacDrv32.dll` and the one audio flag in `H:\gc\config.toml`; inspect `H:\gc\loader-log.txt`.
+- Temporarily update only `H:\gc\iDmacDrv32.dll` and the two audio settings in `H:\gc\config.toml`; inspect `H:\gc\loader-log.txt`.
 - Record automated and operator results by updating this plan's checkboxes and adding a dated execution note beneath the completion gate. Never add runtime binaries, configuration, logs, or backups to Git.
 
 ### Task 1: Complete Automated Verification
@@ -103,6 +103,7 @@ Edit `H:\gc\config.toml` so `[experimental]` contains exactly:
 
 ```toml
 enable_wasapi_exclusive_audio = false
+wasapi_exclusive_buffer_ms = 10
 ```
 
 Re-read the entire `[experimental]` table and confirm all pre-existing operator values are unchanged.
@@ -137,6 +138,7 @@ Stop the game, change only:
 
 ```toml
 enable_wasapi_exclusive_audio = true
+wasapi_exclusive_buffer_ms = 10
 ```
 
 Launch again. Confirm the log reports:
@@ -145,7 +147,7 @@ Launch again. Confirm the log reports:
 - endpoint friendly name and ID;
 - exclusive PCM16, 2 channels, 44,100 Hz;
 - default and minimum device periods;
-- requested duration;
+- configured and requested durations;
 - actual driver-aligned endpoint frames and milliseconds;
 - event-driven exclusive initialization success;
 - MMCSS task `Pro Audio` and critical priority success;

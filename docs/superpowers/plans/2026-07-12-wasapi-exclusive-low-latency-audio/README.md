@@ -19,6 +19,7 @@ Do not combine these plans during execution. Complete, verify, review, and commi
 | 9 | [Exclusive audio engine](09-exclusive-audio-engine.md) | Render thread, endpoint clock, counters, fatal monitor, summaries | `ExclusiveAudioEngineTests` |
 | 10 | [Hook and lifecycle integration](10-hook-integration.md) | Exact-target `DirectSoundCreate8` hook, lazy engine, game-only gate | `WasapiAudioPatchTests` |
 | 11 | [Verification and gameplay acceptance](11-verification-and-gameplay-acceptance.md) | Full build/CTest evidence and operator play-test gate | complete CTest plus manual sequence |
+| 12 | [Configurable fixed buffer duration](12-configurable-fixed-buffer-duration.md) | Default 10 ms fixed request, strict buffer knob, and distortion retest | focused audio tests plus complete CTest |
 
 ## Dependency Flow
 
@@ -28,7 +29,7 @@ audio types → immutable PCM → mixer → secondary buffer ──────�
 audio types → cursor timeline ────────────────┘               │
 audio types → strict WASAPI endpoint → exclusive engine ─────┤
 device/primary + secondary + exclusive engine → hook/lifecycle
-hook/lifecycle → full verification → operator gameplay acceptance
+hook/lifecycle → fixed-buffer repair → full verification → operator gameplay acceptance
 ```
 
 ## Cross-Plan Contracts
@@ -67,8 +68,8 @@ bool WasapiAudioPatchInit() noexcept;
 - Source, tests, plans, and commits belong in `H:\gc\artifacts\GCLoader`. `H:\gc` is runtime/deploy state.
 - Preserve the ignored `.superpowers/` directory and unrelated untracked files.
 - Target Windows 10+ and Win32/x86 only.
-- `experimental.enable_wasapi_exclusive_audio` is required and defaults to `false`; disabled mode installs no audio hook.
-- Enabled mode uses one event-driven WASAPI exclusive stream at exact 44,100 Hz stereo PCM16 and the driver-aligned minimum period.
+- `experimental.enable_wasapi_exclusive_audio` and `experimental.wasapi_exclusive_buffer_ms` are required; their defaults are `false` and `10`.
+- Enabled mode uses one event-driven WASAPI exclusive stream at exact 44,100 Hz stereo PCM16 and requests the larger of the configured duration or endpoint minimum; `0` explicitly selects the minimum.
 - There is no enabled-mode fallback to 48 kHz, shared WASAPI, another audio API, or original DirectSound.
 - Hook only `dsound!DirectSoundCreate8`; never enable or disable all MinHook targets from this feature.
 - COM activation, endpoint enumeration, thread creation, and engine initialization occur after the first intercepted call, never under `DllMain` loader lock.
@@ -93,6 +94,7 @@ bool WasapiAudioPatchInit() noexcept;
 | Continuous rendering, preallocation, late/silence counters, runtime fatal handoff | 09 |
 | Exact MinHook ownership, lazy first-call startup, fail-closed lifecycle, logging/UI | 10 |
 | Complete automated checks, deployment, disabled baseline, gameplay and latency judgment | 11 |
+| Fixed 10 ms default, strict buffer knob, endpoint-duration propagation, and crackling retest | 12 |
 
 ## Source of Truth
 
