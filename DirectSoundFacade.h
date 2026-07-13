@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 namespace gc::audio {
@@ -148,7 +149,7 @@ private:
         std::shared_ptr<AudioCursorTimeline>) noexcept;
     ~SecondarySoundBuffer();
 
-    std::uint64_t ResolveCurrentSourceFrame() noexcept;
+    std::uint64_t ResolveCurrentSourceFrameLocked() noexcept;
 
     IAudioEngineServices& engine_;
     const DWORD flags_;
@@ -157,10 +158,11 @@ private:
     std::shared_ptr<AudioSnapshot> snapshot_;
     std::shared_ptr<AudioCursorTimeline> timeline_;
     std::unique_ptr<MixerVoice> voice_;
+    std::mutex control_mutex_;
     std::atomic_ulong references_{1};
     std::atomic_long volume_{DSBVOLUME_MAX};
-    std::atomic_uint64_t epoch_{1};
-    std::atomic_uint64_t last_reported_source_frame_{};
+    std::uint64_t epoch_{1};
+    std::uint64_t last_reported_source_frame_{};
 };
 
 } // namespace gc::audio

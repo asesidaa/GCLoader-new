@@ -5,11 +5,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -118,6 +123,15 @@ public:
     }
 
     std::optional<std::uint64_t> CurrentOutputFrame() noexcept override {
+        std::unique_lock lock(output_frame_read_mutex_);
+        if (block_next_output_frame_read_) {
+            output_frame_read_entered_ = true;
+            output_frame_read_condition_.notify_all();
+            output_frame_read_condition_.wait(lock, [this] {
+                return release_output_frame_read_;
+            });
+            block_next_output_frame_read_ = false;
+        }
         return output_frame;
     }
 
@@ -139,6 +153,27 @@ public:
         return mixer_->diagnostics();
     }
 
+    void BlockNextOutputFrameRead() {
+        std::lock_guard lock(output_frame_read_mutex_);
+        block_next_output_frame_read_ = true;
+        output_frame_read_entered_ = false;
+        release_output_frame_read_ = false;
+    }
+
+    bool WaitForBlockedOutputFrameRead() {
+        std::unique_lock lock(output_frame_read_mutex_);
+        return output_frame_read_condition_.wait_for(
+            lock,
+            std::chrono::seconds(2),
+            [this] { return output_frame_read_entered_; });
+    }
+
+    void ReleaseOutputFrameRead() {
+        std::lock_guard lock(output_frame_read_mutex_);
+        release_output_frame_read_ = true;
+        output_frame_read_condition_.notify_all();
+    }
+
     bool initialized{};
     bool fail_voice_creation{};
     std::optional<std::uint64_t> output_frame{};
@@ -149,6 +184,11 @@ public:
 
 private:
     std::unique_ptr<MiniaudioMixer> mixer_;
+    std::mutex output_frame_read_mutex_;
+    std::condition_variable output_frame_read_condition_;
+    bool block_next_output_frame_read_{};
+    bool output_frame_read_entered_{};
+    bool release_output_frame_read_{};
 };
 
 HRESULT CreateBuffer(
@@ -257,6 +297,18 @@ int TestConstructionAndValidation() {
         SecondarySoundBuffer::Create(engine, descriptor, &concrete) ==
             DSERR_INVALIDPARAM,
         "primary descriptor rejection by secondary factory");
+    descriptor = BufferDescription(&wave);
+    descriptor.dwReserved = 1;
+    failures += Expect(
+        SecondarySoundBuffer::Create(engine, descriptor, &concrete) ==
+            DSERR_INVALIDPARAM && concrete == nullptr,
+        "secondary descriptor reserved field rejection");
+    descriptor = BufferDescription(&wave);
+    descriptor.guid3DAlgorithm = IID_IUnknown;
+    failures += Expect(
+        SecondarySoundBuffer::Create(engine, descriptor, &concrete) ==
+            DSERR_INVALIDPARAM && concrete == nullptr,
+        "secondary descriptor 3D algorithm rejection");
     descriptor = BufferDescription(&wave, 32, kStaticFlags | DSBCAPS_CTRL3D);
     failures += Expect(
         SecondarySoundBuffer::Create(engine, descriptor, &concrete) ==
@@ -785,6 +837,176 @@ int TestSeekRestoreUnsupportedAndLifetime() {
     return failures;
 }
 
+int TestConcurrentSeeksAreOneFacadeTransactionAtATime() {
+    using namespace std::chrono_literals;
+
+    MixerEngineServices engine;
+    auto wave = PcmFormat();
+    auto descriptor = BufferDescription(&wave, 24);
+    IDirectSoundBuffer8* buffer{};
+    int failures = Expect(
+        CreateBuffer(engine, descriptor, &buffer) == DS_OK,
+        "concurrent seek transaction buffer creation");
+    if (buffer == nullptr) {
+        return failures + 1;
+    }
+
+    const std::array<std::int16_t, 12> samples{
+        1000, 1000, 2000, 2000, 3000, 3000,
+        4000, 4000, 5000, 5000, 6000, 6000,
+    };
+    std::array<float, 8> output{};
+    failures += Expect(
+        FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, 0) == DS_OK &&
+            engine.Render(100, output).result == MA_SUCCESS,
+        "concurrent seek transaction starts from a mapped active span");
+    engine.output_frame = 102;
+    engine.BlockNextOutputFrameRead();
+
+    DWORD blocked_cursor{};
+    auto reader = std::async(std::launch::async, [&] {
+        return buffer->GetCurrentPosition(&blocked_cursor, nullptr);
+    });
+    const auto reader_entered = engine.WaitForBlockedOutputFrameRead();
+    failures += Expect(
+        reader_entered,
+        "cursor reader reaches the blocked endpoint-clock query");
+
+    auto first_seek = std::async(std::launch::async, [&] {
+        return buffer->SetCurrentPosition(8);
+    });
+    auto second_seek = std::async(std::launch::async, [&] {
+        return buffer->SetCurrentPosition(16);
+    });
+    const auto first_wait = first_seek.wait_for(100ms);
+    const auto second_wait = second_seek.wait_for(100ms);
+    failures += Expect(
+        first_wait == std::future_status::timeout &&
+            second_wait == std::future_status::timeout,
+        "both seeks wait behind the in-flight facade read transaction");
+
+    engine.ReleaseOutputFrameRead();
+    failures += Expect(
+        reader.get() == DS_OK && blocked_cursor == 8 &&
+            first_seek.get() == DS_OK && second_seek.get() == DS_OK,
+        "blocked cursor and both serialized seeks complete successfully");
+
+    output.fill(0.0F);
+    failures += Expect(
+        engine.Render(200, output).result == MA_SUCCESS,
+        "latest serialized seek renders to its terminal span");
+    std::size_t audible_frames{};
+    for (std::size_t frame = 0; frame < output.size() / 2; ++frame) {
+        if (output[frame * 2] != 0.0F ||
+            output[frame * 2 + 1] != 0.0F) {
+            ++audible_frames;
+        }
+    }
+    failures += Expect(
+        audible_frames == 2 || audible_frames == 4,
+        "serialized seek winner has a complete two- or four-frame tail");
+
+    const auto drain_end = 200 + audible_frames;
+    DWORD status{};
+    DWORD cursor{};
+    engine.output_frame = drain_end - 1;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK &&
+            status == DSBSTATUS_PLAYING &&
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 20 && engine.cursor_failures == 0,
+        "serialized seek epoch resolves the final audible source frame");
+    engine.output_frame = drain_end;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK && status == 0 &&
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 20 && engine.cursor_failures == 0,
+        "serialized seek epoch drains without a cursor fallback");
+    buffer->Release();
+    return failures;
+}
+
+int TestConcurrentPlayAndSeekShareFacadeTransactionOrder() {
+    using namespace std::chrono_literals;
+
+    MixerEngineServices engine;
+    auto wave = PcmFormat();
+    auto descriptor = BufferDescription(&wave, 24);
+    IDirectSoundBuffer8* buffer{};
+    int failures = Expect(
+        CreateBuffer(engine, descriptor, &buffer) == DS_OK,
+        "play-seek transaction buffer creation");
+    if (buffer == nullptr) {
+        return failures + 1;
+    }
+
+    const std::array<std::int16_t, 12> samples{
+        1000, 1000, 2000, 2000, 3000, 3000,
+        4000, 4000, 5000, 5000, 6000, 6000,
+    };
+    std::array<float, 8> output{};
+    failures += Expect(
+        FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, 0) == DS_OK &&
+            engine.Render(300, output).result == MA_SUCCESS,
+        "play-seek transaction starts from a mapped active span");
+    engine.output_frame = 302;
+    engine.BlockNextOutputFrameRead();
+
+    auto stopper = std::async(std::launch::async, [&] {
+        return buffer->Stop();
+    });
+    const auto stopper_entered = engine.WaitForBlockedOutputFrameRead();
+    failures += Expect(
+        stopper_entered,
+        "Stop reaches the blocked endpoint-clock query");
+
+    auto player = std::async(std::launch::async, [&] {
+        return buffer->Play(0, 0, 0);
+    });
+    auto seeker = std::async(std::launch::async, [&] {
+        return buffer->SetCurrentPosition(8);
+    });
+    const auto play_wait = player.wait_for(100ms);
+    const auto seek_wait = seeker.wait_for(100ms);
+    failures += Expect(
+        play_wait == std::future_status::timeout &&
+            seek_wait == std::future_status::timeout,
+        "Play and seek wait behind the in-flight Stop transaction");
+
+    engine.ReleaseOutputFrameRead();
+    failures += Expect(
+        stopper.get() == DS_OK && player.get() == DS_OK &&
+            seeker.get() == DS_OK,
+        "Stop, Play, and seek complete in facade transaction order");
+
+    output.fill(0.0F);
+    failures += Expect(
+        engine.Render(400, output).result == MA_SUCCESS &&
+            std::all_of(output.begin(), output.end(), [](float sample) {
+                return sample != 0.0F;
+            }),
+        "ordered Play and seek render the complete final tail");
+    DWORD status{};
+    DWORD cursor{};
+    engine.output_frame = 403;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK &&
+            status == DSBSTATUS_PLAYING &&
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 20 && engine.cursor_failures == 0,
+        "ordered Play and seek resolve the final audible source frame");
+    engine.output_frame = 404;
+    failures += Expect(
+        buffer->GetStatus(&status) == DS_OK && status == 0 &&
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+            cursor == 20 && engine.cursor_failures == 0,
+        "ordered Play and seek drain without a cursor fallback");
+    buffer->Release();
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -797,5 +1019,7 @@ int main() {
     failures += TestNonLoopingFinalSpanDrainsByEndpointClock();
     failures += TestResetBufferIgnoresStaleFinalDrainRecord();
     failures += TestSeekRestoreUnsupportedAndLifetime();
+    failures += TestConcurrentSeeksAreOneFacadeTransactionAtATime();
+    failures += TestConcurrentPlayAndSeekShareFacadeTransactionOrder();
     return failures == 0 ? 0 : 1;
 }

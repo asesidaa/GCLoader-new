@@ -709,8 +709,8 @@ int test_production_diagnostics_use_injected_platform_actions() {
         ? std::string_view{}
         : diagnostics.info.back();
     for (const auto required : {
-             "requested_backend=wasapi-exclusive",
-             "active_backend=wasapi-exclusive",
+             "requested_backend=wasapi_exclusive",
+             "active_backend=wasapi_exclusive",
              "endpoint_name=\"Fake Pro Audio Endpoint\"",
              "endpoint_id=\"endpoint-id-123\"",
              "format=pcm16/44100Hz/2ch/16bit",
@@ -892,6 +892,7 @@ int test_config_gate_and_attach_failure_policy() {
         diagnostics.info.size() == 1 &&
             contains(diagnostics.info.back(), "requested_backend=directsound") &&
             contains(diagnostics.info.back(), "active_backend=directsound") &&
+            contains(diagnostics.info.back(), "hook_installed=false") &&
             diagnostics.errors.empty() && diagnostics.messages.empty() &&
             diagnostics.termination_codes.empty(),
         "disabled config logs original DirectSound backend only");

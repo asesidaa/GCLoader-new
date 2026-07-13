@@ -379,6 +379,8 @@ HRESULT SecondarySoundBuffer::Create(
     if (descriptor.dwSize != sizeof(DSBUFFERDESC) ||
         descriptor.lpwfxFormat == nullptr ||
         descriptor.dwBufferBytes == 0 ||
+        descriptor.dwReserved != 0 ||
+        !IsEqualGUID(descriptor.guid3DAlgorithm, GUID_NULL) ||
         (descriptor.dwFlags & DSBCAPS_PRIMARYBUFFER) != 0) {
         return DSERR_INVALIDPARAM;
     }
@@ -485,9 +487,9 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
     return DS_OK;
 }
 
-std::uint64_t SecondarySoundBuffer::ResolveCurrentSourceFrame() noexcept {
-    const auto last = last_reported_source_frame_.load(
-        std::memory_order_acquire);
+std::uint64_t
+SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
+    const auto last = last_reported_source_frame_;
     const auto mixing = voice_->playing();
     const auto audible_until = voice_->audible_until_output_frame();
     if (!mixing && !audible_until.has_value()) {
@@ -506,15 +508,13 @@ std::uint64_t SecondarySoundBuffer::ResolveCurrentSourceFrame() noexcept {
     }
     const auto source_frame = timeline_->ResolveSourceFrame(
         *output_frame,
-        epoch_.load(std::memory_order_acquire),
+        epoch_,
         buffer_bytes_ / format_.block_align);
     if (!source_frame.has_value()) {
         engine_.CountCursorTimelineFailure();
         return last;
     }
-    last_reported_source_frame_.store(
-        *source_frame,
-        std::memory_order_release);
+    last_reported_source_frame_ = *source_frame;
     return *source_frame;
 }
 
@@ -524,7 +524,8 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
     if (play_cursor == nullptr && write_cursor == nullptr) {
         return DSERR_INVALIDPARAM;
     }
-    const auto source_frame = ResolveCurrentSourceFrame();
+    std::lock_guard control_lock(control_mutex_);
+    const auto source_frame = ResolveCurrentSourceFrameLocked();
     if (play_cursor != nullptr) {
         *play_cursor = static_cast<DWORD>(
             SourceFrameToByte(source_frame, format_.block_align));
@@ -581,6 +582,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) {
     if (status == nullptr) {
         return DSERR_INVALIDPARAM;
     }
+    std::lock_guard control_lock(control_mutex_);
     *status = 0;
     auto audible = voice_->playing();
     if (!audible) {
@@ -671,9 +673,10 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
         (flags & ~DSBPLAY_LOOPING) != 0) {
         return DSERR_INVALIDPARAM;
     }
+    std::lock_guard control_lock(control_mutex_);
     return voice_->Play(
         (flags & DSBPLAY_LOOPING) != 0,
-        epoch_.load(std::memory_order_acquire));
+        epoch_);
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
@@ -682,13 +685,10 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
         position % format_.block_align != 0) {
         return DSERR_INVALIDPARAM;
     }
+    std::lock_guard control_lock(control_mutex_);
     const auto source_frame = position / format_.block_align;
-    const auto epoch = epoch_.fetch_add(
-        1,
-        std::memory_order_acq_rel) + 1;
-    last_reported_source_frame_.store(
-        source_frame,
-        std::memory_order_release);
+    const auto epoch = ++epoch_;
+    last_reported_source_frame_ = source_frame;
     return voice_->Seek(source_frame, epoch);
 }
 
@@ -715,7 +715,8 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFrequency(DWORD) {
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Stop() {
-    ResolveCurrentSourceFrame();
+    std::lock_guard control_lock(control_mutex_);
+    ResolveCurrentSourceFrameLocked();
     voice_->Stop();
     return DS_OK;
 }

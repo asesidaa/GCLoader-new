@@ -136,8 +136,8 @@ std::string startup_text(const EndpointInitialization& initialization) {
         static_cast<double>(kOutputSampleRate);
     std::ostringstream stream;
     stream << std::fixed << std::setprecision(3)
-        << "WASAPI audio startup requested_backend=wasapi-exclusive"
-        << " active_backend=wasapi-exclusive"
+        << "WASAPI audio startup requested_backend=wasapi_exclusive"
+        << " active_backend=wasapi_exclusive"
         << " endpoint_name=\"" << utf8(initialization.endpoint_name) << "\""
         << " endpoint_id=\"" << utf8(initialization.endpoint_id) << "\""
         << " format=" << kExactFormat
@@ -600,12 +600,12 @@ bool WasapiAudioPatchInitWithDependencies(
         emit_info(
             dependencies.platform,
             "WASAPI audio config requested_backend=directsound "
-            "active_backend=directsound enabled=false");
+            "active_backend=directsound hook_installed=false enabled=false");
     } else {
         emit_info(
             dependencies.platform,
-            "WASAPI audio config requested_backend=wasapi-exclusive "
-            "active_backend=wasapi-exclusive hook_installed=true");
+            "WASAPI audio config requested_backend=wasapi_exclusive "
+            "active_backend=wasapi_exclusive hook_installed=true");
     }
     return true;
 }
