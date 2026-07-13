@@ -131,7 +131,7 @@ bool IsExactOutputFormat(const WAVEFORMATEX& format) noexcept {
         format.wBitsPerSample == kOutputBitsPerSample &&
         format.nBlockAlign == kOutputBlockAlign &&
         format.nAvgBytesPerSec == kOutputAverageBytesPerSecond &&
-        format.cbSize == 0;
+        (format.cbSize == 0 || format.cbSize == sizeof(WAVEFORMATEX));
 }
 
 float DirectSoundVolumeToLinearGain(LONG volume) noexcept {

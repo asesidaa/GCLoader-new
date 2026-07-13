@@ -361,6 +361,16 @@ int TestPrimaryFormatCapabilitiesAndVtable() {
     failures += Expect(
         primary->SetFormat(&output) == DS_OK,
         "exact output primary format acceptance");
+    auto game_primary = output;
+    game_primary.cbSize = 0x12;
+    failures += Expect(
+        primary->SetFormat(&game_primary) == DS_OK,
+        "game primary cbSize 0x12 compatibility");
+    auto unrelated_cb_size = output;
+    unrelated_cb_size.cbSize = 1;
+    failures += Expect(
+        primary->SetFormat(&unrelated_cb_size) == DSERR_BADFORMAT,
+        "unrelated primary cbSize rejection");
     auto wrong_rate = output;
     wrong_rate.nSamplesPerSec = 48000;
     wrong_rate.nAvgBytesPerSec = 48000 * wrong_rate.nBlockAlign;
