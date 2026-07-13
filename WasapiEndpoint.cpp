@@ -35,9 +35,31 @@ HRESULT LastErrorAsHresult() noexcept {
 class Win32WasapiApi final : public IWasapiApi {
 public:
     ~Win32WasapiApi() override {
-        const auto on_initializing_thread = com_initialized_ &&
-            GetCurrentThreadId() == initializing_thread_id_;
-        if (mmcss_handle_ != nullptr && on_initializing_thread) {
+        if (shutdown_complete_) {
+            return;
+        }
+        if (IsInitializingThread()) {
+            ShutdownOnInitializingThread();
+            return;
+        }
+
+        if (render_event_ != nullptr) {
+            CloseHandle(render_event_);
+            render_event_ = nullptr;
+        }
+        mmcss_handle_ = nullptr;
+        DetachComObjectsForProcessCleanup();
+    }
+
+    HRESULT ShutdownOnInitializingThread() noexcept override {
+        if (shutdown_complete_) {
+            return S_OK;
+        }
+        if (!IsInitializingThread()) {
+            return RPC_E_WRONG_THREAD;
+        }
+
+        if (mmcss_handle_ != nullptr) {
             AvRevertMmThreadCharacteristics(mmcss_handle_);
             mmcss_handle_ = nullptr;
         }
@@ -50,10 +72,10 @@ public:
         client_.Reset();
         device_.Reset();
         enumerator_.Reset();
-        if (on_initializing_thread) {
-            CoUninitialize();
-            com_initialized_ = false;
-        }
+        CoUninitialize();
+        com_initialized_ = false;
+        shutdown_complete_ = true;
+        return S_OK;
     }
 
     HRESULT InitializeComMta() noexcept override {
@@ -182,6 +204,9 @@ public:
     }
 
     void ReleaseAudioClient() noexcept override {
+        if (!IsInitializingThread()) {
+            return;
+        }
         clock_.Reset();
         render_client_.Reset();
         client_.Reset();
@@ -287,6 +312,19 @@ public:
     }
 
 private:
+    bool IsInitializingThread() const noexcept {
+        return com_initialized_ &&
+            GetCurrentThreadId() == initializing_thread_id_;
+    }
+
+    void DetachComObjectsForProcessCleanup() noexcept {
+        static_cast<void>(clock_.Detach());
+        static_cast<void>(render_client_.Detach());
+        static_cast<void>(client_.Detach());
+        static_cast<void>(device_.Detach());
+        static_cast<void>(enumerator_.Detach());
+    }
+
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator_;
     Microsoft::WRL::ComPtr<IMMDevice> device_;
     Microsoft::WRL::ComPtr<IAudioClient> client_;
@@ -296,6 +334,7 @@ private:
     HANDLE mmcss_handle_{};
     DWORD initializing_thread_id_{};
     bool com_initialized_{};
+    bool shutdown_complete_{};
 };
 
 } // namespace
@@ -303,6 +342,10 @@ private:
 WasapiEndpoint::WasapiEndpoint(
     std::unique_ptr<IWasapiApi> api) noexcept
     : api_(std::move(api)) {}
+
+WasapiEndpoint::~WasapiEndpoint() {
+    static_cast<void>(ShutdownOnInitializingThread());
+}
 
 std::unique_ptr<WasapiEndpoint> WasapiEndpoint::Create(
     std::unique_ptr<IWasapiApi> api,
@@ -424,6 +467,13 @@ HRESULT WasapiEndpoint::Initialize(
                 attempted,
                 failure);
         }
+        if (aligned_frames == 0) {
+            return Fail(
+                AudioFailureStage::GetAlignedBufferSize,
+                AUDCLNT_E_BUFFER_SIZE_ERROR,
+                attempted,
+                failure);
+        }
         api_->ReleaseAudioClient();
         result = api_->ActivateAudioClient();
         if (FAILED(result)) {
@@ -467,7 +517,8 @@ HRESULT WasapiEndpoint::Initialize(
             attempted,
             failure);
     }
-    if ((initialization_.alignment_retry &&
+    if (initialization_.actual_buffer_frames == 0 ||
+        (initialization_.alignment_retry &&
          initialization_.actual_buffer_frames != aligned_frames) ||
         (!initialization_.alignment_retry &&
          initialization_.actual_buffer_frames >
@@ -521,6 +572,13 @@ HRESULT WasapiEndpoint::Initialize(
         return Fail(
             AudioFailureStage::GetClockFrequency,
             result,
+            attempted,
+            failure);
+    }
+    if (initialization_.clock_frequency == 0) {
+        return Fail(
+            AudioFailureStage::GetClockFrequency,
+            E_UNEXPECTED,
             attempted,
             failure);
     }
@@ -647,6 +705,17 @@ HRESULT WasapiEndpoint::ReadClock(
         &position->qpc_100ns);
     if (FAILED(result) && failure != nullptr) {
         *failure = {AudioFailureStage::GetClockPosition, result};
+    }
+    return result;
+}
+
+HRESULT WasapiEndpoint::ShutdownOnInitializingThread() noexcept {
+    if (shutdown_complete_) {
+        return S_OK;
+    }
+    const auto result = api_->ShutdownOnInitializingThread();
+    if (SUCCEEDED(result)) {
+        shutdown_complete_ = true;
     }
     return result;
 }

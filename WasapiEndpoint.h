@@ -93,6 +93,7 @@ public:
     virtual HRESULT WaitForRender(DWORD) noexcept = 0;
     virtual HRESULT GetClockPosition(
         std::uint64_t*, std::uint64_t*) noexcept = 0;
+    virtual HRESULT ShutdownOnInitializingThread() noexcept = 0;
 };
 
 class WasapiEndpoint final {
@@ -101,6 +102,7 @@ public:
         std::unique_ptr<IWasapiApi>,
         EndpointInitialization*,
         AudioFailure*);
+    ~WasapiEndpoint();
 
     HRESULT Start(AudioFailure*) noexcept;
     HRESULT WaitForRender(DWORD, AudioFailure*) noexcept;
@@ -108,6 +110,7 @@ public:
         std::span<const std::int16_t>, AudioFailure*) noexcept;
     HRESULT TrySubmitSilence() noexcept;
     HRESULT ReadClock(EndpointClockPosition*, AudioFailure*) noexcept;
+    HRESULT ShutdownOnInitializingThread() noexcept;
     const EndpointInitialization& initialization() const noexcept;
 
 private:
@@ -119,6 +122,7 @@ private:
 
     std::unique_ptr<IWasapiApi> api_;
     EndpointInitialization initialization_{};
+    bool shutdown_complete_{};
 };
 
 std::unique_ptr<IWasapiApi> CreateProductionWasapiApi() noexcept;

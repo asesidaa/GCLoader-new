@@ -15,9 +15,11 @@
 - Request minimum `GetDevicePeriod` as both buffer duration and periodicity with `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`.
 - On `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`, call `GetBufferSize`, release the failed client, activate a new client, recalculate duration, and retry once.
 - After retry, actual frames must equal the alignment frame count. Without retry, actual frames must not exceed `ReferenceTimeToFramesCeil(minimum_period, 44100)`.
+- A successful aligned-size query, actual-size query, or clock-frequency query that returns zero is invalid at that query's existing failure stage. Zero aligned/actual frames use `AUDCLNT_E_BUFFER_SIZE_ERROR`; zero frequency uses `E_UNEXPECTED`.
 - Register the event before `Start`, prefill the complete endpoint buffer with silence, and require render/clock services.
 - Require MMCSS task `Pro Audio` and `AVRT_PRIORITY_CRITICAL`; failure is fatal.
 - Runtime buffer/clock methods allocate nothing and log nothing.
+- Core Audio/MMCSS teardown is owner-thread-only. The explicit shutdown surface is idempotent; an off-thread call returns `RPC_E_WRONG_THREAD` without releasing COM interfaces or reverting MMCSS.
 
 ---
 
@@ -125,6 +127,7 @@ public:
     virtual HRESULT WaitForRender(DWORD timeout_ms) noexcept = 0;
     virtual HRESULT GetClockPosition(
         std::uint64_t*, std::uint64_t*) noexcept = 0;
+    virtual HRESULT ShutdownOnInitializingThread() noexcept = 0;
 };
 ```
 
@@ -159,17 +162,22 @@ The captured format must be PCM/2/44100/16/4/176400, and both initialize duratio
 
 Add alignment behavior: first initialize returns `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`, aligned size is 144, then the fake must observe `ReleaseAudioClient`, second `ActivateAudioClient`, retry duration `FramesToReferenceTime(144,44100)`, and actual size exactly 144.
 
+Assert exactly two `ActivateAudioClient` and two `InitializeExclusiveEvent` calls plus one `ReleaseAudioClient` call. No third activation or initialization attempt is permitted.
+
 Add rejection cases:
 
 - direct success with nominal minimum 133 frames but actual 266;
 - retry actual size different from the reported aligned size;
 - closest/unsupported format (`S_FALSE` or `AUDCLNT_E_UNSUPPORTED_FORMAT`);
 - a second alignment error on retry;
+- successful zero aligned frames, zero actual frames, and zero clock frequency at `GetAlignedBufferSize`, `GetActualBufferSize`, and `GetClockFrequency` respectively;
 - failure at event, services, clock frequency, prefill, MMCSS registration, priority, and start.
 
 For each failure assert both `AudioFailureStage` and HRESULT.
 
 After a successful create/start, exercise runtime forwarding: an exact-size PCM16 block is copied and released with flags `0`; a wrong-size block returns `E_INVALIDARG` without acquiring a buffer; `TrySubmitSilence` releases one full buffer with `AUDCLNT_BUFFERFLAGS_SILENT`; wait failure records `WaitRenderEvent`; clock `S_FALSE` is accepted with returned position/QPC; failed clock records `GetClockPosition`.
+
+Make shutdown fake-observable. An off-thread call must return `RPC_E_WRONG_THREAD` and remain retryable on the initializing thread. After owner-thread success, a repeated explicit call and later destruction must not delegate again. Same-thread destruction without a prior explicit call delegates exactly once.
 
 - [ ] **Step 2: Register and verify red**
 
@@ -202,6 +210,10 @@ if (hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
     if (FAILED(hr)) {
         return fail(AudioFailureStage::GetAlignedBufferSize, hr);
     }
+    if (aligned_frames == 0) {
+        return fail(AudioFailureStage::GetAlignedBufferSize,
+                    AUDCLNT_E_BUFFER_SIZE_ERROR);
+    }
     api_->ReleaseAudioClient();
     if (FAILED(hr = api_->ActivateAudioClient())) {
         return fail(AudioFailureStage::ReactivateAudioClient, hr);
@@ -231,6 +243,8 @@ if (!alignment_retry && actual_frames >
 }
 ```
 
+Reject `actual_frames == 0` at `GetActualBufferSize` with `AUDCLNT_E_BUFFER_SIZE_ERROR`. After successful `GetClockFrequency`, reject a zero result at `GetClockFrequency` with `E_UNEXPECTED`. These checks occur before any render-buffer acquisition.
+
 Then perform event, services, clock, silent prefill, MMCSS, and priority in the tested order. Return the initialized-but-not-started endpoint.
 
 - [ ] **Step 4: Implement runtime endpoint methods**
@@ -244,10 +258,13 @@ HRESULT SubmitPcm16(
     std::span<const std::int16_t>, AudioFailure*) noexcept;
 HRESULT TrySubmitSilence() noexcept;
 HRESULT ReadClock(EndpointClockPosition*, AudioFailure*) noexcept;
+HRESULT ShutdownOnInitializingThread() noexcept;
 const EndpointInitialization& initialization() const noexcept;
 ```
 
 `Start` delegates once to `IWasapiApi::Start` and records `StartEndpoint` on failure. `SubmitPcm16` requires exactly `actual_buffer_frames * 2` samples, calls `GetRenderBuffer`, `memcpy`, then `ReleaseRenderBuffer(frames,0)`. `TrySubmitSilence` requests one whole endpoint buffer and releases it with `AUDCLNT_BUFFERFLAGS_SILENT`, returning any HRESULT without formatting or logging. `ReadClock` accepts `S_OK` and `S_FALSE`; only `FAILED(hr)` is fatal.
+
+`ShutdownOnInitializingThread` delegates until owner-thread shutdown succeeds, then returns `S_OK` without delegating again. `WasapiEndpoint` destruction invokes it as a same-thread fallback. An off-thread `RPC_E_WRONG_THREAD` does not mark shutdown complete, so the owning audio thread can still perform the required cleanup.
 
 - [ ] **Step 5: Implement `Win32WasapiApi`**
 
@@ -275,11 +292,11 @@ client_->Initialize(
     nullptr);
 ```
 
-On alignment retry, `ReleaseAudioClient` resets render/clock/client `ComPtr`s but retains the selected `IMMDevice` so `ActivateAudioClient` creates a fresh client from the same endpoint.
+On alignment retry, owner-thread `ReleaseAudioClient` resets render/clock/client `ComPtr`s but retains the selected `IMMDevice` so `ActivateAudioClient` creates a fresh client from the same endpoint.
 
 `CreateRenderEvent` uses auto-reset/nonsignaled `CreateEventW`. MMCSS calls `AvSetMmThreadCharacteristicsW(L"Pro Audio", ...)` followed by `AvSetMmThreadPriority(..., AVRT_PRIORITY_CRITICAL)`.
 
-The production destructor reverts MMCSS, closes the event, releases COM objects, and calls `CoUninitialize` only when destruction occurs on the initializing audio thread; normal process lifetime deliberately leaves the endpoint alive.
+Production `ShutdownOnInitializingThread` verifies the current thread, then reverts MMCSS, closes the event, releases clock/render/client/device/enumerator COM objects, and calls `CoUninitialize` in that order. It is idempotent. The production destructor invokes it only on the initializing thread. If destruction nevertheless occurs off-thread, the fail-safe closes the thread-independent event and `Detach()`es every remaining `ComPtr` without `Release`; it does not revert MMCSS or call `CoUninitialize`. This deliberate leak is reserved for fatal process-cleanup paths. Plan 09 must explicitly shut down and reset the endpoint before the audio thread exits; normal success remains process-lifetime and deliberately leaves the endpoint alive.
 
 - [ ] **Step 6: Verify focused policy and production compilation**
 

@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -49,6 +50,7 @@ enum class Call {
     Start,
     WaitForRender,
     GetClockPosition,
+    ShutdownOnInitializingThread,
 };
 
 int Expect(bool condition, std::string_view name) {
@@ -62,6 +64,7 @@ int Expect(bool condition, std::string_view name) {
 class FakeWasapiApi final : public IWasapiApi {
 public:
     HRESULT InitializeComMta() noexcept override {
+        initializing_thread_id = GetCurrentThreadId();
         return Record(Call::InitializeComMta);
     }
 
@@ -158,6 +161,9 @@ public:
     HRESULT GetRenderBuffer(
         std::uint32_t frames,
         BYTE** buffer) noexcept override {
+        if (render_buffer_call_count != nullptr) {
+            ++*render_buffer_call_count;
+        }
         requested_render_frames.push_back(frames);
         const auto result = Record(Call::GetRenderBuffer);
         if (SUCCEEDED(result)) {
@@ -200,6 +206,19 @@ public:
             *qpc = clock_qpc;
         }
         return result;
+    }
+
+    HRESULT ShutdownOnInitializingThread() noexcept override {
+        if (shutdown_call_count != nullptr) {
+            ++*shutdown_call_count;
+        }
+        if (GetCurrentThreadId() != initializing_thread_id) {
+            if (wrong_thread_shutdown_call_count != nullptr) {
+                ++*wrong_thread_shutdown_call_count;
+            }
+            return RPC_E_WRONG_THREAD;
+        }
+        return Record(Call::ShutdownOnInitializingThread);
     }
 
     HRESULT Record(Call call, HRESULT normal = S_OK) noexcept {
@@ -246,6 +265,10 @@ public:
     std::vector<std::uint32_t> released_render_frames;
     std::vector<DWORD> released_render_flags;
     DWORD observed_wait_timeout{};
+    std::shared_ptr<std::uint32_t> shutdown_call_count;
+    std::shared_ptr<std::uint32_t> wrong_thread_shutdown_call_count;
+    std::shared_ptr<std::uint32_t> render_buffer_call_count;
+    DWORD initializing_thread_id{};
 };
 
 bool IsExactPcm16(const WAVEFORMATEX& format) {
@@ -411,6 +434,20 @@ int TestAlignmentRetryUsesAuthoritativeFrames() {
         observed->calls.size() >= prefix.size() &&
             std::equal(prefix.begin(), prefix.end(), observed->calls.begin()),
         "alignment retry releases and reactivates in exact order");
+    failures += Expect(
+        std::count(
+            observed->calls.begin(),
+            observed->calls.end(),
+            Call::ActivateAudioClient) == 2 &&
+            std::count(
+                observed->calls.begin(),
+                observed->calls.end(),
+                Call::InitializeExclusiveEvent) == 2 &&
+            std::count(
+                observed->calls.begin(),
+                observed->calls.end(),
+                Call::ReleaseAudioClient) == 1,
+        "alignment retry performs exactly two activations and initializations");
     const auto aligned_duration = FramesToReferenceTime(
         observed->aligned_frames,
         kOutputSampleRate);
@@ -529,6 +566,43 @@ int TestInitializationRejectionsAndStages() {
     return failures;
 }
 
+int TestSuccessfulZeroOutputsAreRejected() {
+    int failures = 0;
+    auto aligned_render_calls = std::make_shared<std::uint32_t>();
+    failures += ExpectCreateFailure(
+        [aligned_render_calls](FakeWasapiApi& api) {
+            api.first_initialize_result = AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
+            api.aligned_frames = 0;
+            api.render_buffer_call_count = aligned_render_calls;
+        },
+        AudioFailureStage::GetAlignedBufferSize,
+        AUDCLNT_E_BUFFER_SIZE_ERROR,
+        "successful zero aligned frame count rejected at aligned-size stage");
+    auto actual_render_calls = std::make_shared<std::uint32_t>();
+    failures += ExpectCreateFailure(
+        [actual_render_calls](FakeWasapiApi& api) {
+            api.actual_frames = 0;
+            api.render_buffer_call_count = actual_render_calls;
+        },
+        AudioFailureStage::GetActualBufferSize,
+        AUDCLNT_E_BUFFER_SIZE_ERROR,
+        "successful zero actual frame count rejected at actual-size stage");
+    auto frequency_render_calls = std::make_shared<std::uint32_t>();
+    failures += ExpectCreateFailure(
+        [frequency_render_calls](FakeWasapiApi& api) {
+            api.clock_frequency = 0;
+            api.render_buffer_call_count = frequency_render_calls;
+        },
+        AudioFailureStage::GetClockFrequency,
+        E_UNEXPECTED,
+        "successful zero clock frequency rejected at clock-frequency stage");
+    failures += Expect(
+        *aligned_render_calls == 0 && *actual_render_calls == 0 &&
+            *frequency_render_calls == 0,
+        "zero successful outputs reject before render-buffer acquisition");
+    return failures;
+}
+
 int TestStartAndRuntimeFailures() {
     int failures = 0;
     {
@@ -601,6 +675,59 @@ int TestStartAndRuntimeFailures() {
     return failures;
 }
 
+int TestOwnerThreadShutdownIsIdempotent() {
+    auto shutdown_calls = std::make_shared<std::uint32_t>();
+    auto wrong_thread_calls = std::make_shared<std::uint32_t>();
+    auto api = std::make_unique<FakeWasapiApi>();
+    api->shutdown_call_count = shutdown_calls;
+    api->wrong_thread_shutdown_call_count = wrong_thread_calls;
+    EndpointInitialization attempted{};
+    AudioFailure failure{};
+    auto endpoint = WasapiEndpoint::Create(
+        std::move(api),
+        &attempted,
+        &failure);
+
+    int failures = Expect(endpoint != nullptr, "endpoint for explicit shutdown");
+    if (endpoint == nullptr) {
+        return failures + 1;
+    }
+    HRESULT wrong_thread_result{S_OK};
+    std::thread wrong_thread([&] {
+        wrong_thread_result = endpoint->ShutdownOnInitializingThread();
+    });
+    wrong_thread.join();
+    failures += Expect(
+        wrong_thread_result == RPC_E_WRONG_THREAD &&
+            *shutdown_calls == 1 && *wrong_thread_calls == 1,
+        "off-thread shutdown is rejected and remains retryable");
+    failures += Expect(
+        endpoint->ShutdownOnInitializingThread() == S_OK &&
+            endpoint->ShutdownOnInitializingThread() == S_OK &&
+            *shutdown_calls == 2,
+        "owner-thread shutdown delegates once after wrong-thread rejection");
+    endpoint.reset();
+    failures += Expect(
+        *shutdown_calls == 2,
+        "destruction after explicit shutdown does not delegate again");
+
+    auto fallback_calls = std::make_shared<std::uint32_t>();
+    auto fallback_api = std::make_unique<FakeWasapiApi>();
+    fallback_api->shutdown_call_count = fallback_calls;
+    endpoint = WasapiEndpoint::Create(
+        std::move(fallback_api),
+        &attempted,
+        &failure);
+    failures += Expect(
+        endpoint != nullptr,
+        "endpoint for same-thread destructor fallback");
+    endpoint.reset();
+    failures += Expect(
+        *fallback_calls == 1,
+        "same-thread destructor fallback delegates shutdown once");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -608,6 +735,8 @@ int main() {
     failures += TestDirectSuccessAndRuntimeForwarding();
     failures += TestAlignmentRetryUsesAuthoritativeFrames();
     failures += TestInitializationRejectionsAndStages();
+    failures += TestSuccessfulZeroOutputsAreRejected();
     failures += TestStartAndRuntimeFailures();
+    failures += TestOwnerThreadShutdownIsIdempotent();
     return failures == 0 ? 0 : 1;
 }

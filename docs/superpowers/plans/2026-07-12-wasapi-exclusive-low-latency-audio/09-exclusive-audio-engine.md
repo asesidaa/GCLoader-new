@@ -17,8 +17,10 @@
 - Render callbacks do not allocate/free, log, show UI, initialize COM, or wait on a game-thread mutex.
 - A late wake or mixer short read increments counters and submits silence; it is not immediately fatal.
 - Endpoint API failure records the first stage/HRESULT atomically, increments endpoint failures, signals fatal control, and exits the render loop.
+- Before any audio-thread exit after endpoint creation, call `WasapiEndpoint::ShutdownOnInitializingThread()` and reset the endpoint on that same thread. This applies to startup failure, runtime failure/exit, and explicit test shutdown.
 - Monitor thread alone emits periodic summaries and runtime fatal reports.
 - No endpoint rebuild, fallback, or default-device follow occurs.
+- Normal successful production operation remains process-lifetime; releasing DirectSound facades and process detach do not initiate teardown.
 
 ---
 
@@ -79,7 +81,7 @@ public:
 
 - [ ] **Step 1: Write failing engine tests with fake endpoint/observer**
 
-Create `tests/ExclusiveAudioEngineTests.cpp`. Its fake implements the complete `IWasapiApi` surface: `InitializeComMta`, `OpenDefaultConsoleEndpoint`, `ActivateAudioClient`, `IsExactFormatSupported`, `GetDevicePeriod`, `InitializeExclusiveEvent`, `GetBufferSize`, `ReleaseAudioClient`, `CreateRenderEvent`, `SetEventHandle`, `GetRenderService`, `GetClockService`, `GetClockFrequency`, `GetRenderBuffer`, `ReleaseRenderBuffer`, `RegisterMmcssProAudio`, `SetMmcssCriticalPriority`, `Start`, `WaitForRender`, and `GetClockPosition`. It stores calls in a fixed-capacity array, returns endpoint name/ID and 133 frames from initialization, makes `WaitForRender` consume a controlled fixed queue, writes render buffers into preallocated storage, and returns controlled clock position/QPC values. It exposes submitted PCM blocks to assertions without allocating while the render-allocation probe is enabled.
+Create `tests/ExclusiveAudioEngineTests.cpp`. Its fake implements the complete `IWasapiApi` surface: `InitializeComMta`, `OpenDefaultConsoleEndpoint`, `ActivateAudioClient`, `IsExactFormatSupported`, `GetDevicePeriod`, `InitializeExclusiveEvent`, `GetBufferSize`, `ReleaseAudioClient`, `CreateRenderEvent`, `SetEventHandle`, `GetRenderService`, `GetClockService`, `GetClockFrequency`, `GetRenderBuffer`, `ReleaseRenderBuffer`, `RegisterMmcssProAudio`, `SetMmcssCriticalPriority`, `Start`, `WaitForRender`, `GetClockPosition`, and `ShutdownOnInitializingThread`. It stores calls in a fixed-capacity array, returns endpoint name/ID and a frame count derived from the configured period, makes `WaitForRender` consume a controlled fixed queue, writes render buffers into preallocated storage, and returns controlled clock position/QPC values. It exposes submitted PCM blocks to assertions without allocating while the render-allocation probe is enabled.
 
 Assert:
 
@@ -96,6 +98,7 @@ Assert:
 11. `RuntimeFailed` runs on the monitor thread, never the recorded audio-thread ID;
 12. a periodic summary includes render, mixer classification, maximum voice, late, silence, cursor, and endpoint counts;
 13. an allocator probe around two warmed render events records zero allocation/free calls, and the observer receives no callback during those events.
+14. startup failure after endpoint creation, runtime-loop failure/exit, and explicit test shutdown each invoke endpoint shutdown/reset exactly once on the recorded audio-thread ID before that thread exits; no monitor/caller-thread shutdown is accepted.
 
 - [ ] **Step 2: Register and verify red**
 
@@ -153,18 +156,25 @@ mixer_ = MiniaudioMixer::Create(
     frames, mixer_allocations_, &mixer_result);
 if (!mixer_) {
     failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
+    endpoint_->ShutdownOnInitializingThread();
+    endpoint_.reset();
     signal_init_failure({failure, attempted});
     return;
 }
 float_mix_.resize(static_cast<std::size_t>(frames) * 2);
 pcm16_mix_.resize(static_cast<std::size_t>(frames) * 2);
 if (FAILED(endpoint_->Start(&failure))) {
-    signal_init_failure({failure, endpoint_->initialization()});
+    const auto failed_initialization = endpoint_->initialization();
+    endpoint_->ShutdownOnInitializingThread();
+    endpoint_.reset();
+    signal_init_failure({failure, failed_initialization});
     return;
 }
 ```
 
 Read initial clock position/frequency, reset the mapper to output frame zero, store success, signal initialization, then enter render.
+
+Any failure after endpoint creation, including initial clock setup, first captures the attempted metadata, then calls `ShutdownOnInitializingThread()` and resets `endpoint_` before signaling startup failure and returning from the audio thread. A failure inside `WasapiEndpoint::Create` is already cleaned by its same-thread destructor fallback. The bounded caller-timeout path remains deliberate fail-fast abandonment because the audio thread may be stuck inside a system call; it must never destroy or release the endpoint from the waiting caller thread.
 
 Wrap mixer creation and both vector resizes in `try/catch (const std::bad_alloc&)`; report `InitializeMixer/E_OUTOFMEMORY` with the attempted endpoint metadata. No allocation exception may escape the audio-thread entry point.
 
@@ -208,6 +218,8 @@ submitted_frames_.fetch_add(frames, std::memory_order_release);
 render_callbacks_.fetch_add(1, std::memory_order_relaxed);
 ```
 
+After leaving the render loop for any reason, the audio thread calls `endpoint_->ShutdownOnInitializingThread()` and resets `endpoint_` before it returns. The same sequence is used for an explicit test-shutdown request. The engine destructor/test harness signals the audio thread, waits for that owner-thread cleanup to complete, and only then joins it; neither the monitor thread nor the controlling caller resets the endpoint.
+
 No function reachable from this block may include plog or allocate.
 
 - [ ] **Step 5: Implement late detection and atomic first-failure recording**
@@ -227,6 +239,8 @@ The monitor waits on `fatal_event_` with a 30,000 ms timeout:
 - timeout: snapshot counters and call `RuntimeSummary`;
 - fatal event: acquire-load stage/HRESULT, snapshot counters, call `RuntimeFailed`, then exit;
 - test/process shutdown event: exit without a fatal report.
+
+The test-shutdown event only requests audio-loop exit. It does not own endpoint cleanup. The audio thread performs shutdown/reset before publishing its exited state; the test harness joins only after that state is visible. Normal production success does not signal this path because the engine and endpoint are process-lifetime.
 
 `StartupSucceeded` is called by the non-render caller after the initialization event, not by the audio thread.
 
