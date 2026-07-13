@@ -581,6 +581,22 @@ int main(int argc, char *argv[]) {
                 "Uses the default console endpoint in exclusive 44.1 kHz PCM16 mode.\n"
                 "Disable this option if exclusive endpoint initialization fails.");
         }
+        auto& wasapi_exclusive_buffer_ms =
+            g_config.experimental().wasapi_exclusive_buffer_ms();
+        if (ImGui::InputScalar(
+                "WASAPI exclusive buffer (ms)",
+                ImGuiDataType_U32,
+                &wasapi_exclusive_buffer_ms)) {
+            g_config_dirty = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Fixed exclusive buffer duration for this game launch.\n"
+                "Default is 10 ms; use 0 for the endpoint minimum.\n"
+                "Restart the game after changing it.");
+        }
 
         // --- Mode Specific Settings ---
         if (ImGui::BeginTable("Bindings", 3,

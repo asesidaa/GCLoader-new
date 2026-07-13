@@ -30,7 +30,7 @@
 - Modify: `GUI_main.cpp`
 - Test: `tests/ConfigFeatureTests.cpp`
 
-- [ ] **Step 1: Add failing schema and round-trip tests**
+- [x] **Step 1: Add failing schema and round-trip tests**
 
 Add `wasapi_exclusive_buffer_ms = 10` to every default/valid experimental fixture and `wasapi_exclusive_buffer_ms = 20` to `kEnabledExperimentalConfig`. Add these assertions:
 
@@ -56,7 +56,7 @@ failures += expect_u32(
 
 Add a partial `[experimental]` fixture containing every existing field but omitting `wasapi_exclusive_buffer_ms`, and require `expect_parse_failure(..., "missing wasapi_exclusive_buffer_ms")`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 & $env:ComSpec /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target ConfigFeatureTests'
@@ -64,22 +64,33 @@ Add a partial `[experimental]` fixture containing every existing field but omitt
 
 Expected: compilation fails because `ExperimentalConfig::wasapi_exclusive_buffer_ms` does not exist.
 
-- [ ] **Step 3: Implement schema, getter, distributed value, and GUI input**
+- [x] **Step 3: Implement schema, getter, distributed value, and GUI input**
 
-Add to `ExperimentalConfig` and `ConfigManager`:
+Add the distinct 32-bit numeric storage alias, then add the field to
+`ExperimentalConfig` and its public getter to `ConfigManager`. A raw
+`std::uint32_t` cannot be used for reflect-cpp storage here because SDL aliases
+`SDL_Keycode` to that type and its key-name reflector would parse the numeric
+TOML value as a string.
 
 ```cpp
-rfl::Rename<"wasapi_exclusive_buffer_ms", std::uint32_t>
+using WasapiBufferMillisecondsConfigValue = unsigned long;
+static_assert(
+    sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));
+
+rfl::Rename<
+    "wasapi_exclusive_buffer_ms",
+    WasapiBufferMillisecondsConfigValue>
     wasapi_exclusive_buffer_ms = 10;
 
 std::uint32_t GetWasapiExclusiveBufferMs() const {
-    return config.experimental.value().wasapi_exclusive_buffer_ms.value();
+    return static_cast<std::uint32_t>(
+        config.experimental.value().wasapi_exclusive_buffer_ms.value());
 }
 ```
 
 Add `wasapi_exclusive_buffer_ms = 10` beside the enable flag in `config.toml`. In `GUI_main.cpp`, add a `ImGuiDataType_U32` input bound directly to the field and a tooltip stating that `0` uses the endpoint minimum and changes take effect after restarting the game.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 ```powershell
 & $env:ComSpec /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target ConfigFeatureTests ConfigGUI'
@@ -206,4 +217,3 @@ Keep `enable_wasapi_exclusive_audio = true`. Verify deployed/built SHA256 hashes
 - [ ] **Step 3: Operator retest gate**
 
 Launch `game471.exe` at 120 FPS and confirm the startup log reports configured/requested duration near 10 ms and an actual frame count near 441 (or the driver's aligned equivalent). The operator judges whether the prior crackling/chopped distortion is gone. Do not claim success from automated checks alone.
-

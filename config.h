@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <cstdint>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -52,6 +53,12 @@ struct NesysConfig
     rfl::Rename<"server_ip", std::string> server_ip = "127.0.0.1";
 };
 
+// SDL_Keycode aliases std::uint32_t, so its string Reflector also matches a
+// raw std::uint32_t. Windows unsigned long is a distinct 32-bit numeric type.
+using WasapiBufferMillisecondsConfigValue = unsigned long;
+static_assert(
+    sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));
+
 struct ExperimentalConfig
 {
     rfl::Rename<"enable_120fps_timer_patches", bool> enable_120fps_timer_patches = false;
@@ -59,6 +66,10 @@ struct ExperimentalConfig
     rfl::Rename<"enable_timer_freeze_patches", bool> enable_timer_freeze_patches = false;
     rfl::Rename<"enable_nesys_service_adapter_patch", bool> enable_nesys_service_adapter_patch = true;
     rfl::Rename<"enable_wasapi_exclusive_audio", bool> enable_wasapi_exclusive_audio = false;
+    rfl::Rename<
+        "wasapi_exclusive_buffer_ms",
+        WasapiBufferMillisecondsConfigValue>
+        wasapi_exclusive_buffer_ms = 10;
 };
 
 struct GamepadConfig
@@ -187,6 +198,10 @@ public:
     bool GetEnableNesysServiceAdapterPatch() const { return config.experimental.value().enable_nesys_service_adapter_patch.value(); }
     bool GetEnableWasapiExclusiveAudio() const {
         return config.experimental.value().enable_wasapi_exclusive_audio.value();
+    }
+    std::uint32_t GetWasapiExclusiveBufferMs() const {
+        return static_cast<std::uint32_t>(
+            config.experimental.value().wasapi_exclusive_buffer_ms.value());
     }
     const std::string& GetNesysServerIp() const {
         return config.nesys.value().server_ip.value();

@@ -124,9 +124,17 @@ Add two required fields to `ExperimentalConfig`:
 ```cpp
 rfl::Rename<"enable_wasapi_exclusive_audio", bool>
     enable_wasapi_exclusive_audio = false;
-rfl::Rename<"wasapi_exclusive_buffer_ms", std::uint32_t>
+rfl::Rename<
+    "wasapi_exclusive_buffer_ms",
+    WasapiBufferMillisecondsConfigValue>
     wasapi_exclusive_buffer_ms = 10;
 ```
+
+`WasapiBufferMillisecondsConfigValue` is the Windows 32-bit unsigned numeric
+storage type used for reflect-cpp. It remains distinct from `std::uint32_t`
+because SDL aliases `SDL_Keycode` to `std::uint32_t` and the existing key-name
+reflector would otherwise parse this numeric TOML field as a string. The
+`ConfigManager` getter exposes the value as `std::uint32_t`.
 
 The distributed configuration contains:
 
