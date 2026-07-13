@@ -7,6 +7,7 @@
 #include <propvarutil.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -342,8 +343,11 @@ private:
 } // namespace
 
 WasapiEndpoint::WasapiEndpoint(
-    std::unique_ptr<IWasapiApi> api) noexcept
-    : api_(std::move(api)) {}
+    std::unique_ptr<IWasapiApi> api,
+    REFERENCE_TIME configured_duration) noexcept
+    : api_(std::move(api)) {
+    initialization_.configured_duration = configured_duration;
+}
 
 WasapiEndpoint::~WasapiEndpoint() {
     static_cast<void>(ShutdownOnInitializingThread());
@@ -351,6 +355,7 @@ WasapiEndpoint::~WasapiEndpoint() {
 
 std::unique_ptr<WasapiEndpoint> WasapiEndpoint::Create(
     std::unique_ptr<IWasapiApi> api,
+    REFERENCE_TIME configured_duration,
     EndpointInitialization* attempted,
     AudioFailure* failure) {
     if (attempted != nullptr) {
@@ -367,7 +372,9 @@ std::unique_ptr<WasapiEndpoint> WasapiEndpoint::Create(
     }
 
     auto endpoint = std::unique_ptr<WasapiEndpoint>(
-        new (std::nothrow) WasapiEndpoint(std::move(api)));
+        new (std::nothrow) WasapiEndpoint(
+            std::move(api),
+            configured_duration));
     if (endpoint == nullptr) {
         if (failure != nullptr) {
             *failure = {AudioFailureStage::CoInitialize, E_OUTOFMEMORY};
@@ -449,7 +456,9 @@ HRESULT WasapiEndpoint::Initialize(
         *attempted = initialization_;
     }
 
-    auto requested = initialization_.minimum_period;
+    auto requested = std::max(
+        initialization_.minimum_period,
+        initialization_.configured_duration);
     initialization_.requested_duration = requested;
     result = api_->InitializeExclusiveEvent(
         requested,
@@ -527,7 +536,7 @@ HRESULT WasapiEndpoint::Initialize(
         (!initialization_.alignment_retry &&
          initialization_.actual_buffer_frames >
              ReferenceTimeToFramesCeil(
-                 initialization_.minimum_period,
+                 initialization_.requested_duration,
                  kOutputSampleRate))) {
         return Fail(
             AudioFailureStage::GetActualBufferSize,

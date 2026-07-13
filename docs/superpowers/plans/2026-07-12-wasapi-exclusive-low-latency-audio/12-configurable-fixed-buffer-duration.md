@@ -117,7 +117,7 @@ Expected: the focused test passes, ConfigGUI builds, and missing-key parsing sta
 - Test: `tests/ExclusiveAudioEngineTests.cpp`
 - Test: `tests/WasapiAudioPatchTests.cpp`
 
-- [ ] **Step 1: Add failing endpoint-policy and propagation tests**
+- [x] **Step 1: Add failing endpoint-policy and propagation tests**
 
 Extend `WasapiEndpointTests` so `Create` receives a configured duration and proves all three policies:
 
@@ -143,7 +143,7 @@ configured_duration_100ns=100000
 configured_duration_ms=10.000
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```powershell
 & $env:ComSpec /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target WasapiEndpointTests ExclusiveAudioEngineTests WasapiAudioPatchTests'
@@ -151,7 +151,7 @@ configured_duration_ms=10.000
 
 Expected: compilation fails on the new duration parameter/field before production code is changed.
 
-- [ ] **Step 3: Implement the duration flow**
+- [x] **Step 3: Implement the duration flow**
 
 Add `configured_duration` to `EndpointInitialization`. Pass a `REFERENCE_TIME configured_duration` through `StartProductionExclusiveAudioEngine`, `ExclusiveAudioEngine::StartAndWait`, and `WasapiEndpoint::Create`.
 
@@ -178,7 +178,7 @@ ReferenceTimeToFramesCeil(
 
 Capture the config once when constructing the process-lifetime production detour state, convert milliseconds with `10'000` 100-ns units per millisecond, and forward it to startup. Add configured duration in both 100-ns and milliseconds to startup logs.
 
-- [ ] **Step 4: Verify focused GREEN and commit**
+- [x] **Step 4: Verify focused GREEN and commit**
 
 ```powershell
 & $env:ComSpec /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target WasapiEndpointTests ExclusiveAudioEngineTests WasapiAudioPatchTests'

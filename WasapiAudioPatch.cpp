@@ -35,6 +35,13 @@ constexpr std::string_view kFailureMessage =
     "to restore the original DirectSound backend.";
 constexpr std::string_view kExactFormat =
     "pcm16/44100Hz/2ch/16bit";
+constexpr REFERENCE_TIME kReferenceTimePerMillisecond = 10'000;
+
+constexpr REFERENCE_TIME BufferMillisecondsToReferenceTime(
+    std::uint32_t milliseconds) noexcept {
+    return static_cast<REFERENCE_TIME>(milliseconds) *
+        kReferenceTimePerMillisecond;
+}
 
 const char* audio_failure_stage_name(AudioFailureStage stage) noexcept {
     switch (stage) {
@@ -147,6 +154,10 @@ std::string startup_text(const EndpointInitialization& initialization) {
         << " minimum_period_100ns=" << initialization.minimum_period
         << " minimum_period_ms="
         << static_cast<double>(initialization.minimum_period) / 10'000.0
+        << " configured_duration_100ns="
+        << initialization.configured_duration
+        << " configured_duration_ms="
+        << static_cast<double>(initialization.configured_duration) / 10'000.0
         << " requested_duration_100ns=" << initialization.requested_duration
         << " requested_duration_ms="
         << static_cast<double>(initialization.requested_duration) / 10'000.0
@@ -291,8 +302,10 @@ class ProductionExclusiveEngineStartup final
     : public detail::IExclusiveEngineStartup {
 public:
     explicit ProductionExclusiveEngineStartup(
-        detail::AudioPatchPlatformActions actions) noexcept
-        : actions_(actions) {}
+        detail::AudioPatchPlatformActions actions,
+        REFERENCE_TIME configured_duration) noexcept
+        : actions_(actions),
+          configured_duration_(configured_duration) {}
 
     IAudioEngineServices* Start(
         AudioStartupFailure* startup_failure) noexcept override {
@@ -313,6 +326,7 @@ public:
         auto engine = detail::StartProductionExclusiveAudioEngine(
             CreateProductionWasapiApi,
             &ExclusiveAudioEngine::StartAndWait,
+            configured_duration_,
             std::move(observer),
             startup_failure);
         if (engine == nullptr) {
@@ -324,6 +338,7 @@ public:
 
 private:
     detail::AudioPatchPlatformActions actions_{};
+    REFERENCE_TIME configured_duration_{};
     std::unique_ptr<ExclusiveAudioEngine> engine_;
 };
 
@@ -344,8 +359,12 @@ private:
 };
 
 struct ProductionDetourState {
-    ProductionDetourState() noexcept
-        : startup(production_platform_actions()) {}
+    // This process-lifetime state samples the parsed value exactly once.
+    ProductionDetourState()
+        : startup(
+              production_platform_actions(),
+              BufferMillisecondsToReferenceTime(
+                  ConfigManager::instance().GetWasapiExclusiveBufferMs())) {}
 
     ProductionExclusiveEngineStartup startup;
     detail::CachedExclusiveEngineFactory factory{startup};
@@ -531,6 +550,7 @@ void ReportAudioStartupFailure(
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn create_api,
     StartExclusiveAudioEngineFn start_engine,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<IAudioEngineObserver> observer,
     AudioStartupFailure* startup_failure) noexcept {
     if (startup_failure != nullptr) {
@@ -561,6 +581,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
         std::move(api),
         std::move(observer),
         10'000,
+        configured_duration,
         std::shared_ptr<const ma_allocation_callbacks>{},
         startup_failure);
 }

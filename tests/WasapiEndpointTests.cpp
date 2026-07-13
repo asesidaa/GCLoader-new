@@ -289,6 +289,7 @@ int TestDirectSuccessAndRuntimeForwarding() {
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
+        0,
         &attempted,
         &failure);
 
@@ -334,6 +335,7 @@ int TestDirectSuccessAndRuntimeForwarding() {
             attempted.endpoint_id == observed->endpoint_id &&
             attempted.default_period == observed->default_period &&
             attempted.minimum_period == observed->minimum_period &&
+            attempted.configured_duration == 0 &&
             attempted.requested_duration == observed->minimum_period &&
             attempted.actual_buffer_frames == observed->actual_frames &&
             attempted.clock_frequency == observed->clock_frequency &&
@@ -402,6 +404,57 @@ int TestDirectSuccessAndRuntimeForwarding() {
     return failures;
 }
 
+int TestConfiguredDurationPolicy() {
+    int failures = 0;
+    {
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->actual_frames = static_cast<std::uint32_t>(
+            gc::audio::ReferenceTimeToFramesCeil(
+                100'000,
+                kOutputSampleRate));
+        auto* observed = api.get();
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api),
+            100'000,
+            &attempted,
+            &failure);
+        failures += Expect(
+            endpoint != nullptr &&
+                observed->initialize_durations ==
+                    std::vector<REFERENCE_TIME>{100'000} &&
+                observed->initialize_periodicities ==
+                    std::vector<REFERENCE_TIME>{100'000} &&
+                endpoint->initialization().configured_duration == 100'000 &&
+                endpoint->initialization().requested_duration == 100'000 &&
+                endpoint->initialization().actual_buffer_frames == 441,
+            "configured 10 ms duration and periodicity");
+    }
+    {
+        auto api = std::make_unique<FakeWasapiApi>();
+        auto* observed = api.get();
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api),
+            20'000,
+            &attempted,
+            &failure);
+        failures += Expect(
+            endpoint != nullptr &&
+                observed->initialize_durations ==
+                    std::vector<REFERENCE_TIME>{observed->minimum_period} &&
+                observed->initialize_periodicities ==
+                    observed->initialize_durations &&
+                endpoint->initialization().configured_duration == 20'000 &&
+                endpoint->initialization().requested_duration ==
+                    observed->minimum_period,
+            "configured duration below minimum clamps to minimum");
+    }
+    return failures;
+}
+
 int TestAlignmentRetryUsesAuthoritativeFrames() {
     auto api = std::make_unique<FakeWasapiApi>();
     api->first_initialize_result = AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
@@ -411,6 +464,7 @@ int TestAlignmentRetryUsesAuthoritativeFrames() {
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
+        100'000,
         &attempted,
         &failure);
 
@@ -455,7 +509,7 @@ int TestAlignmentRetryUsesAuthoritativeFrames() {
     failures += Expect(
         observed->initialize_durations ==
                 std::vector<REFERENCE_TIME>{
-                    observed->minimum_period,
+                    100'000,
                     aligned_duration} &&
             observed->initialize_periodicities ==
                 observed->initialize_durations &&
@@ -465,6 +519,7 @@ int TestAlignmentRetryUsesAuthoritativeFrames() {
         "alignment retry duration and exact format");
     failures += Expect(
         attempted.alignment_retry &&
+            attempted.configured_duration == 100'000 &&
             attempted.requested_duration == aligned_duration &&
             attempted.actual_buffer_frames == observed->aligned_frames,
         "alignment retry metadata uses authoritative aligned frames");
@@ -483,6 +538,7 @@ int ExpectCreateFailure(
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
+        0,
         &attempted,
         &failure);
     return Expect(
@@ -627,7 +683,7 @@ int TestUnaddressableOutputSizesAreRejected() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), &attempted, &failure);
+            std::move(api), 0, &attempted, &failure);
         failures += Expect(
             endpoint == nullptr &&
                 failure.stage == AudioFailureStage::GetActualBufferSize &&
@@ -646,7 +702,7 @@ int TestUnaddressableOutputSizesAreRejected() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), &attempted, &failure);
+            std::move(api), 0, &attempted, &failure);
         failures += Expect(
             endpoint == nullptr &&
                 failure.stage == AudioFailureStage::GetAlignedBufferSize &&
@@ -665,7 +721,7 @@ int TestStartAndRuntimeFailures() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), &attempted, &failure);
+            std::move(api), 0, &attempted, &failure);
         failures += Expect(endpoint != nullptr, "endpoint for start failure");
         if (endpoint != nullptr) {
             observed->fail_call = Call::Start;
@@ -684,7 +740,7 @@ int TestStartAndRuntimeFailures() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), &attempted, &failure);
+            std::move(api), 0, &attempted, &failure);
         failures += Expect(endpoint != nullptr, "endpoint for runtime failures");
         if (endpoint == nullptr) {
             return failures + 1;
@@ -739,6 +795,7 @@ int TestOwnerThreadShutdownIsIdempotent() {
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
+        0,
         &attempted,
         &failure);
 
@@ -770,6 +827,7 @@ int TestOwnerThreadShutdownIsIdempotent() {
     fallback_api->shutdown_call_count = fallback_calls;
     endpoint = WasapiEndpoint::Create(
         std::move(fallback_api),
+        0,
         &attempted,
         &failure);
     failures += Expect(
@@ -787,6 +845,7 @@ int TestOwnerThreadShutdownIsIdempotent() {
 int main() {
     int failures = 0;
     failures += TestDirectSuccessAndRuntimeForwarding();
+    failures += TestConfiguredDurationPolicy();
     failures += TestAlignmentRetryUsesAuthoritativeFrames();
     failures += TestInitializationRejectionsAndStages();
     failures += TestSuccessfulZeroOutputsAreRejected();

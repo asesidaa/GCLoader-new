@@ -27,6 +27,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartExclusiveAudioEngineAndWait(
     std::unique_ptr<IWasapiApi>,
     std::shared_ptr<IAudioEngineObserver>,
     DWORD timeout_ms,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks>,
     const ExclusiveAudioEngineTiming&,
     AudioStartupFailure*) noexcept;
@@ -67,6 +68,7 @@ public:
         std::unique_ptr<IWasapiApi>,
         std::shared_ptr<IAudioEngineObserver>,
         DWORD timeout_ms,
+        REFERENCE_TIME configured_duration,
         std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
         AudioStartupFailure*) noexcept;
 
@@ -86,6 +88,7 @@ private:
             std::unique_ptr<IWasapiApi>,
             std::shared_ptr<IAudioEngineObserver>,
             DWORD,
+            REFERENCE_TIME,
             std::shared_ptr<const ma_allocation_callbacks>,
             const detail::ExclusiveAudioEngineTiming&,
             AudioStartupFailure*) noexcept;
@@ -93,6 +96,7 @@ private:
     ExclusiveAudioEngine(
         std::unique_ptr<IWasapiApi>,
         std::shared_ptr<IAudioEngineObserver>,
+        REFERENCE_TIME configured_duration,
         std::shared_ptr<const ma_allocation_callbacks>,
         DWORD summary_interval_ms) noexcept;
 
@@ -112,6 +116,7 @@ private:
     void CloseControlEvents() noexcept;
 
     std::unique_ptr<IWasapiApi> pending_api_;
+    REFERENCE_TIME configured_duration_{};
     std::unique_ptr<WasapiEndpoint> endpoint_;
     std::shared_ptr<IAudioEngineObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;

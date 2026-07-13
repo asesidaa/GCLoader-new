@@ -370,7 +370,7 @@ Any of the following is fatal:
 - exact 44,100 Hz stereo PCM16 exclusive format unsupported;
 - endpoint already held by another exclusive client;
 - configured fixed-period initialization or alignment retry failure;
-- actual endpoint buffer materially larger than the reported minimum;
+- actual endpoint buffer materially larger than the requested duration;
 - render or clock service unavailable;
 - event registration failure;
 - MMCSS `Pro Audio` registration failure;

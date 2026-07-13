@@ -59,6 +59,7 @@ void ReportAudioStartupFailure(
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn,
     StartExclusiveAudioEngineFn,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<IAudioEngineObserver>,
     AudioStartupFailure*) noexcept;
 

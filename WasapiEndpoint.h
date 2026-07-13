@@ -48,6 +48,7 @@ struct EndpointInitialization {
     std::wstring endpoint_id;
     REFERENCE_TIME default_period{};
     REFERENCE_TIME minimum_period{};
+    REFERENCE_TIME configured_duration{};
     REFERENCE_TIME requested_duration{};
     std::uint32_t actual_buffer_frames{};
     std::uint64_t clock_frequency{};
@@ -100,6 +101,7 @@ class WasapiEndpoint final {
 public:
     static std::unique_ptr<WasapiEndpoint> Create(
         std::unique_ptr<IWasapiApi>,
+        REFERENCE_TIME configured_duration,
         EndpointInitialization*,
         AudioFailure*);
     ~WasapiEndpoint();
@@ -114,7 +116,9 @@ public:
     const EndpointInitialization& initialization() const noexcept;
 
 private:
-    explicit WasapiEndpoint(std::unique_ptr<IWasapiApi>) noexcept;
+    WasapiEndpoint(
+        std::unique_ptr<IWasapiApi>,
+        REFERENCE_TIME configured_duration) noexcept;
     HRESULT Initialize(EndpointInitialization*, AudioFailure*);
     HRESULT Fail(
         AudioFailureStage, HRESULT,

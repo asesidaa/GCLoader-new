@@ -27,9 +27,11 @@ HRESULT LastErrorResult() noexcept {
 ExclusiveAudioEngine::ExclusiveAudioEngine(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     DWORD summary_interval_ms) noexcept
     : pending_api_(std::move(api)),
+      configured_duration_(configured_duration),
       observer_(std::move(observer)),
       mixer_allocations_(std::move(mixer_allocations)),
       summary_interval_ms_(summary_interval_ms) {}
@@ -61,12 +63,14 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
     DWORD timeout_ms,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     AudioStartupFailure* startup_failure) noexcept {
     return detail::StartExclusiveAudioEngineAndWait(
         std::move(api),
         std::move(observer),
         timeout_ms,
+        configured_duration,
         std::move(mixer_allocations),
         detail::ExclusiveAudioEngineTiming{},
         startup_failure);
@@ -77,6 +81,7 @@ detail::StartExclusiveAudioEngineAndWait(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
     DWORD timeout_ms,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     const ExclusiveAudioEngineTiming& timing,
     AudioStartupFailure* startup_failure) noexcept {
@@ -95,6 +100,7 @@ detail::StartExclusiveAudioEngineAndWait(
         new (std::nothrow) ExclusiveAudioEngine(
             std::move(api),
             std::move(observer),
+            configured_duration,
             std::move(mixer_allocations),
             timing.summary_interval_ms));
     if (engine == nullptr) {
@@ -191,7 +197,10 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
     bool endpoint_initialized = false;
     try {
         endpoint_ = WasapiEndpoint::Create(
-            std::move(pending_api_), &attempted, &failure);
+            std::move(pending_api_),
+            configured_duration_,
+            &attempted,
+            &failure);
         if (endpoint_ == nullptr) {
             SignalInitializationFailure(
                 failure, std::move(attempted));

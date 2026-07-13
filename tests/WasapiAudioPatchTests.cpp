@@ -469,6 +469,7 @@ AudioStartupFailure exact_startup_failure() {
     failure.attempted.endpoint_name = L"Fake endpoint";
     failure.attempted.endpoint_id = L"fake-endpoint-id";
     failure.attempted.minimum_period = 20'000;
+    failure.attempted.configured_duration = 100'000;
     failure.attempted.requested_duration = 20'000;
     failure.attempted.actual_buffer_frames = 96;
     return failure;
@@ -483,6 +484,8 @@ bool same_failure(
         left.attempted.endpoint_id == right.attempted.endpoint_id &&
         left.attempted.default_period == right.attempted.default_period &&
         left.attempted.minimum_period == right.attempted.minimum_period &&
+        left.attempted.configured_duration ==
+            right.attempted.configured_duration &&
         left.attempted.requested_duration ==
             right.attempted.requested_duration &&
         left.attempted.actual_buffer_frames ==
@@ -695,6 +698,7 @@ int test_production_diagnostics_use_injected_platform_actions() {
     initialization.endpoint_id = L"endpoint-id-123";
     initialization.default_period = 100'000;
     initialization.minimum_period = 20'000;
+    initialization.configured_duration = 100'000;
     initialization.requested_duration = 30'000;
     initialization.actual_buffer_frames = 147;
     initialization.alignment_retry = true;
@@ -718,6 +722,8 @@ int test_production_diagnostics_use_injected_platform_actions() {
              "default_period_ms=10.000",
              "minimum_period_100ns=20000",
              "minimum_period_ms=2.000",
+             "configured_duration_100ns=100000",
+             "configured_duration_ms=10.000",
              "requested_duration_100ns=30000",
              "requested_duration_ms=3.000",
              "actual_buffer_frames=147",
@@ -813,14 +819,19 @@ std::unique_ptr<gc::audio::IWasapiApi> fake_null_wasapi_api() noexcept {
 }
 
 int g_start_engine_calls{};
+DWORD g_start_engine_timeout{};
+REFERENCE_TIME g_start_engine_configured_duration{};
 
 std::unique_ptr<gc::audio::ExclusiveAudioEngine> fake_start_engine(
     std::unique_ptr<gc::audio::IWasapiApi>,
     std::shared_ptr<gc::audio::IAudioEngineObserver>,
-    DWORD,
+    DWORD timeout,
+    REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks>,
     AudioStartupFailure*) noexcept {
     ++g_start_engine_calls;
+    g_start_engine_timeout = timeout;
+    g_start_engine_configured_duration = configured_duration;
     return nullptr;
 }
 
@@ -830,11 +841,29 @@ int test_null_production_api_and_startup_fatal_reporting() {
     g_diagnostics = &diagnostics;
     const auto actions = fake_platform_actions();
     g_start_engine_calls = 0;
+    g_start_engine_timeout = 0;
+    g_start_engine_configured_duration = 0;
+
+    AudioStartupFailure forwarded_failure{};
+    auto engine = gc::audio::detail::StartProductionExclusiveAudioEngine(
+        &gc::audio::CreateProductionWasapiApi,
+        fake_start_engine,
+        100'000,
+        {},
+        &forwarded_failure);
+    failures += expect(
+        engine == nullptr && g_start_engine_calls == 1 &&
+            g_start_engine_timeout == 10'000 &&
+            g_start_engine_configured_duration == 100'000,
+        "production startup forwards fixed configured duration");
+
+    g_start_engine_calls = 0;
 
     AudioStartupFailure allocation_failure{};
-    auto engine = gc::audio::detail::StartProductionExclusiveAudioEngine(
+    engine = gc::audio::detail::StartProductionExclusiveAudioEngine(
         fake_null_wasapi_api,
         fake_start_engine,
+        100'000,
         {},
         &allocation_failure);
     failures += expect(
