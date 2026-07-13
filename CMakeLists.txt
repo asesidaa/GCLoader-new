@@ -154,6 +154,7 @@ set(SOURCES
         SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
         TestModeStorageRedirect.cpp
+        WasapiAudioPatch.cpp
         WasapiAudioTypes.cpp
         WasapiEndpoint.cpp
 )
@@ -327,6 +328,17 @@ target_link_libraries(ExclusiveAudioEngineTests PRIVATE
         propsys
 )
 add_test(NAME ExclusiveAudioEngineTests COMMAND ExclusiveAudioEngineTests)
+
+add_executable(WasapiAudioPatchTests
+        WasapiAudioPatch.cpp
+        tests/WasapiAudioPatchTests.cpp
+)
+target_include_directories(WasapiAudioPatchTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+)
+target_link_libraries(WasapiAudioPatchTests PRIVATE minhook)
+add_test(NAME WasapiAudioPatchTests COMMAND WasapiAudioPatchTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
