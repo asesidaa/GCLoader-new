@@ -6,8 +6,10 @@
 #include <condition_variable>
 #include <dsound.h>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -168,6 +170,57 @@ int expect(bool value, const char* name) {
     }
     std::cerr << "Expectation failed: " << name << '\n';
     return 1;
+}
+
+struct DiagnosticState {
+    std::vector<std::string> info;
+    std::vector<std::string> errors;
+    std::vector<std::string> messages;
+    std::vector<DWORD> termination_codes;
+    int fail_fast_calls{};
+};
+
+DiagnosticState* g_diagnostics{};
+
+void fake_log_info(const char* text) {
+    g_diagnostics->info.emplace_back(text == nullptr ? "" : text);
+}
+
+void fake_log_error(const char* text) {
+    g_diagnostics->errors.emplace_back(text == nullptr ? "" : text);
+}
+
+void fake_show_error(const char* text) {
+    g_diagnostics->messages.emplace_back(text == nullptr ? "" : text);
+}
+
+void fake_terminate_process(DWORD exit_code) {
+    g_diagnostics->termination_codes.push_back(exit_code);
+}
+
+void fake_fail_fast() {
+    ++g_diagnostics->fail_fast_calls;
+}
+
+struct FailFastEscape {};
+
+void fake_throwing_fail_fast() {
+    ++g_diagnostics->fail_fast_calls;
+    throw FailFastEscape{};
+}
+
+gc::audio::detail::AudioPatchPlatformActions fake_platform_actions() {
+    return {
+        fake_log_info,
+        fake_log_error,
+        fake_show_error,
+        fake_terminate_process,
+        fake_fail_fast,
+    };
+}
+
+bool contains(std::string_view text, std::string_view fragment) {
+    return text.find(fragment) != std::string_view::npos;
 }
 
 bool only_target(const std::vector<LPVOID>& values, LPVOID target) {
@@ -631,6 +684,295 @@ int test_concurrent_first_callers_share_initialization() {
     return failures;
 }
 
+int test_production_diagnostics_use_injected_platform_actions() {
+    int failures = 0;
+    DiagnosticState diagnostics;
+    g_diagnostics = &diagnostics;
+    const auto actions = fake_platform_actions();
+
+    gc::audio::EndpointInitialization initialization{};
+    initialization.endpoint_name = L"Fake Pro Audio Endpoint";
+    initialization.endpoint_id = L"endpoint-id-123";
+    initialization.default_period = 100'000;
+    initialization.minimum_period = 20'000;
+    initialization.requested_duration = 30'000;
+    initialization.actual_buffer_frames = 147;
+    initialization.alignment_retry = true;
+    gc::audio::detail::ReportAudioStartupSucceeded(
+        initialization,
+        actions);
+
+    failures += expect(
+        diagnostics.info.size() == 1,
+        "startup emits one non-real-time information record");
+    const std::string_view startup = diagnostics.info.empty()
+        ? std::string_view{}
+        : diagnostics.info.back();
+    for (const auto required : {
+             "requested_backend=wasapi-exclusive",
+             "active_backend=wasapi-exclusive",
+             "endpoint_name=\"Fake Pro Audio Endpoint\"",
+             "endpoint_id=\"endpoint-id-123\"",
+             "format=pcm16/44100Hz/2ch/16bit",
+             "default_period_100ns=100000",
+             "default_period_ms=10.000",
+             "minimum_period_100ns=20000",
+             "minimum_period_ms=2.000",
+             "requested_duration_100ns=30000",
+             "requested_duration_ms=3.000",
+             "actual_buffer_frames=147",
+             "actual_buffer_ms=3.333",
+             "exclusive_event_driven=true",
+             "alignment_retry=true",
+             "mmcss_profile=\"Pro Audio\"",
+             "mmcss_priority=\"Critical\"",
+             "mixer_rate_hz=44100",
+             "mixer_channels=2",
+         }) {
+        failures += expect(
+            contains(startup, required),
+            "startup log contains every required field");
+    }
+
+    gc::audio::AudioRuntimeCountersSnapshot counters{};
+    counters.render_callbacks = 11;
+    counters.late_event_wakes = 12;
+    counters.silence_fallbacks = 13;
+    counters.cursor_timeline_failures = 14;
+    counters.endpoint_hresult_failures = 15;
+    counters.mixer.native_rate_buffers = 16;
+    counters.mixer.sample_format_converted_buffers = 17;
+    counters.mixer.sample_rate_converted_buffers = 18;
+    counters.mixer.native_gameplay_buffers = 19;
+    counters.mixer.active_voices = 20;
+    counters.mixer.maximum_simultaneous_voices = 21;
+    gc::audio::detail::ReportAudioRuntimeSummary(counters, actions);
+
+    failures += expect(
+        diagnostics.info.size() == 2,
+        "runtime summary emits one non-real-time information record");
+    const std::string_view summary = diagnostics.info.size() < 2
+        ? std::string_view{}
+        : diagnostics.info.back();
+    for (const auto required : {
+             "render_callbacks=11",
+             "late_event_wakes=12",
+             "silence_fallbacks=13",
+             "cursor_timeline_failures=14",
+             "endpoint_hresult_failures=15",
+             "native_rate_buffers=16",
+             "sample_format_converted_buffers=17",
+             "sample_rate_converted_buffers=18",
+             "native_gameplay_buffers=19",
+             "active_voices=20",
+             "maximum_simultaneous_voices=21",
+         }) {
+        failures += expect(
+            contains(summary, required),
+            "runtime summary contains every counter");
+    }
+
+    gc::audio::AudioFailure runtime_failure{
+        gc::audio::AudioFailureStage::ReleaseRenderBuffer,
+        HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_AVAILABLE),
+    };
+    gc::audio::detail::ReportAudioRuntimeFailure(
+        initialization,
+        runtime_failure,
+        counters,
+        actions);
+
+    failures += expect(
+        diagnostics.errors.size() == 1 &&
+            contains(diagnostics.errors.back(), "endpoint_id=\"endpoint-id-123\"") &&
+            contains(diagnostics.errors.back(), "stage=ReleaseRenderBuffer") &&
+            contains(diagnostics.errors.back(), "hresult=0x800710DF") &&
+            contains(diagnostics.errors.back(), "format=pcm16/44100Hz/2ch/16bit") &&
+            contains(diagnostics.errors.back(), "maximum_simultaneous_voices=21"),
+        "runtime fatal logs endpoint stage HRESULT format and counters");
+    failures += expect(
+        diagnostics.messages.size() == 1 &&
+            contains(
+                diagnostics.messages.back(),
+                "WASAPI exclusive low-latency audio failed.\n"
+                "Restart the game after setting "
+                "enable_wasapi_exclusive_audio = false\n"
+                "to restore the original DirectSound backend."),
+        "runtime fatal displays required disable-setting restart text");
+    failures += expect(
+        diagnostics.termination_codes ==
+                std::vector<DWORD>{ERROR_DEVICE_NOT_AVAILABLE} &&
+            diagnostics.fail_fast_calls == 1,
+        "runtime fatal terminates then uses injected fail-fast fallback");
+
+    return failures;
+}
+
+std::unique_ptr<gc::audio::IWasapiApi> fake_null_wasapi_api() noexcept {
+    return nullptr;
+}
+
+int g_start_engine_calls{};
+
+std::unique_ptr<gc::audio::ExclusiveAudioEngine> fake_start_engine(
+    std::unique_ptr<gc::audio::IWasapiApi>,
+    std::shared_ptr<gc::audio::IAudioEngineObserver>,
+    DWORD,
+    std::shared_ptr<const ma_allocation_callbacks>,
+    AudioStartupFailure*) noexcept {
+    ++g_start_engine_calls;
+    return nullptr;
+}
+
+int test_null_production_api_and_startup_fatal_reporting() {
+    int failures = 0;
+    DiagnosticState diagnostics;
+    g_diagnostics = &diagnostics;
+    const auto actions = fake_platform_actions();
+    g_start_engine_calls = 0;
+
+    AudioStartupFailure allocation_failure{};
+    auto engine = gc::audio::detail::StartProductionExclusiveAudioEngine(
+        fake_null_wasapi_api,
+        fake_start_engine,
+        {},
+        &allocation_failure);
+    failures += expect(
+        engine == nullptr && g_start_engine_calls == 0,
+        "null production WASAPI API fails before StartAndWait");
+    failures += expect(
+        allocation_failure.failure.stage ==
+                gc::audio::AudioFailureStage::InitializeMixer &&
+            allocation_failure.failure.result == E_OUTOFMEMORY,
+        "null production WASAPI API publishes InitializeMixer E_OUTOFMEMORY");
+
+    const auto startup_failure = exact_startup_failure();
+    gc::audio::detail::ReportAudioStartupFailure(startup_failure, actions);
+    failures += expect(
+        diagnostics.errors.size() == 1 &&
+            contains(diagnostics.errors.back(), "endpoint_id=\"fake-endpoint-id\"") &&
+            contains(diagnostics.errors.back(), "stage=GetActualBufferSize") &&
+            contains(diagnostics.errors.back(), "hresult=0x8007000B") &&
+            contains(diagnostics.errors.back(), "format=pcm16/44100Hz/2ch/16bit"),
+        "startup fatal logs endpoint stage HRESULT and exact format");
+    failures += expect(
+        diagnostics.messages.size() == 1 &&
+            contains(
+                diagnostics.messages.back(),
+                "enable_wasapi_exclusive_audio = false"),
+        "startup fatal displays required disable setting");
+    failures += expect(
+        diagnostics.termination_codes ==
+                std::vector<DWORD>{ERROR_DEVICE_NOT_AVAILABLE} &&
+            diagnostics.fail_fast_calls == 1,
+        "startup fatal terminates then uses injected fail-fast fallback");
+    return failures;
+}
+
+int test_config_gate_and_attach_failure_policy() {
+    int failures = 0;
+    DiagnosticState diagnostics;
+    g_diagnostics = &diagnostics;
+
+    FakeState disabled;
+    g_fake = &disabled;
+    failures += expect(
+        gc::audio::detail::WasapiAudioPatchInitWithDependencies(
+            false,
+            {
+                fake_minhook_api(),
+                fake_resolver_api(),
+                fake_platform_actions(),
+            }),
+        "disabled config returns success");
+    failures += expect_no_calls(
+        disabled,
+        "disabled config performs zero resolution MinHook or engine work");
+    failures += expect(
+        diagnostics.info.size() == 1 &&
+            contains(diagnostics.info.back(), "requested_backend=directsound") &&
+            contains(diagnostics.info.back(), "active_backend=directsound") &&
+            diagnostics.errors.empty() && diagnostics.messages.empty() &&
+            diagnostics.termination_codes.empty(),
+        "disabled config logs original DirectSound backend only");
+
+    diagnostics = {};
+    FakeState clean_failure;
+    clean_failure.module = nullptr;
+    g_fake = &clean_failure;
+    failures += expect(
+        !gc::audio::detail::WasapiAudioPatchInitWithDependencies(
+            true,
+            {
+                fake_minhook_api(),
+                fake_resolver_api(),
+                fake_platform_actions(),
+            }),
+        "clean hook install failure may fail attach normally");
+    failures += expect(
+        diagnostics.errors.size() == 1 &&
+            contains(diagnostics.errors.back(), "stage=ResolveModule") &&
+            contains(diagnostics.errors.back(), "status=0") &&
+            contains(diagnostics.errors.back(), "win32_error=126") &&
+            contains(diagnostics.errors.back(), "target=0x00000000") &&
+            contains(diagnostics.errors.back(), "rollback_attempted=false") &&
+            contains(diagnostics.errors.back(), "rollback_disable_status=0") &&
+            contains(diagnostics.errors.back(), "rollback_remove_status=0") &&
+            contains(diagnostics.errors.back(), "rollback_complete=true"),
+        "hook failure logs every forward and rollback field");
+    failures += expect(
+        diagnostics.messages.size() == 1 &&
+            contains(
+                diagnostics.messages.back(),
+                "enable_wasapi_exclusive_audio = false") &&
+            diagnostics.termination_codes.empty(),
+        "clean hook failure is actionable and does not terminate");
+
+    diagnostics = {};
+    FakeState incomplete_failure;
+    incomplete_failure.apply_status = MH_ERROR_MEMORY_PROTECT;
+    incomplete_failure.remove_status = MH_ERROR_MEMORY_PROTECT;
+    g_fake = &incomplete_failure;
+    auto actions = fake_platform_actions();
+    actions.fail_fast = fake_throwing_fail_fast;
+    bool returned = false;
+    bool fail_fast_escaped = false;
+    try {
+        returned = gc::audio::detail::WasapiAudioPatchInitWithDependencies(
+            true,
+            {
+                fake_minhook_api(),
+                fake_resolver_api(),
+                actions,
+            });
+    } catch (const FailFastEscape&) {
+        fail_fast_escaped = true;
+    }
+    failures += expect(
+        !returned && fail_fast_escaped && diagnostics.fail_fast_calls == 1,
+        "incomplete rollback never returns normal attach failure");
+    failures += expect(
+        diagnostics.termination_codes ==
+            std::vector<DWORD>{ERROR_DLL_INIT_FAILED},
+        "incomplete rollback terminates with ERROR_DLL_INIT_FAILED");
+    failures += expect(
+        diagnostics.errors.size() == 1 &&
+            contains(diagnostics.errors.back(), "stage=ApplyQueued") &&
+            contains(diagnostics.errors.back(), "rollback_attempted=true") &&
+            contains(diagnostics.errors.back(), "rollback_complete=false"),
+        "incomplete rollback logs actionable transaction result before stop");
+    failures += expect(
+        incomplete_failure.engine_factory_calls == 0,
+        "attach gate performs no engine work under loader lock");
+    return failures;
+}
+
+int test_production_disabled_config_integration() {
+    return expect(
+        gc::audio::WasapiAudioPatchInit(),
+        "production config.toml disabled mode returns success");
+}
+
 } // namespace
 
 int main() {
@@ -1023,6 +1365,10 @@ int main() {
     failures += test_detour_validation_and_success();
     failures += test_failure_reporting_and_cache();
     failures += test_concurrent_first_callers_share_initialization();
+    failures += test_production_diagnostics_use_injected_platform_actions();
+    failures += test_null_production_api_and_startup_fatal_reporting();
+    failures += test_config_gate_and_attach_failure_policy();
+    failures += test_production_disabled_config_integration();
 
     return failures == 0 ? 0 : 1;
 }

@@ -338,13 +338,20 @@ add_executable(WasapiAudioPatchTests
         WasapiEndpoint.cpp
         ExclusiveAudioEngine.cpp
         WasapiAudioPatch.cpp
+        NesysNetworkConfig.cpp
+        RegistryConfig.cpp
+        config.cpp
         tests/WasapiAudioPatchTests.cpp
 )
 target_include_directories(WasapiAudioPatchTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${SDL3_SOURCE_DIR}/include
         ${minhook_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(WasapiAudioPatchTests PRIVATE
+        SDL3-static
         minhook
         miniaudio
         dsound
@@ -353,8 +360,12 @@ target_link_libraries(WasapiAudioPatchTests PRIVATE
         uuid
         avrt
         propsys
+        tomlplusplus::tomlplusplus
+        reflectcpp
 )
 add_test(NAME WasapiAudioPatchTests COMMAND WasapiAudioPatchTests)
+set_tests_properties(WasapiAudioPatchTests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp

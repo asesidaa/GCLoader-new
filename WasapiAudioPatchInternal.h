@@ -13,11 +13,54 @@ struct AudioResolverApi {
     decltype(&GetProcAddress) get_proc_address{};
 };
 
+struct AudioPatchPlatformActions {
+    void (*log_info)(const char*){};
+    void (*log_error)(const char*){};
+    void (*show_error)(const char*){};
+    void (*terminate_process)(DWORD){};
+    void (*fail_fast)(){};
+};
+
+struct AudioPatchInitDependencies {
+    AudioMinHookApi minhook{};
+    AudioResolverApi resolver{};
+    AudioPatchPlatformActions platform{};
+};
+
+using CreateWasapiApiFn = std::unique_ptr<IWasapiApi> (*)() noexcept;
+using StartExclusiveAudioEngineFn =
+    decltype(&ExclusiveAudioEngine::StartAndWait);
+
 bool InstallWasapiAudioHookWithResolver(
     bool enabled,
     AudioMinHookApi minhook,
     AudioResolverApi resolver,
     AudioHookFailure* failure) noexcept;
+
+bool WasapiAudioPatchInitWithDependencies(
+    bool enabled,
+    AudioPatchInitDependencies dependencies);
+
+void ReportAudioStartupSucceeded(
+    const EndpointInitialization&,
+    AudioPatchPlatformActions) noexcept;
+void ReportAudioRuntimeSummary(
+    const AudioRuntimeCountersSnapshot&,
+    AudioPatchPlatformActions) noexcept;
+void ReportAudioRuntimeFailure(
+    const EndpointInitialization&,
+    const AudioFailure&,
+    const AudioRuntimeCountersSnapshot&,
+    AudioPatchPlatformActions) noexcept;
+void ReportAudioStartupFailure(
+    const AudioStartupFailure&,
+    AudioPatchPlatformActions) noexcept;
+
+std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
+    CreateWasapiApiFn,
+    StartExclusiveAudioEngineFn,
+    std::shared_ptr<IAudioEngineObserver>,
+    AudioStartupFailure*) noexcept;
 
 class IExclusiveEngineStartup {
 public:

@@ -12,6 +12,7 @@
 #include "NesysServiceProcess.h"
 #include "SessionLog.h"
 #include "SwitchInputPatch.h"
+#include "WasapiAudioPatch.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -50,6 +51,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
 
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
+                if (!gc::audio::WasapiAudioPatchInit()) {
+                    PLOG_ERROR
+                        << "WasapiAudioPatch: fail-closed DLL attach";
+                    return FALSE;
+                }
+
                 RfidEmuInit();
                 PLOG_DEBUG << "Rfid init complete!" << std::endl;
 
