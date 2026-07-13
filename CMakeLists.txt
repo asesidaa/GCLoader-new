@@ -154,6 +154,7 @@ set(SOURCES
         SyntheticNetworkAdapter.cpp
         TestModeStorageRedirect.cpp
         WasapiAudioTypes.cpp
+        WasapiEndpoint.cpp
 )
 
 set(GUI_SOURCES
@@ -177,6 +178,10 @@ target_link_libraries(iDmacDrv32 PRIVATE
         dsound
         dxguid
         ntdll
+        ole32
+        uuid
+        avrt
+        propsys
         minhook
         miniaudio
         safetyhook::safetyhook
@@ -277,6 +282,23 @@ target_link_libraries(DirectSoundDeviceTests PRIVATE
         dxguid
 )
 add_test(NAME DirectSoundDeviceTests COMMAND DirectSoundDeviceTests)
+
+add_executable(WasapiEndpointTests
+        WasapiAudioTypes.cpp
+        WasapiEndpoint.cpp
+        tests/WasapiEndpointTests.cpp
+)
+target_include_directories(WasapiEndpointTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(WasapiEndpointTests PRIVATE
+        miniaudio
+        ole32
+        uuid
+        avrt
+        propsys
+)
+add_test(NAME WasapiEndpointTests COMMAND WasapiEndpointTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp
