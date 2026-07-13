@@ -872,6 +872,7 @@ HRESULT MixerVoice::Seek(
     if (source_frame >= state_->source_length_frames) {
         return DSERR_INVALIDPARAM;
     }
+    std::lock_guard control_lock(state_->control_mutex);
     state_->seek_mailbox.Publish(source_frame, epoch);
     state_->accepted_epoch.store(epoch, std::memory_order_seq_cst);
     return DS_OK;

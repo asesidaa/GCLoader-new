@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -629,6 +630,89 @@ int TestAudibleDrainPublicationRejectsStaleRunAndEpoch() {
     return failures;
 }
 
+int TestConcurrentSeeksKeepTerminalDrainObservable() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "concurrent-seek mixer creation");
+    if (mixer == nullptr) {
+        return failures + 1;
+    }
+    const auto bytes = Pcm16Bytes({
+        16384, 8192, 4096, 2048,
+        1024, 512, 256, 128,
+    });
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "concurrent-seek PCM16 normalization");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "concurrent-seek voice creation");
+    if (voice == nullptr) {
+        return failures + 1;
+    }
+
+    constexpr std::uint32_t worker_count = 8;
+    constexpr std::uint32_t iterations = 50'000;
+    std::barrier start_round(worker_count + 1);
+    std::barrier finish_round(worker_count + 1);
+    std::atomic_bool seek_failed{};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (std::uint32_t worker = 0; worker < worker_count; ++worker) {
+        workers.emplace_back([&, worker] {
+            for (std::uint32_t round = 0; round < iterations; ++round) {
+                start_round.arrive_and_wait();
+                const auto epoch = std::uint64_t{2} +
+                    static_cast<std::uint64_t>(round) * worker_count + worker;
+                if (voice->Seek(worker, epoch) != DS_OK) {
+                    seek_failed.store(true, std::memory_order_relaxed);
+                }
+                finish_round.arrive_and_wait();
+            }
+        });
+    }
+
+    std::vector<float> output(kPeriodFrames * 2);
+    bool every_terminal_drain_observable = true;
+    std::uint64_t output_frame{};
+    for (std::uint32_t round = 0; round < iterations; ++round) {
+        const auto play_epoch = std::uint64_t{2} +
+            static_cast<std::uint64_t>(round) * worker_count;
+        if (voice->Play(false, play_epoch) != DS_OK) {
+            seek_failed.store(true, std::memory_order_relaxed);
+        }
+        start_round.arrive_and_wait();
+        finish_round.arrive_and_wait();
+        const auto rendered = mixer->Render(output, output_frame);
+        output_frame += kPeriodFrames;
+        if (rendered.result != MA_SUCCESS ||
+            rendered.frames_read != kPeriodFrames ||
+            !voice->at_end() ||
+            !voice->audible_until_output_frame().has_value()) {
+            every_terminal_drain_observable = false;
+        }
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+
+    failures += Expect(
+        !seek_failed.load(std::memory_order_relaxed),
+        "all concurrent seeks are accepted");
+    failures += Expect(
+        every_terminal_drain_observable,
+        "concurrent seeks preserve the final audible drain observation");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -970,6 +1054,7 @@ int main() {
     failures += TestConcurrentVoiceStateAccounting();
     failures += TestStaleRenderCannotEndNewPlaybackRun();
     failures += TestAudibleDrainPublicationRejectsStaleRunAndEpoch();
+    failures += TestConcurrentSeeksKeepTerminalDrainObservable();
 
     return failures == 0 ? 0 : 1;
 }

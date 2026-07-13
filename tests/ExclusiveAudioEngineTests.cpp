@@ -67,6 +67,10 @@ int TestProductionRenderFinalizationAndStartupTimeoutClamp() {
                 10'000 &&
             gc::audio::detail::ClampExclusiveAudioStartupTimeout(0) == 0,
         "startup timeout is capped at ten seconds");
+    failures += Expect(
+        gc::audio::detail::ExclusiveAudioEngineTiming{}
+                .summary_interval_ms == 30'000,
+        "production runtime summary interval defaults to thirty seconds");
 
     std::array<float, kSamples> short_block{};
     short_block.fill(0.5F);
@@ -656,6 +660,9 @@ struct EngineFixture {
         std::make_shared<AllocationOwner>(allocation_lifetime);
     std::shared_ptr<const ma_allocation_callbacks> callbacks{
         allocation_owner, &allocation_owner->callbacks};
+    gc::audio::detail::ExclusiveAudioEngineTiming timing{
+        .summary_interval_ms = 250,
+    };
 
     EngineFixture() {
         api->allocations = &allocation_owner->probe;
@@ -666,11 +673,12 @@ struct EngineFixture {
     std::unique_ptr<ExclusiveAudioEngine> Start(
         AudioStartupFailure* failure = nullptr,
         DWORD timeout_ms = 2'000) {
-        return ExclusiveAudioEngine::StartAndWait(
+        return gc::audio::detail::StartExclusiveAudioEngineAndWait(
             std::make_unique<FakeWasapiApi>(api),
             observer,
             timeout_ms,
             callbacks,
+            timing,
             failure);
     }
 };

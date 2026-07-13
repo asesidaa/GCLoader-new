@@ -10,13 +10,6 @@ namespace gc::audio {
 
 namespace {
 
-#if defined(GC_EXCLUSIVE_AUDIO_ENGINE_SUMMARY_INTERVAL_MS)
-constexpr DWORD kSummaryIntervalMs =
-    GC_EXCLUSIVE_AUDIO_ENGINE_SUMMARY_INTERVAL_MS;
-#else
-constexpr DWORD kSummaryIntervalMs = 30'000;
-#endif
-
 constexpr DWORD kRenderWaitMs = 2'000;
 
 static_assert(std::is_nothrow_move_constructible_v<EndpointInitialization>);
@@ -34,10 +27,12 @@ HRESULT LastErrorResult() noexcept {
 ExclusiveAudioEngine::ExclusiveAudioEngine(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
-    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations) noexcept
+    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+    DWORD summary_interval_ms) noexcept
     : pending_api_(std::move(api)),
       observer_(std::move(observer)),
-      mixer_allocations_(std::move(mixer_allocations)) {}
+      mixer_allocations_(std::move(mixer_allocations)),
+      summary_interval_ms_(summary_interval_ms) {}
 
 ExclusiveAudioEngine::~ExclusiveAudioEngine() {
     if (shutdown_event_ != nullptr) {
@@ -68,6 +63,23 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
     DWORD timeout_ms,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     AudioStartupFailure* startup_failure) noexcept {
+    return detail::StartExclusiveAudioEngineAndWait(
+        std::move(api),
+        std::move(observer),
+        timeout_ms,
+        std::move(mixer_allocations),
+        detail::ExclusiveAudioEngineTiming{},
+        startup_failure);
+}
+
+std::unique_ptr<ExclusiveAudioEngine>
+detail::StartExclusiveAudioEngineAndWait(
+    std::unique_ptr<IWasapiApi> api,
+    std::shared_ptr<IAudioEngineObserver> observer,
+    DWORD timeout_ms,
+    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+    const ExclusiveAudioEngineTiming& timing,
+    AudioStartupFailure* startup_failure) noexcept {
     if (startup_failure != nullptr) {
         *startup_failure = {};
     }
@@ -83,7 +95,8 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
         new (std::nothrow) ExclusiveAudioEngine(
             std::move(api),
             std::move(observer),
-            std::move(mixer_allocations)));
+            std::move(mixer_allocations),
+            timing.summary_interval_ms));
     if (engine == nullptr) {
         if (startup_failure != nullptr) {
             startup_failure->failure = {
@@ -330,7 +343,7 @@ void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
             static_cast<DWORD>(std::size(controls)),
             controls,
             FALSE,
-            kSummaryIntervalMs);
+            summary_interval_ms_);
         if (wait == WAIT_OBJECT_0) {
             const auto stage = static_cast<AudioFailureStage>(
                 failure_stage_.load(std::memory_order_acquire));

@@ -16,6 +16,23 @@
 
 namespace gc::audio {
 
+class ExclusiveAudioEngine;
+class IAudioEngineObserver;
+
+namespace detail {
+
+struct ExclusiveAudioEngineTiming;
+
+std::unique_ptr<ExclusiveAudioEngine> StartExclusiveAudioEngineAndWait(
+    std::unique_ptr<IWasapiApi>,
+    std::shared_ptr<IAudioEngineObserver>,
+    DWORD timeout_ms,
+    std::shared_ptr<const ma_allocation_callbacks>,
+    const ExclusiveAudioEngineTiming&,
+    AudioStartupFailure*) noexcept;
+
+} // namespace detail
+
 struct AudioRuntimeCountersSnapshot {
     std::uint64_t render_callbacks{};
     std::uint64_t late_event_wakes{};
@@ -64,10 +81,20 @@ public:
     void CountCursorTimelineFailure() noexcept override;
 
 private:
+    friend std::unique_ptr<ExclusiveAudioEngine>
+        detail::StartExclusiveAudioEngineAndWait(
+            std::unique_ptr<IWasapiApi>,
+            std::shared_ptr<IAudioEngineObserver>,
+            DWORD,
+            std::shared_ptr<const ma_allocation_callbacks>,
+            const detail::ExclusiveAudioEngineTiming&,
+            AudioStartupFailure*) noexcept;
+
     ExclusiveAudioEngine(
         std::unique_ptr<IWasapiApi>,
         std::shared_ptr<IAudioEngineObserver>,
-        std::shared_ptr<const ma_allocation_callbacks>) noexcept;
+        std::shared_ptr<const ma_allocation_callbacks>,
+        DWORD summary_interval_ms) noexcept;
 
     bool CreateControlEvents() noexcept;
     bool StartThreads() noexcept;
@@ -115,6 +142,7 @@ private:
     std::atomic_uint64_t endpoint_hresult_failures_{};
     std::uint64_t last_qpc_100ns_{};
     REFERENCE_TIME actual_period_100ns_{};
+    DWORD summary_interval_ms_{};
 };
 
 } // namespace gc::audio
