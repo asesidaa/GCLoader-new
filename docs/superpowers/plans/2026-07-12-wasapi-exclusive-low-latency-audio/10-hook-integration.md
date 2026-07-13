@@ -135,8 +135,8 @@ using DirectSoundCreate8Fn = HRESULT (WINAPI*)(
 class IExclusiveEngineFactory {
 public:
     virtual ~IExclusiveEngineFactory() = default;
-    virtual ExclusiveAudioEngine* GetOrCreate(
-        AudioStartupFailure*) noexcept = 0;
+    virtual IAudioEngineServices* GetOrCreate(
+        const AudioStartupFailure**) noexcept = 0;
 };
 
 class IAudioStartupFailureReporter {
@@ -189,10 +189,10 @@ On success, move the engine into process-lifetime global ownership and publish `
 For a valid call:
 
 ```cpp
-AudioStartupFailure startup_failure{};
+const AudioStartupFailure* startup_failure{};
 auto* engine = GetOrCreateExclusiveAudioEngine(&startup_failure);
 if (engine == nullptr) {
-    reporter.FatalStartupFailure(startup_failure);
+    reporter.FatalStartupFailure(*startup_failure);
     return DSERR_NODRIVER;
 }
 return CreateDirectSoundDevice(*engine, output);

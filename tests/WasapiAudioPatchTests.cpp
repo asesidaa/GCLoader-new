@@ -2,14 +2,27 @@
 #include "WasapiAudioPatchInternal.h"
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <dsound.h>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
 
 using gc::audio::AudioHookFailure;
 using gc::audio::AudioHookStage;
+using gc::audio::AudioStartupFailure;
+using gc::audio::IAudioEngineServices;
+using gc::audio::IAudioStartupFailureReporter;
+using gc::audio::IExclusiveEngineFactory;
+
+static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
+static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
 
 constexpr gc::audio::AudioMinHookApi kDefaultMinHookApi;
 static_assert(kDefaultMinHookApi.initialize == nullptr);
@@ -289,6 +302,335 @@ int expect_invalid_api_rejected(
     return failures;
 }
 
+class FakeEngineServices final : public IAudioEngineServices {
+public:
+    std::unique_ptr<gc::audio::MixerVoice> CreateVoice(
+        const gc::audio::NormalizedSourceFormat&,
+        std::shared_ptr<gc::audio::AudioSnapshot>,
+        std::shared_ptr<gc::audio::AudioCursorTimeline>,
+        gc::audio::VoiceUsage,
+        ma_result*) noexcept override {
+        return nullptr;
+    }
+
+    std::optional<std::uint64_t> CurrentOutputFrame() noexcept override {
+        return 0;
+    }
+
+    std::uint32_t endpoint_buffer_frames() const noexcept override {
+        return 0;
+    }
+
+    void CountCursorTimelineFailure() noexcept override {}
+};
+
+class FakeEngineFactory final : public IExclusiveEngineFactory {
+public:
+    IAudioEngineServices* GetOrCreate(
+        const AudioStartupFailure** failure) noexcept override {
+        ++calls;
+        if (failure != nullptr) {
+            *failure = engine == nullptr ? &failure_to_return : nullptr;
+        }
+        return engine;
+    }
+
+    IAudioEngineServices* engine{};
+    AudioStartupFailure failure_to_return{};
+    int calls{};
+};
+
+class FakeEngineStartup final
+    : public gc::audio::detail::IExclusiveEngineStartup {
+public:
+    IAudioEngineServices* Start(
+        AudioStartupFailure* output) noexcept override {
+        calls.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::unique_lock lock(mutex);
+            entered = true;
+            condition.notify_all();
+            condition.wait(lock, [this] {
+                return !block_until_released || released;
+            });
+        }
+        if (output != nullptr) {
+            *output = std::move(failure);
+        }
+        return engine;
+    }
+
+    void WaitUntilEntered() {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [this] { return entered; });
+    }
+
+    void Release() {
+        {
+            std::lock_guard lock(mutex);
+            released = true;
+        }
+        condition.notify_all();
+    }
+
+    IAudioEngineServices* engine{};
+    AudioStartupFailure failure{};
+    std::atomic_int calls{};
+    bool block_until_released{};
+
+private:
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered{};
+    bool released{};
+};
+
+class FakeFailureReporter final : public IAudioStartupFailureReporter {
+public:
+    void FatalStartupFailure(
+        const AudioStartupFailure& failure) noexcept override {
+        ++calls;
+        reported = &failure;
+    }
+
+    int calls{};
+    const AudioStartupFailure* reported{};
+};
+
+std::atomic_int g_saved_original_calls{};
+
+HRESULT WINAPI fake_saved_original(
+    LPCGUID,
+    LPDIRECTSOUND8*,
+    LPUNKNOWN) {
+    g_saved_original_calls.fetch_add(1, std::memory_order_relaxed);
+    return DS_OK;
+}
+
+AudioStartupFailure exact_startup_failure() {
+    AudioStartupFailure failure{};
+    failure.failure = {
+        gc::audio::AudioFailureStage::GetActualBufferSize,
+        HRESULT_FROM_WIN32(ERROR_BAD_FORMAT),
+    };
+    failure.attempted.endpoint_name = L"Fake endpoint";
+    failure.attempted.endpoint_id = L"fake-endpoint-id";
+    failure.attempted.minimum_period = 20'000;
+    failure.attempted.requested_duration = 20'000;
+    failure.attempted.actual_buffer_frames = 96;
+    return failure;
+}
+
+bool same_failure(
+    const AudioStartupFailure& left,
+    const AudioStartupFailure& right) {
+    return left.failure.stage == right.failure.stage &&
+        left.failure.result == right.failure.result &&
+        left.attempted.endpoint_name == right.attempted.endpoint_name &&
+        left.attempted.endpoint_id == right.attempted.endpoint_id &&
+        left.attempted.default_period == right.attempted.default_period &&
+        left.attempted.minimum_period == right.attempted.minimum_period &&
+        left.attempted.requested_duration ==
+            right.attempted.requested_duration &&
+        left.attempted.actual_buffer_frames ==
+            right.attempted.actual_buffer_frames &&
+        left.attempted.clock_frequency ==
+            right.attempted.clock_frequency &&
+        left.attempted.alignment_retry ==
+            right.attempted.alignment_retry;
+}
+
+int test_detour_validation_and_success() {
+    int failures = 0;
+    FakeEngineFactory validation_factory;
+    FakeFailureReporter reporter;
+    g_saved_original_calls.store(0, std::memory_order_relaxed);
+
+    failures += expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            nullptr,
+            nullptr,
+            nullptr,
+            validation_factory,
+            reporter,
+            fake_saved_original) == DSERR_INVALIDPARAM,
+        "direct detour rejects null output pointer");
+
+    GUID unexpected_device{};
+    auto* output = reinterpret_cast<LPDIRECTSOUND8>(0x1);
+    failures += expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            &unexpected_device,
+            &output,
+            nullptr,
+            validation_factory,
+            reporter,
+            fake_saved_original) == DSERR_NODRIVER,
+        "direct detour rejects nondefault device");
+    failures += expect(
+        output == nullptr,
+        "direct detour nulls output before GUID validation");
+
+    output = reinterpret_cast<LPDIRECTSOUND8>(0x1);
+    failures += expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            nullptr,
+            &output,
+            reinterpret_cast<LPUNKNOWN>(0x1),
+            validation_factory,
+            reporter,
+            fake_saved_original) == DSERR_NOAGGREGATION,
+        "direct detour rejects aggregation");
+    failures += expect(
+        output == nullptr,
+        "direct detour nulls output before aggregation validation");
+    failures += expect(
+        validation_factory.calls == 0 && reporter.calls == 0 &&
+            g_saved_original_calls.load(std::memory_order_relaxed) == 0,
+        "validation paths perform no factory reporter or original work");
+
+    FakeEngineServices engine;
+    FakeEngineStartup startup;
+    startup.engine = &engine;
+    gc::audio::detail::CachedExclusiveEngineFactory factory(startup);
+
+    LPDIRECTSOUND8 first{};
+    LPDIRECTSOUND8 second{};
+    failures += expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            nullptr,
+            &first,
+            nullptr,
+            factory,
+            reporter,
+            fake_saved_original) == DS_OK,
+        "first valid detour creates DirectSound device");
+    failures += expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            nullptr,
+            &second,
+            nullptr,
+            factory,
+            reporter,
+            fake_saved_original) == DS_OK,
+        "second valid detour creates DirectSound device");
+    failures += expect(
+        first != nullptr && second != nullptr && first != second,
+        "valid detours return independent device facades");
+    failures += expect(
+        startup.calls.load(std::memory_order_relaxed) == 1,
+        "two valid detours initialize engine once");
+    const AudioStartupFailure sentinel_failure{};
+    const AudioStartupFailure* success_failure = &sentinel_failure;
+    failures += expect(
+        factory.GetOrCreate(&success_failure) == &engine &&
+            success_failure == nullptr,
+        "successful cached lookup publishes null failure");
+    failures += expect(
+        reporter.calls == 0,
+        "successful detours do not report startup failure");
+    failures += expect(
+        g_saved_original_calls.load(std::memory_order_relaxed) == 0,
+        "successful detours never call saved original");
+    if (first != nullptr) {
+        first->Release();
+    }
+    if (second != nullptr) {
+        second->Release();
+    }
+    return failures;
+}
+
+int test_failure_reporting_and_cache() {
+    int failures = 0;
+    FakeEngineStartup startup;
+    startup.failure = exact_startup_failure();
+    const auto expected_failure = exact_startup_failure();
+    gc::audio::detail::CachedExclusiveEngineFactory factory(startup);
+    FakeFailureReporter reporter;
+    g_saved_original_calls.store(0, std::memory_order_relaxed);
+
+    auto* output = reinterpret_cast<LPDIRECTSOUND8>(0x1);
+    failures += expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            nullptr,
+            &output,
+            nullptr,
+            factory,
+            reporter,
+            fake_saved_original) == DSERR_NODRIVER,
+        "engine startup failure returns no driver");
+    failures += expect(
+        output == nullptr,
+        "engine startup failure leaves output null");
+    failures += expect(
+        reporter.calls == 1 && reporter.reported != nullptr &&
+            same_failure(*reporter.reported, expected_failure),
+        "engine startup failure reports exact failure once");
+    failures += expect(
+        g_saved_original_calls.load(std::memory_order_relaxed) == 0,
+        "failed detour never calls saved original");
+
+    const AudioStartupFailure* cached_failure{};
+    failures += expect(
+        factory.GetOrCreate(&cached_failure) == nullptr,
+        "cached failure returns no engine");
+    failures += expect(
+        startup.calls.load(std::memory_order_relaxed) == 1,
+        "cached failure is not retried");
+    failures += expect(
+        cached_failure != nullptr &&
+            same_failure(*cached_failure, expected_failure),
+        "cached failure preserves exact startup diagnostics");
+    failures += expect(
+        cached_failure == reporter.reported,
+        "cached failure replays one stable immutable value");
+    failures += expect(
+        reporter.calls == 1,
+        "direct cached lookup does not report a second fatal failure");
+    return failures;
+}
+
+int test_concurrent_first_callers_share_initialization() {
+    int failures = 0;
+    FakeEngineServices engine;
+    FakeEngineStartup startup;
+    startup.engine = &engine;
+    startup.block_until_released = true;
+    gc::audio::detail::CachedExclusiveEngineFactory factory(startup);
+    std::atomic_bool begin{};
+    IAudioEngineServices* first{};
+    IAudioEngineServices* second{};
+
+    auto call_factory = [&](IAudioEngineServices** result) {
+        while (!begin.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        const AudioStartupFailure* failure{};
+        *result = factory.GetOrCreate(&failure);
+    };
+    std::thread first_caller(call_factory, &first);
+    std::thread second_caller(call_factory, &second);
+    begin.store(true, std::memory_order_release);
+    startup.WaitUntilEntered();
+    for (int attempt = 0; attempt != 100; ++attempt) {
+        std::this_thread::yield();
+    }
+    failures += expect(
+        startup.calls.load(std::memory_order_relaxed) == 1,
+        "concurrent first callers allow one initializer");
+    startup.Release();
+    first_caller.join();
+    second_caller.join();
+    failures += expect(
+        first == &engine && second == &engine,
+        "concurrent first callers receive published engine");
+    failures += expect(
+        startup.calls.load(std::memory_order_relaxed) == 1,
+        "concurrent publication does not retry initialization");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -466,6 +808,35 @@ int main() {
     failures += expect(
         success.engine_factory_calls == 0,
         "hook installation performs no engine calls");
+
+    using DirectSoundCreate8Fn = HRESULT (WINAPI*)(
+        LPCGUID, LPDIRECTSOUND8*, LPUNKNOWN);
+    const auto installed_detour =
+        reinterpret_cast<DirectSoundCreate8Fn>(success.detour);
+    failures += expect(
+        installed_detour(nullptr, nullptr, nullptr) == DSERR_INVALIDPARAM,
+        "detour rejects null output pointer");
+
+    GUID unexpected_device{};
+    auto* output = reinterpret_cast<LPDIRECTSOUND8>(0x1);
+    failures += expect(
+        installed_detour(&unexpected_device, &output, nullptr) ==
+            DSERR_NODRIVER,
+        "detour rejects nondefault device");
+    failures += expect(
+        output == nullptr,
+        "detour nulls output before rejecting device");
+
+    output = reinterpret_cast<LPDIRECTSOUND8>(0x1);
+    failures += expect(
+        installed_detour(
+            nullptr,
+            &output,
+            reinterpret_cast<LPUNKNOWN>(0x1)) == DSERR_NOAGGREGATION,
+        "detour rejects aggregation");
+    failures += expect(
+        output == nullptr,
+        "detour nulls output before rejecting aggregation");
     failures += expect_failure(
         success_failure,
         AudioHookStage::None,
@@ -648,6 +1019,10 @@ int main() {
         MH_ERROR_MEMORY_PROTECT,
         false,
         "apply: both cleanup calls failing is incomplete");
+
+    failures += test_detour_validation_and_success();
+    failures += test_failure_reporting_and_cache();
+    failures += test_concurrent_first_callers_share_initialization();
 
     return failures == 0 ? 0 : 1;
 }

@@ -1,14 +1,104 @@
 #include "WasapiAudioPatch.h"
 
+#include "DirectSoundFacade.h"
+#include "ExclusiveAudioEngine.h"
 #include "WasapiAudioPatchInternal.h"
 
 #include <dsound.h>
+
+#include <exception>
+#include <memory>
+#include <new>
+#include <type_traits>
+#include <utility>
 
 namespace gc::audio {
 namespace {
 
 LPVOID g_original_direct_sound_create8{};
 LPVOID g_committed_target{};
+
+static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
+static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
+
+class ProductionAudioObserver final : public IAudioEngineObserver {
+public:
+    void StartupSucceeded(const EndpointInitialization&) noexcept override {}
+    void RuntimeSummary(
+        const AudioRuntimeCountersSnapshot&) noexcept override {}
+    void RuntimeFailed(
+        const AudioFailure&,
+        const AudioRuntimeCountersSnapshot&) noexcept override {
+        std::terminate();
+    }
+};
+
+class ProductionExclusiveEngineStartup final
+    : public detail::IExclusiveEngineStartup {
+public:
+    IAudioEngineServices* Start(
+        AudioStartupFailure* startup_failure) noexcept override {
+        std::shared_ptr<ProductionAudioObserver> observer;
+        try {
+            observer = std::make_shared<ProductionAudioObserver>();
+        } catch (...) {
+            if (startup_failure != nullptr) {
+                *startup_failure = {};
+                startup_failure->failure = {
+                    AudioFailureStage::InitializeMixer,
+                    E_OUTOFMEMORY,
+                };
+            }
+            return nullptr;
+        }
+
+        auto engine = ExclusiveAudioEngine::StartAndWait(
+            CreateProductionWasapiApi(),
+            std::move(observer),
+            10'000,
+            std::shared_ptr<const ma_allocation_callbacks>{},
+            startup_failure);
+        if (engine == nullptr) {
+            return nullptr;
+        }
+        engine_ = std::move(engine);
+        return engine_.get();
+    }
+
+private:
+    std::unique_ptr<ExclusiveAudioEngine> engine_;
+};
+
+class ProductionAudioStartupFailureReporter final
+    : public IAudioStartupFailureReporter {
+public:
+    void FatalStartupFailure(
+        const AudioStartupFailure&) noexcept override {
+        // Task 3 replaces this fail-closed placeholder with actionable
+        // diagnostics and the production TerminateProcess path.
+        std::terminate();
+    }
+};
+
+struct ProductionDetourState {
+    ProductionExclusiveEngineStartup startup;
+    detail::CachedExclusiveEngineFactory factory{startup};
+};
+
+ProductionAudioStartupFailureReporter g_startup_failure_reporter;
+
+ProductionDetourState* production_detour_state() noexcept {
+    // Deliberately process-lifetime: DirectSound facade release and process
+    // detach must not tear down the engine or join its endpoint threads.
+    static ProductionDetourState* state = []() noexcept {
+        try {
+            return new (std::nothrow) ProductionDetourState();
+        } catch (...) {
+            return static_cast<ProductionDetourState*>(nullptr);
+        }
+    }();
+    return state;
+}
 
 struct RollbackResult {
     MH_STATUS disable_status{MH_OK};
@@ -17,10 +107,38 @@ struct RollbackResult {
 };
 
 HRESULT WINAPI DirectSoundCreate8Detour(
-    LPCGUID,
-    LPDIRECTSOUND8*,
-    LPUNKNOWN) {
-    return DSERR_NODRIVER;
+    LPCGUID device_guid,
+    LPDIRECTSOUND8* output,
+    LPUNKNOWN outer) {
+    if (output == nullptr) {
+        return DSERR_INVALIDPARAM;
+    }
+    *output = nullptr;
+    if (device_guid != nullptr) {
+        return DSERR_NODRIVER;
+    }
+    if (outer != nullptr) {
+        return DSERR_NOAGGREGATION;
+    }
+
+    auto* state = production_detour_state();
+    if (state == nullptr) {
+        AudioStartupFailure failure{};
+        failure.failure = {
+            AudioFailureStage::InitializeMixer,
+            E_OUTOFMEMORY,
+        };
+        g_startup_failure_reporter.FatalStartupFailure(failure);
+        return DSERR_NODRIVER;
+    }
+    return detail::InvokeDirectSoundCreate8Detour(
+        device_guid,
+        output,
+        outer,
+        state->factory,
+        g_startup_failure_reporter,
+        reinterpret_cast<DirectSoundCreate8Fn>(
+            g_original_direct_sound_create8));
 }
 
 void set_failure(
@@ -67,6 +185,89 @@ bool complete_api_tables(
 } // namespace
 
 namespace detail {
+
+CachedExclusiveEngineFactory::CachedExclusiveEngineFactory(
+    IExclusiveEngineStartup& startup) noexcept
+    : startup_(startup) {}
+
+IAudioEngineServices* CachedExclusiveEngineFactory::GetOrCreate(
+    const AudioStartupFailure** startup_failure) noexcept {
+    if (startup_failure != nullptr) {
+        *startup_failure = nullptr;
+    }
+
+    {
+        std::unique_lock lock(mutex_);
+        while (state_ == State::Initializing) {
+            condition_.wait(lock);
+        }
+        if (state_ == State::Succeeded) {
+            return engine_;
+        }
+        if (state_ == State::Failed) {
+            if (startup_failure != nullptr) {
+                *startup_failure = &failure_;
+            }
+            return nullptr;
+        }
+        state_ = State::Initializing;
+    }
+
+    AudioStartupFailure observed_failure{};
+    auto* observed_engine = startup_.Start(&observed_failure);
+
+    {
+        std::lock_guard lock(mutex_);
+        if (observed_engine != nullptr) {
+            engine_ = observed_engine;
+            state_ = State::Succeeded;
+        } else {
+            failure_ = std::move(observed_failure);
+            state_ = State::Failed;
+            if (startup_failure != nullptr) {
+                *startup_failure = &failure_;
+            }
+        }
+    }
+    condition_.notify_all();
+    return observed_engine;
+}
+
+HRESULT InvokeDirectSoundCreate8Detour(
+    LPCGUID device_guid,
+    LPDIRECTSOUND8* output,
+    LPUNKNOWN outer,
+    IExclusiveEngineFactory& factory,
+    IAudioStartupFailureReporter& reporter,
+    DirectSoundCreate8Fn saved_original) noexcept {
+    static_cast<void>(saved_original);
+    if (output == nullptr) {
+        return DSERR_INVALIDPARAM;
+    }
+    *output = nullptr;
+    if (device_guid != nullptr) {
+        return DSERR_NODRIVER;
+    }
+    if (outer != nullptr) {
+        return DSERR_NOAGGREGATION;
+    }
+
+    const AudioStartupFailure* startup_failure{};
+    auto* engine = factory.GetOrCreate(&startup_failure);
+    if (engine == nullptr) {
+        AudioStartupFailure missing_failure{};
+        if (startup_failure == nullptr) {
+            missing_failure.failure = {
+                AudioFailureStage::InitializeMixer,
+                E_UNEXPECTED,
+            };
+            startup_failure = &missing_failure;
+        }
+        reporter.FatalStartupFailure(*startup_failure);
+        return DSERR_NODRIVER;
+    }
+    return CreateDirectSoundDevice(*engine, output);
+}
 
 bool InstallWasapiAudioHookWithResolver(
     bool enabled,

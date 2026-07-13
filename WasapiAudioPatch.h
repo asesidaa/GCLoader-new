@@ -2,8 +2,29 @@
 
 #include <Windows.h>
 #include <MinHook.h>
+#include <dsound.h>
 
 namespace gc::audio {
+
+class IAudioEngineServices;
+struct AudioStartupFailure;
+
+using DirectSoundCreate8Fn = HRESULT (WINAPI*)(
+    LPCGUID, LPDIRECTSOUND8*, LPUNKNOWN);
+
+class IExclusiveEngineFactory {
+public:
+    virtual ~IExclusiveEngineFactory() = default;
+    virtual IAudioEngineServices* GetOrCreate(
+        const AudioStartupFailure**) noexcept = 0;
+};
+
+class IAudioStartupFailureReporter {
+public:
+    virtual ~IAudioStartupFailureReporter() = default;
+    virtual void FatalStartupFailure(
+        const AudioStartupFailure&) noexcept = 0;
+};
 
 enum class AudioHookStage {
     None,

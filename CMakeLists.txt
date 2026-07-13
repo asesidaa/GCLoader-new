@@ -330,6 +330,13 @@ target_link_libraries(ExclusiveAudioEngineTests PRIVATE
 add_test(NAME ExclusiveAudioEngineTests COMMAND ExclusiveAudioEngineTests)
 
 add_executable(WasapiAudioPatchTests
+        WasapiAudioTypes.cpp
+        AudioSnapshot.cpp
+        AudioCursorTimeline.cpp
+        MiniaudioMixer.cpp
+        DirectSoundFacade.cpp
+        WasapiEndpoint.cpp
+        ExclusiveAudioEngine.cpp
         WasapiAudioPatch.cpp
         tests/WasapiAudioPatchTests.cpp
 )
@@ -337,7 +344,16 @@ target_include_directories(WasapiAudioPatchTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${minhook_SOURCE_DIR}/include
 )
-target_link_libraries(WasapiAudioPatchTests PRIVATE minhook)
+target_link_libraries(WasapiAudioPatchTests PRIVATE
+        minhook
+        miniaudio
+        dsound
+        dxguid
+        ole32
+        uuid
+        avrt
+        propsys
+)
 add_test(NAME WasapiAudioPatchTests COMMAND WasapiAudioPatchTests)
 
 add_executable(CountdownTimerFreezeTests
