@@ -10,6 +10,12 @@ namespace {
 LPVOID g_original_direct_sound_create8{};
 LPVOID g_committed_target{};
 
+struct RollbackResult {
+    MH_STATUS disable_status{MH_OK};
+    MH_STATUS remove_status{MH_OK};
+    bool complete{true};
+};
+
 HRESULT WINAPI DirectSoundCreate8Detour(
     LPCGUID,
     LPDIRECTSOUND8*,
@@ -28,9 +34,34 @@ void set_failure(
     }
 }
 
-void rollback(AudioMinHookApi api, LPVOID target) noexcept {
-    api.disable(target);
-    api.remove(target);
+RollbackResult rollback(AudioMinHookApi api, LPVOID target) noexcept {
+    RollbackResult result{};
+    result.disable_status = api.disable(target);
+    result.remove_status = api.remove(target);
+    result.complete = result.remove_status == MH_OK ||
+        result.remove_status == MH_ERROR_NOT_CREATED;
+    return result;
+}
+
+void record_rollback(
+    AudioHookFailure* failure,
+    RollbackResult rollback_result) noexcept {
+    if (failure != nullptr) {
+        failure->rollback_attempted = true;
+        failure->rollback_disable_status = rollback_result.disable_status;
+        failure->rollback_remove_status = rollback_result.remove_status;
+        failure->rollback_complete = rollback_result.complete;
+    }
+}
+
+bool complete_api_tables(
+    AudioMinHookApi minhook,
+    detail::AudioResolverApi resolver) noexcept {
+    return resolver.get_module_handle != nullptr &&
+        resolver.get_proc_address != nullptr &&
+        minhook.initialize != nullptr && minhook.create != nullptr &&
+        minhook.queue_enable != nullptr && minhook.apply != nullptr &&
+        minhook.disable != nullptr && minhook.remove != nullptr;
 }
 
 } // namespace
@@ -47,6 +78,15 @@ bool InstallWasapiAudioHookWithResolver(
     }
     if (!enabled) {
         return true;
+    }
+    if (!complete_api_tables(minhook, resolver)) {
+        set_failure(
+            failure,
+            AudioHookStage::ValidateApi,
+            MH_UNKNOWN,
+            ERROR_INVALID_PARAMETER,
+            nullptr);
+        return false;
     }
 
     const auto module = resolver.get_module_handle(L"dsound.dll");
@@ -105,7 +145,7 @@ bool InstallWasapiAudioHookWithResolver(
             status,
             ERROR_SUCCESS,
             target);
-        rollback(minhook, target);
+        record_rollback(failure, rollback(minhook, target));
         return false;
     }
 
@@ -117,7 +157,7 @@ bool InstallWasapiAudioHookWithResolver(
             status,
             ERROR_SUCCESS,
             target);
-        rollback(minhook, target);
+        record_rollback(failure, rollback(minhook, target));
         return false;
     }
 

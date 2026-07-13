@@ -14,7 +14,13 @@
 - Enabled hook installation may run under loader lock; COM, endpoints, miniaudio, and threads may not.
 - Resolve only loaded `dsound.dll` and export `DirectSoundCreate8`; do not load another module in `DllMain`.
 - Queue/enable/disable/remove only the owned target; never use `MH_ALL_HOOKS`.
-- Roll back a partially created/queued hook before returning failure.
+- Roll back a partially created/queued hook by attempting disable and then
+  remove on the owned target, and retain both exact MinHook statuses alongside
+  the original forward failure. Cleanup is complete only when remove returns
+  `MH_OK` or `MH_ERROR_NOT_CREATED`.
+- If cleanup is incomplete, the attach path must report actionable diagnostics
+  and hard-stop the process; it must never return a normal failed attach that
+  could unload this DLL while the detour remains live.
 - The detour never calls the original function in enabled mode.
 - Accept only `device_guid == nullptr`, `outer == nullptr`, and nonnull result pointer.
 - Engine initialization failure is fatal and tells the operator to set `enable_wasapi_exclusive_audio = false`; no fallback.
@@ -38,7 +44,7 @@
 
 ```cpp
 enum class AudioHookStage {
-    None, ResolveModule, ResolveExport, InitializeMinHook,
+    None, ValidateApi, ResolveModule, ResolveExport, InitializeMinHook,
     CreateHook, QueueEnable, ApplyQueued,
 };
 
@@ -47,15 +53,19 @@ struct AudioHookFailure {
     MH_STATUS status{MH_OK};
     DWORD win32_error{ERROR_SUCCESS};
     void* target{};
+    bool rollback_attempted{false};
+    MH_STATUS rollback_disable_status{MH_OK};
+    MH_STATUS rollback_remove_status{MH_OK};
+    bool rollback_complete{true};
 };
 
 struct AudioMinHookApi {
-    decltype(&MH_Initialize) initialize;
-    decltype(&MH_CreateHook) create;
-    decltype(&MH_QueueEnableHook) queue_enable;
-    decltype(&MH_ApplyQueued) apply;
-    decltype(&MH_DisableHook) disable;
-    decltype(&MH_RemoveHook) remove;
+    decltype(&MH_Initialize) initialize{};
+    decltype(&MH_CreateHook) create{};
+    decltype(&MH_QueueEnableHook) queue_enable{};
+    decltype(&MH_ApplyQueued) apply{};
+    decltype(&MH_DisableHook) disable{};
+    decltype(&MH_RemoveHook) remove{};
 };
 
 bool InstallWasapiAudioHook(
@@ -77,6 +87,11 @@ Create `tests/WasapiAudioPatchTests.cpp` with fake module/export resolution and 
 - queue/apply failure disables and removes exactly the created target;
 - no fake call receives `MH_ALL_HOOKS`;
 - every failure records exact stage/status/Win32 error;
+- enabled mode rejects incomplete resolver or MinHook tables before making any
+  injected call, including validation of disable/remove before create;
+- rollback records the exact disable and remove status without replacing the
+  queue/apply failure, attempts disable before remove, and marks cleanup
+  complete only for remove `MH_OK`/`MH_ERROR_NOT_CREATED`;
 - no engine-factory function is invoked during hook installation.
 
 - [ ] **Step 2: Implement owned hook installation**
@@ -92,7 +107,12 @@ queue_enable(target);
 apply();
 ```
 
-On any failure after create, call `disable(target)` then `remove(target)`. Retain the committed target for process lifetime; do not expose a detach unhook.
+On any failure after create, call `disable(target)` then `remove(target)` and
+record both results. A disable failure does not by itself make cleanup
+incomplete when remove succeeds or reports not-created; any other remove result
+means the target may still reference this DLL and sets `rollback_complete` to
+false. Retain the committed target for process lifetime; do not expose a detach
+unhook.
 
 ### Task 2: Lazy Engine and Detour Contract
 
@@ -197,7 +217,20 @@ if (!gc::audio::WasapiAudioPatchInit()) {
 }
 ```
 
-Disabled mode returns true. Enabled hook failure logs the `AudioHookFailure`, shows an actionable message, and returns false so attach fails. No engine work occurs in this function.
+Disabled mode returns true. Enabled hook failure logs every forward and
+rollback field in `AudioHookFailure` and shows the actionable message before
+choosing the exit path. When `rollback_complete` is true, it returns false so
+attach fails normally.
+
+When `rollback_complete` is false, `WasapiAudioPatchInit` must not return to
+`DllMain`: a live detour could otherwise point into this DLL after the loader
+unloads it. After logging and showing the actionable message, call the injected
+process-termination seam. Its production implementation calls
+`TerminateProcess(GetCurrentProcess(), ERROR_DLL_INIT_FAILED)` and follows an
+unexpected return with a non-returning fail-fast/abort fallback. Later tests
+inject reporting and termination functions and must prove the incomplete
+rollback path never reaches a normal `return false`. No engine work occurs in
+this function.
 
 - [ ] **Step 7: Register sources, test target, and Windows libraries**
 

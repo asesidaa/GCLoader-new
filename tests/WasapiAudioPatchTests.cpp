@@ -2,7 +2,6 @@
 #include "WasapiAudioPatchInternal.h"
 
 #include <algorithm>
-#include <cstring>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -12,6 +11,18 @@ namespace {
 using gc::audio::AudioHookFailure;
 using gc::audio::AudioHookStage;
 
+constexpr gc::audio::AudioMinHookApi kDefaultMinHookApi;
+static_assert(kDefaultMinHookApi.initialize == nullptr);
+static_assert(kDefaultMinHookApi.create == nullptr);
+static_assert(kDefaultMinHookApi.queue_enable == nullptr);
+static_assert(kDefaultMinHookApi.apply == nullptr);
+static_assert(kDefaultMinHookApi.disable == nullptr);
+static_assert(kDefaultMinHookApi.remove == nullptr);
+
+constexpr gc::audio::detail::AudioResolverApi kDefaultResolverApi;
+static_assert(kDefaultResolverApi.get_module_handle == nullptr);
+static_assert(kDefaultResolverApi.get_proc_address == nullptr);
+
 struct FakeState {
     HMODULE module{reinterpret_cast<HMODULE>(0x1000)};
     FARPROC export_address{reinterpret_cast<FARPROC>(0x2000)};
@@ -19,6 +30,8 @@ struct FakeState {
     MH_STATUS create_status{MH_OK};
     MH_STATUS queue_status{MH_OK};
     MH_STATUS apply_status{MH_OK};
+    MH_STATUS disable_status{MH_OK};
+    MH_STATUS remove_status{MH_OK};
     int module_calls{0};
     int export_calls{0};
     int initialize_calls{0};
@@ -30,6 +43,7 @@ struct FakeState {
     std::vector<LPVOID> queued;
     std::vector<LPVOID> disabled;
     std::vector<LPVOID> removed;
+    std::vector<std::string> calls;
     LPVOID detour{};
     LPVOID* original_storage{};
 };
@@ -37,12 +51,14 @@ struct FakeState {
 FakeState* g_fake{};
 
 HMODULE WINAPI fake_get_module_handle(LPCWSTR module_name) {
+    g_fake->calls.emplace_back("resolve-module");
     ++g_fake->module_calls;
     g_fake->module_name = module_name == nullptr ? L"" : module_name;
     return g_fake->module;
 }
 
 FARPROC WINAPI fake_get_proc_address(HMODULE module, LPCSTR export_name) {
+    g_fake->calls.emplace_back("resolve-export");
     ++g_fake->export_calls;
     if (module != g_fake->module) {
         return nullptr;
@@ -52,11 +68,13 @@ FARPROC WINAPI fake_get_proc_address(HMODULE module, LPCSTR export_name) {
 }
 
 MH_STATUS WINAPI fake_initialize() {
+    g_fake->calls.emplace_back("initialize");
     ++g_fake->initialize_calls;
     return g_fake->initialize_status;
 }
 
 MH_STATUS WINAPI fake_create(LPVOID target, LPVOID detour, LPVOID* original) {
+    g_fake->calls.emplace_back("create");
     g_fake->created.push_back(target);
     g_fake->detour = detour;
     g_fake->original_storage = original;
@@ -67,23 +85,27 @@ MH_STATUS WINAPI fake_create(LPVOID target, LPVOID detour, LPVOID* original) {
 }
 
 MH_STATUS WINAPI fake_queue_enable(LPVOID target) {
+    g_fake->calls.emplace_back("queue");
     g_fake->queued.push_back(target);
     return g_fake->queue_status;
 }
 
 MH_STATUS WINAPI fake_apply_queued() {
+    g_fake->calls.emplace_back("apply");
     ++g_fake->apply_calls;
     return g_fake->apply_status;
 }
 
 MH_STATUS WINAPI fake_disable(LPVOID target) {
+    g_fake->calls.emplace_back("disable");
     g_fake->disabled.push_back(target);
-    return MH_OK;
+    return g_fake->disable_status;
 }
 
 MH_STATUS WINAPI fake_remove(LPVOID target) {
+    g_fake->calls.emplace_back("remove");
     g_fake->removed.push_back(target);
-    return MH_OK;
+    return g_fake->remove_status;
 }
 
 gc::audio::AudioMinHookApi fake_minhook_api() {
@@ -110,6 +132,20 @@ bool install(
         enabled,
         fake_minhook_api(),
         fake_resolver_api(),
+        failure);
+}
+
+bool install_with_apis(
+    bool enabled,
+    FakeState& state,
+    gc::audio::AudioMinHookApi minhook,
+    gc::audio::detail::AudioResolverApi resolver,
+    AudioHookFailure* failure) {
+    g_fake = &state;
+    return gc::audio::detail::InstallWasapiAudioHookWithResolver(
+        enabled,
+        minhook,
+        resolver,
         failure);
 }
 
@@ -153,11 +189,191 @@ int expect_failure(
     return failures;
 }
 
+int expect_rollback(
+    const AudioHookFailure& actual,
+    bool attempted,
+    MH_STATUS disable_status,
+    MH_STATUS remove_status,
+    bool complete,
+    const char* name) {
+    int failures = 0;
+    failures += expect(actual.rollback_attempted == attempted, name);
+    failures += expect(
+        actual.rollback_disable_status == disable_status,
+        name);
+    failures += expect(actual.rollback_remove_status == remove_status, name);
+    failures += expect(actual.rollback_complete == complete, name);
+    return failures;
+}
+
+int expect_no_calls(const FakeState& state, const char* name) {
+    return expect(
+        state.calls.empty() && state.module_calls == 0 &&
+            state.export_calls == 0 && state.initialize_calls == 0 &&
+            state.created.empty() && state.queued.empty() &&
+            state.apply_calls == 0 && state.disabled.empty() &&
+            state.removed.empty(),
+        name);
+}
+
+int exercise_rollback_statuses(
+    bool queue_origin,
+    MH_STATUS disable_status,
+    MH_STATUS remove_status,
+    bool expected_complete,
+    const char* name) {
+    const auto target = reinterpret_cast<LPVOID>(0x2000);
+    FakeState state{};
+    state.queue_status =
+        queue_origin ? MH_ERROR_MEMORY_PROTECT : MH_OK;
+    state.apply_status =
+        queue_origin ? MH_OK : MH_ERROR_MEMORY_PROTECT;
+    state.disable_status = disable_status;
+    state.remove_status = remove_status;
+
+    AudioHookFailure failure{};
+    int failures = 0;
+    failures += expect(!install(true, state, &failure), name);
+    failures += expect_failure(
+        failure,
+        queue_origin ? AudioHookStage::QueueEnable
+                     : AudioHookStage::ApplyQueued,
+        MH_ERROR_MEMORY_PROTECT,
+        ERROR_SUCCESS,
+        target,
+        name);
+    failures += expect_rollback(
+        failure,
+        true,
+        disable_status,
+        remove_status,
+        expected_complete,
+        name);
+    failures += expect(
+        only_target(state.disabled, target) &&
+            only_target(state.removed, target),
+        name);
+    failures += expect(
+        state.calls.size() >= 2 &&
+            state.calls[state.calls.size() - 2] == "disable" &&
+            state.calls.back() == "remove",
+        name);
+    return failures;
+}
+
+int expect_invalid_api_rejected(
+    gc::audio::AudioMinHookApi minhook,
+    gc::audio::detail::AudioResolverApi resolver,
+    const char* name) {
+    FakeState state{};
+    AudioHookFailure failure{};
+    int failures = 0;
+    failures += expect(
+        !install_with_apis(true, state, minhook, resolver, &failure),
+        name);
+    failures += expect_failure(
+        failure,
+        AudioHookStage::ValidateApi,
+        MH_UNKNOWN,
+        ERROR_INVALID_PARAMETER,
+        nullptr,
+        name);
+    failures += expect_rollback(
+        failure,
+        false,
+        MH_OK,
+        MH_OK,
+        true,
+        name);
+    failures += expect_no_calls(state, name);
+    return failures;
+}
+
 } // namespace
 
 int main() {
     int failures = 0;
     const auto target = reinterpret_cast<LPVOID>(0x2000);
+
+    FakeState disabled_incomplete{};
+    AudioHookFailure disabled_incomplete_failure{
+        AudioHookStage::ApplyQueued,
+        MH_ERROR_MEMORY_PROTECT,
+        ERROR_ACCESS_DENIED,
+        target,
+    };
+    failures += expect(
+        install_with_apis(
+            false,
+            disabled_incomplete,
+            {},
+            {},
+            &disabled_incomplete_failure),
+        "disabled mode bypasses incomplete table validation");
+    failures += expect_no_calls(
+        disabled_incomplete,
+        "disabled incomplete tables perform zero calls");
+    failures += expect_failure(
+        disabled_incomplete_failure,
+        AudioHookStage::None,
+        MH_OK,
+        ERROR_SUCCESS,
+        nullptr,
+        "disabled incomplete tables clear failure");
+    failures += expect_rollback(
+        disabled_incomplete_failure,
+        false,
+        MH_OK,
+        MH_OK,
+        true,
+        "disabled incomplete tables need no rollback");
+
+    failures += expect_invalid_api_rejected(
+        fake_minhook_api(),
+        {},
+        "empty resolver table rejected before calls");
+
+    auto missing_initialize = fake_minhook_api();
+    missing_initialize.initialize = nullptr;
+    failures += expect_invalid_api_rejected(
+        missing_initialize,
+        fake_resolver_api(),
+        "missing initialize rejected before calls");
+
+    auto missing_create = fake_minhook_api();
+    missing_create.create = nullptr;
+    failures += expect_invalid_api_rejected(
+        missing_create,
+        fake_resolver_api(),
+        "missing create rejected before calls");
+
+    auto missing_queue = fake_minhook_api();
+    missing_queue.queue_enable = nullptr;
+    failures += expect_invalid_api_rejected(
+        missing_queue,
+        fake_resolver_api(),
+        "missing queue rejected before calls");
+
+    auto missing_apply = fake_minhook_api();
+    missing_apply.apply = nullptr;
+    failures += expect_invalid_api_rejected(
+        missing_apply,
+        fake_resolver_api(),
+        "missing apply rejected before calls");
+
+    auto missing_disable = fake_minhook_api();
+    missing_disable.disable = nullptr;
+    failures += expect_invalid_api_rejected(
+        missing_disable,
+        fake_resolver_api(),
+        "missing rollback disable rejected before create");
+
+    auto missing_remove = fake_minhook_api();
+    missing_remove.remove = nullptr;
+    failures += expect_invalid_api_rejected(
+        missing_remove,
+        fake_resolver_api(),
+        "missing rollback remove rejected before create");
 
     FakeState disabled{};
     AudioHookFailure disabled_failure{
@@ -187,6 +403,13 @@ int main() {
         ERROR_SUCCESS,
         nullptr,
         "disabled mode clears failure");
+    failures += expect_rollback(
+        disabled_failure,
+        false,
+        MH_OK,
+        MH_OK,
+        true,
+        "disabled mode needs no rollback");
 
     FakeState success{};
     success.initialize_status = MH_ERROR_ALREADY_INITIALIZED;
@@ -224,6 +447,13 @@ int main() {
         ERROR_SUCCESS,
         nullptr,
         "successful install clears failure");
+    failures += expect_rollback(
+        success_failure,
+        false,
+        MH_OK,
+        MH_OK,
+        true,
+        "successful install needs no rollback");
 
     FakeState missing_module{};
     missing_module.module = nullptr;
@@ -314,6 +544,13 @@ int main() {
         only_target(queue_failure.disabled, target) &&
             only_target(queue_failure.removed, target),
         "queue failure rolls back exact created target");
+    failures += expect_rollback(
+        queue_error,
+        true,
+        MH_OK,
+        MH_OK,
+        true,
+        "queue rollback records clean statuses");
     failures += expect(
         never_all_hooks(queue_failure),
         "queue rollback never uses MH_ALL_HOOKS");
@@ -335,12 +572,56 @@ int main() {
         only_target(apply_failure.disabled, target) &&
             only_target(apply_failure.removed, target),
         "apply failure rolls back exact created target");
+    failures += expect_rollback(
+        apply_error,
+        true,
+        MH_OK,
+        MH_OK,
+        true,
+        "apply rollback records clean statuses");
     failures += expect(
         never_all_hooks(apply_failure),
         "apply rollback never uses MH_ALL_HOOKS");
     failures += expect(
         apply_failure.engine_factory_calls == 0,
         "failure paths perform no engine calls");
+
+    failures += exercise_rollback_statuses(
+        true,
+        MH_ERROR_MEMORY_PROTECT,
+        MH_OK,
+        true,
+        "queue: disable failure and remove success is clean");
+    failures += exercise_rollback_statuses(
+        true,
+        MH_OK,
+        MH_ERROR_MEMORY_PROTECT,
+        false,
+        "queue: remove failure is incomplete");
+    failures += exercise_rollback_statuses(
+        true,
+        MH_ERROR_MEMORY_PROTECT,
+        MH_ERROR_MEMORY_PROTECT,
+        false,
+        "queue: both cleanup calls failing is incomplete");
+    failures += exercise_rollback_statuses(
+        false,
+        MH_ERROR_MEMORY_PROTECT,
+        MH_ERROR_NOT_CREATED,
+        true,
+        "apply: remove not-created is clean despite disable failure");
+    failures += exercise_rollback_statuses(
+        false,
+        MH_OK,
+        MH_ERROR_MEMORY_PROTECT,
+        false,
+        "apply: remove failure is incomplete");
+    failures += exercise_rollback_statuses(
+        false,
+        MH_ERROR_MEMORY_PROTECT,
+        MH_ERROR_MEMORY_PROTECT,
+        false,
+        "apply: both cleanup calls failing is incomplete");
 
     return failures == 0 ? 0 : 1;
 }

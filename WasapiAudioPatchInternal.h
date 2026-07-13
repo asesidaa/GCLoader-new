@@ -5,8 +5,8 @@
 namespace gc::audio::detail {
 
 struct AudioResolverApi {
-    decltype(&GetModuleHandleW) get_module_handle;
-    decltype(&GetProcAddress) get_proc_address;
+    decltype(&GetModuleHandleW) get_module_handle{};
+    decltype(&GetProcAddress) get_proc_address{};
 };
 
 bool InstallWasapiAudioHookWithResolver(
