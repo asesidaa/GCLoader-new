@@ -43,10 +43,6 @@ public:
             return;
         }
 
-        if (render_event_ != nullptr) {
-            CloseHandle(render_event_);
-            render_event_ = nullptr;
-        }
         mmcss_handle_ = nullptr;
         DetachComObjectsForProcessCleanup();
     }
