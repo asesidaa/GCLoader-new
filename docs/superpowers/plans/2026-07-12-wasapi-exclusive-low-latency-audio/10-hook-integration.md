@@ -11,6 +11,9 @@
 ## Global Constraints
 
 - Disabled mode resolves no DirectSound export, creates no hook, and creates no engine.
+- Enabled installation requires a nonnull `AudioHookFailure*` before any
+  validation, resolution, or MinHook call so the caller always owns the exact
+  forward and rollback result. Disabled mode accepts null.
 - Enabled hook installation may run under loader lock; COM, endpoints, miniaudio, and threads may not.
 - Resolve only loaded `dsound.dll` and export `DirectSoundCreate8`; do not load another module in `DllMain`.
 - Queue/enable/disable/remove only the owned target; never use `MH_ALL_HOOKS`.
@@ -75,11 +78,18 @@ bool InstallWasapiAudioHook(
 bool WasapiAudioPatchInit() noexcept;
 ```
 
+`AudioHookFailure*` is optional only when `enabled == false`. Enabled
+installation rejects null before resolver/MinHook validation or any state
+change; every enabled caller must retain the result needed to distinguish an
+incomplete rollback from an ordinary failure.
+
 - [ ] **Step 1: Write failing hook transaction tests**
 
 Create `tests/WasapiAudioPatchTests.cpp` with fake module/export resolution and fake MinHook functions. Assert:
 
 - disabled mode performs zero resolution and MinHook calls;
+- disabled mode accepts a null failure output with zero validation/calls,
+  while enabled mode rejects null before any validation/call;
 - enabled mode resolves exactly `dsound.dll!DirectSoundCreate8`;
 - `MH_ERROR_ALREADY_INITIALIZED` is accepted from initialization;
 - create, queue, and apply reference only the resolved target;
@@ -221,6 +231,10 @@ Disabled mode returns true. Enabled hook failure logs every forward and
 rollback field in `AudioHookFailure` and shows the actionable message before
 choosing the exit path. When `rollback_complete` is true, it returns false so
 attach fails normally.
+
+The Task 3 caller must always pass a nonnull `AudioHookFailure` for enabled
+installation and retain it until the clean-failure versus hard-stop decision is
+complete; ignoring or omitting the transaction result is not permitted.
 
 When `rollback_complete` is false, `WasapiAudioPatchInit` must not return to
 `DllMain`: a live detour could otherwise point into this DLL after the loader

@@ -36,6 +36,9 @@ struct AudioMinHookApi {
     decltype(&MH_RemoveHook) remove{};
 };
 
+// Enabled installation requires a nonnull failure record so the caller can
+// distinguish complete cleanup from a possibly live detour. Disabled
+// installation accepts nullptr and performs no hook work.
 bool InstallWasapiAudioHook(
     bool enabled,
     AudioMinHookApi api,

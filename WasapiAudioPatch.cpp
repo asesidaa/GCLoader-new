@@ -73,12 +73,16 @@ bool InstallWasapiAudioHookWithResolver(
     AudioMinHookApi minhook,
     AudioResolverApi resolver,
     AudioHookFailure* failure) noexcept {
-    if (failure != nullptr) {
-        *failure = {};
-    }
     if (!enabled) {
+        if (failure != nullptr) {
+            *failure = {};
+        }
         return true;
     }
+    if (failure == nullptr) {
+        return false;
+    }
+    *failure = {};
     if (!complete_api_tables(minhook, resolver)) {
         set_failure(
             failure,

@@ -295,6 +295,32 @@ int main() {
     int failures = 0;
     const auto target = reinterpret_cast<LPVOID>(0x2000);
 
+    FakeState disabled_null_failure{};
+    failures += expect(
+        install_with_apis(
+            false,
+            disabled_null_failure,
+            {},
+            {},
+            nullptr),
+        "disabled mode accepts null failure output");
+    failures += expect_no_calls(
+        disabled_null_failure,
+        "disabled null failure performs zero validation and calls");
+
+    FakeState enabled_null_failure{};
+    failures += expect(
+        !install_with_apis(
+            true,
+            enabled_null_failure,
+            fake_minhook_api(),
+            fake_resolver_api(),
+            nullptr),
+        "enabled mode rejects null failure output");
+    failures += expect_no_calls(
+        enabled_null_failure,
+        "enabled null failure performs zero validation and calls");
+
     FakeState disabled_incomplete{};
     AudioHookFailure disabled_incomplete_failure{
         AudioHookStage::ApplyQueued,
