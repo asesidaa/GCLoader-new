@@ -193,7 +193,7 @@ Expected: fixed 10 ms, explicit minimum, below-minimum clamping, alignment retry
 
 ### Task 3: Verify and Prepare the 10 ms Runtime Retest
 
-- [ ] **Step 1: Run product and complete automated verification**
+- [x] **Step 1: Run product and complete automated verification**
 
 ```powershell
 & $env:ComSpec /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target iDmacDrv32 ConfigGUI ConfigFeatureTests WasapiEndpointTests ExclusiveAudioEngineTests WasapiAudioPatchTests'
@@ -204,16 +204,28 @@ git diff HEAD~2 --check
 
 Expected: product and GUI build, complete CTest is green, and the only uncommitted files are intentional plan checkbox/evidence updates.
 
-- [ ] **Step 2: Back up and deploy without touching unrelated runtime settings**
+- [x] **Step 2: Back up and deploy without touching unrelated runtime settings**
 
-Stop the game, create a timestamped directory under `H:\gc\deploy-backups`, copy the current DLL and config into it, deploy `build-msvc32-latest\iDmacDrv32.dll`, and add only this missing strict key under runtime `[experimental]`:
+Stop the game, create a timestamped directory under `H:\gc\deploy-backups`,
+and copy the current DLL, ConfigGUI, and config into it. Deploy
+`build-msvc32-latest\iDmacDrv32.dll` and `build-msvc32-latest\ConfigGUI.exe`,
+then add only this missing strict key under runtime `[experimental]`:
 
 ```toml
 wasapi_exclusive_buffer_ms = 10
 ```
 
-Keep `enable_wasapi_exclusive_audio = true`. Verify deployed/built SHA256 hashes match.
+Keep `enable_wasapi_exclusive_audio = true`. Verify the deployed/built DLL and
+ConfigGUI SHA256 hashes match.
 
 - [ ] **Step 3: Operator retest gate**
 
 Launch `game471.exe` at 120 FPS and confirm the startup log reports configured/requested duration near 10 ms and an actual frame count near 441 (or the driver's aligned equivalent). The operator judges whether the prior crackling/chopped distortion is gone. Do not claim success from automated checks alone.
+
+#### Execution evidence (2026-07-14)
+
+- Product and GUI targets are current, and complete serial CTest passed 20/20.
+- Deployed DLL SHA256: `CD485D3C02CFAB89617CABD12E47F282A1F6C47A639130082CD9EA11E5674D91`.
+- Deployed ConfigGUI SHA256: `EB14B8BC671036A49E45FFF72ADBEF18EE2EE1D50BCF9BC1C16E87509CC420D1`.
+- Rollback snapshot: `H:\gc\deploy-backups\20260714-044709-wasapi-10ms-buffer`.
+- Operator audio acceptance remains pending.
