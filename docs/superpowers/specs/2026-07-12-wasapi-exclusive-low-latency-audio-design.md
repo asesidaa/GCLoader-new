@@ -86,11 +86,17 @@ The diagnostic probe reported:
 
 The current diagnostic actively initializes its 48,000 Hz test format. It checks 44,100 Hz through `IsFormatSupported` but does not print the aligned 44,100 Hz exclusive buffer returned by `Initialize` and `GetBufferSize`. The production backend must perform and log that initialization. Because three milliseconds is 132.3 frames at 44,100 Hz, the implementation must use the driver-aligned result rather than hard-code 132 or 133 frames.
 
+### First runtime acceptance finding
+
+The first enabled gameplay launch on 2026-07-14 initialized the XONAR endpoint successfully at 132 frames, or 2.993 ms, but produced continuously crackling or chopped audio while the game ran at 120 FPS. The run reported no endpoint HRESULT failure and ended before the first 30-second runtime summary. A source comparison with Spice2x found that its exclusive WASAPI wrapper likewise submits one complete endpoint buffer per event, but explicitly offers a larger fixed exclusive-buffer setting because approximately 3 ms can underrun and crackle on some endpoints.
+
+The production policy is therefore revised from an unconditional device-minimum request to a fixed, operator-configurable buffer duration. The default is 10 ms. The selected duration remains fixed for the process lifetime; there is no runtime adaptation. A configured value of zero explicitly requests the device minimum for diagnosis or operator tuning.
+
 ## Goals
 
 - Replace all of the game's DirectSound-rendered audio with one event-driven WASAPI exclusive stream when explicitly enabled.
 - Require the game-native output format: 44,100 Hz, stereo, PCM16.
-- Request the endpoint's minimum exclusive period and verify the actual aligned result.
+- Default to a fixed 10 ms exclusive period, allow an operator-selected fixed duration, and verify the actual aligned result.
 - Keep gameplay BGM, SHOT, tap, and arrangement audio on a zero-sample-rate-conversion path.
 - Keep the exclusive stream running continuously so a newly played hit sound begins in the next render period without stream-start cost.
 - Preserve the DirectSound buffer, volume, loop, seek, status, lock, and cursor behavior observed in `game471.exe`.
@@ -113,11 +119,13 @@ The current diagnostic actively initializes its 48,000 Hz test format. It checks
 
 ## Configuration
 
-Add one required field to `ExperimentalConfig`:
+Add two required fields to `ExperimentalConfig`:
 
 ```cpp
 rfl::Rename<"enable_wasapi_exclusive_audio", bool>
     enable_wasapi_exclusive_audio = false;
+rfl::Rename<"wasapi_exclusive_buffer_ms", std::uint32_t>
+    wasapi_exclusive_buffer_ms = 10;
 ```
 
 The distributed configuration contains:
@@ -125,13 +133,14 @@ The distributed configuration contains:
 ```toml
 [experimental]
 enable_wasapi_exclusive_audio = false
+wasapi_exclusive_buffer_ms = 10
 ```
 
-The key is required under the repository's strict configuration-upgrade contract. An older or partial configuration missing the key fails parsing instead of receiving a backward-compatible default.
+Both keys are required under the repository's strict configuration-upgrade contract. An older or partial configuration missing either key fails parsing instead of receiving a backward-compatible default.
 
-`ConfigGUI` exposes the field as an experimental checkbox and round-trips it through reflect-cpp TOML serialization.
+`ConfigGUI` exposes the enable field as an experimental checkbox and the buffer duration as an unsigned integer, then round-trips both through reflect-cpp TOML serialization.
 
-When the field is false, GCLoader installs no audio hook and the game uses its original DirectSound implementation. When true, failure to install or initialize the new backend is fatal and the error message tells the operator to set the field back to false.
+When the enable field is false, GCLoader installs no audio hook and the game uses its original DirectSound implementation. When true, failure to install or initialize the new backend is fatal and the error message tells the operator to set the field back to false. The buffer field is read once during initialization. Zero selects the endpoint minimum; a positive value selects that many milliseconds. The endpoint request is the larger of the selected duration and the endpoint minimum.
 
 ## Selected Architecture
 
@@ -196,11 +205,11 @@ This process-lifetime object owns:
 - global submitted-frame and endpoint-play timelines;
 - real-time-safe counters.
 
-The first intercepted `DirectSoundCreate8` starts the audio thread and waits for a bounded initialization result. The audio thread activates the default endpoint, confirms the exact PCM16 format with `IsFormatSupported`, queries the default and minimum periods, and initializes an event-driven exclusive client.
+The first intercepted `DirectSoundCreate8` starts the audio thread and waits for a bounded initialization result. The audio thread activates the default endpoint, confirms the exact PCM16 format with `IsFormatSupported`, queries the default and minimum periods, and initializes an event-driven exclusive client at the configured fixed duration.
 
-Initialization uses `AUDCLNT_SHAREMODE_EXCLUSIVE` and `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`, with buffer duration and periodicity based on the minimum device period. If Windows returns `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`, the engine obtains the aligned frame count, releases and reacquires the audio client as required, recalculates the duration, and retries once.
+Initialization uses `AUDCLNT_SHAREMODE_EXCLUSIVE` and `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`. Buffer duration and periodicity are equal and use `max(device minimum, configured milliseconds)`, where zero configured milliseconds means the device minimum. If Windows returns `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`, the engine obtains the aligned frame count, releases and reacquires the audio client as required, recalculates the duration, and retries once.
 
-After initialization, `GetBufferSize` is authoritative. The driver-aligned result produced by the documented alignment retry is accepted as the minimum realizable buffer for this endpoint and exact format. GCLoader does not multiply that result or add another software period. The log reports both the nominal minimum period and the actual aligned duration so any driver-level difference remains visible.
+After initialization, `GetBufferSize` is authoritative. The driver-aligned result produced by the documented alignment retry is accepted as the realizable fixed buffer for this endpoint and exact format. GCLoader does not multiply that result or add another software period. The log reports the configured duration, device minimum, requested duration, and actual aligned duration so any driver-level difference remains visible.
 
 The thread obtains the render and clock services, sets the event, prefills the complete endpoint buffer with silence, starts the stream, and registers with MMCSS using the `Pro Audio` profile. Failure to establish the requested MMCSS scheduling is fatal in enabled mode.
 
@@ -272,7 +281,7 @@ Each buffer therefore uses copy-on-write immutable publication:
 4. A miniaudio data-source read atomically captures one snapshot for its entire read operation.
 5. A later game write cannot mutate memory currently being read by the audio thread.
 
-The initial streaming fill may clone roughly three seconds of PCM, and later refills may clone that ring again. This work occurs on the game's streaming thread, not the 3 ms render thread. It is preferred over a render-thread mutex or torn audio. A later implementation plan may optimize copying only after profiling proves it necessary; the correctness contract remains immutable publication.
+The initial streaming fill may clone roughly three seconds of PCM, and later refills may clone that ring again. This work occurs on the game's streaming thread, not the render thread. It is preferred over a render-thread mutex or torn audio. A later implementation plan may optimize copying only after profiling proves it necessary; the correctness contract remains immutable publication.
 
 Only one `Lock` may be outstanding per buffer. Invalid ranges, unaligned lengths, mismatched `Unlock` arguments, or unsupported lock flags return DirectSound errors without publishing partial data.
 
@@ -352,7 +361,7 @@ Any of the following is fatal:
 - no default console render endpoint;
 - exact 44,100 Hz stereo PCM16 exclusive format unsupported;
 - endpoint already held by another exclusive client;
-- minimum-period initialization or alignment retry failure;
+- configured fixed-period initialization or alignment retry failure;
 - actual endpoint buffer materially larger than the reported minimum;
 - render or clock service unavailable;
 - event registration failure;
@@ -377,7 +386,7 @@ Successful startup logs:
 - endpoint name and ID;
 - exact exclusive format;
 - default and minimum device periods;
-- requested duration;
+- configured fixed duration and requested duration;
 - actual aligned endpoint frames and milliseconds;
 - exclusive event-driven initialization success;
 - MMCSS profile and priority result;
@@ -406,8 +415,8 @@ Automated verification supports the implementation but does not replace playing 
 
 Focused CMake/CTest targets cover deterministic behavior:
 
-- strict configuration parsing and failure when the new key is missing;
-- ConfigGUI round-trip and the distributed default-off value;
+- strict configuration parsing and failure when either audio key is missing;
+- ConfigGUI round-trip, the distributed default-off value, and the 10 ms buffer default;
 - source-format validation and native-versus-converted classification;
 - COM identity, supported interface IDs, and reference counting;
 - primary-buffer format validation;
@@ -417,7 +426,7 @@ Focused CMake/CTest targets cover deterministic behavior:
 - output-clock render spans with simulated first-period starts, queued audio, loop wrap, stop, seek, and resynchronization;
 - source-frame and source-byte cursor conversion;
 - strict WASAPI call order and failure behavior through a mockable endpoint abstraction;
-- driver-aligned minimum-period acceptance and rejection of any application-added buffering beyond that result;
+- configured-duration selection, explicit zero-to-device-minimum behavior, and driver-aligned fixed-period acceptance;
 - fatal-error handoff from the real-time thread to non-real-time reporting;
 - proof that render-path helpers do not allocate or log in their steady-state test path.
 
@@ -431,7 +440,7 @@ The required manual sequence is:
 
 1. Disable the hook and confirm the original DirectSound game still starts and plays audio.
 2. Enable the hook and confirm startup completes without an audio error dialog.
-3. Confirm the log reports exclusive 44,100 Hz stereo PCM16, the actual aligned minimum-period buffer, successful MMCSS registration, and no backend fallback.
+3. Confirm the log reports exclusive 44,100 Hz stereo PCM16, configured 10 ms duration, the actual aligned fixed-period buffer, successful MMCSS registration, and no backend fallback.
 4. Exercise attract mode and menus long enough to hear representative navigation, voice, and menu audio, including exceptional formats.
 5. Play multiple stages and confirm both BGM and SHOT streams start, stay synchronized, seek or resynchronize correctly, fade correctly, and transition cleanly.
 6. Exercise both tap sounds and the arrangement effect repeatedly, including dense gameplay.
@@ -451,4 +460,4 @@ The feature is not accepted until the operator completes this play test. Automat
 
 ## Acceptance Summary
 
-The design is successful when the opt-in hook provides all game audio through one strict 44,100 Hz event-driven WASAPI exclusive stream at the endpoint's aligned minimum period, gameplay audio uses no sample-rate conversion, logs prove the intended backend stayed active without sustained render faults, and the operator can launch and play the game with correct audio while perceiving materially reduced hit-sound latency.
+The design is successful when the opt-in hook provides all game audio through one strict 44,100 Hz event-driven WASAPI exclusive stream at the configured fixed period (10 ms by default), gameplay audio uses no sample-rate conversion, logs prove the intended backend stayed active without sustained render faults, and the operator can launch and play the game with correct audio while perceiving materially reduced hit-sound latency.
