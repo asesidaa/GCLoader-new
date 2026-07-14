@@ -47,6 +47,8 @@ bool IsExactOutputFormat(const WAVEFORMATEX&) noexcept;
 float DirectSoundVolumeToLinearGain(LONG) noexcept;
 REFERENCE_TIME FramesToReferenceTime(
     std::uint64_t, std::uint32_t) noexcept;
+std::uint64_t ReferenceTimeToFramesFloor(
+    REFERENCE_TIME, std::uint32_t) noexcept;
 std::uint64_t ReferenceTimeToFramesCeil(
     REFERENCE_TIME, std::uint32_t) noexcept;
 

@@ -7,7 +7,6 @@
 #include <propvarutil.h>
 #include <wrl/client.h>
 
-#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -404,6 +403,14 @@ HRESULT WasapiEndpoint::Fail(
 HRESULT WasapiEndpoint::Initialize(
     EndpointInitialization* attempted,
     AudioFailure* failure) {
+    if (initialization_.configured_duration <= 0) {
+        return Fail(
+            AudioFailureStage::InvalidConfiguredDuration,
+            E_INVALIDARG,
+            attempted,
+            failure);
+    }
+
     auto result = api_->InitializeComMta();
     if (FAILED(result)) {
         return Fail(AudioFailureStage::CoInitialize, result, attempted, failure);
@@ -456,10 +463,15 @@ HRESULT WasapiEndpoint::Initialize(
         *attempted = initialization_;
     }
 
-    auto requested = std::max(
-        initialization_.minimum_period,
-        initialization_.configured_duration);
-    initialization_.requested_duration = requested;
+    initialization_.requested_duration = initialization_.configured_duration;
+    if (initialization_.configured_duration < initialization_.minimum_period) {
+        return Fail(
+            AudioFailureStage::ConfiguredDurationBelowMinimum,
+            AUDCLNT_E_INVALID_DEVICE_PERIOD,
+            attempted,
+            failure);
+    }
+    auto requested = initialization_.configured_duration;
     result = api_->InitializeExclusiveEvent(
         requested,
         requested,
@@ -529,15 +541,19 @@ HRESULT WasapiEndpoint::Initialize(
             attempted,
             failure);
     }
+    const auto ordinary_floor = ReferenceTimeToFramesFloor(
+        initialization_.requested_duration,
+        kOutputSampleRate);
+    const auto ordinary_ceil = ReferenceTimeToFramesCeil(
+        initialization_.requested_duration,
+        kOutputSampleRate);
     if (initialization_.actual_buffer_frames == 0 ||
         !CanAddressOutputBuffer(initialization_.actual_buffer_frames) ||
         (initialization_.alignment_retry &&
          initialization_.actual_buffer_frames != aligned_frames) ||
         (!initialization_.alignment_retry &&
-         initialization_.actual_buffer_frames >
-             ReferenceTimeToFramesCeil(
-                 initialization_.requested_duration,
-                 kOutputSampleRate))) {
+         initialization_.actual_buffer_frames != ordinary_floor &&
+         initialization_.actual_buffer_frames != ordinary_ceil)) {
         return Fail(
             AudioFailureStage::GetActualBufferSize,
             AUDCLNT_E_BUFFER_SIZE_ERROR,

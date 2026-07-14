@@ -148,6 +148,18 @@ REFERENCE_TIME FramesToReferenceTime(
         (frames * kReferenceTimesPerSecond + rate / 2) / rate);
 }
 
+std::uint64_t ReferenceTimeToFramesFloor(
+    REFERENCE_TIME duration,
+    std::uint32_t rate) noexcept {
+    if (duration <= 0 || rate == 0) {
+        return 0;
+    }
+    const auto value = static_cast<std::uint64_t>(duration);
+    return value / kReferenceTimesPerSecond * rate +
+        value % kReferenceTimesPerSecond * rate /
+            kReferenceTimesPerSecond;
+}
+
 std::uint64_t ReferenceTimeToFramesCeil(
     REFERENCE_TIME duration,
     std::uint32_t rate) noexcept {

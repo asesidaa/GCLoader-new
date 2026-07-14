@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -264,11 +265,30 @@ int main() {
         gc::audio::ReferenceTimeToFramesCeil(30'000, 44100) == 133,
         "3 ms is 133 whole frames");
     failures += expect(
+        gc::audio::ReferenceTimeToFramesFloor(30'000, 44100) == 132 &&
+            gc::audio::ReferenceTimeToFramesFloor(100'000, 44100) == 441,
+        "reference time floor preserves ordinary frame bounds");
+    const auto maximum_duration =
+        std::numeric_limits<REFERENCE_TIME>::max();
+    const auto expected_maximum_floor =
+        static_cast<std::uint64_t>(
+            maximum_duration / gc::audio::kReferenceTimesPerSecond) *
+            44100 +
+        static_cast<std::uint64_t>(
+            maximum_duration % gc::audio::kReferenceTimesPerSecond) *
+            44100 / gc::audio::kReferenceTimesPerSecond;
+    failures += expect(
+        gc::audio::ReferenceTimeToFramesFloor(maximum_duration, 44100) ==
+            expected_maximum_floor,
+        "reference time floor avoids multiplication overflow");
+    failures += expect(
         gc::audio::FramesToReferenceTime(133, 44100) == 30'159,
         "133 frames uses documented nearest hns value");
     failures += expect(
         gc::audio::ReferenceTimeToFramesCeil(-1, 44100) == 0 &&
             gc::audio::ReferenceTimeToFramesCeil(30'000, 0) == 0 &&
+            gc::audio::ReferenceTimeToFramesFloor(-1, 44100) == 0 &&
+            gc::audio::ReferenceTimeToFramesFloor(30'000, 0) == 0 &&
             gc::audio::FramesToReferenceTime(133, 0) == 0,
         "invalid duration and rate arithmetic returns zero");
     failures += expect(

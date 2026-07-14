@@ -108,6 +108,9 @@ public:
         REFERENCE_TIME duration,
         REFERENCE_TIME periodicity,
         const WAVEFORMATEX& format) noexcept override {
+        if (initialize_exclusive_call_count != nullptr) {
+            ++*initialize_exclusive_call_count;
+        }
         initialize_durations.push_back(duration);
         initialize_periodicities.push_back(periodicity);
         initialize_formats.push_back(format);
@@ -269,6 +272,7 @@ public:
     std::shared_ptr<std::uint32_t> shutdown_call_count;
     std::shared_ptr<std::uint32_t> wrong_thread_shutdown_call_count;
     std::shared_ptr<std::uint32_t> render_buffer_call_count;
+    std::shared_ptr<std::uint32_t> initialize_exclusive_call_count;
     DWORD initializing_thread_id{};
 };
 
@@ -289,7 +293,7 @@ int TestDirectSuccessAndRuntimeForwarding() {
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
-        0,
+        30'000,
         &attempted,
         &failure);
 
@@ -329,13 +333,13 @@ int TestDirectSuccessAndRuntimeForwarding() {
                 std::vector<REFERENCE_TIME>{observed->minimum_period} &&
             observed->initialize_periodicities ==
                 std::vector<REFERENCE_TIME>{observed->minimum_period},
-        "minimum period used as both direct initialize durations");
+        "configured minimum used as both direct initialize durations");
     failures += Expect(
         attempted.endpoint_name == observed->endpoint_name &&
             attempted.endpoint_id == observed->endpoint_id &&
             attempted.default_period == observed->default_period &&
             attempted.minimum_period == observed->minimum_period &&
-            attempted.configured_duration == 0 &&
+            attempted.configured_duration == observed->minimum_period &&
             attempted.requested_duration == observed->minimum_period &&
             attempted.actual_buffer_frames == observed->actual_frames &&
             attempted.clock_frequency == observed->clock_frequency &&
@@ -432,8 +436,27 @@ int TestConfiguredDurationPolicy() {
             "configured 10 ms duration and periodicity");
     }
     {
+        auto initialize_calls = std::make_shared<std::uint32_t>();
         auto api = std::make_unique<FakeWasapiApi>();
-        auto* observed = api.get();
+        api->initialize_exclusive_call_count = initialize_calls;
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api),
+            0,
+            &attempted,
+            &failure);
+        failures += Expect(
+            endpoint == nullptr &&
+                failure.stage == AudioFailureStage::InvalidConfiguredDuration &&
+                failure.result == E_INVALIDARG &&
+                *initialize_calls == 0,
+            "zero fixed duration is rejected before exclusive initialization");
+    }
+    {
+        auto initialize_calls = std::make_shared<std::uint32_t>();
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->initialize_exclusive_call_count = initialize_calls;
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
@@ -442,15 +465,29 @@ int TestConfiguredDurationPolicy() {
             &attempted,
             &failure);
         failures += Expect(
-            endpoint != nullptr &&
-                observed->initialize_durations ==
-                    std::vector<REFERENCE_TIME>{observed->minimum_period} &&
-                observed->initialize_periodicities ==
-                    observed->initialize_durations &&
-                endpoint->initialization().configured_duration == 20'000 &&
-                endpoint->initialization().requested_duration ==
-                    observed->minimum_period,
-            "configured duration below minimum clamps to minimum");
+            endpoint == nullptr &&
+                attempted.configured_duration == 20'000 &&
+                attempted.requested_duration == 20'000 &&
+                attempted.minimum_period == 30'000 &&
+                failure.stage ==
+                    AudioFailureStage::ConfiguredDurationBelowMinimum &&
+                failure.result == AUDCLNT_E_INVALID_DEVICE_PERIOD &&
+                *initialize_calls == 0,
+            "configured duration below minimum fails without clamping");
+    }
+    {
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->actual_frames = 132;
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api),
+            30'000,
+            &attempted,
+            &failure);
+        failures += Expect(
+            endpoint != nullptr && attempted.actual_buffer_frames == 132,
+            "ordinary duration floor frame count is accepted");
     }
     return failures;
 }
@@ -538,7 +575,7 @@ int ExpectCreateFailure(
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
-        0,
+        30'000,
         &attempted,
         &failure);
     return Expect(
@@ -554,6 +591,11 @@ int TestInitializationRejectionsAndStages() {
         AudioFailureStage::GetActualBufferSize,
         AUDCLNT_E_BUFFER_SIZE_ERROR,
         "oversized direct actual buffer rejected");
+    failures += ExpectCreateFailure(
+        [](FakeWasapiApi& api) { api.actual_frames = 131; },
+        AudioFailureStage::GetActualBufferSize,
+        AUDCLNT_E_BUFFER_SIZE_ERROR,
+        "undersized direct actual buffer rejected");
     failures += ExpectCreateFailure(
         [](FakeWasapiApi& api) {
             api.first_initialize_result = AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
@@ -680,10 +722,11 @@ int TestUnaddressableOutputSizesAreRejected() {
             unaddressable_frames, kOutputSampleRate);
         api->actual_frames = unaddressable_frames;
         api->shutdown_call_count = shutdown_calls;
+        const auto configured_duration = api->minimum_period;
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), 0, &attempted, &failure);
+            std::move(api), configured_duration, &attempted, &failure);
         failures += Expect(
             endpoint == nullptr &&
                 failure.stage == AudioFailureStage::GetActualBufferSize &&
@@ -702,7 +745,7 @@ int TestUnaddressableOutputSizesAreRejected() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), 0, &attempted, &failure);
+            std::move(api), 30'000, &attempted, &failure);
         failures += Expect(
             endpoint == nullptr &&
                 failure.stage == AudioFailureStage::GetAlignedBufferSize &&
@@ -721,7 +764,7 @@ int TestStartAndRuntimeFailures() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), 0, &attempted, &failure);
+            std::move(api), 30'000, &attempted, &failure);
         failures += Expect(endpoint != nullptr, "endpoint for start failure");
         if (endpoint != nullptr) {
             observed->fail_call = Call::Start;
@@ -740,7 +783,7 @@ int TestStartAndRuntimeFailures() {
         EndpointInitialization attempted{};
         AudioFailure failure{};
         auto endpoint = WasapiEndpoint::Create(
-            std::move(api), 0, &attempted, &failure);
+            std::move(api), 30'000, &attempted, &failure);
         failures += Expect(endpoint != nullptr, "endpoint for runtime failures");
         if (endpoint == nullptr) {
             return failures + 1;
@@ -795,7 +838,7 @@ int TestOwnerThreadShutdownIsIdempotent() {
     AudioFailure failure{};
     auto endpoint = WasapiEndpoint::Create(
         std::move(api),
-        0,
+        30'000,
         &attempted,
         &failure);
 
@@ -827,7 +870,7 @@ int TestOwnerThreadShutdownIsIdempotent() {
     fallback_api->shutdown_call_count = fallback_calls;
     endpoint = WasapiEndpoint::Create(
         std::move(fallback_api),
-        0,
+        30'000,
         &attempted,
         &failure);
     failures += Expect(
