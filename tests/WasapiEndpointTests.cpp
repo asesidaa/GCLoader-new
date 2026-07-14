@@ -38,6 +38,7 @@ enum class Call {
     GetDevicePeriod,
     InitializeExclusiveEvent,
     GetBufferSize,
+    GetStreamLatency,
     ReleaseAudioClient,
     CreateRenderEvent,
     SetEventHandle,
@@ -130,6 +131,14 @@ public:
                     buffer_size_count == 1
                 ? aligned_frames
                 : actual_frames;
+        }
+        return result;
+    }
+
+    HRESULT GetStreamLatency(REFERENCE_TIME* latency) noexcept override {
+        const auto result = Record(Call::GetStreamLatency, stream_latency_result);
+        if (SUCCEEDED(result)) {
+            *latency = stream_latency;
         }
         return result;
     }
@@ -246,10 +255,12 @@ public:
     HRESULT retry_initialize_result{S_OK};
     HRESULT wait_result{S_OK};
     HRESULT clock_result{S_OK};
+    HRESULT stream_latency_result{S_OK};
     std::wstring endpoint_name{L"Fake Speakers"};
     std::wstring endpoint_id{L"fake-endpoint-id"};
     REFERENCE_TIME default_period{100'000};
     REFERENCE_TIME minimum_period{30'000};
+    REFERENCE_TIME stream_latency{42'000};
     std::uint32_t aligned_frames{144};
     std::uint32_t actual_frames{static_cast<std::uint32_t>(
         gc::audio::ReferenceTimeToFramesCeil(
@@ -310,6 +321,7 @@ int TestDirectSuccessAndRuntimeForwarding() {
         Call::GetDevicePeriod,
         Call::InitializeExclusiveEvent,
         Call::GetBufferSize,
+        Call::GetStreamLatency,
         Call::CreateRenderEvent,
         Call::SetEventHandle,
         Call::GetRenderService,
@@ -342,6 +354,9 @@ int TestDirectSuccessAndRuntimeForwarding() {
             attempted.configured_duration == observed->minimum_period &&
             attempted.requested_duration == observed->minimum_period &&
             attempted.actual_buffer_frames == observed->actual_frames &&
+            attempted.stream_latency == observed->stream_latency &&
+            attempted.stream_latency_result == S_OK &&
+            attempted.stream_latency_available &&
             attempted.clock_frequency == observed->clock_frequency &&
             !attempted.alignment_retry,
         "direct attempted metadata is fully populated");
@@ -405,6 +420,33 @@ int TestDirectSuccessAndRuntimeForwarding() {
             position.position == observed->clock_position &&
             position.qpc_100ns == observed->clock_qpc,
         "clock S_FALSE is accepted with returned values");
+    return failures;
+}
+
+int TestStreamLatencyFailureIsMetadataOnly() {
+    auto api = std::make_unique<FakeWasapiApi>();
+    api->stream_latency_result = E_NOTIMPL;
+    auto* observed = api.get();
+    EndpointInitialization attempted{};
+    AudioFailure failure{};
+    auto endpoint = WasapiEndpoint::Create(
+        std::move(api),
+        30'000,
+        &attempted,
+        &failure);
+
+    int failures = Expect(
+        endpoint != nullptr,
+        "stream latency query failure does not reject endpoint");
+    failures += Expect(
+        observed->calls.end() != std::find(
+            observed->calls.begin(),
+            observed->calls.end(),
+            Call::GetStreamLatency) &&
+            attempted.stream_latency == 0 &&
+            attempted.stream_latency_result == E_NOTIMPL &&
+            !attempted.stream_latency_available,
+        "stream latency failure remains exact unavailable metadata");
     return failures;
 }
 
@@ -888,6 +930,7 @@ int TestOwnerThreadShutdownIsIdempotent() {
 int main() {
     int failures = 0;
     failures += TestDirectSuccessAndRuntimeForwarding();
+    failures += TestStreamLatencyFailureIsMetadataOnly();
     failures += TestConfiguredDurationPolicy();
     failures += TestAlignmentRetryUsesAuthoritativeFrames();
     failures += TestInitializationRejectionsAndStages();

@@ -145,6 +145,7 @@ set(SOURCES
         DirectSoundFacade.cpp
         ExclusiveAudioEngine.cpp
         MiniaudioMixer.cpp
+        OutputPacingTracker.cpp
         CountdownTimerFreeze.cpp
         config.cpp
         dllmain.cpp
@@ -329,6 +330,7 @@ add_executable(ExclusiveAudioEngineTests
         MiniaudioMixer.cpp
         DirectSoundFacade.cpp
         WasapiEndpoint.cpp
+        OutputPacingTracker.cpp
         ExclusiveAudioEngine.cpp
         tests/ExclusiveAudioEngineTests.cpp
 )
@@ -353,6 +355,7 @@ add_executable(WasapiAudioPatchTests
         MiniaudioMixer.cpp
         DirectSoundFacade.cpp
         WasapiEndpoint.cpp
+        OutputPacingTracker.cpp
         ExclusiveAudioEngine.cpp
         WasapiAudioPatch.cpp
         NesysNetworkConfig.cpp

@@ -490,6 +490,11 @@ bool same_failure(
             right.attempted.configured_duration &&
         left.attempted.requested_duration ==
             right.attempted.requested_duration &&
+        left.attempted.stream_latency == right.attempted.stream_latency &&
+        left.attempted.stream_latency_result ==
+            right.attempted.stream_latency_result &&
+        left.attempted.stream_latency_available ==
+            right.attempted.stream_latency_available &&
         left.attempted.actual_buffer_frames ==
             right.attempted.actual_buffer_frames &&
         left.attempted.clock_frequency ==
@@ -702,6 +707,9 @@ int test_production_diagnostics_use_injected_platform_actions() {
     initialization.minimum_period = 20'000;
     initialization.configured_duration = 100'000;
     initialization.requested_duration = 30'000;
+    initialization.stream_latency = 50'000;
+    initialization.stream_latency_result = S_OK;
+    initialization.stream_latency_available = true;
     initialization.actual_buffer_frames = 147;
     initialization.alignment_retry = true;
     gc::audio::detail::ReportAudioStartupSucceeded(
@@ -728,6 +736,8 @@ int test_production_diagnostics_use_injected_platform_actions() {
              "configured_duration_ms=10.000",
              "requested_duration_100ns=30000",
              "requested_duration_ms=3.000",
+             "stream_latency_100ns=50000",
+             "stream_latency_ms=5.000",
              "actual_buffer_frames=147",
              "actual_buffer_ms=3.333",
              "exclusive_event_driven=true",
@@ -748,13 +758,19 @@ int test_production_diagnostics_use_injected_platform_actions() {
     counters.silence_fallbacks = 13;
     counters.pending_cursor_queries = 14;
     counters.unmapped_cursor_failures = 15;
-    counters.endpoint_hresult_failures = 16;
-    counters.mixer.native_rate_buffers = 17;
-    counters.mixer.sample_format_converted_buffers = 18;
-    counters.mixer.sample_rate_converted_buffers = 19;
-    counters.mixer.native_gameplay_buffers = 20;
-    counters.mixer.active_voices = 21;
-    counters.mixer.maximum_simultaneous_voices = 22;
+    counters.confirmed_gap_events = 16;
+    counters.skipped_output_frames = 17;
+    counters.maximum_skipped_output_frames = 18;
+    counters.chronic_pacing_failures = 19;
+    counters.current_submitted_lead_frames = -20;
+    counters.minimum_submitted_lead_frames = -21;
+    counters.endpoint_hresult_failures = 22;
+    counters.mixer.native_rate_buffers = 23;
+    counters.mixer.sample_format_converted_buffers = 24;
+    counters.mixer.sample_rate_converted_buffers = 25;
+    counters.mixer.native_gameplay_buffers = 26;
+    counters.mixer.active_voices = 27;
+    counters.mixer.maximum_simultaneous_voices = 28;
     gc::audio::detail::ReportAudioRuntimeSummary(counters, actions);
 
     failures += expect(
@@ -769,13 +785,19 @@ int test_production_diagnostics_use_injected_platform_actions() {
              "silence_fallbacks=13",
              "pending_cursor_queries=14",
              "unmapped_cursor_failures=15",
-             "endpoint_hresult_failures=16",
-             "native_rate_buffers=17",
-             "sample_format_converted_buffers=18",
-             "sample_rate_converted_buffers=19",
-             "native_gameplay_buffers=20",
-             "active_voices=21",
-             "maximum_simultaneous_voices=22",
+             "confirmed_gap_events=16",
+             "skipped_output_frames=17",
+             "maximum_skipped_output_frames=18",
+             "chronic_pacing_failures=19",
+             "current_submitted_lead_frames=-20",
+             "minimum_submitted_lead_frames=-21",
+             "endpoint_hresult_failures=22",
+             "native_rate_buffers=23",
+             "sample_format_converted_buffers=24",
+             "sample_rate_converted_buffers=25",
+             "native_gameplay_buffers=26",
+             "active_voices=27",
+             "maximum_simultaneous_voices=28",
          }) {
         failures += expect(
             contains(summary, required),
@@ -798,7 +820,7 @@ int test_production_diagnostics_use_injected_platform_actions() {
             contains(diagnostics.errors.back(), "stage=ReleaseRenderBuffer") &&
             contains(diagnostics.errors.back(), "hresult=0x800710DF") &&
             contains(diagnostics.errors.back(), "format=pcm16/44100Hz/2ch/16bit") &&
-            contains(diagnostics.errors.back(), "maximum_simultaneous_voices=22"),
+            contains(diagnostics.errors.back(), "maximum_simultaneous_voices=28"),
         "runtime fatal logs endpoint stage HRESULT format and counters");
     failures += expect(
         diagnostics.messages.size() == 1 &&
@@ -815,6 +837,54 @@ int test_production_diagnostics_use_injected_platform_actions() {
             diagnostics.fail_fast_calls == 1,
         "runtime fatal terminates then uses injected fail-fast fallback");
 
+    return failures;
+}
+
+int test_pacing_specific_diagnostics() {
+    int failures = 0;
+    DiagnosticState diagnostics;
+    g_diagnostics = &diagnostics;
+    const auto actions = fake_platform_actions();
+
+    gc::audio::EndpointInitialization unavailable{};
+    unavailable.endpoint_id = L"latency-unavailable";
+    unavailable.stream_latency_result = E_NOTIMPL;
+    gc::audio::detail::ReportAudioStartupSucceeded(unavailable, actions);
+    failures += expect(
+        diagnostics.info.size() == 1 &&
+            contains(diagnostics.info.back(), "stream_latency=unavailable") &&
+            contains(
+                diagnostics.info.back(),
+                "stream_latency_hresult=0x80004001"),
+        "unsupported stream latency is explicit startup metadata");
+
+    diagnostics = {};
+    unavailable.configured_duration = 100'000;
+    unavailable.minimum_period = 30'000;
+    unavailable.actual_buffer_frames = 441;
+    gc::audio::AudioRuntimeCountersSnapshot counters{};
+    counters.confirmed_gap_events = 3;
+    counters.skipped_output_frames = 882;
+    counters.maximum_skipped_output_frames = 441;
+    counters.chronic_pacing_failures = 1;
+    gc::audio::detail::ReportAudioRuntimeFailure(
+        unavailable,
+        {gc::audio::AudioFailureStage::ChronicOutputGap, E_FAIL},
+        counters,
+        actions);
+    failures += expect(
+        diagnostics.errors.size() == 1 &&
+            contains(diagnostics.errors.back(), "stage=ChronicOutputGap") &&
+            contains(diagnostics.errors.back(), "confirmed_gap_events=3") &&
+            contains(diagnostics.errors.back(), "skipped_output_frames=882") &&
+            contains(
+                diagnostics.errors.back(),
+                "maximum_skipped_output_frames=441") &&
+            diagnostics.messages.size() == 1 &&
+            contains(
+                diagnostics.messages.back(),
+                "increase wasapi_exclusive_buffer_ms and restart"),
+        "chronic pacing fatal gives buffer-specific recovery guidance");
     return failures;
 }
 
@@ -853,6 +923,7 @@ int test_null_production_api_and_startup_fatal_reporting() {
         &gc::audio::CreateProductionWasapiApi,
         fake_start_engine,
         100'000,
+        actions,
         {},
         &forwarded_failure);
     failures += expect(
@@ -860,6 +931,16 @@ int test_null_production_api_and_startup_fatal_reporting() {
             g_start_engine_timeout == 10'000 &&
             g_start_engine_configured_duration == 100'000,
         "production startup forwards fixed configured duration");
+    failures += expect(
+        diagnostics.info.size() == 1 &&
+            contains(
+                diagnostics.info.back(),
+                "stage=production_engine_start") &&
+            contains(diagnostics.info.back(), "configured_buffer_ms=10") &&
+            contains(
+                diagnostics.info.back(),
+                "configured_duration_100ns=100000"),
+        "production startup logs the duration immediately before StartAndWait");
 
     g_start_engine_calls = 0;
 
@@ -868,6 +949,7 @@ int test_null_production_api_and_startup_fatal_reporting() {
         fake_null_wasapi_api,
         fake_start_engine,
         100'000,
+        actions,
         {},
         &allocation_failure);
     failures += expect(
@@ -912,6 +994,7 @@ int test_config_gate_and_attach_failure_policy() {
     failures += expect(
         gc::audio::detail::WasapiAudioPatchInitWithDependencies(
             false,
+            10,
             {
                 fake_minhook_api(),
                 fake_resolver_api(),
@@ -926,9 +1009,41 @@ int test_config_gate_and_attach_failure_policy() {
             contains(diagnostics.info.back(), "requested_backend=directsound") &&
             contains(diagnostics.info.back(), "active_backend=directsound") &&
             contains(diagnostics.info.back(), "hook_installed=false") &&
+            contains(diagnostics.info.back(), "configured_buffer_ms=10") &&
+            contains(
+                diagnostics.info.back(),
+                "configured_duration_100ns=100000") &&
             diagnostics.errors.empty() && diagnostics.messages.empty() &&
             diagnostics.termination_codes.empty(),
         "disabled config logs original DirectSound backend only");
+
+    diagnostics = {};
+    FakeState enabled;
+    g_fake = &enabled;
+    failures += expect(
+        gc::audio::detail::WasapiAudioPatchInitWithDependencies(
+            true,
+            10,
+            {
+                fake_minhook_api(),
+                fake_resolver_api(),
+                fake_platform_actions(),
+            }),
+        "enabled config returns success");
+    failures += expect(
+        diagnostics.info.size() == 1 &&
+            contains(
+                diagnostics.info.back(),
+                "requested_backend=wasapi_exclusive") &&
+            contains(
+                diagnostics.info.back(),
+                "active_backend=wasapi_exclusive") &&
+            contains(diagnostics.info.back(), "hook_installed=true") &&
+            contains(diagnostics.info.back(), "configured_buffer_ms=10") &&
+            contains(
+                diagnostics.info.back(),
+                "configured_duration_100ns=100000"),
+        "enabled config logs the parsed buffer duration before the detour runs");
 
     diagnostics = {};
     FakeState clean_failure;
@@ -937,6 +1052,7 @@ int test_config_gate_and_attach_failure_policy() {
     failures += expect(
         !gc::audio::detail::WasapiAudioPatchInitWithDependencies(
             true,
+            10,
             {
                 fake_minhook_api(),
                 fake_resolver_api(),
@@ -974,6 +1090,7 @@ int test_config_gate_and_attach_failure_policy() {
     try {
         returned = gc::audio::detail::WasapiAudioPatchInitWithDependencies(
             true,
+            10,
             {
                 fake_minhook_api(),
                 fake_resolver_api(),
@@ -1394,6 +1511,7 @@ int main() {
     failures += test_failure_reporting_and_cache();
     failures += test_concurrent_first_callers_share_initialization();
     failures += test_production_diagnostics_use_injected_platform_actions();
+    failures += test_pacing_specific_diagnostics();
     failures += test_null_production_api_and_startup_fatal_reporting();
     failures += test_config_gate_and_attach_failure_policy();
 

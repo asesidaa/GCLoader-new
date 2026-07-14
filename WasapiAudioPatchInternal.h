@@ -4,6 +4,7 @@
 #include "WasapiAudioPatch.h"
 
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 
 namespace gc::audio::detail {
@@ -39,6 +40,7 @@ bool InstallWasapiAudioHookWithResolver(
 
 bool WasapiAudioPatchInitWithDependencies(
     bool enabled,
+    std::uint32_t configured_buffer_ms,
     AudioPatchInitDependencies dependencies);
 
 void ReportAudioStartupSucceeded(
@@ -60,6 +62,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn,
     StartExclusiveAudioEngineFn,
     REFERENCE_TIME configured_duration,
+    AudioPatchPlatformActions,
     std::shared_ptr<IAudioEngineObserver>,
     AudioStartupFailure*) noexcept;
 

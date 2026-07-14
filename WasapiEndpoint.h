@@ -38,6 +38,8 @@ enum class AudioFailureStage : std::uint32_t {
     GetRenderBuffer,
     ReleaseRenderBuffer,
     GetClockPosition,
+    InvalidClockPosition,
+    ChronicOutputGap,
 };
 
 struct AudioFailure {
@@ -52,6 +54,9 @@ struct EndpointInitialization {
     REFERENCE_TIME minimum_period{};
     REFERENCE_TIME configured_duration{};
     REFERENCE_TIME requested_duration{};
+    REFERENCE_TIME stream_latency{};
+    HRESULT stream_latency_result{E_NOTIMPL};
+    bool stream_latency_available{};
     std::uint32_t actual_buffer_frames{};
     std::uint64_t clock_frequency{};
     bool alignment_retry{};
@@ -82,6 +87,7 @@ public:
         REFERENCE_TIME, REFERENCE_TIME,
         const WAVEFORMATEX&) noexcept = 0;
     virtual HRESULT GetBufferSize(std::uint32_t*) noexcept = 0;
+    virtual HRESULT GetStreamLatency(REFERENCE_TIME*) noexcept = 0;
     virtual void ReleaseAudioClient() noexcept = 0;
     virtual HRESULT CreateRenderEvent() noexcept = 0;
     virtual HRESULT SetEventHandle() noexcept = 0;

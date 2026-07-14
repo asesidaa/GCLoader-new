@@ -33,6 +33,11 @@ constexpr std::string_view kFailureMessage =
     "WASAPI exclusive low-latency audio failed.\n"
     "Restart the game after setting enable_wasapi_exclusive_audio = false\n"
     "to restore the original DirectSound backend.";
+constexpr std::string_view kPacingFailureMessage =
+    "WASAPI exclusive low-latency audio pacing failed.\n"
+    "Please increase wasapi_exclusive_buffer_ms and restart the game.\n"
+    "Set enable_wasapi_exclusive_audio = false and restart to restore "
+    "the original DirectSound backend.";
 constexpr std::string_view kExactFormat =
     "pcm16/44100Hz/2ch/16bit";
 constexpr REFERENCE_TIME kReferenceTimePerMillisecond = 10'000;
@@ -52,7 +57,9 @@ const char* audio_failure_stage_name(AudioFailureStage stage) noexcept {
     case AudioFailureStage::OpenDefaultEndpoint: return "OpenDefaultEndpoint";
     case AudioFailureStage::ActivateAudioClient: return "ActivateAudioClient";
     case AudioFailureStage::IsFormatSupported: return "IsFormatSupported";
+    case AudioFailureStage::InvalidConfiguredDuration: return "InvalidConfiguredDuration";
     case AudioFailureStage::GetDevicePeriod: return "GetDevicePeriod";
+    case AudioFailureStage::ConfiguredDurationBelowMinimum: return "ConfiguredDurationBelowMinimum";
     case AudioFailureStage::InitializeExclusive: return "InitializeExclusive";
     case AudioFailureStage::GetAlignedBufferSize: return "GetAlignedBufferSize";
     case AudioFailureStage::ReactivateAudioClient: return "ReactivateAudioClient";
@@ -72,6 +79,8 @@ const char* audio_failure_stage_name(AudioFailureStage stage) noexcept {
     case AudioFailureStage::GetRenderBuffer: return "GetRenderBuffer";
     case AudioFailureStage::ReleaseRenderBuffer: return "ReleaseRenderBuffer";
     case AudioFailureStage::GetClockPosition: return "GetClockPosition";
+    case AudioFailureStage::InvalidClockPosition: return "InvalidClockPosition";
+    case AudioFailureStage::ChronicOutputGap: return "ChronicOutputGap";
     }
     return "Unknown";
 }
@@ -118,6 +127,15 @@ std::string counters_text(const AudioRuntimeCountersSnapshot& counters) {
         << " pending_cursor_queries=" << counters.pending_cursor_queries
         << " unmapped_cursor_failures="
         << counters.unmapped_cursor_failures
+        << " confirmed_gap_events=" << counters.confirmed_gap_events
+        << " skipped_output_frames=" << counters.skipped_output_frames
+        << " maximum_skipped_output_frames="
+        << counters.maximum_skipped_output_frames
+        << " chronic_pacing_failures=" << counters.chronic_pacing_failures
+        << " current_submitted_lead_frames="
+        << counters.current_submitted_lead_frames
+        << " minimum_submitted_lead_frames="
+        << counters.minimum_submitted_lead_frames
         << " endpoint_hresult_failures=" << counters.endpoint_hresult_failures
         << " native_rate_buffers=" << counters.mixer.native_rate_buffers
         << " sample_format_converted_buffers="
@@ -162,7 +180,19 @@ std::string startup_text(const EndpointInitialization& initialization) {
         << static_cast<double>(initialization.configured_duration) / 10'000.0
         << " requested_duration_100ns=" << initialization.requested_duration
         << " requested_duration_ms="
-        << static_cast<double>(initialization.requested_duration) / 10'000.0
+        << static_cast<double>(initialization.requested_duration) / 10'000.0;
+    if (initialization.stream_latency_available) {
+        stream
+            << " stream_latency_100ns=" << initialization.stream_latency
+            << " stream_latency_ms="
+            << static_cast<double>(initialization.stream_latency) / 10'000.0;
+    } else {
+        stream
+            << " stream_latency=unavailable"
+            << " stream_latency_hresult="
+            << hresult_hex(initialization.stream_latency_result);
+    }
+    stream
         << " actual_buffer_frames=" << initialization.actual_buffer_frames
         << " actual_buffer_ms=" << actual_ms
         << " exclusive_event_driven=true"
@@ -187,7 +217,15 @@ std::string failure_text(
                 : utf8(initialization.endpoint_id))
         << "\" stage=" << audio_failure_stage_name(failure.stage)
         << " hresult=" << hresult_hex(failure.result)
-        << " format=" << kExactFormat;
+        << " format=" << kExactFormat
+        << " default_period_100ns=" << initialization.default_period
+        << " minimum_period_100ns=" << initialization.minimum_period
+        << " configured_duration_100ns="
+        << initialization.configured_duration
+        << " requested_duration_100ns="
+        << initialization.requested_duration
+        << " actual_buffer_frames="
+        << initialization.actual_buffer_frames;
     return stream.str();
 }
 
@@ -212,6 +250,22 @@ std::string hook_failure_text(const AudioHookFailure& failure) {
     return stream.str();
 }
 
+std::string audio_config_text(
+    bool enabled,
+    std::uint32_t configured_buffer_ms) {
+    std::ostringstream stream;
+    stream << "WASAPI audio config requested_backend="
+        << (enabled ? "wasapi_exclusive" : "directsound")
+        << " active_backend="
+        << (enabled ? "wasapi_exclusive" : "directsound")
+        << " hook_installed=" << (enabled ? "true" : "false")
+        << " enabled=" << (enabled ? "true" : "false")
+        << " configured_buffer_ms=" << configured_buffer_ms
+        << " configured_duration_100ns="
+        << BufferMillisecondsToReferenceTime(configured_buffer_ms);
+    return stream.str();
+}
+
 void emit_info(
     detail::AudioPatchPlatformActions actions,
     const char* text) noexcept {
@@ -228,10 +282,41 @@ void emit_error(
     }
 }
 
+void report_audio_buffer_handoff(
+    detail::AudioPatchPlatformActions actions,
+    std::string_view stage,
+    REFERENCE_TIME configured_duration) noexcept {
+    try {
+        std::ostringstream stream;
+        stream << "WASAPI audio buffer handoff stage=" << stage
+            << " configured_buffer_ms="
+            << configured_duration / kReferenceTimePerMillisecond
+            << " configured_duration_100ns=" << configured_duration;
+        const auto text = stream.str();
+        emit_info(actions, text.c_str());
+    } catch (...) {
+        emit_error(
+            actions,
+            "WASAPI audio buffer handoff diagnostics formatting failed");
+    }
+}
+
 void show_error(detail::AudioPatchPlatformActions actions) noexcept {
     if (actions.show_error != nullptr) {
         try { actions.show_error(kFailureMessage.data()); } catch (...) {}
     }
+}
+
+void show_runtime_error(
+    detail::AudioPatchPlatformActions actions,
+    AudioFailureStage stage) noexcept {
+    if (actions.show_error == nullptr) {
+        return;
+    }
+    const auto message = stage == AudioFailureStage::ChronicOutputGap
+        ? kPacingFailureMessage
+        : kFailureMessage;
+    try { actions.show_error(message.data()); } catch (...) {}
 }
 
 void production_log_info(const char* text) {
@@ -329,6 +414,7 @@ public:
             CreateProductionWasapiApi,
             &ExclusiveAudioEngine::StartAndWait,
             configured_duration_,
+            actions_,
             std::move(observer),
             startup_failure);
         if (engine == nullptr) {
@@ -363,10 +449,19 @@ private:
 struct ProductionDetourState {
     // This process-lifetime state samples the parsed value exactly once.
     ProductionDetourState()
-        : startup(
-              production_platform_actions(),
+        : ProductionDetourState(
               BufferMillisecondsToReferenceTime(
                   ConfigManager::instance().GetWasapiExclusiveBufferMs())) {}
+
+    explicit ProductionDetourState(REFERENCE_TIME configured_duration)
+        : startup(
+              production_platform_actions(),
+              configured_duration) {
+        report_audio_buffer_handoff(
+            production_platform_actions(),
+            "detour_state",
+            configured_duration);
+    }
 
     ProductionExclusiveEngineStartup startup;
     detail::CachedExclusiveEngineFactory factory{startup};
@@ -515,7 +610,7 @@ void ReportAudioRuntimeFailure(
     } catch (...) {
         emit_error(actions, "WASAPI audio runtime fatal formatting failed");
     }
-    show_error(actions);
+    show_runtime_error(actions, failure.stage);
     if (actions.terminate_process != nullptr) {
         try {
             actions.terminate_process(ERROR_DEVICE_NOT_AVAILABLE);
@@ -553,8 +648,13 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn create_api,
     StartExclusiveAudioEngineFn start_engine,
     REFERENCE_TIME configured_duration,
+    AudioPatchPlatformActions actions,
     std::shared_ptr<IAudioEngineObserver> observer,
     AudioStartupFailure* startup_failure) noexcept {
+    report_audio_buffer_handoff(
+        actions,
+        "production_engine_start",
+        configured_duration);
     if (startup_failure != nullptr) {
         *startup_failure = {};
     }
@@ -590,6 +690,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
 
 bool WasapiAudioPatchInitWithDependencies(
     bool enabled,
+    std::uint32_t configured_buffer_ms,
     AudioPatchInitDependencies dependencies) {
     AudioHookFailure failure{};
     if (!InstallWasapiAudioHookWithResolver(
@@ -619,16 +720,13 @@ bool WasapiAudioPatchInitWithDependencies(
         std::abort();
     }
 
-    if (!enabled) {
-        emit_info(
+    try {
+        const auto text = audio_config_text(enabled, configured_buffer_ms);
+        emit_info(dependencies.platform, text.c_str());
+    } catch (...) {
+        emit_error(
             dependencies.platform,
-            "WASAPI audio config requested_backend=directsound "
-            "active_backend=directsound hook_installed=false enabled=false");
-    } else {
-        emit_info(
-            dependencies.platform,
-            "WASAPI audio config requested_backend=wasapi_exclusive "
-            "active_backend=wasapi_exclusive hook_installed=true");
+            "WASAPI audio config diagnostics formatting failed");
     }
     return true;
 }
@@ -833,8 +931,10 @@ bool InstallWasapiAudioHook(
 bool WasapiAudioPatchInit() noexcept {
     const auto actions = production_platform_actions();
     try {
+        const auto& config = ConfigManager::instance();
         return detail::WasapiAudioPatchInitWithDependencies(
-            ConfigManager::instance().GetEnableWasapiExclusiveAudio(),
+            config.GetEnableWasapiExclusiveAudio(),
+            config.GetWasapiExclusiveBufferMs(),
             {
                 {
                     MH_Initialize,

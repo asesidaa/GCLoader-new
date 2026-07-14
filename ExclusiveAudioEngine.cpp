@@ -239,14 +239,6 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         pcm16_mix_.resize(
             static_cast<std::size_t>(frames) * kOutputChannels);
 
-        if (FAILED(endpoint_->Start(&failure))) {
-            CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(
-                failure, std::move(initialization_));
-            SetEvent(audio_exited_event_);
-            return;
-        }
-
         EndpointClockPosition initial_clock{};
         if (FAILED(endpoint_->ReadClock(&initial_clock, &failure))) {
             CleanupEndpointOnAudioThread();
@@ -259,8 +251,23 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             initial_clock.position,
             initialization_.clock_frequency,
             0);
-        submitted_frames_.store(frames, std::memory_order_release);
-        last_qpc_100ns_ = initial_clock.qpc_100ns;
+        pacing_tracker_.emplace(frames);
+        submitted_frames_.store(
+            pacing_tracker_->submitted_tail(),
+            std::memory_order_release);
+        current_submitted_lead_frames_.store(
+            frames, std::memory_order_relaxed);
+        minimum_submitted_lead_frames_.store(
+            frames, std::memory_order_relaxed);
+
+        if (FAILED(endpoint_->Start(&failure))) {
+            CleanupEndpointOnAudioThread();
+            SignalInitializationFailure(
+                failure, std::move(initialization_));
+            SetEvent(audio_exited_event_);
+            return;
+        }
+        last_qpc_100ns_ = 0;
         actual_period_100ns_ = FramesToReferenceTime(
             frames, kOutputSampleRate);
         initialization_succeeded_.store(true, std::memory_order_release);
@@ -314,10 +321,43 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
         }
         CountLateWake(clock.qpc_100ns);
 
-        const auto begin = submitted_frames_.load(std::memory_order_relaxed);
+        const auto presented = clock_mapper_.ToOutputFrame(clock.position);
+        if (!presented.has_value() || !pacing_tracker_.has_value()) {
+            static_cast<void>(endpoint_->TrySubmitSilence());
+            RecordRuntimeFailure({
+                AudioFailureStage::InvalidClockPosition,
+                E_FAIL,
+            });
+            break;
+        }
+
+        const auto decision = pacing_tracker_->Plan(*presented);
+        RecordPacingDecision(decision);
+        if (decision.kind == OutputPacingDecisionKind::InvalidClock) {
+            static_cast<void>(endpoint_->TrySubmitSilence());
+            RecordRuntimeFailure({
+                AudioFailureStage::InvalidClockPosition,
+                E_FAIL,
+            });
+            break;
+        }
+        if (decision.kind == OutputPacingDecisionKind::ChronicGap) {
+            chronic_pacing_failures_.fetch_add(
+                1, std::memory_order_relaxed);
+            static_cast<void>(endpoint_->TrySubmitSilence());
+            RecordRuntimeFailure({
+                AudioFailureStage::ChronicOutputGap,
+                E_FAIL,
+            });
+            break;
+        }
+
         auto rendered = mixer_->Render(
             float_mix_,
-            MixerRenderTimeline{begin, 0});
+            MixerRenderTimeline{
+                decision.block_begin,
+                decision.discontinuity_frames,
+            });
         if (detail::FinalizeMixerRenderBlock(
                 float_mix_, frames, rendered)) {
             silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
@@ -327,7 +367,16 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
             RecordRuntimeFailure(failure);
             break;
         }
-        submitted_frames_.fetch_add(frames, std::memory_order_release);
+        if (!pacing_tracker_->Commit(decision)) {
+            RecordRuntimeFailure({
+                AudioFailureStage::InvalidClockPosition,
+                E_FAIL,
+            });
+            break;
+        }
+        submitted_frames_.store(
+            pacing_tracker_->submitted_tail(),
+            std::memory_order_release);
         render_callbacks_.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -394,7 +443,10 @@ void ExclusiveAudioEngine::SignalInitializationFailure(
 
 void ExclusiveAudioEngine::RecordRuntimeFailure(
     const AudioFailure& failure) noexcept {
-    endpoint_hresult_failures_.fetch_add(1, std::memory_order_relaxed);
+    if (failure.stage != AudioFailureStage::InvalidClockPosition &&
+        failure.stage != AudioFailureStage::ChronicOutputGap) {
+        endpoint_hresult_failures_.fetch_add(1, std::memory_order_relaxed);
+    }
     bool expected = false;
     if (!failure_claimed_.compare_exchange_strong(
             expected,
@@ -410,8 +462,44 @@ void ExclusiveAudioEngine::RecordRuntimeFailure(
     SetEvent(fatal_event_);
 }
 
+void ExclusiveAudioEngine::RecordPacingDecision(
+    const OutputPacingDecision& decision) noexcept {
+    if (decision.kind == OutputPacingDecisionKind::InvalidClock) {
+        return;
+    }
+    current_submitted_lead_frames_.store(
+        decision.submitted_lead_frames,
+        std::memory_order_relaxed);
+    auto minimum = minimum_submitted_lead_frames_.load(
+        std::memory_order_relaxed);
+    while (decision.submitted_lead_frames < minimum &&
+           !minimum_submitted_lead_frames_.compare_exchange_weak(
+               minimum,
+               decision.submitted_lead_frames,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+    if (decision.kind != OutputPacingDecisionKind::RecoverableGap &&
+        decision.kind != OutputPacingDecisionKind::ChronicGap) {
+        return;
+    }
+    confirmed_gap_events_.fetch_add(1, std::memory_order_relaxed);
+    skipped_output_frames_.fetch_add(
+        decision.discontinuity_frames,
+        std::memory_order_relaxed);
+    auto maximum = maximum_skipped_output_frames_.load(
+        std::memory_order_relaxed);
+    while (decision.discontinuity_frames > maximum &&
+           !maximum_skipped_output_frames_.compare_exchange_weak(
+               maximum,
+               decision.discontinuity_frames,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+}
+
 void ExclusiveAudioEngine::CountLateWake(std::uint64_t qpc_100ns) noexcept {
-    if (qpc_100ns > last_qpc_100ns_) {
+    if (last_qpc_100ns_ != 0 && qpc_100ns > last_qpc_100ns_) {
         const auto delta = qpc_100ns - last_qpc_100ns_;
         const auto period = static_cast<std::uint64_t>(
             std::max<REFERENCE_TIME>(actual_period_100ns_, 0));
@@ -430,6 +518,12 @@ ExclusiveAudioEngine::SnapshotCounters() const noexcept {
         silence_fallbacks_.load(std::memory_order_relaxed),
         pending_cursor_queries_.load(std::memory_order_relaxed),
         unmapped_cursor_failures_.load(std::memory_order_relaxed),
+        confirmed_gap_events_.load(std::memory_order_relaxed),
+        skipped_output_frames_.load(std::memory_order_relaxed),
+        maximum_skipped_output_frames_.load(std::memory_order_relaxed),
+        chronic_pacing_failures_.load(std::memory_order_relaxed),
+        current_submitted_lead_frames_.load(std::memory_order_relaxed),
+        minimum_submitted_lead_frames_.load(std::memory_order_relaxed),
         endpoint_hresult_failures_.load(std::memory_order_relaxed),
         mixer_ != nullptr ? mixer_->diagnostics() : MixerDiagnosticsSnapshot{},
     };
@@ -488,7 +582,14 @@ ExclusiveAudioEngine::CurrentOutputFrame() noexcept {
         RecordRuntimeFailure(failure);
         return std::nullopt;
     }
-    return clock_mapper_.ToOutputFrame(position.position);
+    const auto output_frame = clock_mapper_.ToOutputFrame(position.position);
+    if (!output_frame.has_value()) {
+        RecordRuntimeFailure({
+            AudioFailureStage::InvalidClockPosition,
+            E_FAIL,
+        });
+    }
+    return output_frame;
 }
 
 std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept {

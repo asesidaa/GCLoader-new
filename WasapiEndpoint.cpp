@@ -205,6 +205,12 @@ public:
             : client_->GetBufferSize(frames);
     }
 
+    HRESULT GetStreamLatency(REFERENCE_TIME* latency) noexcept override {
+        return client_ == nullptr
+            ? E_UNEXPECTED
+            : client_->GetStreamLatency(latency);
+    }
+
     void ReleaseAudioClient() noexcept override {
         if (!IsInitializingThread()) {
             return;
@@ -559,6 +565,13 @@ HRESULT WasapiEndpoint::Initialize(
             AUDCLNT_E_BUFFER_SIZE_ERROR,
             attempted,
             failure);
+    }
+    initialization_.stream_latency_result = api_->GetStreamLatency(
+        &initialization_.stream_latency);
+    initialization_.stream_latency_available = SUCCEEDED(
+        initialization_.stream_latency_result);
+    if (!initialization_.stream_latency_available) {
+        initialization_.stream_latency = 0;
     }
     if (attempted != nullptr) {
         *attempted = initialization_;

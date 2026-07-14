@@ -1,5 +1,14 @@
 # Configurable Fixed WASAPI Buffer Duration Implementation Plan
 
+> **Follow-up status (2026-07-14):** The operator confirmed that the deployed
+> 10 ms buffer removed the prior crackling, but this buffer-only repair is not
+> the final low-latency timing design. Its `0 = endpoint minimum` and
+> below-minimum clamping policy is superseded by
+> `docs/superpowers/specs/2026-07-14-wasapi-fixed-period-clock-pacing-design.md`:
+> the user value is now a strictly positive fixed period, values below the
+> endpoint minimum fail, and `IAudioClock`-paced gap recovery preserves source
+> time when a render deadline is actually missed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan inline. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the unstable endpoint-minimum request with a fixed, configurable exclusive buffer that defaults to 10 ms while preserving `0 = endpoint minimum`.
@@ -18,6 +27,21 @@
 - Preserve the current `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED` retry and treat its aligned duration as authoritative.
 - The render thread remains allocation-free and does not read configuration.
 - Preserve exact 44,100 Hz stereo PCM16 and all existing fail-closed behavior.
+- Run every CMake configure and build inside the x86 MSVC environment loaded by
+  `C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat`.
+- Let the repository CMake configuration discover or fetch all dependencies; do
+  not pass hand-written dependency paths to compensate for an invalid cache.
+- Use a normal in-place configure/build while the cache is healthy. If a CMake
+  invocation outside `vcvars32.bat` contaminates the cache, recover with the
+  following fresh configure before building again:
+
+```powershell
+& $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --fresh -S . -B build-msvc32-latest -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl'
+```
+
+  A successful recovery must discover the project dependencies through CMake
+  and leave `CMAKE_C_COMPILER`, `CMAKE_CXX_COMPILER`, and
+  `CMAKE_MAKE_PROGRAM` populated in `build-msvc32-latest/CMakeCache.txt`.
 
 ---
 

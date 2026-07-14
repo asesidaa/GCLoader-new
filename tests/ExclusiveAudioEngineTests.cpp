@@ -51,6 +51,13 @@ constexpr std::uint64_t kInitialClock = 1'000;
 constexpr auto kPeriod = static_cast<REFERENCE_TIME>(1'814);
 constexpr HRESULT kWaitFailure = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
 
+constexpr std::uint64_t ClockPositionForOutputFrame(
+    std::uint64_t frame) noexcept {
+    return kInitialClock +
+        (frame * kClockFrequency + gc::audio::kOutputSampleRate - 1) /
+            gc::audio::kOutputSampleRate;
+}
+
 int Expect(bool condition, std::string_view name) {
     if (condition) {
         return 0;
@@ -214,6 +221,7 @@ enum class ApiCall : std::uint8_t {
     GetDevicePeriod,
     InitializeExclusiveEvent,
     GetBufferSize,
+    GetStreamLatency,
     ReleaseAudioClient,
     CreateRenderEvent,
     SetEventHandle,
@@ -338,6 +346,17 @@ struct FakeWasapiState {
         }
         return found;
     }
+
+    std::size_t First(ApiCall wanted) const noexcept {
+        const auto count = std::min(call_count.load(), calls.size());
+        for (std::size_t index = 0; index < count; ++index) {
+            if (calls[index].ready.load(std::memory_order_acquire) &&
+                calls[index].record.call == wanted) {
+                return index;
+            }
+        }
+        return calls.size();
+    }
 };
 
 class FakeWasapiApi final : public IWasapiApi {
@@ -404,6 +423,15 @@ public:
             gc::audio::ReferenceTimeToFramesCeil(
                 kPeriod, gc::audio::kOutputSampleRate));
         return state_->MaybeFail(ApiCall::GetBufferSize);
+    }
+
+    HRESULT GetStreamLatency(REFERENCE_TIME* latency) noexcept override {
+        state_->Record(ApiCall::GetStreamLatency);
+        const auto failure = state_->MaybeFail(ApiCall::GetStreamLatency);
+        if (SUCCEEDED(failure)) {
+            *latency = kPeriod;
+        }
+        return failure;
     }
 
     void ReleaseAudioClient() noexcept override {
@@ -1102,6 +1130,167 @@ int TestSilenceRuntimeFailureAndCleanup() {
     return failures;
 }
 
+int TestPreStartClockOriginAndRecoverableGapPacing() {
+    int failures = 0;
+    EngineFixture fixture;
+    auto engine = fixture.Start();
+    failures += Expect(engine != nullptr, "paced engine startup");
+    failures += Expect(
+        fixture.api->First(ApiCall::GetClockPosition) <
+            fixture.api->First(ApiCall::Start),
+        "stopped stream clock is sampled before endpoint Start");
+
+    auto source = MakeConstantSource(failures);
+    ma_result voice_result = MA_ERROR;
+    auto voice = engine->CreateVoice(
+        source.format,
+        source.snapshot,
+        source.timeline,
+        VoiceUsage::GameplayNativeCandidate,
+        &voice_result);
+    failures += Expect(
+        voice != nullptr && voice_result == MA_SUCCESS &&
+            voice->Play(true, 1) == DS_OK,
+        "paced test voice starts");
+
+    constexpr std::uint64_t first_qpc = 100'000;
+    fixture.api->PushClock(ClockPositionForOutputFrame(8), first_qpc);
+    fixture.api->PushWait();
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) >= 1;
+        }) &&
+            source.timeline->ResolveSourceFrame(8, 1, kFrames).kind ==
+                AudioCursorResolutionKind::Resolved &&
+            source.timeline->ResolveSourceFrame(0, 1, kFrames).kind ==
+                AudioCursorResolutionKind::PendingGeneration,
+        "first post-start event renders the packet after silent prefill");
+
+    fixture.api->PushClock(
+        ClockPositionForOutputFrame(16),
+        first_qpc + static_cast<std::uint64_t>(kPeriod + kPeriod / 2 + 1));
+    fixture.api->PushWait();
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) >= 2;
+        }),
+        "late QPC wake inside submitted tail renders sequentially");
+
+    fixture.api->PushClock(
+        ClockPositionForOutputFrame(25),
+        first_qpc + static_cast<std::uint64_t>(3 * kPeriod));
+    fixture.api->PushWait();
+    failures += Expect(
+        WaitUntil([&] {
+            return fixture.api->submission_count.load(
+                       std::memory_order_acquire) >= 3;
+        }) &&
+            source.timeline->ResolveSourceFrame(24, 1, kFrames).kind ==
+                AudioCursorResolutionKind::Resolved &&
+            source.timeline->ResolveSourceFrame(31, 1, kFrames).kind ==
+                AudioCursorResolutionKind::Resolved &&
+            source.timeline->ResolveSourceFrame(32, 1, kFrames).kind ==
+                AudioCursorResolutionKind::Resolved,
+        "recoverable gap advances the mixer and renders the aligned block");
+
+    engine->CountPendingCursorQuery();
+    engine->CountUnmappedCursorFailure();
+    fixture.api->PushWait(E_ABORT);
+    failures += Expect(WaitForFatal(fixture), "paced test reaches fatal handoff");
+    const auto& counters = fixture.observer_state->fatal_counters;
+    failures += Expect(
+        counters.render_callbacks == 3 &&
+            counters.late_event_wakes == 1 &&
+            counters.confirmed_gap_events == 1 &&
+            counters.skipped_output_frames == 8 &&
+            counters.maximum_skipped_output_frames == 8 &&
+            counters.chronic_pacing_failures == 0 &&
+            counters.current_submitted_lead_frames == -1 &&
+            counters.minimum_submitted_lead_frames == -1 &&
+            counters.pending_cursor_queries == 1 &&
+            counters.unmapped_cursor_failures == 1,
+        "recoverable pacing, lead, and cursor counters remain distinct");
+
+    voice->Stop();
+    engine.reset();
+    voice.reset();
+    failures += ExpectOwnerThreadCleanup(
+        fixture, "paced recoverable-gap audio thread");
+    return failures;
+}
+
+int TestChronicAndInvalidClockPacingFailures() {
+    int failures = 0;
+    {
+        EngineFixture fixture;
+        auto engine = fixture.Start();
+        failures += Expect(engine != nullptr, "chronic-gap engine startup");
+        constexpr std::array presentations{9ULL, 25ULL, 41ULL};
+        for (std::size_t index = 0; index < presentations.size(); ++index) {
+            fixture.api->PushClock(
+                ClockPositionForOutputFrame(presentations[index]),
+                200'000 + index * 2'000);
+            fixture.api->PushWait();
+            if (index != presentations.size() - 1) {
+                failures += Expect(
+                    WaitUntil([&] {
+                        return fixture.api->submission_count.load(
+                                   std::memory_order_acquire) >= index + 1;
+                    }),
+                    "recoverable chronic-gap prefix submits");
+            }
+        }
+        failures += Expect(
+            WaitForFatal(fixture) &&
+                fixture.observer_state->fatal_failure.stage ==
+                    AudioFailureStage::ChronicOutputGap &&
+                fixture.observer_state->fatal_failure.result == E_FAIL,
+            "third rolling gap is a chronic pacing failure");
+        const auto& counters = fixture.observer_state->fatal_counters;
+        failures += Expect(
+            counters.render_callbacks == 2 &&
+                counters.confirmed_gap_events == 3 &&
+                counters.skipped_output_frames == 24 &&
+                counters.maximum_skipped_output_frames == 8 &&
+                counters.chronic_pacing_failures == 1 &&
+                counters.endpoint_hresult_failures == 0 &&
+                fixture.api->Count(ApiCall::ReleaseRenderBuffer) == 4,
+            "chronic gap reports all confirmed gaps and submits one silence packet");
+        engine.reset();
+        failures += ExpectOwnerThreadCleanup(
+            fixture, "chronic-gap audio thread");
+    }
+    {
+        EngineFixture fixture;
+        auto engine = fixture.Start();
+        failures += Expect(engine != nullptr, "invalid-clock engine startup");
+        fixture.api->PushClock(ClockPositionForOutputFrame(8), 300'000);
+        fixture.api->PushWait();
+        failures += Expect(
+            WaitUntil([&] {
+                return fixture.api->submission_count.load(
+                           std::memory_order_acquire) == 1;
+            }),
+            "invalid-clock prefix submits once");
+        fixture.api->PushClock(ClockPositionForOutputFrame(7), 302'000);
+        fixture.api->PushWait();
+        failures += Expect(
+            WaitForFatal(fixture) &&
+                fixture.observer_state->fatal_failure.stage ==
+                    AudioFailureStage::InvalidClockPosition &&
+                fixture.observer_state->fatal_counters.render_callbacks == 1 &&
+                fixture.observer_state->fatal_counters.endpoint_hresult_failures ==
+                    0,
+            "mapped clock regression is a non-HRESULT pacing failure");
+        engine.reset();
+        failures += ExpectOwnerThreadCleanup(
+            fixture, "invalid-clock audio thread");
+    }
+    return failures;
+}
+
 int TestVoiceClockSummaryAndRenderSafety() {
     int failures = 0;
     EngineFixture fixture;
@@ -1216,10 +1405,6 @@ int TestVoiceClockSummaryAndRenderSafety() {
         mapped.has_value() && *mapped == gc::audio::kOutputSampleRate,
         "CurrentOutputFrame maps IAudioClock through endpoint mapper");
 
-    fixture.api->PushClock(S_OK, kInitialClock - 1, late_qpc + 5 * kPeriod);
-    failures += Expect(
-        !engine->CurrentOutputFrame().has_value(),
-        "unmappable successful clock sample returns no frame");
     engine->CountPendingCursorQuery();
     engine->CountUnmappedCursorFailure();
 
@@ -1229,7 +1414,7 @@ int TestVoiceClockSummaryAndRenderSafety() {
             const auto& counters = fixture.observer_state->summary;
             return fixture.observer_state->summary_count.load() != 0 &&
                 counters.render_callbacks >= 4 &&
-                counters.late_event_wakes == 1 &&
+                counters.late_event_wakes == 0 &&
                 counters.silence_fallbacks == 0 &&
                 counters.pending_cursor_queries == 1 &&
                 counters.unmapped_cursor_failures == 1;
@@ -1401,6 +1586,13 @@ int TestExactRuntimeFailureStages() {
             fixture.observer_state->fatal_counters.endpoint_hresult_failures ==
                 1,
             "one endpoint failure counted");
+        if (test.call == ApiCall::ReleaseRenderBuffer) {
+            failures += Expect(
+                fixture.observer_state->fatal_counters.render_callbacks == 0 &&
+                    fixture.api->submission_count.load(
+                        std::memory_order_acquire) == 0,
+                "failed release does not commit or publish the rendered tail");
+        }
         engine.reset();
         failures += ExpectOwnerThreadCleanup(fixture, "runtime-case audio thread");
     }
@@ -1451,6 +1643,8 @@ int main() {
     failures += TestStartupCallbackPrecedesImmediateRuntimeFailure();
     failures += TestEndpointServiceGateProtectsCallerClockRead();
     failures += TestSilenceRuntimeFailureAndCleanup();
+    failures += TestPreStartClockOriginAndRecoverableGapPacing();
+    failures += TestChronicAndInvalidClockPacingFailures();
     failures += TestVoiceClockSummaryAndRenderSafety();
     failures += TestConcurrentVoiceCreation();
     failures += TestExactRuntimeFailureStages();

@@ -2,6 +2,7 @@
 
 #include "AudioCursorTimeline.h"
 #include "DirectSoundFacade.h"
+#include "OutputPacingTracker.h"
 #include "WasapiEndpoint.h"
 
 #include <Windows.h>
@@ -40,6 +41,12 @@ struct AudioRuntimeCountersSnapshot {
     std::uint64_t silence_fallbacks{};
     std::uint64_t pending_cursor_queries{};
     std::uint64_t unmapped_cursor_failures{};
+    std::uint64_t confirmed_gap_events{};
+    std::uint64_t skipped_output_frames{};
+    std::uint64_t maximum_skipped_output_frames{};
+    std::uint64_t chronic_pacing_failures{};
+    std::int64_t current_submitted_lead_frames{};
+    std::int64_t minimum_submitted_lead_frames{};
     std::uint64_t endpoint_hresult_failures{};
     MixerDiagnosticsSnapshot mixer{};
 };
@@ -112,6 +119,8 @@ private:
         AudioFailure,
         EndpointInitialization) noexcept;
     void RecordRuntimeFailure(const AudioFailure&) noexcept;
+    void RecordPacingDecision(
+        const OutputPacingDecision&) noexcept;
     void CountLateWake(std::uint64_t qpc_100ns) noexcept;
     AudioRuntimeCountersSnapshot SnapshotCounters() const noexcept;
     bool ShutdownRequested() const noexcept;
@@ -127,6 +136,7 @@ private:
     std::vector<float> float_mix_;
     std::vector<std::int16_t> pcm16_mix_;
     EndpointClockMapper clock_mapper_;
+    std::optional<OutputPacingTracker> pacing_tracker_;
     std::thread audio_thread_;
     std::thread monitor_thread_;
     HANDLE initialization_event_{};
@@ -147,6 +157,12 @@ private:
     std::atomic_uint64_t silence_fallbacks_{};
     std::atomic_uint64_t pending_cursor_queries_{};
     std::atomic_uint64_t unmapped_cursor_failures_{};
+    std::atomic_uint64_t confirmed_gap_events_{};
+    std::atomic_uint64_t skipped_output_frames_{};
+    std::atomic_uint64_t maximum_skipped_output_frames_{};
+    std::atomic_uint64_t chronic_pacing_failures_{};
+    std::atomic_int64_t current_submitted_lead_frames_{};
+    std::atomic_int64_t minimum_submitted_lead_frames_{};
     std::atomic_uint64_t endpoint_hresult_failures_{};
     std::uint64_t last_qpc_100ns_{};
     REFERENCE_TIME actual_period_100ns_{};
