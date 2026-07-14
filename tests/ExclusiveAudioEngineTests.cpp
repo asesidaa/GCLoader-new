@@ -673,7 +673,7 @@ struct EngineFixture {
     std::unique_ptr<ExclusiveAudioEngine> Start(
         AudioStartupFailure* failure = nullptr,
         DWORD timeout_ms = 2'000,
-        REFERENCE_TIME configured_duration = 0) {
+        REFERENCE_TIME configured_duration = kPeriod) {
         return gc::audio::detail::StartExclusiveAudioEngineAndWait(
             std::make_unique<FakeWasapiApi>(api),
             observer,
@@ -1415,7 +1415,7 @@ int TestExplicitTestShutdown() {
 int TestConfiguredDurationPropagation() {
     int failures = 0;
     EngineFixture fixture;
-    auto engine = fixture.Start(nullptr, 2'000, 100'000);
+    auto engine = fixture.Start(nullptr, 2'000, kPeriod);
     failures += Expect(engine != nullptr, "configured-duration engine startup");
     EndpointInitialization startup{};
     {
@@ -1423,8 +1423,8 @@ int TestConfiguredDurationPropagation() {
         startup = fixture.observer_state->startup;
     }
     failures += Expect(
-        startup.configured_duration == 100'000 &&
-            startup.requested_duration == 100'000,
+        startup.configured_duration == kPeriod &&
+            startup.requested_duration == kPeriod,
         "engine forwards configured duration to endpoint and observer");
     engine.reset();
     failures += ExpectOwnerThreadCleanup(
