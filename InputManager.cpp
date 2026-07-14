@@ -1,8 +1,6 @@
-﻿#include "InputManager.h"
-#include "config.h" // Assuming this exists and is set up
+#include "InputManager.h"
+
 #include "plog/Log.h"
-#include <vector>
-#include <iomanip>
 
 namespace {
 
@@ -19,50 +17,23 @@ const char* input_mode_name(InputMode mode)
     }
 }
 
-const char* sdl_event_type_name(Uint32 type)
-{
-    switch (type)
-    {
-    case SDL_EVENT_KEY_DOWN:
-        return "KEY_DOWN";
-    case SDL_EVENT_KEY_UP:
-        return "KEY_UP";
-    case SDL_EVENT_GAMEPAD_ADDED:
-        return "GAMEPAD_ADDED";
-    case SDL_EVENT_GAMEPAD_REMOVED:
-        return "GAMEPAD_REMOVED";
-    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        return "GAMEPAD_BUTTON_DOWN";
-    case SDL_EVENT_GAMEPAD_BUTTON_UP:
-        return "GAMEPAD_BUTTON_UP";
-    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        return "GAMEPAD_AXIS_MOTION";
-    default:
-        return "OTHER";
-    }
-}
-
 }
 
 InputManager::InputManager()
 {
-    LoadConfig(); // Load mappings from ConfigManager
-    ReinitializeGamepad(); // Attempt to open the configured gamepad
+    LoadConfig();
+    ReinitializeGamepad();
 }
 
 InputManager::~InputManager()
 {
     CloseGamepad();
-    PLOG_INFO << "Shutting down SDL.";
-    SDL_Quit();
 }
 
 void InputManager::LoadConfig()
 {
-    PLOG_DEBUG << "Loading input configuration...";
-    auto& config = ConfigManager::instance(); // Get singleton instance
+    const auto& config = ConfigManager::instance();
 
-    // --- Load Keyboard Config ---
     keyP1Up = config.GetP1UpKey();
     keyP1Down = config.GetP1DownKey();
     keyP1Left = config.GetP1LeftKey();
@@ -74,447 +45,363 @@ void InputManager::LoadConfig()
     keyP2Right = config.GetP2RightKey();
     keyP2Button1 = config.GetP2Button1Key();
     keyTest = config.GetTestKey();
-    keyService1 = config.GetService1Key(); // F1
-    keyService2 = config.GetService2Key(); // I
-    keyService3 = config.GetService3Key(); // P
-    keyP1Start = config.GetP1StartKey(); // 1
-    keyP2Start = config.GetP2StartKey(); // 2
-    keyP2Service = config.GetP2ServiceKey(); // F2
+    keyService1 = config.GetService1Key();
+    keyService2 = config.GetService2Key();
+    keyService3 = config.GetService3Key();
+    keyP1Start = config.GetP1StartKey();
+    keyP2Start = config.GetP2StartKey();
+    keyP2Service = config.GetP2ServiceKey();
 
-    // --- Load Gamepad Config ---
-    gpButtonP1Up = config.GetP1UpButton(); // Default: DPAD_UP
-    gpButtonP1Down = config.GetP1DownButton(); // Default: DPAD_DOWN
-    gpButtonP1Left = config.GetP1LeftButton(); // Default: DPAD_LEFT
-    gpButtonP1Right = config.GetP1RightButton(); // Default: DPAD_RIGHT
-    gpButtonP1Button1 = config.GetP1Button1Button(); // Default: SOUTH (A)
+    gpButtonP1Up = config.GetP1UpButton();
+    gpButtonP1Down = config.GetP1DownButton();
+    gpButtonP1Left = config.GetP1LeftButton();
+    gpButtonP1Right = config.GetP1RightButton();
+    gpButtonP1Button1 = config.GetP1Button1Button();
+    gpButtonP2Up = config.GetP2UpButton();
+    gpButtonP2Down = config.GetP2DownButton();
+    gpButtonP2Left = config.GetP2LeftButton();
+    gpButtonP2Right = config.GetP2RightButton();
+    gpButtonP2Button1 = config.GetP2Button1Button();
 
-    gpButtonP2Up = config.GetP2UpButton(); // Default: INVALID (use axis primarily)
-    gpButtonP2Down = config.GetP2DownButton(); // Default: INVALID
-    gpButtonP2Left = config.GetP2LeftButton(); // Default: INVALID
-    gpButtonP2Right = config.GetP2RightButton(); // Default: INVALID
-    gpButtonP2Button1 = config.GetP2Button1Button(); // Default: EAST (B)
+    gpAxisP1Horizontal = config.GetP1HorizontalAxis();
+    gpAxisP1Vertical = config.GetP1VerticalAxis();
+    gpAxisP2Horizontal = config.GetP2HorizontalAxis();
+    gpAxisP2Vertical = config.GetP2VerticalAxis();
 
-    gpAxisP1Horizontal = config.GetP1HorizontalAxis(); // Default: LEFTX
-    gpAxisP1Vertical = config.GetP1VerticalAxis(); // Default: LEFTY
-
-    gpAxisP2Horizontal = config.GetP2HorizontalAxis(); // Default: RIGHTX
-    gpAxisP2Vertical = config.GetP2VerticalAxis(); // Default: RIGHTY
-
-    // --- Load Other Config ---
-    m_axisThreshold = config.GetGamepadAxisThreshold(); // Default: 16384
-    m_targetGamepadIndex = config.GetGamepadIndex(); // Default: 0
+    m_axisThreshold = config.GetGamepadAxisThreshold();
+    m_targetGamepadIndex = config.GetGamepadIndex();
     m_inputMode = config.GetInputMode();
-    
-    PLOG_INFO << "Input configuration loaded.\n" ;
-    PLOG_INFO << "GC120FPS_INPUT: mode=" << input_mode_name(m_inputMode)
-              << " gamepad_index=" << m_targetGamepadIndex
-              << " axis_threshold=" << m_axisThreshold
-              << " key_start_p1=" << SDL_GetKeyName(keyP1Start)
-              << " key_start_p2=" << SDL_GetKeyName(keyP2Start)
-              << " key_test=" << SDL_GetKeyName(keyTest)
-              << " key_service1=" << SDL_GetKeyName(keyService1)
-              << " key_service2=" << SDL_GetKeyName(keyService2)
-              << " key_service3=" << SDL_GetKeyName(keyService3)
-              << " key_p1_button1=" << SDL_GetKeyName(keyP1Button1);
-    // Log the loaded key codes and button mappings if needed for debugging
-}
 
+    PLOG_INFO << "Input configuration loaded: mode="
+              << input_mode_name(m_inputMode)
+              << ", gamepad_index=" << m_targetGamepadIndex
+              << ", axis_threshold=" << m_axisThreshold;
+}
 
 void InputManager::OpenGamepad(SDL_JoystickID instance_id)
 {
-    if (m_gamepad)
+    if (m_gamepad != nullptr)
     {
-        PLOG_WARNING << "Gamepad already open. Closing first.";
         CloseGamepad();
     }
 
     m_gamepad = SDL_OpenGamepad(instance_id);
-    if (!m_gamepad)
+    if (m_gamepad == nullptr)
     {
-        PLOG_ERROR << "Could not open gamepad with instance ID " << instance_id << ": " << SDL_GetError();
+        PLOG_ERROR << "Could not open gamepad with instance ID "
+                   << instance_id << ": " << SDL_GetError();
         return;
     }
 
-    m_gamepadInstanceId = instance_id; // Store the ID of the opened gamepad
+    m_gamepadInstanceId = instance_id;
     const char* name = SDL_GetGamepadName(m_gamepad);
-    PLOG_INFO << "Opened Gamepad: " << (name ? name : "Unknown") << " (Instance ID: " << instance_id << ")";
-
-    // Reset gamepad specific states
-    stateP1AxisUp = stateP1AxisDown = stateP1AxisLeft = stateP1AxisRight = false;
-    stateP2AxisUp = stateP2AxisDown = stateP2AxisLeft = stateP2AxisRight = false;
-    // Reset button states tied to gamepad buttons
-    if (gpButtonP1Up != SDL_GAMEPAD_BUTTON_INVALID) stateP1Up = false;
-    if (gpButtonP1Down != SDL_GAMEPAD_BUTTON_INVALID) stateP1Down = false;
-    // ... reset all other gamepad-linked states
+    PLOG_INFO << "Opened gamepad: " << (name != nullptr ? name : "Unknown")
+              << " (instance ID " << instance_id << ")";
+    m_snapshotState.ClearGamepad();
 }
 
 void InputManager::CloseGamepad()
 {
-    if (m_gamepad)
+    if (m_gamepad != nullptr)
     {
         const char* name = SDL_GetGamepadName(m_gamepad);
-        PLOG_INFO << "Closing Gamepad: " << (name ? name : "Unknown") << " (Instance ID: " << m_gamepadInstanceId <<
- ")";
+        PLOG_INFO << "Closing gamepad: "
+                  << (name != nullptr ? name : "Unknown")
+                  << " (instance ID " << m_gamepadInstanceId << ")";
         SDL_CloseGamepad(m_gamepad);
         m_gamepad = nullptr;
         m_gamepadInstanceId = 0;
-
-        // Reset states that depend on the gamepad
-        stateP1AxisUp = stateP1AxisDown = stateP1AxisLeft = stateP1AxisRight = false;
-        stateP2AxisUp = stateP2AxisDown = stateP2AxisLeft = stateP2AxisRight = false;
-        // Determine combined state again after resetting axis parts
-        stateP1Up = (stateP1Up && keyP1Up != SDLK_UNKNOWN); // Keep keyboard state if mapped
-        stateP1Down = (stateP1Down && keyP1Down != SDLK_UNKNOWN);
-        stateP1Left = (stateP1Left && keyP1Left != SDLK_UNKNOWN);
-        stateP1Right = (stateP1Right && keyP1Right != SDLK_UNKNOWN);
-        stateP1Button1 = (stateP1Button1 && keyP1Button1 != SDLK_UNKNOWN);
-        stateP2Up = (stateP2Up && keyP2Up != SDLK_UNKNOWN);
-        stateP2Down = (stateP2Down && keyP2Down != SDLK_UNKNOWN);
-        stateP2Left = (stateP2Left && keyP2Left != SDLK_UNKNOWN);
-        stateP2Right = (stateP2Right && keyP2Right != SDLK_UNKNOWN);
-        stateP2Button1 = (stateP2Button1 && keyP2Button1 != SDLK_UNKNOWN);
     }
+
+    m_snapshotState.ClearGamepad();
 }
 
 void InputManager::ReinitializeGamepad()
 {
-    CloseGamepad(); // Ensure any existing gamepad is closed
+    CloseGamepad();
 
-    SDL_JoystickID* gamepads = SDL_GetGamepads(nullptr);
-    if (!gamepads)
+    if (m_targetGamepadIndex < 0)
     {
-        PLOG_INFO << "No gamepads detected.";
+        PLOG_INFO << "Gamepad input is disabled by configuration.";
         return;
     }
 
     int count = 0;
-    for (SDL_JoystickID* it = gamepads; *it != 0; ++it)
+    SDL_JoystickID* gamepads = SDL_GetGamepads(&count);
+    if (gamepads == nullptr || count == 0)
     {
-        count++;
+        PLOG_INFO << "No gamepads detected.";
+        SDL_free(gamepads);
+        return;
     }
 
-
-    if (m_targetGamepadIndex < count)
+    int target_index = m_targetGamepadIndex;
+    if (target_index >= count)
     {
-        SDL_JoystickID target_id = gamepads[m_targetGamepadIndex];
-        if (SDL_IsGamepad(target_id))
-        {
-            OpenGamepad(target_id);
-        }
-        else
-        {
-            PLOG_WARNING << "Device at index " << m_targetGamepadIndex << " is not a recognized gamepad.";
-        }
+        PLOG_WARNING << "Target gamepad index " << target_index
+                     << " is out of range for " << count
+                     << " devices; trying index 0.";
+        target_index = 0;
     }
-    else if (count > 0)
+
+    const SDL_JoystickID target_id = gamepads[target_index];
+    if (SDL_IsGamepad(target_id))
     {
-        PLOG_WARNING << "Target gamepad index " << m_targetGamepadIndex << " out of range. Found " << count <<
- " devices. Trying index 0.";
-        if (SDL_IsGamepad(gamepads[0]))
-        {
-            OpenGamepad(gamepads[0]);
-        }
-        else
-        {
-            PLOG_WARNING << "Device at index 0 is not a recognized gamepad.";
-        }
+        OpenGamepad(target_id);
     }
     else
     {
-        PLOG_INFO << "No suitable gamepads found.";
+        PLOG_WARNING << "Device at index " << target_index
+                     << " is not a recognized gamepad.";
     }
 
     SDL_free(gamepads);
 }
 
-
 void InputManager::HandleEvent(const SDL_Event& event)
 {
-    static uint64_t handled_events = 0;
-    ++handled_events;
-    switch (event.type)
-    {
-    case SDL_EVENT_KEY_DOWN:
-    case SDL_EVENT_KEY_UP:
-        PLOG_INFO << "GC120FPS_INPUT: SDL event #" << handled_events
-                  << " type=" << sdl_event_type_name(event.type)
-                  << " key=" << SDL_GetKeyName(event.key.key)
-                  << " repeat=" << static_cast<int>(event.key.repeat)
-                  << " mode=" << input_mode_name(m_inputMode);
-        break;
-    case SDL_EVENT_GAMEPAD_ADDED:
-    case SDL_EVENT_GAMEPAD_REMOVED:
-    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-    case SDL_EVENT_GAMEPAD_BUTTON_UP:
-    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        PLOG_INFO << "GC120FPS_INPUT: SDL event #" << handled_events
-                  << " type=" << sdl_event_type_name(event.type)
-                  << " which=" << event.gdevice.which
-                  << " mode=" << input_mode_name(m_inputMode);
-        break;
-    default:
-        break;
-    }
-
     switch (event.type)
     {
     case SDL_EVENT_GAMEPAD_ADDED:
-        PLOG_INFO << "Gamepad Added: Instance ID " << event.gdevice.which;
-        if (!m_gamepad)
+        PLOG_INFO << "Gamepad added: instance ID " << event.gdevice.which;
+        if (m_gamepad == nullptr)
         {
-            // If we don't have one open already
-            // Check if this new gamepad matches our target index (tricky without re-scanning)
-            // Simplest: just try to reinitialize based on index
             ReinitializeGamepad();
         }
         break;
 
     case SDL_EVENT_GAMEPAD_REMOVED:
-        PLOG_INFO << "Gamepad Removed: Instance ID " << event.gdevice.which;
-        if (m_gamepad && event.gdevice.which == m_gamepadInstanceId)
+        PLOG_INFO << "Gamepad removed: instance ID " << event.gdevice.which;
+        if (m_gamepad != nullptr &&
+            event.gdevice.which == m_gamepadInstanceId)
         {
             CloseGamepad();
-            // Optionally, try to open another gamepad immediately
-            // ReinitializeGamepad();
         }
         break;
 
-    // --- Keyboard Events ---
     case SDL_EVENT_KEY_DOWN:
         if (!event.key.repeat)
         {
-            // Ignore key repeats for state changes
             UpdateKeyState(event.key.key, true);
-            PLOG_DEBUG << "Key Down: " << SDL_GetKeyName(event.key.key);
         }
-        break;
-    case SDL_EVENT_KEY_UP:
-        UpdateKeyState(event.key.key, false);
-        PLOG_DEBUG << "Key Up: " << SDL_GetKeyName(event.key.key);
         break;
 
-    // --- Gamepad Events ---
+    case SDL_EVENT_KEY_UP:
+        UpdateKeyState(event.key.key, false);
+        break;
+
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        m_snapshotState.ClearKeyboard();
+        break;
+
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        if (m_gamepad && event.gbutton.which == m_gamepadInstanceId)
+        if (m_gamepad != nullptr &&
+            event.gbutton.which == m_gamepadInstanceId)
         {
-            UpdateButtonState(static_cast<SDL_GamepadButton>(event.gbutton.button), true);
-            PLOG_DEBUG << "Gamepad Button Down: " << event.gbutton.button;
+            UpdateButtonState(
+                static_cast<SDL_GamepadButton>(event.gbutton.button),
+                true);
         }
         break;
+
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
-        if (m_gamepad && event.gbutton.which == m_gamepadInstanceId)
+        if (m_gamepad != nullptr &&
+            event.gbutton.which == m_gamepadInstanceId)
         {
-            UpdateButtonState(static_cast<SDL_GamepadButton>(event.gbutton.button), false);
-            PLOG_DEBUG << "Gamepad Button Up: " << event.gbutton.button;
+            UpdateButtonState(
+                static_cast<SDL_GamepadButton>(event.gbutton.button),
+                false);
         }
         break;
+
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        if (m_gamepad && event.gaxis.which == m_gamepadInstanceId)
+        if (m_gamepad != nullptr &&
+            event.gaxis.which == m_gamepadInstanceId)
         {
-            UpdateAxisState(static_cast<SDL_GamepadAxis>(event.gaxis.axis), event.gaxis.value);
-            // Optional: Log axis value only if it changes significantly
+            UpdateAxisState(
+                static_cast<SDL_GamepadAxis>(event.gaxis.axis),
+                event.gaxis.value);
         }
         break;
 
     default:
-        break; // Ignore other event types
+        break;
     }
 }
 
 void InputManager::UpdateKeyState(SDL_Keycode key, bool pressed)
 {
-    const DWORD before = GetInput();
-    bool matched = false;
+    using enum gc::input::LogicalInput;
+    constexpr auto source = gc::input::InputSource::Keyboard;
 
-    // These are cabinet/system buttons, so they must work in every input mode.
-    if (key == keyService1) { stateService1 = pressed; matched = true; }
-    else if (key == keyService2) { stateService2 = pressed; matched = true; }
-    else if (key == keyService3) { stateService3 = pressed; matched = true; }
-    else if (key == keyP1Start) { stateP1Start = pressed; matched = true; }
-    else if (key == keyP2Start) { stateP2Start = pressed; matched = true; }
-    else if (key == keyTest) { stateTest = pressed; matched = true; }
-    else if (key == keyP2Service) { stateP2Service = pressed; matched = true; }
-
-    if (m_inputMode == InputMode::Keyboard)
+    if (key == keyService1)
     {
-        // Only update the main control when in kb mode
-        if (key == keyP1Up) { stateP1Up = pressed; matched = true; }
-        else if (key == keyP1Down) { stateP1Down = pressed; matched = true; }
-        else if (key == keyP1Left) { stateP1Left = pressed; matched = true; }
-        else if (key == keyP1Right) { stateP1Right = pressed; matched = true; }
-        else if (key == keyP1Button1) { stateP1Button1 = pressed; matched = true; }
-
-        else if (key == keyP2Up) { stateP2Up = pressed; matched = true; }
-        else if (key == keyP2Down) { stateP2Down = pressed; matched = true; }
-        else if (key == keyP2Left) { stateP2Left = pressed; matched = true; }
-        else if (key == keyP2Right) { stateP2Right = pressed; matched = true; }
-        else if (key == keyP2Button1) { stateP2Button1 = pressed; matched = true; }
+        m_snapshotState.Set(Service1, source, pressed);
+    }
+    else if (key == keyService2)
+    {
+        m_snapshotState.Set(Service2, source, pressed);
+    }
+    else if (key == keyService3)
+    {
+        m_snapshotState.Set(Service3, source, pressed);
+    }
+    else if (key == keyP1Start)
+    {
+        m_snapshotState.Set(P1Start, source, pressed);
+    }
+    else if (key == keyP2Start)
+    {
+        m_snapshotState.Set(P2Start, source, pressed);
+    }
+    else if (key == keyTest)
+    {
+        m_snapshotState.Set(Test, source, pressed);
+    }
+    else if (key == keyP2Service)
+    {
+        m_snapshotState.Set(P2Service, source, pressed);
     }
 
-    PLOG_INFO << "GC120FPS_INPUT: UpdateKeyState key=" << SDL_GetKeyName(key)
-              << " pressed=" << pressed
-              << " matched=" << matched
-              << " before=0x" << std::hex << before
-              << " after=0x" << GetInput() << std::dec;
-
-}
-
-void InputManager::UpdateButtonState(SDL_GamepadButton button, bool pressed)
-{
-    const DWORD before = GetInput();
-    bool matched = false;
-    if (m_inputMode == InputMode::Keyboard)
+    if (m_inputMode != InputMode::Keyboard)
     {
-        PLOG_INFO << "GC120FPS_INPUT: UpdateButtonState ignored in keyboard mode button="
-                  << static_cast<int>(button)
-                  << " pressed=" << pressed;
         return;
     }
-    // P1 Directions (D-Pad)
-    if (button == gpButtonP1Up) { stateP1Up = pressed; matched = true; }
-    else if (button == gpButtonP1Down) { stateP1Down = pressed; matched = true; }
-    else if (button == gpButtonP1Left) { stateP1Left = pressed; matched = true; }
-    else if (button == gpButtonP1Right) { stateP1Right = pressed; matched = true; }
-    else if (button == gpButtonP2Up) { stateP2Up = pressed; matched = true; }
-    else if (button == gpButtonP2Down) { stateP2Down = pressed; matched = true; }
-    else if (button == gpButtonP2Left) { stateP2Left = pressed; matched = true; }
-    else if (button == gpButtonP2Right) { stateP2Right = pressed; matched = true; }
-    // P1/P2 Buttons
-    else if (button == gpButtonP1Button1) { stateP1Button1 = pressed; matched = true; }
-    else if (button == gpButtonP2Button1) { stateP2Button1 = pressed; matched = true; }
 
-    PLOG_INFO << "GC120FPS_INPUT: UpdateButtonState button=" << static_cast<int>(button)
-              << " pressed=" << pressed
-              << " matched=" << matched
-              << " before=0x" << std::hex << before
-              << " after=0x" << GetInput() << std::dec;
-
+    if (key == keyP1Up)
+    {
+        m_snapshotState.Set(LeftBoosterUp, source, pressed);
+    }
+    else if (key == keyP2Up)
+    {
+        m_snapshotState.Set(LeftBoosterDown, source, pressed);
+    }
+    else if (key == keyP1Down)
+    {
+        m_snapshotState.Set(LeftBoosterLeft, source, pressed);
+    }
+    else if (key == keyP2Down)
+    {
+        m_snapshotState.Set(LeftBoosterRight, source, pressed);
+    }
+    else if (key == keyP1Button1)
+    {
+        m_snapshotState.Set(LeftBoosterButton, source, pressed);
+    }
+    else if (key == keyP1Left)
+    {
+        m_snapshotState.Set(RightBoosterUp, source, pressed);
+    }
+    else if (key == keyP2Left)
+    {
+        m_snapshotState.Set(RightBoosterDown, source, pressed);
+    }
+    else if (key == keyP1Right)
+    {
+        m_snapshotState.Set(RightBoosterLeft, source, pressed);
+    }
+    else if (key == keyP2Right)
+    {
+        m_snapshotState.Set(RightBoosterRight, source, pressed);
+    }
+    else if (key == keyP2Button1)
+    {
+        m_snapshotState.Set(RightBoosterButton, source, pressed);
+    }
 }
 
+void InputManager::UpdateButtonState(
+    SDL_GamepadButton button,
+    bool pressed)
+{
+    if (m_inputMode != InputMode::Gamepad)
+    {
+        return;
+    }
+
+    using enum gc::input::LogicalInput;
+    constexpr auto source = gc::input::InputSource::GamepadButton;
+
+    if (button == gpButtonP1Up)
+    {
+        m_snapshotState.Set(LeftBoosterUp, source, pressed);
+    }
+    else if (button == gpButtonP2Up)
+    {
+        m_snapshotState.Set(LeftBoosterDown, source, pressed);
+    }
+    else if (button == gpButtonP1Down)
+    {
+        m_snapshotState.Set(LeftBoosterLeft, source, pressed);
+    }
+    else if (button == gpButtonP2Down)
+    {
+        m_snapshotState.Set(LeftBoosterRight, source, pressed);
+    }
+    else if (button == gpButtonP1Button1)
+    {
+        m_snapshotState.Set(LeftBoosterButton, source, pressed);
+    }
+    else if (button == gpButtonP1Left)
+    {
+        m_snapshotState.Set(RightBoosterUp, source, pressed);
+    }
+    else if (button == gpButtonP2Left)
+    {
+        m_snapshotState.Set(RightBoosterDown, source, pressed);
+    }
+    else if (button == gpButtonP1Right)
+    {
+        m_snapshotState.Set(RightBoosterLeft, source, pressed);
+    }
+    else if (button == gpButtonP2Right)
+    {
+        m_snapshotState.Set(RightBoosterRight, source, pressed);
+    }
+    else if (button == gpButtonP2Button1)
+    {
+        m_snapshotState.Set(RightBoosterButton, source, pressed);
+    }
+}
 
 void InputManager::UpdateAxisState(SDL_GamepadAxis axis, Sint16 value)
 {
-    if (m_inputMode == InputMode::Keyboard)
+    if (m_inputMode != InputMode::Gamepad)
     {
         return;
     }
-    bool changed = false;
 
-    // --- P1 Axes (Left Stick) ---
-    if (axis == SDL_GAMEPAD_AXIS_LEFTY)
-    {
-        bool newUp = value < -m_axisThreshold;
-        bool newDown = value > m_axisThreshold;
-        if (newUp != stateP1AxisUp)
-        {
-            stateP1AxisUp = newUp;
-            changed = true;
-        }
-        if (newDown != stateP2AxisUp)
-        {
-            stateP2AxisUp = newDown;
-            changed = true;
-        }
-    }
-    else if (axis == SDL_GAMEPAD_AXIS_LEFTX)
-    {
-        bool newLeft = value < -m_axisThreshold;
-        bool newRight = value > m_axisThreshold;
-        if (newLeft != stateP1AxisDown)
-        {
-            stateP1AxisDown = newLeft;
-            changed = true;
-        }
-        if (newRight != stateP2AxisDown)
-        {
-            stateP2AxisDown = newRight;
-            changed = true;
-        }
-    }
-    // --- P2 Axes (Right Stick) ---
-    else if (axis == SDL_GAMEPAD_AXIS_RIGHTY)
-    {
-        bool newUp = value < -m_axisThreshold;
-        bool newDown = value > m_axisThreshold;
-        if (newUp != stateP1AxisLeft)
-        {
-            stateP1AxisLeft = newUp;
-            changed = true;
-        }
-        if (newDown != stateP2AxisLeft)
-        {
-            stateP2AxisLeft = newDown;
-            changed = true;
-        }
-    }
-    else if (axis == SDL_GAMEPAD_AXIS_RIGHTX)
-    {
-        bool newLeft = value < -m_axisThreshold;
-        bool newRight = value > m_axisThreshold;
-        if (newLeft != stateP1AxisRight)
-        {
-            stateP1AxisRight = newLeft;
-            changed = true;
-        }
-        if (newRight != stateP2AxisRight)
-        {
-            stateP2AxisRight = newRight;
-            changed = true;
-        }
-    }
+    using enum gc::input::LogicalInput;
+    constexpr auto source = gc::input::InputSource::GamepadAxis;
+    const bool negative = value < -m_axisThreshold;
+    const bool positive = value > m_axisThreshold;
 
-    // Update combined state if an axis changed state
-    if (changed)
+    if (axis == gpAxisP1Vertical)
     {
-        stateP1Up = stateP1AxisUp;
-        stateP1Down = stateP1AxisDown;
-        stateP1Left = stateP1AxisLeft;
-        stateP1Right = stateP1AxisRight;
-        
-        // *** Update P2 state logic to include buttons ***
-        stateP2Up = stateP2AxisUp; // Added p2UpButton
-        stateP2Down = stateP2AxisDown; // Added p2DownButton
-        stateP2Left = stateP2AxisLeft; // Added p2LeftButton
-        stateP2Right = stateP2AxisRight; // Added p2RightButton
-
-        // Optional: Log axis state change
-        // PLOG_DEBUG << "Axis state changed: P1(" << stateP1Up << stateP1Down << stateP1Left << stateP1Right
-        //            << ") P2(" << stateP2Up << stateP2Down << stateP2Left << stateP2Right << ")";
+        m_snapshotState.Set(LeftBoosterUp, source, negative);
+        m_snapshotState.Set(LeftBoosterDown, source, positive);
+    }
+    else if (axis == gpAxisP1Horizontal)
+    {
+        m_snapshotState.Set(LeftBoosterLeft, source, negative);
+        m_snapshotState.Set(LeftBoosterRight, source, positive);
+    }
+    else if (axis == gpAxisP2Vertical)
+    {
+        m_snapshotState.Set(RightBoosterUp, source, negative);
+        m_snapshotState.Set(RightBoosterDown, source, positive);
+    }
+    else if (axis == gpAxisP2Horizontal)
+    {
+        m_snapshotState.Set(RightBoosterLeft, source, negative);
+        m_snapshotState.Set(RightBoosterRight, source, positive);
     }
 }
 
-
-DWORD InputManager::GetInput() const
+std::uint32_t InputManager::GetInput() const noexcept
 {
-    DWORD inputState = 0;
-
-    // P1 Inputs
-    if (stateService1) inputState |= InputBits::P1_SERVICE_F1;
-    if (stateService2) inputState |= InputBits::P1_SERVICE_I;
-    if (stateService3) inputState |= InputBits::P1_SERVICE_P;
-    if (stateP1Start) inputState |= InputBits::P1_START;
-    if (stateTest) inputState |= InputBits::TEST_MODE;
-    if (stateP1Up) inputState |= InputBits::P1_UP;
-    if (stateP1Down) inputState |= InputBits::P1_DOWN;
-    if (stateP1Left) inputState |= InputBits::P1_LEFT;
-    if (stateP1Right) inputState |= InputBits::P1_RIGHT;
-    if (stateP1Button1)inputState |= InputBits::P1_BUTTON_1;
-
-    if (stateP2Service) inputState |= InputBits::P2_SERVICE;
-    if (stateP2Start) inputState |= InputBits::P2_START;
-    if (stateP2Up) inputState |= InputBits::P2_UP;
-    if (stateP2Down) inputState |= InputBits::P2_DOWN;
-    if (stateP2Left) inputState |= InputBits::P2_LEFT;
-    if (stateP2Right) inputState |= InputBits::P2_RIGHT;
-    if (stateP2Button1) inputState |= InputBits::P2_BUTTON_1;
-
-    static DWORD last_logged_input = 0;
-    if (inputState != last_logged_input)
-    {
-        PLOG_INFO << "GC120FPS_INPUT: GetInput state changed 0x" << std::hex
-                  << last_logged_input << " -> 0x" << inputState << std::dec;
-        last_logged_input = inputState;
-    }
-
-    return inputState;
+    const auto gameplay_source = m_inputMode == InputMode::Keyboard
+        ? gc::input::GameplaySource::Keyboard
+        : gc::input::GameplaySource::Gamepad;
+    return m_snapshotState.Compose(gameplay_source);
 }
