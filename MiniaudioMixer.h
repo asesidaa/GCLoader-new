@@ -72,6 +72,11 @@ struct MixerRenderResult {
     std::uint64_t frames_read;
 };
 
+struct MixerRenderTimeline {
+    std::uint64_t output_frame_begin{};
+    std::uint64_t discontinuity_frames{};
+};
+
 enum class VoiceUsage : std::uint8_t {
     General,
     GameplayNativeCandidate,
@@ -132,7 +137,7 @@ public:
         ma_result* result) noexcept;
     MixerRenderResult Render(
         std::span<float> stereo,
-        std::uint64_t output_frame_begin) noexcept;
+        const MixerRenderTimeline& timeline) noexcept;
     MixerDiagnosticsSnapshot diagnostics() const noexcept;
 
 private:

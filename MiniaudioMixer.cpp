@@ -19,6 +19,7 @@ namespace {
 struct MixerRenderContext {
     std::uint64_t id{};
     std::uint64_t output_frame_begin{};
+    std::uint64_t discontinuity_frames{};
     std::uint32_t frame_count{};
 };
 
@@ -618,6 +619,104 @@ bool PublishMappedSpans(
     return true;
 }
 
+bool OutputFramesUntilSourceEnd(
+    const MixerVoiceState& voice,
+    std::uint64_t* output_frames) noexcept {
+    if (output_frames == nullptr ||
+        voice.epoch_source_start >= voice.source_length_frames) {
+        if (output_frames != nullptr) {
+            *output_frames = 0;
+        }
+        return output_frames != nullptr;
+    }
+
+    const auto source_frames =
+        voice.source_length_frames - voice.epoch_source_start;
+    const auto total_output_frames = CeilScale(
+        source_frames,
+        kOutputSampleRate,
+        voice.format.sample_rate);
+    *output_frames = total_output_frames > voice.epoch_output_frames
+        ? total_output_frames - voice.epoch_output_frames
+        : 0;
+    return true;
+}
+
+enum class DiscontinuityAdvanceResult : std::uint8_t {
+    Continue,
+    Ended,
+    Failed,
+};
+
+DiscontinuityAdvanceResult AdvanceVoiceAcrossDiscontinuity(
+    MixerVoiceState& voice,
+    const MixerRenderContext& render,
+    std::uint64_t playback_run) noexcept {
+    if (render.discontinuity_frames == 0 ||
+        render.output_frame_begin < render.discontinuity_frames ||
+        voice.source_length_frames == 0) {
+        return render.discontinuity_frames == 0
+            ? DiscontinuityAdvanceResult::Continue
+            : DiscontinuityAdvanceResult::Failed;
+    }
+
+    const auto gap_begin =
+        render.output_frame_begin - render.discontinuity_frames;
+    const bool is_looping = voice.looping.load(std::memory_order_seq_cst);
+    std::uint64_t represented = render.discontinuity_frames;
+    bool source_ended{};
+    if (!is_looping) {
+        std::uint64_t available_output{};
+        if (!OutputFramesUntilSourceEnd(voice, &available_output)) {
+            return DiscontinuityAdvanceResult::Failed;
+        }
+        represented = std::min(represented, available_output);
+        source_ended = represented == available_output;
+    }
+
+    std::uint64_t source_begin{};
+    std::uint64_t source_end{};
+    if (!MappedSourceFrame(
+            voice,
+            voice.epoch_output_frames,
+            &source_begin) ||
+        voice.epoch_output_frames >
+            std::numeric_limits<std::uint64_t>::max() - represented ||
+        !MappedSourceFrame(
+            voice,
+            voice.epoch_output_frames + represented,
+            &source_end)) {
+        return DiscontinuityAdvanceResult::Failed;
+    }
+
+    const bool loop_wrapped = is_looping &&
+        source_begin / voice.source_length_frames !=
+            source_end / voice.source_length_frames;
+    if (represented != 0 &&
+        !PublishMappedSpans(
+            voice,
+            gap_begin,
+            represented,
+            loop_wrapped,
+            source_ended)) {
+        return DiscontinuityAdvanceResult::Failed;
+    }
+
+    const auto new_position = is_looping
+        ? source_end % voice.source_length_frames
+        : std::min(source_end, voice.source_length_frames);
+    voice.cursor.store(new_position, std::memory_order_seq_cst);
+    if (ma_data_converter_reset(&voice.converter) != MA_SUCCESS) {
+        return DiscontinuityAdvanceResult::Failed;
+    }
+
+    if (source_ended) {
+        voice.EndPlayback(playback_run, gap_begin + represented);
+        return DiscontinuityAdvanceResult::Ended;
+    }
+    return DiscontinuityAdvanceResult::Continue;
+}
+
 void VoiceNodeProcess(
     ma_node* node,
     const float** frames_in,
@@ -661,6 +760,7 @@ void VoiceNodeProcess(
 
     const auto applied = voice.applied_seek_sequence.load(
         std::memory_order_seq_cst);
+    bool applied_new_generation{};
     if (seek_sequence != applied) {
         if (seek_frame >= voice.source_length_frames ||
             ma_data_converter_reset(&voice.converter) != MA_SUCCESS) {
@@ -677,11 +777,25 @@ void VoiceNodeProcess(
         voice.applied_seek_sequence.store(
             seek_sequence,
             std::memory_order_seq_cst);
+        applied_new_generation = true;
     }
 
     if (voice.ended.load(std::memory_order_seq_cst)) {
         voice.render_output_offset += requested;
         return;
+    }
+
+    if (voice.render_output_offset == 0 &&
+        !applied_new_generation &&
+        render->discontinuity_frames != 0) {
+        const auto advanced = AdvanceVoiceAcrossDiscontinuity(
+            voice,
+            *render,
+            playback_run);
+        if (advanced != DiscontinuityAdvanceResult::Continue) {
+            voice.render_output_offset += requested;
+            return;
+        }
     }
 
     std::uint64_t required_input{};
@@ -1120,8 +1234,9 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
 
 MixerRenderResult MiniaudioMixer::Render(
     std::span<float> stereo,
-    std::uint64_t output_frame_begin) noexcept {
+    const MixerRenderTimeline& timeline) noexcept {
     if (state_ == nullptr ||
+        timeline.output_frame_begin < timeline.discontinuity_frames ||
         stereo.size() !=
             static_cast<std::size_t>(state_->period_frames) *
                 kOutputChannels) {
@@ -1134,7 +1249,8 @@ MixerRenderResult MiniaudioMixer::Render(
 
     MixerRenderContext context{
         state_->render_id.fetch_add(1, std::memory_order_relaxed) + 1,
-        output_frame_begin,
+        timeline.output_frame_begin,
+        timeline.discontinuity_frames,
         state_->period_frames,
     };
     current_render_context = &context;

@@ -146,7 +146,9 @@ public:
     MixerRenderResult Render(
         std::uint64_t output_frame_begin,
         std::span<float> output) noexcept {
-        return mixer_->Render(output, output_frame_begin);
+        return mixer_->Render(
+            output,
+            gc::audio::MixerRenderTimeline{output_frame_begin, 0});
     }
 
     MixerDiagnosticsSnapshot diagnostics() const noexcept {

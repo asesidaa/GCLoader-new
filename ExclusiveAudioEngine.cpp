@@ -315,7 +315,9 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
         CountLateWake(clock.qpc_100ns);
 
         const auto begin = submitted_frames_.load(std::memory_order_relaxed);
-        auto rendered = mixer_->Render(float_mix_, begin);
+        auto rendered = mixer_->Render(
+            float_mix_,
+            MixerRenderTimeline{begin, 0});
         if (detail::FinalizeMixerRenderBlock(
                 float_mix_, frames, rendered)) {
             silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);

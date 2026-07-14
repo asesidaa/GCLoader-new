@@ -22,6 +22,7 @@ using gc::audio::AudioCursorTimeline;
 using gc::audio::AudioLockRegions;
 using gc::audio::AudioSnapshot;
 using gc::audio::MiniaudioMixer;
+using gc::audio::MixerRenderTimeline;
 using gc::audio::MixerVoice;
 using gc::audio::NormalizedSourceFormat;
 using gc::audio::VoiceUsage;
@@ -261,7 +262,21 @@ int ExpectRender(
     std::span<float> output,
     std::uint64_t output_frame_begin,
     std::string_view name) {
-    const auto rendered = mixer.Render(output, output_frame_begin);
+    const auto rendered = mixer.Render(
+        output,
+        MixerRenderTimeline{output_frame_begin, 0});
+    return Expect(
+        rendered.result == MA_SUCCESS &&
+            rendered.frames_read == kPeriodFrames,
+        name);
+}
+
+int ExpectRender(
+    MiniaudioMixer& mixer,
+    std::span<float> output,
+    const MixerRenderTimeline& timeline,
+    std::string_view name) {
+    const auto rendered = mixer.Render(output, timeline);
     return Expect(
         rendered.result == MA_SUCCESS &&
             rendered.frames_read == kPeriodFrames,
@@ -346,6 +361,18 @@ std::vector<std::int16_t> RadicalRegions(
         }
     }
     return samples;
+}
+
+std::vector<std::int16_t> IdentifiedSamples(std::size_t count) {
+    std::vector<std::int16_t> samples(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        samples[index] = static_cast<std::int16_t>((index + 1) * 400);
+    }
+    return samples;
+}
+
+float IdentifiedSample(std::size_t index) {
+    return static_cast<float>((index + 1) * 400) / 32768.0F;
 }
 
 int TestVoiceRetainsSourceOwners() {
@@ -515,7 +542,9 @@ int TestConcurrentVoiceStateAccounting() {
     std::vector<float> output(kPeriodFrames * 2);
     std::uint64_t output_frame{};
     while (done.load(std::memory_order_acquire) != 2) {
-        const auto rendered = mixer->Render(output, output_frame);
+        const auto rendered = mixer->Render(
+            output,
+            MixerRenderTimeline{output_frame, 0});
         output_frame += kPeriodFrames;
         const auto diagnostics = mixer->diagnostics();
         if (rendered.result != MA_SUCCESS ||
@@ -691,7 +720,9 @@ int TestConcurrentSeeksKeepTerminalDrainObservable() {
         }
         start_round.arrive_and_wait();
         finish_round.arrive_and_wait();
-        const auto rendered = mixer->Render(output, output_frame);
+        const auto rendered = mixer->Render(
+            output,
+            MixerRenderTimeline{output_frame, 0});
         output_frame += kPeriodFrames;
         if (rendered.result != MA_SUCCESS ||
             rendered.frames_read != kPeriodFrames ||
@@ -710,6 +741,345 @@ int TestConcurrentSeeksKeepTerminalDrainObservable() {
     failures += Expect(
         every_terminal_drain_observable,
         "concurrent seeks preserve the final audible drain observation");
+    return failures;
+}
+
+int TestNativeLoopAdvancesAcrossDiscontinuity() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "native-gap mixer creation");
+    if (mixer == nullptr) {
+        return failures + 1;
+    }
+
+    const auto bytes = Pcm16Bytes(IdentifiedSamples(32));
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "native-gap source normalization");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "native-gap voice creation");
+    if (voice == nullptr) {
+        return failures + 1;
+    }
+
+    std::vector<float> output(kPeriodFrames * 2);
+    failures += Expect(
+        voice->Play(true, 100) == DS_OK,
+        "native-gap looping play");
+    failures += ExpectRender(
+        *mixer,
+        output,
+        100,
+        "native-gap initial render");
+    failures += ExpectNear(
+        output[0],
+        IdentifiedSample(0),
+        "native-gap initial source frame");
+
+    failures += ExpectRender(
+        *mixer,
+        output,
+        MixerRenderTimeline{116, 8},
+        "native-gap discontinuous render");
+    failures += ExpectNear(
+        output[0],
+        IdentifiedSample(16),
+        "native-gap block starts after skipped source frames");
+    failures += Expect(
+        source->timeline->ResolveSourceFrame(108, 100, 32) == 8 &&
+            source->timeline->ResolveSourceFrame(115, 100, 32) == 15 &&
+            source->timeline->ResolveSourceFrame(116, 100, 32) == 16,
+        "native-gap timeline covers skipped and rendered intervals");
+    return failures;
+}
+
+int TestNonLoopingVoiceEndsInsideDiscontinuity() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "gap-end mixer creation");
+    if (mixer == nullptr) {
+        return failures + 1;
+    }
+
+    const auto bytes = Pcm16Bytes(IdentifiedSamples(12));
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "gap-end source normalization");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "gap-end voice creation");
+    if (voice == nullptr) {
+        return failures + 1;
+    }
+
+    std::vector<float> output(kPeriodFrames * 2);
+    failures += Expect(
+        voice->Play(false, 101) == DS_OK,
+        "gap-end nonlooping play");
+    failures += ExpectRender(
+        *mixer,
+        output,
+        100,
+        "gap-end initial render");
+    failures += ExpectRender(
+        *mixer,
+        output,
+        MixerRenderTimeline{116, 8},
+        "gap-end discontinuous render");
+    failures += Expect(
+        std::all_of(output.begin(), output.end(), [](float sample) {
+            return sample == 0.0F;
+        }),
+        "gap-end current block is silent");
+    failures += Expect(
+        voice->at_end() && !voice->playing() &&
+            voice->audible_until_output_frame() == 112,
+        "gap-end drain boundary is inside skipped interval");
+    failures += Expect(
+        source->timeline->ResolveSourceFrame(111, 101, 12) == 11 &&
+            !source->timeline->ResolveSourceFrame(112, 101, 12).has_value(),
+        "gap-end timeline stops at source end");
+    return failures;
+}
+
+int TestLoopWrapsAcrossDiscontinuity() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "gap-wrap mixer creation");
+    if (mixer == nullptr) {
+        return failures + 1;
+    }
+
+    const auto bytes = Pcm16Bytes(IdentifiedSamples(10));
+    auto source = MakeSource(
+        Pcm(1, 44100, 16),
+        bytes,
+        failures,
+        "gap-wrap source normalization");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "gap-wrap voice creation");
+    if (voice == nullptr) {
+        return failures + 1;
+    }
+
+    std::vector<float> output(kPeriodFrames * 2);
+    failures += Expect(
+        voice->Play(true, 102) == DS_OK,
+        "gap-wrap looping play");
+    failures += ExpectRender(*mixer, output, 100, "gap-wrap initial render");
+    failures += ExpectRender(
+        *mixer,
+        output,
+        MixerRenderTimeline{116, 8},
+        "gap-wrap discontinuous render");
+    failures += ExpectNear(
+        output[0],
+        IdentifiedSample(6),
+        "gap-wrap block starts at wrapped source frame");
+    failures += Expect(
+        source->timeline->ResolveSourceFrame(108, 102, 10) == 8 &&
+            source->timeline->ResolveSourceFrame(110, 102, 10) == 0 &&
+            source->timeline->ResolveSourceFrame(116, 102, 10) == 6,
+        "gap-wrap timeline advances modulo source length");
+    return failures;
+}
+
+int TestConvertedRatesUseCumulativeGapMapping() {
+    int failures = 0;
+    for (const auto rate : {22050U, 48000U}) {
+        ma_result result = MA_ERROR;
+        auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+        failures += Expect(
+            result == MA_SUCCESS && mixer != nullptr,
+            "converted-gap mixer creation");
+        if (mixer == nullptr) {
+            ++failures;
+            continue;
+        }
+
+        const auto bytes = Pcm16Bytes(IdentifiedSamples(64));
+        auto source = MakeSource(
+            Pcm(1, rate, 16),
+            bytes,
+            failures,
+            "converted-gap source normalization");
+        auto voice = MakeVoice(
+            *mixer,
+            *source,
+            VoiceUsage::General,
+            failures,
+            "converted-gap voice creation");
+        if (voice == nullptr) {
+            ++failures;
+            continue;
+        }
+
+        std::vector<float> output(kPeriodFrames * 2);
+        const auto epoch = static_cast<std::uint64_t>(rate);
+        failures += Expect(
+            voice->Play(true, epoch) == DS_OK,
+            "converted-gap looping play");
+        failures += ExpectRender(
+            *mixer,
+            output,
+            100,
+            "converted-gap initial render");
+        failures += ExpectRender(
+            *mixer,
+            output,
+            MixerRenderTimeline{111, 3},
+            "converted-gap first discontinuity");
+        failures += ExpectRender(
+            *mixer,
+            output,
+            MixerRenderTimeline{122, 3},
+            "converted-gap second discontinuity");
+
+        const auto expected = rate == 22050U ? 11U : 23U;
+        failures += Expect(
+            source->timeline->ResolveSourceFrame(122, epoch, 64) == expected,
+            "converted gaps retain cumulative fractional phase");
+    }
+    return failures;
+}
+
+int TestDiscontinuityResetsConverterHistory() {
+    int failures = 0;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "gap-reset mixer creation");
+    if (mixer == nullptr) {
+        return failures + 1;
+    }
+
+    const auto bytes = Pcm16Bytes(RadicalRegions(16, 32));
+    auto source = MakeSource(
+        Pcm(1, 22050, 16),
+        bytes,
+        failures,
+        "gap-reset source normalization");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "gap-reset voice creation");
+    if (voice == nullptr) {
+        return failures + 1;
+    }
+
+    std::vector<float> output(kPeriodFrames * 2);
+    failures += Expect(
+        voice->Play(false, 103) == DS_OK,
+        "gap-reset play");
+    failures += ExpectRender(*mixer, output, 100, "gap-reset initial render");
+    failures += ExpectRender(
+        *mixer,
+        output,
+        MixerRenderTimeline{132, 24},
+        "gap-reset discontinuous render");
+    failures += ExpectExceptionalLinear(
+        output,
+        22050,
+        true,
+        "gap-reset emits only new positive converter history");
+    failures += Expect(
+        source->timeline->ResolveSourceFrame(132, 103, 32) == 16,
+        "gap-reset block timeline begins at direct mapped position");
+    return failures;
+}
+
+int TestExplicitGenerationWinsOverDiscontinuity() {
+    int failures = 0;
+    for (const bool replay : {false, true}) {
+        ma_result result = MA_ERROR;
+        auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+        failures += Expect(
+            result == MA_SUCCESS && mixer != nullptr,
+            "gap-precedence mixer creation");
+        if (mixer == nullptr) {
+            ++failures;
+            continue;
+        }
+
+        const auto bytes = Pcm16Bytes(IdentifiedSamples(32));
+        auto source = MakeSource(
+            Pcm(1, 44100, 16),
+            bytes,
+            failures,
+            "gap-precedence source normalization");
+        auto voice = MakeVoice(
+            *mixer,
+            *source,
+            VoiceUsage::General,
+            failures,
+            "gap-precedence voice creation");
+        if (voice == nullptr) {
+            ++failures;
+            continue;
+        }
+
+        std::vector<float> output(kPeriodFrames * 2);
+        failures += Expect(
+            voice->Play(true, 104) == DS_OK,
+            "gap-precedence initial play");
+        failures += ExpectRender(
+            *mixer,
+            output,
+            100,
+            "gap-precedence initial render");
+
+        constexpr std::uint64_t new_epoch = 105;
+        const auto control_result = replay
+            ? voice->Play(true, new_epoch)
+            : voice->Seek(3, new_epoch);
+        failures += Expect(
+            control_result == DS_OK,
+            "gap-precedence control accepted");
+        failures += ExpectRender(
+            *mixer,
+            output,
+            MixerRenderTimeline{116, 8},
+            "gap-precedence discontinuous render");
+
+        const auto expected_source = replay ? 8U : 3U;
+        failures += ExpectNear(
+            output[0],
+            IdentifiedSample(expected_source),
+            "gap-precedence explicit source anchor wins");
+        failures += Expect(
+            source->timeline->ResolveSourceFrame(
+                116,
+                new_epoch,
+                32) == expected_source,
+            "gap-precedence new generation begins without old gap");
+    }
     return failures;
 }
 
@@ -1044,10 +1414,19 @@ int main() {
         "voice counters settle without underflow");
 
     std::vector<float> wrong_size(kPeriodFrames * 2 - 1, 1.0F);
-    const auto rejected = mixer->Render(wrong_size, 600);
+    const auto rejected = mixer->Render(
+        wrong_size,
+        MixerRenderTimeline{600, 0});
     failures += Expect(
         rejected.result == MA_INVALID_ARGS && rejected.frames_read == 0,
         "non-period render span is rejected");
+    const auto invalid_timeline = mixer->Render(
+        output,
+        MixerRenderTimeline{7, 8});
+    failures += Expect(
+        invalid_timeline.result == MA_INVALID_ARGS &&
+            invalid_timeline.frames_read == 0,
+        "discontinuity before output frame zero is rejected");
 
     failures += TestVoiceRetainsSourceOwners();
     failures += TestVoiceRetainsMixerState();
@@ -1055,6 +1434,12 @@ int main() {
     failures += TestStaleRenderCannotEndNewPlaybackRun();
     failures += TestAudibleDrainPublicationRejectsStaleRunAndEpoch();
     failures += TestConcurrentSeeksKeepTerminalDrainObservable();
+    failures += TestNativeLoopAdvancesAcrossDiscontinuity();
+    failures += TestNonLoopingVoiceEndsInsideDiscontinuity();
+    failures += TestLoopWrapsAcrossDiscontinuity();
+    failures += TestConvertedRatesUseCumulativeGapMapping();
+    failures += TestDiscontinuityResetsConverterHistory();
+    failures += TestExplicitGenerationWinsOverDiscontinuity();
 
     return failures == 0 ? 0 : 1;
 }
