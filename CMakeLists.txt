@@ -236,6 +236,15 @@ target_include_directories(AudioCursorTimelineTests PRIVATE
 target_link_libraries(AudioCursorTimelineTests PRIVATE miniaudio)
 add_test(NAME AudioCursorTimelineTests COMMAND AudioCursorTimelineTests)
 
+add_executable(OutputPacingTrackerTests
+        OutputPacingTracker.cpp
+        tests/OutputPacingTrackerTests.cpp
+)
+target_include_directories(OutputPacingTrackerTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME OutputPacingTrackerTests COMMAND OutputPacingTrackerTests)
+
 add_executable(MiniaudioMixerTests
         WasapiAudioTypes.cpp
         AudioSnapshot.cpp
