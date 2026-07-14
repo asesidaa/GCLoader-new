@@ -20,6 +20,7 @@ static_assert(
 constexpr const char* kRequiredConfigPrefix = R"toml(
 axis_threshold = 16384
 gamepad_index = 0
+input_poll_hz = 1000
 input_mode = 'Keyboard'
 gameplay_input_style = 'Arcade'
 
@@ -27,32 +28,32 @@ gameplay_input_style = 'Arcade'
 p1_axis_horizontal = 'leftx'
 p1_axis_vertical = 'lefty'
 p1_button1 = 'south'
-p1_dpad_down = 'dpad_down'
-p1_dpad_left = 'dpad_left'
-p1_dpad_right = 'dpad_right'
+p1_dpad_down = 'dpad_left'
+p1_dpad_left = 'invalid'
+p1_dpad_right = 'invalid'
 p1_dpad_up = 'dpad_up'
 p2_axis_horizontal = 'rightx'
 p2_axis_vertical = 'righty'
 p2_button1 = 'east'
-p2_button_down = 'invalid'
+p2_button_down = 'dpad_right'
 p2_button_left = 'invalid'
 p2_button_right = 'invalid'
-p2_button_up = 'invalid'
+p2_button_up = 'dpad_down'
 
 [keyboard]
 p1_button1 = 'space'
-p1_down = 's'
-p1_left = 'a'
-p1_right = 'd'
+p1_down = 'a'
+p1_left = 'up'
+p1_right = 'left'
 p1_start = '1'
 p1_up = 'w'
 p2_button1 = 'k'
-p2_down = 'down'
-p2_left = 'left'
+p2_down = 'd'
+p2_left = 'down'
 p2_right = 'right'
 p2_service = 'f2'
 p2_start = '2'
-p2_up = 'up'
+p2_up = 's'
 service1 = 'f1'
 service2 = 'i'
 service3 = 'p'
@@ -229,6 +230,54 @@ int expect_key(SDL_Keycode actual, SDL_Keycode expected, const char* name) {
     return 1;
 }
 
+int expect_gamepad_button(
+    SDL_GamepadButton actual,
+    SDL_GamepadButton expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+
+    std::cerr << "Expected " << name << " button "
+              << static_cast<int>(expected) << ", got "
+              << static_cast<int>(actual) << "\n";
+    return 1;
+}
+
+int expect_gamepad_axis(
+    SDL_GamepadAxis actual,
+    SDL_GamepadAxis expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+
+    std::cerr << "Expected " << name << " axis "
+              << static_cast<int>(expected) << ", got "
+              << static_cast<int>(actual) << "\n";
+    return 1;
+}
+
+int expect_poll_rate_validation(
+    InputPollHertzConfigValue value,
+    bool expected_valid,
+    const char* name) {
+    try {
+        ValidateInputPollHertz(value);
+        if (expected_valid) {
+            return 0;
+        }
+    } catch (const std::runtime_error&) {
+        if (!expected_valid) {
+            return 0;
+        }
+    }
+
+    std::cerr << "Expected " << name << " validation to be "
+              << expected_valid << "\n";
+    return 1;
+}
+
 int expect_vk(int actual, int expected, const char* name) {
     if (actual == expected) {
         return 0;
@@ -357,6 +406,159 @@ int main() {
         "127.0.0.1",
         "constructed ConfigGUI NESYS server IPv4");
     const auto generated_toml = rfl::toml::write(generated_defaults);
+    failures += expect_u32(
+        upgraded_defaults.input_poll_hz(),
+        1000,
+        "upgraded default input_poll_hz");
+    failures += expect_u32(
+        generated_defaults.input_poll_hz(),
+        1000,
+        "constructed ConfigGUI input_poll_hz");
+    failures += expect_bool(
+        generated_toml.find("input_poll_hz = 1000") != std::string::npos,
+        true,
+        "generated TOML input_poll_hz");
+
+    for (const auto rate : std::array<InputPollHertzConfigValue, 4>{
+             125, 250, 500, 1000}) {
+        failures += expect_poll_rate_validation(
+            rate,
+            true,
+            "supported input poll rate");
+    }
+    failures += expect_poll_rate_validation(
+        0,
+        false,
+        "zero input poll rate");
+    failures += expect_poll_rate_validation(
+        333,
+        false,
+        "unsupported input poll rate");
+    failures += expect_poll_rate_validation(
+        2000,
+        false,
+        "too-high input poll rate");
+
+    failures += expect_parse_failure(
+        replace_once(
+            std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig,
+            "input_poll_hz = 1000\n",
+            ""),
+        "missing input_poll_hz");
+
+    const auto custom_poll_config = parse_config(replace_once(
+        std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig,
+        "input_poll_hz = 1000",
+        "input_poll_hz = 250"));
+    failures += expect_u32(
+        custom_poll_config.input_poll_hz(),
+        250,
+        "custom input_poll_hz");
+    const auto reparsed_poll_config =
+        parse_config(rfl::toml::write(custom_poll_config));
+    failures += expect_u32(
+        reparsed_poll_config.input_poll_hz(),
+        250,
+        "input_poll_hz TOML round trip");
+
+    failures += expect_key(
+        generated_defaults.keyboard().p1_up(),
+        SDLK_W,
+        "default left booster up");
+    failures += expect_key(
+        generated_defaults.keyboard().p2_up(),
+        SDLK_S,
+        "default left booster down");
+    failures += expect_key(
+        generated_defaults.keyboard().p1_down(),
+        SDLK_A,
+        "default left booster left");
+    failures += expect_key(
+        generated_defaults.keyboard().p2_down(),
+        SDLK_D,
+        "default left booster right");
+    failures += expect_key(
+        generated_defaults.keyboard().p1_left(),
+        SDLK_UP,
+        "default right booster up");
+    failures += expect_key(
+        generated_defaults.keyboard().p2_left(),
+        SDLK_DOWN,
+        "default right booster down");
+    failures += expect_key(
+        generated_defaults.keyboard().p1_right(),
+        SDLK_LEFT,
+        "default right booster left");
+    failures += expect_key(
+        generated_defaults.keyboard().p2_right(),
+        SDLK_RIGHT,
+        "default right booster right");
+    failures += expect_key(
+        generated_defaults.keyboard().p1_button1(),
+        SDLK_SPACE,
+        "default left booster center button");
+    failures += expect_key(
+        generated_defaults.keyboard().p2_button1(),
+        SDLK_K,
+        "default right booster center button");
+
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p1_dpad_up(),
+        SDL_GAMEPAD_BUTTON_DPAD_UP,
+        "default left booster dpad up");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p2_button_up(),
+        SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+        "default left booster dpad down");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p1_dpad_down(),
+        SDL_GAMEPAD_BUTTON_DPAD_LEFT,
+        "default left booster dpad left");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p2_button_down(),
+        SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
+        "default left booster dpad right");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p1_dpad_left(),
+        SDL_GAMEPAD_BUTTON_INVALID,
+        "default right booster up button disabled");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p2_button_left(),
+        SDL_GAMEPAD_BUTTON_INVALID,
+        "default right booster down button disabled");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p1_dpad_right(),
+        SDL_GAMEPAD_BUTTON_INVALID,
+        "default right booster left button disabled");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p2_button_right(),
+        SDL_GAMEPAD_BUTTON_INVALID,
+        "default right booster right button disabled");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p1_button1(),
+        SDL_GAMEPAD_BUTTON_SOUTH,
+        "default left booster center button");
+    failures += expect_gamepad_button(
+        generated_defaults.gamepad().p2_button1(),
+        SDL_GAMEPAD_BUTTON_EAST,
+        "default right booster center button");
+    failures += expect_gamepad_axis(
+        generated_defaults.gamepad().p1_axis_horizontal(),
+        SDL_GAMEPAD_AXIS_LEFTX,
+        "default left booster horizontal axis");
+    failures += expect_gamepad_axis(
+        generated_defaults.gamepad().p1_axis_vertical(),
+        SDL_GAMEPAD_AXIS_LEFTY,
+        "default left booster vertical axis");
+    failures += expect_gamepad_axis(
+        generated_defaults.gamepad().p2_axis_horizontal(),
+        SDL_GAMEPAD_AXIS_RIGHTX,
+        "default right booster horizontal axis");
+    failures += expect_gamepad_axis(
+        generated_defaults.gamepad().p2_axis_vertical(),
+        SDL_GAMEPAD_AXIS_RIGHTY,
+        "default right booster vertical axis");
+
     failures += expect_bool(
         generated_toml.find("[nesys]") != std::string::npos,
         true,

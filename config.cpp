@@ -24,6 +24,8 @@ ConfigManager::ConfigManager()
     auto result = rfl::toml::read<InputConfig>(configFile);
     if (result)
     {
+        ValidateInputPollHertz(result.value().input_poll_hz());
+
         const auto& server_ip = result.value().nesys().server_ip();
         if (!gc::nesys_service::IsDottedDecimalIpv4(server_ip))
         {

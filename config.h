@@ -25,16 +25,16 @@ enum class GameplayInputStyle {
 
 struct KeyboardConfig
 {
-    // Use rfl::Rename to match TOML keys with C++ variable names
-    rfl::Rename<"p1_up", SDL_Keycode> p1_up = SDLK_W; // Default values
-    rfl::Rename<"p1_down", SDL_Keycode> p1_down = SDLK_S;
-    rfl::Rename<"p1_left", SDL_Keycode> p1_left = SDLK_A;
-    rfl::Rename<"p1_right", SDL_Keycode> p1_right = SDLK_D;
+    // Direction names are FastIO labels, not logical booster directions.
+    rfl::Rename<"p1_up", SDL_Keycode> p1_up = SDLK_W;
+    rfl::Rename<"p1_down", SDL_Keycode> p1_down = SDLK_A;
+    rfl::Rename<"p1_left", SDL_Keycode> p1_left = SDLK_UP;
+    rfl::Rename<"p1_right", SDL_Keycode> p1_right = SDLK_LEFT;
     rfl::Rename<"p1_button1", SDL_Keycode> p1_button1 = SDLK_SPACE;
 
-    rfl::Rename<"p2_up", SDL_Keycode> p2_up = SDLK_UP;
-    rfl::Rename<"p2_down", SDL_Keycode> p2_down = SDLK_DOWN;
-    rfl::Rename<"p2_left", SDL_Keycode> p2_left = SDLK_LEFT;
+    rfl::Rename<"p2_up", SDL_Keycode> p2_up = SDLK_S;
+    rfl::Rename<"p2_down", SDL_Keycode> p2_down = SDLK_D;
+    rfl::Rename<"p2_left", SDL_Keycode> p2_left = SDLK_DOWN;
     rfl::Rename<"p2_right", SDL_Keycode> p2_right = SDLK_RIGHT;
     rfl::Rename<"p2_button1", SDL_Keycode> p2_button1 = SDLK_K;
 
@@ -59,6 +59,25 @@ using WasapiBufferMillisecondsConfigValue = unsigned long;
 static_assert(
     sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));
 
+using InputPollHertzConfigValue = unsigned long;
+static_assert(
+    sizeof(InputPollHertzConfigValue) == sizeof(std::uint32_t));
+
+inline constexpr bool IsSupportedInputPollHertz(
+    InputPollHertzConfigValue value) noexcept
+{
+    return value == 125 || value == 250 || value == 500 || value == 1000;
+}
+
+inline void ValidateInputPollHertz(InputPollHertzConfigValue value)
+{
+    if (!IsSupportedInputPollHertz(value))
+    {
+        throw std::runtime_error(
+            "Invalid input_poll_hz; expected one of 125, 250, 500, or 1000");
+    }
+}
+
 inline constexpr char kWasapiExclusiveBufferTooltip[] =
     "Fixed exclusive buffer duration for this game launch.\n"
     "Default is 10 ms. Value must be greater than zero.\n"
@@ -80,10 +99,11 @@ struct ExperimentalConfig
 
 struct GamepadConfig
 {
+    // Direction names are FastIO labels, not logical booster directions.
     rfl::Rename<"p1_dpad_up", SDL_GamepadButton> p1_dpad_up = SDL_GAMEPAD_BUTTON_DPAD_UP;
-    rfl::Rename<"p1_dpad_down", SDL_GamepadButton> p1_dpad_down = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
-    rfl::Rename<"p1_dpad_left", SDL_GamepadButton> p1_dpad_left = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
-    rfl::Rename<"p1_dpad_right", SDL_GamepadButton> p1_dpad_right = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+    rfl::Rename<"p1_dpad_down", SDL_GamepadButton> p1_dpad_down = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+    rfl::Rename<"p1_dpad_left", SDL_GamepadButton> p1_dpad_left = SDL_GAMEPAD_BUTTON_INVALID;
+    rfl::Rename<"p1_dpad_right", SDL_GamepadButton> p1_dpad_right = SDL_GAMEPAD_BUTTON_INVALID;
     rfl::Rename<"p1_button1", SDL_GamepadButton> p1_button1 = SDL_GAMEPAD_BUTTON_SOUTH; // A/X
 
     rfl::Rename<"p1_axis_horizontal", SDL_GamepadAxis> p1_axis_horizontal = SDL_GAMEPAD_AXIS_LEFTX;
@@ -93,9 +113,9 @@ struct GamepadConfig
     rfl::Rename<"p2_axis_vertical", SDL_GamepadAxis> p2_axis_vertical = SDL_GAMEPAD_AXIS_RIGHTY;
     rfl::Rename<"p2_button1", SDL_GamepadButton> p2_button1 = SDL_GAMEPAD_BUTTON_EAST; // B/O
 
-    // Optional P2 Direction Buttons
-    rfl::Rename<"p2_button_up", SDL_GamepadButton> p2_button_up = SDL_GAMEPAD_BUTTON_INVALID; // Default to invalid
-    rfl::Rename<"p2_button_down", SDL_GamepadButton> p2_button_down = SDL_GAMEPAD_BUTTON_INVALID;
+    // Optional direction buttons, with the D-pad completing the left booster.
+    rfl::Rename<"p2_button_up", SDL_GamepadButton> p2_button_up = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+    rfl::Rename<"p2_button_down", SDL_GamepadButton> p2_button_down = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
     rfl::Rename<"p2_button_left", SDL_GamepadButton> p2_button_left = SDL_GAMEPAD_BUTTON_INVALID;
     rfl::Rename<"p2_button_right", SDL_GamepadButton> p2_button_right = SDL_GAMEPAD_BUTTON_INVALID;
 };
@@ -106,6 +126,7 @@ struct InputConfig
     // Top-level settings
     rfl::Rename<"gamepad_index", int> gamepad_index = 0;
     rfl::Rename<"axis_threshold", Sint16> axis_threshold = 16384;
+    rfl::Rename<"input_poll_hz", InputPollHertzConfigValue> input_poll_hz = 1000;
     rfl::Rename<"input_mode", InputMode> input_mode = InputMode::Keyboard; // Default to keyboard
     rfl::Rename<"gameplay_input_style", GameplayInputStyle> gameplay_input_style =
         GameplayInputStyle::Arcade;
@@ -194,6 +215,9 @@ public:
 
     Sint16 GetGamepadAxisThreshold() const { return config.axis_threshold.value(); } // e.g., 16384 or 24000
     int GetGamepadIndex() const { return config.gamepad_index.value(); } // e.g., 0 or 1
+    std::uint32_t GetInputPollHertz() const {
+        return static_cast<std::uint32_t>(config.input_poll_hz.value());
+    }
     InputMode GetInputMode() const { return config.input_mode.value(); }
     GameplayInputStyle GetGameplayInputStyle() const {
         return config.gameplay_input_style.value();

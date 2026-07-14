@@ -10,8 +10,11 @@
 #include "RegistryConfig.h"
 
 #include <rfl/toml.hpp>
+#include <algorithm>
+#include <array>
 #include <iostream>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 #include <optional>
@@ -348,6 +351,29 @@ int main(int argc, char *argv[]) {
                 IM_ARRAYSIZE(gameplay_input_styles))) {
             g_config.gameplay_input_style =
                 static_cast<GameplayInputStyle>(current_gameplay_input_style);
+            g_config_dirty = true;
+        }
+
+        constexpr std::array<InputPollHertzConfigValue, 4> input_poll_rates{
+            125, 250, 500, 1000};
+        constexpr const char* input_poll_rate_labels[]{
+            "125 Hz", "250 Hz", "500 Hz", "1000 Hz"};
+        auto& input_poll_hz = g_config.input_poll_hz();
+        const auto rate_it = std::find(
+            input_poll_rates.begin(),
+            input_poll_rates.end(),
+            input_poll_hz);
+        int current_rate = rate_it == input_poll_rates.end()
+            ? 3
+            : static_cast<int>(
+                std::distance(input_poll_rates.begin(), rate_it));
+        if (ImGui::Combo(
+                "Input Polling Rate",
+                &current_rate,
+                input_poll_rate_labels,
+                IM_ARRAYSIZE(input_poll_rate_labels))) {
+            input_poll_hz =
+                input_poll_rates[static_cast<std::size_t>(current_rate)];
             g_config_dirty = true;
         }
 
