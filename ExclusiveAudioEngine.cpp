@@ -268,6 +268,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             return;
         }
         last_qpc_100ns_ = 0;
+        has_last_qpc_sample_ = false;
         actual_period_100ns_ = FramesToReferenceTime(
             frames, kOutputSampleRate);
         initialization_succeeded_.store(true, std::memory_order_release);
@@ -332,7 +333,6 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
         }
 
         const auto decision = pacing_tracker_->Plan(*presented);
-        RecordPacingDecision(decision);
         if (decision.kind == OutputPacingDecisionKind::InvalidClock) {
             static_cast<void>(endpoint_->TrySubmitSilence());
             RecordRuntimeFailure({
@@ -342,6 +342,7 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
             break;
         }
         if (decision.kind == OutputPacingDecisionKind::ChronicGap) {
+            RecordPacingDecision(decision);
             chronic_pacing_failures_.fetch_add(
                 1, std::memory_order_relaxed);
             static_cast<void>(endpoint_->TrySubmitSilence());
@@ -377,6 +378,7 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
         submitted_frames_.store(
             pacing_tracker_->submitted_tail(),
             std::memory_order_release);
+        RecordPacingDecision(decision);
         render_callbacks_.fetch_add(1, std::memory_order_relaxed);
     }
 }
@@ -499,7 +501,7 @@ void ExclusiveAudioEngine::RecordPacingDecision(
 }
 
 void ExclusiveAudioEngine::CountLateWake(std::uint64_t qpc_100ns) noexcept {
-    if (last_qpc_100ns_ != 0 && qpc_100ns > last_qpc_100ns_) {
+    if (has_last_qpc_sample_ && qpc_100ns > last_qpc_100ns_) {
         const auto delta = qpc_100ns - last_qpc_100ns_;
         const auto period = static_cast<std::uint64_t>(
             std::max<REFERENCE_TIME>(actual_period_100ns_, 0));
@@ -508,6 +510,7 @@ void ExclusiveAudioEngine::CountLateWake(std::uint64_t qpc_100ns) noexcept {
         }
     }
     last_qpc_100ns_ = qpc_100ns;
+    has_last_qpc_sample_ = true;
 }
 
 AudioRuntimeCountersSnapshot

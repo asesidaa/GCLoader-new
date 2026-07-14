@@ -1153,7 +1153,7 @@ int TestPreStartClockOriginAndRecoverableGapPacing() {
             voice->Play(true, 1) == DS_OK,
         "paced test voice starts");
 
-    constexpr std::uint64_t first_qpc = 100'000;
+    constexpr std::uint64_t first_qpc = 0;
     fixture.api->PushClock(ClockPositionForOutputFrame(8), first_qpc);
     fixture.api->PushWait();
     failures += Expect(

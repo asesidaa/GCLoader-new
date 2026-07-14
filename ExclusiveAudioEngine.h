@@ -165,6 +165,7 @@ private:
     std::atomic_int64_t minimum_submitted_lead_frames_{};
     std::atomic_uint64_t endpoint_hresult_failures_{};
     std::uint64_t last_qpc_100ns_{};
+    bool has_last_qpc_sample_{};
     REFERENCE_TIME actual_period_100ns_{};
     DWORD summary_interval_ms_{};
 };
