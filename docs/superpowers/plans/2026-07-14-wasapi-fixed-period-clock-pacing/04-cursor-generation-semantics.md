@@ -66,7 +66,7 @@ virtual void CountUnmappedCursorFailure() noexcept = 0;
 Remove `CountCursorTimelineFailure` after all fakes and production consumers are
 updated.
 
-- [ ] **Step 1: Write failing timeline status tests**
+- [x] **Step 1: Write failing timeline status tests**
 
 Assert:
 
@@ -90,7 +90,7 @@ expect(timeline.ResolveSourceFrame(350, 7, 1000).kind ==
 Retain loop, conversion-ratio, stable-read, and bounded-ring tests with the new
 result type.
 
-- [ ] **Step 2: Write failing facade generation tests**
+- [x] **Step 2: Write failing facade generation tests**
 
 In `SecondarySoundBufferTests`, assert that:
 
@@ -105,7 +105,7 @@ In `SecondarySoundBufferTests`, assert that:
 - a null `CurrentOutputFrame` preserves the last cursor without calling either
   facade counter, because the engine owns clock-failure accounting.
 
-- [ ] **Step 3: Run focused tests and verify red**
+- [x] **Step 3: Run focused tests and verify red**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target AudioCursorTimelineTests MiniaudioMixerTests SecondarySoundBufferTests DirectSoundDeviceTests ExclusiveAudioEngineTests WasapiAudioPatchTests && ctest --test-dir build-msvc32-latest -R "^(AudioCursorTimelineTests|MiniaudioMixerTests|SecondarySoundBufferTests|DirectSoundDeviceTests|ExclusiveAudioEngineTests|WasapiAudioPatchTests)$" --output-on-failure'
@@ -113,7 +113,7 @@ In `SecondarySoundBufferTests`, assert that:
 
 Expected: old optional results and counter interface fail the new assertions.
 
-- [ ] **Step 4: Implement lookup classification**
+- [x] **Step 4: Implement lookup classification**
 
 While scanning stable slots, track whether the requested generation exists and
 its earliest output begin. Return:
@@ -127,7 +127,7 @@ return {AudioCursorResolutionKind::Unmapped, 0};
 
 Invalid zero source length is `Unmapped`.
 
-- [ ] **Step 5: Implement unique control generations and counters**
+- [x] **Step 5: Implement unique control generations and counters**
 
 Rename the facade field to `playback_generation_`. Increment it for every
 accepted `Play` and `SetCurrentPosition`. Store the requested/fallback source
@@ -144,12 +144,12 @@ stored frame. Update `ExclusiveAudioEngine`, its counter snapshot, and every
 `IAudioEngineServices` fake in this same task so the commit builds on its own;
 Plan 5 only adds the pacing counters.
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run the six focused targets. Expected: all pass with the expected counter split,
 new play generation propagation, and no game-thread timeline writes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add -- AudioCursorTimeline.h AudioCursorTimeline.cpp DirectSoundFacade.h DirectSoundFacade.cpp MiniaudioMixer.cpp ExclusiveAudioEngine.h ExclusiveAudioEngine.cpp tests/AudioCursorTimelineTests.cpp tests/MiniaudioMixerTests.cpp tests/SecondarySoundBufferTests.cpp tests/DirectSoundDeviceTests.cpp tests/ExclusiveAudioEngineTests.cpp tests/WasapiAudioPatchTests.cpp

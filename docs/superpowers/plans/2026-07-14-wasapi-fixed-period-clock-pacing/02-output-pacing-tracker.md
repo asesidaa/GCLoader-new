@@ -56,7 +56,7 @@ public:
 };
 ```
 
-- [ ] **Step 1: Register a failing focused target**
+- [x] **Step 1: Register a failing focused target**
 
 Add:
 
@@ -72,7 +72,7 @@ add_test(NAME OutputPacingTrackerTests COMMAND OutputPacingTrackerTests)
 Append `OutputPacingTracker.cpp` to `SOURCES` and to
 `ExclusiveAudioEngineTests` after Plan 5 integrates it.
 
-- [ ] **Step 2: Write the failing state-machine cases**
+- [x] **Step 2: Write the failing state-machine cases**
 
 Use a 441-frame tracker and assert:
 
@@ -98,7 +98,7 @@ regression, zero packet frames, align-up overflow, block-end overflow, commit of
 a stale/mismatched decision, two recoverable gap events, a third gap within
 44,100 frames producing `ChronicGap`, and an old gap expiring before the third.
 
-- [ ] **Step 3: Run and verify red**
+- [x] **Step 3: Run and verify red**
 
 Reconfigure inside `vcvars32.bat`, then run:
 
@@ -108,7 +108,7 @@ Reconfigure inside `vcvars32.bat`, then run:
 
 Expected: compilation fails because the tracker files or symbols are absent.
 
-- [ ] **Step 4: Implement minimal deterministic planning**
+- [x] **Step 4: Implement minimal deterministic planning**
 
 Initialize `submitted_tail_` to `packet_frames`. `Plan` must:
 
@@ -133,12 +133,12 @@ output frames, insert the current presentation position, and return
 a renderable decision whose `block_begin` still matches the current tail or its
 declared discontinuity, then stores `block_end`.
 
-- [ ] **Step 5: Verify green and allocation independence**
+- [x] **Step 5: Verify green and allocation independence**
 
 Run the focused target twice. Expected: PASS both times and no test uses heap
 allocation to drive `Plan` or `Commit`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -- CMakeLists.txt OutputPacingTracker.h OutputPacingTracker.cpp tests/OutputPacingTrackerTests.cpp

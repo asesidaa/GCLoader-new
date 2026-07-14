@@ -43,13 +43,13 @@ HRESULT stream_latency_result{E_NOTIMPL};
 bool stream_latency_available{};
 ```
 
-- [ ] **Step 1: Write failing latency metadata tests**
+- [x] **Step 1: Write failing latency metadata tests**
 
 Assert a successful fake query stores the exact value. Assert a failed query
 stores its HRESULT, leaves availability false, and does not fail endpoint
 creation.
 
-- [ ] **Step 2: Implement production and endpoint query**
+- [x] **Step 2: Implement production and endpoint query**
 
 `ProductionWasapiApi::GetStreamLatency` delegates to
 `IAudioClient::GetStreamLatency`. Query after successful initialization and
@@ -84,7 +84,7 @@ std::int64_t current_submitted_lead_frames{};
 std::int64_t minimum_submitted_lead_frames{};
 ```
 
-- [ ] **Step 3: Write failing engine call-order and pacing tests**
+- [x] **Step 3: Write failing engine call-order and pacing tests**
 
 Extend the fake call log and assert:
 
@@ -104,7 +104,7 @@ Extend the fake call log and assert:
     `InvalidClockPosition`;
 12. pending and unmapped cursor counters are independently visible.
 
-- [ ] **Step 4: Run engine tests and verify red**
+- [x] **Step 4: Run engine tests and verify red**
 
 Reconfigure for the new tracker source, then run:
 
@@ -114,7 +114,7 @@ Reconfigure for the new tracker source, then run:
 
 Expected: old start/clock order and sequential `submitted_frames_` logic fail.
 
-- [ ] **Step 5: Establish clock origin before start**
+- [x] **Step 5: Establish clock origin before start**
 
 After mixer/vector creation and before `Start`:
 
@@ -133,7 +133,7 @@ last_qpc_100ns_ = 0;
 
 Do not seed late-wake timing from `origin.qpc_100ns`.
 
-- [ ] **Step 6: Integrate pacing decisions**
+- [x] **Step 6: Integrate pacing decisions**
 
 The render loop maps clock position and calls `Plan`. Handle decisions:
 
@@ -167,7 +167,7 @@ post-start event only seeds `last_qpc_100ns_`; later events use the existing
 - Modify: `tests/WasapiAudioPatchTests.cpp`
 - Modify: `docs/superpowers/plans/2026-07-12-wasapi-exclusive-low-latency-audio/12-configurable-fixed-buffer-duration.md`
 
-- [ ] **Step 7: Extend failing text assertions**
+- [x] **Step 7: Extend failing text assertions**
 
 Startup text must include stream latency or `stream_latency=unavailable`.
 Runtime summary/fatal text must include `confirmed_gap_events`,
@@ -179,13 +179,13 @@ failure count. The chronic fatal message must contain
 Retain the already-written assertions that the parsed 10 ms value reaches the
 config log, detour state, and production engine start.
 
-- [ ] **Step 8: Implement non-real-time formatting**
+- [x] **Step 8: Implement non-real-time formatting**
 
 Only observer/initialization code formats the new fields. The render loop
 updates counters but calls no logger. Map new startup and runtime failure stages
 to stable stage names in the existing failure-text switch.
 
-- [ ] **Step 9: Verify all focused audio targets**
+- [x] **Step 9: Verify all focused audio targets**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target WasapiEndpointTests ExclusiveAudioEngineTests WasapiAudioPatchTests SecondarySoundBufferTests MiniaudioMixerTests OutputPacingTrackerTests iDmacDrv32 && ctest --test-dir build-msvc32-latest -R "^(WasapiEndpointTests|ExclusiveAudioEngineTests|WasapiAudioPatchTests|SecondarySoundBufferTests|MiniaudioMixerTests|OutputPacingTrackerTests)$" --output-on-failure'
@@ -193,7 +193,7 @@ to stable stage names in the existing failure-text switch.
 
 Expected: all focused targets pass and `iDmacDrv32.dll` links.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```powershell
 git add -- CMakeLists.txt WasapiEndpoint.h WasapiEndpoint.cpp ExclusiveAudioEngine.h ExclusiveAudioEngine.cpp ExclusiveAudioEngineInternal.h WasapiAudioPatch.cpp WasapiAudioPatchInternal.h tests/WasapiEndpointTests.cpp tests/ExclusiveAudioEngineTests.cpp tests/WasapiAudioPatchTests.cpp docs/superpowers/plans/2026-07-12-wasapi-exclusive-low-latency-audio/12-configurable-fixed-buffer-duration.md

@@ -35,7 +35,7 @@
   `AudioFailureStage::ConfiguredDurationBelowMinimum`, and strict
   `EndpointInitialization::requested_duration` semantics.
 
-- [ ] **Step 1: Write failing endpoint tests**
+- [x] **Step 1: Write failing endpoint tests**
 
 Add cases that call `WasapiEndpoint::Create` with controlled fake APIs:
 
@@ -62,7 +62,7 @@ to `InitializeExclusiveEvent` are exactly 100,000. Add no-alignment cases where
 the actual frames equal the floor or ceiling of the requested duration, plus a
 multi-frame mismatch that fails at `GetActualBufferSize`.
 
-- [ ] **Step 2: Run the focused tests and verify red**
+- [x] **Step 2: Run the focused tests and verify red**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target WasapiEndpointTests WasapiAudioPatchTests && ctest --test-dir build-msvc32-latest -R "^(WasapiEndpointTests|WasapiAudioPatchTests)$" --output-on-failure'
@@ -71,7 +71,7 @@ multi-frame mismatch that fails at `GetActualBufferSize`.
 Expected: the zero case still selects the minimum, the below-minimum case still
 clamps, or the new failure-stage symbols are absent.
 
-- [ ] **Step 3: Add strict validation stages**
+- [x] **Step 3: Add strict validation stages**
 
 Extend `AudioFailureStage`:
 
@@ -107,7 +107,7 @@ if (initialization_.configured_duration < initialization_.minimum_period) {
 const auto requested = initialization_.configured_duration;
 ```
 
-- [ ] **Step 4: Enforce exact ordinary rounding**
+- [x] **Step 4: Enforce exact ordinary rounding**
 
 For a success without alignment retry, compute the allowed frame bounds with
 overflow-safe integer helpers:
@@ -126,7 +126,7 @@ Add `ReferenceTimeToFramesFloor` beside the existing ceiling helper in
 `WasapiAudioTypes.h/.cpp`, with zero/negative and overflow tests in
 `tests/AudioFormatTests.cpp`. Keep the alignment-retry equality check unchanged.
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -136,7 +136,7 @@ Run:
 
 Expected: all three tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -- WasapiAudioTypes.h WasapiAudioTypes.cpp WasapiEndpoint.h WasapiEndpoint.cpp tests/AudioFormatTests.cpp tests/WasapiEndpointTests.cpp tests/WasapiAudioPatchTests.cpp

@@ -50,7 +50,7 @@ than retained as a second behavior path. Until Plan 5 supplies pacing decisions,
 `MixerRenderTimeline{output_frame_begin, 0}` so this commit remains fully
 buildable.
 
-- [ ] **Step 1: Write failing native-rate gap tests**
+- [x] **Step 1: Write failing native-rate gap tests**
 
 Create a looping 44.1 kHz source whose frame value identifies its source
 position. Render `[441,882)`, then render with:
@@ -69,7 +69,7 @@ voice did not invoke an extra mixer render for the missing packet.
 Add non-looping coverage where the source ends inside the gap and publishes the
 correct `audible_until_output_frame`.
 
-- [ ] **Step 2: Write failing converted and precedence tests**
+- [x] **Step 2: Write failing converted and precedence tests**
 
 For 22.05 kHz and 48 kHz sources, assert cumulative mapped advancement matches
 `floor(discontinuity_frames * source_rate / 44100)` without per-gap rounding
@@ -77,7 +77,7 @@ drift. Then publish `Seek(frame, new_epoch)` or `Play(loop, new_epoch)` before a
 gap render and assert the first sample comes from the explicit requested frame,
 not requested frame plus the older gap.
 
-- [ ] **Step 3: Run focused tests and verify red**
+- [x] **Step 3: Run focused tests and verify red**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest --target MiniaudioMixerTests && ctest --test-dir build-msvc32-latest -R "^MiniaudioMixerTests$" --output-on-failure'
@@ -85,7 +85,7 @@ not requested frame plus the older gap.
 
 Expected: missing `MixerRenderTimeline` or wrong sequential source samples.
 
-- [ ] **Step 4: Extend render context and apply mailbox first**
+- [x] **Step 4: Extend render context and apply mailbox first**
 
 Validate `output_frame_begin >= discontinuity_frames`. Store both values in
 `MixerRenderContext`. In `VoiceNodeProcess`, preserve the existing stable
@@ -100,7 +100,7 @@ render->discontinuity_frames != 0 &&
 playback_run != 0
 ```
 
-- [ ] **Step 5: Implement direct source advancement**
+- [x] **Step 5: Implement direct source advancement**
 
 Use the existing cumulative epoch mapping:
 
@@ -125,12 +125,12 @@ call `EndPlayback` with
 `gap_begin + represented`. For a looping source, wrap the stored cursor. Return
 silence for the current voice if it ended in the gap.
 
-- [ ] **Step 6: Verify focused mixer behavior**
+- [x] **Step 6: Verify focused mixer behavior**
 
 Run `MiniaudioMixerTests`. Expected: all native, converted, loop, end, seek,
 play, allocation, and prior zero-gap cases pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add -- MiniaudioMixer.h MiniaudioMixer.cpp ExclusiveAudioEngine.cpp tests/MiniaudioMixerTests.cpp tests/SecondarySoundBufferTests.cpp

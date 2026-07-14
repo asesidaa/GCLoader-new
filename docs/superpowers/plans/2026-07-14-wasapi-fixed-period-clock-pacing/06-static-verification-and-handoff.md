@@ -25,7 +25,7 @@
 - Verify: `build-msvc32-latest/CMakeCache.txt`
 - Verify: all files committed by Plans 1-5
 
-- [ ] **Step 1: Inspect cache identity**
+- [x] **Step 1: Inspect cache identity**
 
 ```powershell
 Select-String -Path build-msvc32-latest/CMakeCache.txt -Pattern '^(CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|CMAKE_MAKE_PROGRAM):'
@@ -34,7 +34,7 @@ Select-String -Path build-msvc32-latest/CMakeCache.txt -Pattern '^(CMAKE_C_COMPI
 Expected: x86 MSVC `cl.exe` and Ninja are populated. If absent or inconsistent,
 use `cmake --fresh`; otherwise perform the normal configure below.
 
-- [ ] **Step 2: Reconfigure through CMake**
+- [x] **Step 2: Reconfigure through CMake**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake -S . -B build-msvc32-latest -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl'
@@ -43,7 +43,7 @@ use `cmake --fresh`; otherwise perform the normal configure below.
 Expected: configure/generate succeeds and CMake discovers or fetches all
 dependencies without manual paths.
 
-- [ ] **Step 3: Build production and every test**
+- [x] **Step 3: Build production and every test**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && cmake --build build-msvc32-latest'
@@ -51,7 +51,7 @@ dependencies without manual paths.
 
 Expected: Ninja exits 0 and produces `build-msvc32-latest/iDmacDrv32.dll`.
 
-- [ ] **Step 4: Run complete CTest**
+- [x] **Step 4: Run complete CTest**
 
 ```powershell
 & $env:ComSpec /d /s /c '"C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat" && ctest --test-dir build-msvc32-latest --output-on-failure'
@@ -63,7 +63,7 @@ Expected: every registered test passes, including
 `WasapiEndpointTests`, `ExclusiveAudioEngineTests`, and
 `WasapiAudioPatchTests`.
 
-- [ ] **Step 5: Review the owned diff and commit state**
+- [x] **Step 5: Review the owned diff and commit state**
 
 Run separately:
 
@@ -99,3 +99,20 @@ The operator deploys and verifies at 10 ms:
 9. enabled audio feels lower latency than the DirectSound baseline.
 
 Only the operator's result closes gameplay acceptance.
+
+## Static verification evidence
+
+- The repository-driven configure completed under `vcvars32.bat` with the x86
+  MSVC compiler and Ninja; no dependency path was supplied manually.
+- The complete default build exited successfully and produced an x86
+  `iDmacDrv32.dll` (`14C machine`).
+- Complete CTest passed 21/21 with zero failures.
+- DLL SHA-256:
+  `D3A1C036003CBE1173152387D2DA8D1C7D0ECBE8F8791A22C5DDF76584968A36`.
+- Ninja records 348 dependencies for the production
+  `WasapiAudioPatch.cpp.obj`, including `ExclusiveAudioEngine.h` and
+  `WasapiAudioPatchInternal.h`.
+- The owned commit range has no whitespace errors, the worktree is clean, and
+  `FrameratePatch.cpp` is absent from the changed-file set.
+- Deployment, game launch, and operator gameplay acceptance were not performed
+  during static verification.
