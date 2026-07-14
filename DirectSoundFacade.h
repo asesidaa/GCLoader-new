@@ -22,7 +22,8 @@ public:
     virtual std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept = 0;
     virtual std::uint32_t endpoint_buffer_frames() const noexcept = 0;
-    virtual void CountCursorTimelineFailure() noexcept = 0;
+    virtual void CountPendingCursorQuery() noexcept = 0;
+    virtual void CountUnmappedCursorFailure() noexcept = 0;
 };
 
 HRESULT CreateDirectSoundDevice(
@@ -161,7 +162,7 @@ private:
     std::mutex control_mutex_;
     std::atomic_ulong references_{1};
     std::atomic_long volume_{DSBVOLUME_MAX};
-    std::uint64_t epoch_{1};
+    std::uint64_t playback_generation_{};
     std::uint64_t last_reported_source_frame_{};
 };
 

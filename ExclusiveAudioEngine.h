@@ -38,7 +38,8 @@ struct AudioRuntimeCountersSnapshot {
     std::uint64_t render_callbacks{};
     std::uint64_t late_event_wakes{};
     std::uint64_t silence_fallbacks{};
-    std::uint64_t cursor_timeline_failures{};
+    std::uint64_t pending_cursor_queries{};
+    std::uint64_t unmapped_cursor_failures{};
     std::uint64_t endpoint_hresult_failures{};
     MixerDiagnosticsSnapshot mixer{};
 };
@@ -80,7 +81,8 @@ public:
         ma_result*) noexcept override;
     std::optional<std::uint64_t> CurrentOutputFrame() noexcept override;
     std::uint32_t endpoint_buffer_frames() const noexcept override;
-    void CountCursorTimelineFailure() noexcept override;
+    void CountPendingCursorQuery() noexcept override;
+    void CountUnmappedCursorFailure() noexcept override;
 
 private:
     friend std::unique_ptr<ExclusiveAudioEngine>
@@ -143,7 +145,8 @@ private:
     std::atomic_uint64_t render_callbacks_{};
     std::atomic_uint64_t late_event_wakes_{};
     std::atomic_uint64_t silence_fallbacks_{};
-    std::atomic_uint64_t cursor_timeline_failures_{};
+    std::atomic_uint64_t pending_cursor_queries_{};
+    std::atomic_uint64_t unmapped_cursor_failures_{};
     std::atomic_uint64_t endpoint_hresult_failures_{};
     std::uint64_t last_qpc_100ns_{};
     REFERENCE_TIME actual_period_100ns_{};

@@ -23,6 +23,7 @@
 namespace {
 
 using gc::audio::AudioCursorTimeline;
+using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioSnapshot;
 using gc::audio::IAudioEngineServices;
 using gc::audio::MiniaudioMixer;
@@ -139,8 +140,12 @@ public:
         return 4;
     }
 
-    void CountCursorTimelineFailure() noexcept override {
-        ++cursor_failures;
+    void CountPendingCursorQuery() noexcept override {
+        ++pending_cursor_queries;
+    }
+
+    void CountUnmappedCursorFailure() noexcept override {
+        ++unmapped_cursor_failures;
     }
 
     MixerRenderResult Render(
@@ -179,7 +184,8 @@ public:
     bool initialized{};
     bool fail_voice_creation{};
     std::optional<std::uint64_t> output_frame{};
-    std::uint64_t cursor_failures{};
+    std::uint64_t pending_cursor_queries{};
+    std::uint64_t unmapped_cursor_failures{};
     VoiceUsage last_usage{VoiceUsage::General};
     std::weak_ptr<AudioSnapshot> observed_snapshot;
     std::weak_ptr<AudioCursorTimeline> observed_timeline;
@@ -550,6 +556,15 @@ int TestVolumePlaybackAndCursors() {
     failures += Expect(
         buffer->Play(0, 0, DSBPLAY_LOOPING) == DS_OK,
         "looping Play succeeds");
+    engine.output_frame = 100;
+    DWORD play_cursor{};
+    DWORD write_cursor{};
+    failures += Expect(
+        buffer->GetCurrentPosition(&play_cursor, &write_cursor) == DS_OK &&
+            play_cursor == 0 && write_cursor == 16 &&
+            engine.pending_cursor_queries == 1 &&
+            engine.unmapped_cursor_failures == 0,
+        "new play generation immediately returns its stable anchor");
     DWORD status{};
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK &&
@@ -561,8 +576,6 @@ int TestVolumePlaybackAndCursors() {
         engine.Render(100, first_output).result == MA_SUCCESS,
         "first real mixer render");
     engine.output_frame = 102;
-    DWORD play_cursor{};
-    DWORD write_cursor{};
     failures += Expect(
         buffer->GetCurrentPosition(&play_cursor, &write_cursor) == DS_OK &&
             play_cursor == 8 && write_cursor == 24,
@@ -571,6 +584,12 @@ int TestVolumePlaybackAndCursors() {
     failures += Expect(
         buffer->Play(0, 0, DSBPLAY_LOOPING) == DS_OK,
         "repeated Play succeeds");
+    engine.output_frame = 104;
+    failures += Expect(
+        buffer->GetCurrentPosition(&play_cursor, nullptr) == DS_OK &&
+            play_cursor == 8 && engine.pending_cursor_queries == 2 &&
+            engine.unmapped_cursor_failures == 0,
+        "repeated Play creates a distinct pending generation");
     std::array<float, 8> second_output{};
     failures += Expect(
         engine.Render(104, second_output).result == MA_SUCCESS,
@@ -587,18 +606,21 @@ int TestVolumePlaybackAndCursors() {
         "repeated Play does not double-count active voice");
 
     engine.output_frame.reset();
-    const auto failures_before = engine.cursor_failures;
+    const auto pending_before = engine.pending_cursor_queries;
+    const auto unmapped_before = engine.unmapped_cursor_failures;
     failures += Expect(
         buffer->GetCurrentPosition(&play_cursor, &write_cursor) == DS_OK &&
             play_cursor == 16 && write_cursor == 0 &&
-            engine.cursor_failures == failures_before + 1,
-        "missing clock returns last good cursor with diagnostic");
+            engine.pending_cursor_queries == pending_before &&
+            engine.unmapped_cursor_failures == unmapped_before,
+        "missing clock returns last good cursor without facade diagnostic");
     engine.output_frame = 999;
     failures += Expect(
         buffer->GetCurrentPosition(&play_cursor, nullptr) == DS_OK &&
             play_cursor == 16 &&
-            engine.cursor_failures == failures_before + 2,
-        "missing timeline returns last good cursor with diagnostic");
+            engine.pending_cursor_queries == pending_before &&
+            engine.unmapped_cursor_failures == unmapped_before + 1,
+        "uncovered active timeline increments only unmapped failures");
 
     engine.output_frame = 106;
     failures += Expect(buffer->Stop() == DS_OK, "Stop succeeds");
@@ -645,8 +667,11 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     const auto timeline = engine.observed_timeline.lock();
     failures += Expect(
         timeline != nullptr &&
-            timeline->ResolveSourceFrame(701, 1, 2) == 1 &&
-            !timeline->ResolveSourceFrame(702, 1, 2).has_value(),
+            timeline->ResolveSourceFrame(701, 1, 2).kind ==
+                AudioCursorResolutionKind::Resolved &&
+            timeline->ResolveSourceFrame(701, 1, 2).source_frame == 1 &&
+            timeline->ResolveSourceFrame(702, 1, 2).kind ==
+                AudioCursorResolutionKind::Unmapped,
         "mixer publishes half-open final span ending at output frame 702");
 
     engine.output_frame = 701;
@@ -654,7 +679,8 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     DWORD status{};
     failures += Expect(
         buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && engine.cursor_failures == 0,
+            cursor == 4 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "queued final span resolves hardware-mapped source bytes");
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK &&
@@ -667,7 +693,8 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
         "status stops at the final queued output boundary");
     failures += Expect(
         buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && engine.cursor_failures == 0,
+            cursor == 4 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "cursor remains last good after final queued output drains");
     buffer->Release();
 
@@ -693,7 +720,8 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK && status == 0 &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && stop_engine.cursor_failures == 0,
+            cursor == 4 && stop_engine.pending_cursor_queries == 0 &&
+            stop_engine.unmapped_cursor_failures == 0,
         "Stop preserves hardware-mapped cursor and clears drain state");
     buffer->Release();
     return failures;
@@ -732,7 +760,8 @@ int TestResetBufferIgnoresStaleFinalDrainRecord() {
         "stale old-epoch drain cannot report COM playing status");
     failures += Expect(
         buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 0 && engine.cursor_failures == 0,
+            cursor == 0 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "stale old-epoch drain cannot resolve old span or add fallback failure");
 
     failures += Expect(
@@ -747,7 +776,8 @@ int TestResetBufferIgnoresStaleFinalDrainRecord() {
         buffer->GetStatus(&status) == DS_OK &&
             status == DSBSTATUS_PLAYING &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && engine.cursor_failures == 0,
+            cursor == 4 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "new epoch final drain alone drives COM status and cursor");
     buffer->Release();
     return failures;
@@ -783,11 +813,14 @@ int TestSeekRestoreUnsupportedAndLifetime() {
         "aligned in-range seek succeeds");
     engine.output_frame = 100;
     DWORD cursor{};
-    const auto failures_before = engine.cursor_failures;
+    const auto pending_before = engine.pending_cursor_queries;
+    const auto unmapped_before = engine.unmapped_cursor_failures;
     failures += Expect(
         buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && engine.cursor_failures == failures_before + 1,
-        "seek epoch rejects pre-seek render span");
+            cursor == 4 &&
+            engine.pending_cursor_queries == pending_before + 1 &&
+            engine.unmapped_cursor_failures == unmapped_before,
+        "accepted seek reports its anchor as a pending generation");
     output.fill(0.0F);
     engine.Render(200, output);
     engine.output_frame = 201;
@@ -917,13 +950,15 @@ int TestConcurrentSeeksAreOneFacadeTransactionAtATime() {
         buffer->GetStatus(&status) == DS_OK &&
             status == DSBSTATUS_PLAYING &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 20 && engine.cursor_failures == 0,
+            cursor == 20 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "serialized seek epoch resolves the final audible source frame");
     engine.output_frame = drain_end;
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK && status == 0 &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 20 && engine.cursor_failures == 0,
+            cursor == 20 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "serialized seek epoch drains without a cursor fallback");
     buffer->Release();
     return failures;
@@ -997,13 +1032,15 @@ int TestConcurrentPlayAndSeekShareFacadeTransactionOrder() {
         buffer->GetStatus(&status) == DS_OK &&
             status == DSBSTATUS_PLAYING &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 20 && engine.cursor_failures == 0,
+            cursor == 20 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "ordered Play and seek resolve the final audible source frame");
     engine.output_frame = 404;
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK && status == 0 &&
             buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 20 && engine.cursor_failures == 0,
+            cursor == 20 && engine.pending_cursor_queries == 0 &&
+            engine.unmapped_cursor_failures == 0,
         "ordered Play and seek drain without a cursor fallback");
     buffer->Release();
     return failures;

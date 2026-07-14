@@ -102,14 +102,13 @@ public:
         return 4;
     }
 
-    void CountCursorTimelineFailure() noexcept override {
-        ++cursor_failures;
-    }
+    void CountPendingCursorQuery() noexcept override {}
+
+    void CountUnmappedCursorFailure() noexcept override {}
 
     bool initialized{};
     std::uint32_t voice_creations{};
     std::optional<std::uint64_t> output_frame{};
-    std::uint64_t cursor_failures{};
 
 private:
     std::unique_ptr<MiniaudioMixer> mixer_;

@@ -200,12 +200,12 @@ void AudioCursorTimeline::Publish(const AudioRenderSpan& span) noexcept {
         detail::kRenderSpanAtomicOrder);
 }
 
-std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
+AudioCursorResolution AudioCursorTimeline::ResolveSourceFrame(
     std::uint64_t output_frame,
-    std::uint64_t epoch,
+    std::uint64_t requested_generation,
     std::uint64_t source_length_frames) const noexcept {
     if (source_length_frames == 0) {
-        return std::nullopt;
+        return {AudioCursorResolutionKind::Unmapped, 0};
     }
 
     const auto published = published_generation_.load(
@@ -213,6 +213,8 @@ std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
     const auto available = std::min<std::uint64_t>(
         published,
         kRenderSpanCapacity);
+    bool generation_seen{};
+    auto earliest_begin = std::numeric_limits<std::uint64_t>::max();
 
     for (std::uint64_t offset = 0; offset < available; ++offset) {
         const auto generation = published - offset - 1;
@@ -241,10 +243,18 @@ std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
         }
 
         const auto& span = *stable_span;
-        if (span.epoch != epoch ||
-            span.output_frame_end <= span.output_frame_begin ||
+        if (span.output_frame_end <= span.output_frame_begin ||
             span.source_frame_end_unwrapped <
                 span.source_frame_begin_unwrapped ||
+            span.epoch != requested_generation) {
+            continue;
+        }
+
+        generation_seen = true;
+        earliest_begin = std::min(
+            earliest_begin,
+            span.output_frame_begin);
+        if (
             output_frame < span.output_frame_begin ||
             output_frame >= span.output_frame_end) {
             continue;
@@ -258,14 +268,20 @@ std::optional<std::uint64_t> AudioCursorTimeline::ResolveSourceFrame(
         if (!scaled.has_value() || *scaled >
             std::numeric_limits<std::uint64_t>::max() -
                 span.source_frame_begin_unwrapped) {
-            return std::nullopt;
+            return {AudioCursorResolutionKind::Unmapped, 0};
         }
 
-        return (span.source_frame_begin_unwrapped + *scaled) %
-            source_length_frames;
+        return {
+            AudioCursorResolutionKind::Resolved,
+            (span.source_frame_begin_unwrapped + *scaled) %
+                source_length_frames,
+        };
     }
 
-    return std::nullopt;
+    return !generation_seen || output_frame < earliest_begin
+        ? AudioCursorResolution{
+              AudioCursorResolutionKind::PendingGeneration, 0}
+        : AudioCursorResolution{AudioCursorResolutionKind::Unmapped, 0};
 }
 
 void EndpointClockMapper::Reset(

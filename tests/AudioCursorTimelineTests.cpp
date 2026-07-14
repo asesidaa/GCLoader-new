@@ -82,6 +82,8 @@ void operator delete[](void* pointer, std::size_t) noexcept {
 namespace {
 
 using gc::audio::AudioCursorTimeline;
+using gc::audio::AudioCursorResolution;
+using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioRenderSpan;
 using gc::audio::EndpointClockMapper;
 
@@ -94,11 +96,19 @@ int Expect(bool condition, std::string_view name) {
     return 1;
 }
 
+bool ResolvesTo(
+    const AudioCursorResolution& resolution,
+    std::uint64_t source_frame) noexcept {
+    return resolution.kind == AudioCursorResolutionKind::Resolved &&
+        resolution.source_frame == source_frame;
+}
+
 int TestEmptyTimeline() {
     const AudioCursorTimeline timeline;
     return Expect(
-        !timeline.ResolveSourceFrame(0, 1, 100).has_value(),
-        "an empty timeline to return no cursor");
+        timeline.ResolveSourceFrame(0, 1, 100).kind ==
+            AudioCursorResolutionKind::PendingGeneration,
+        "an empty timeline generation to remain pending");
 }
 
 int TestHalfOpenSpanInterpolation() {
@@ -107,22 +117,25 @@ int TestHalfOpenSpanInterpolation() {
 
     int failures = 0;
     failures += Expect(
-        timeline.ResolveSourceFrame(100, 1, 100) == 0,
+        ResolvesTo(timeline.ResolveSourceFrame(100, 1, 100), 0),
         "span begin to map to source begin");
     failures += Expect(
-        timeline.ResolveSourceFrame(150, 1, 100) == 50,
+        ResolvesTo(timeline.ResolveSourceFrame(150, 1, 100), 50),
         "span midpoint to interpolate in source frames");
     failures += Expect(
-        timeline.ResolveSourceFrame(199, 1, 100) == 99,
+        ResolvesTo(timeline.ResolveSourceFrame(199, 1, 100), 99),
         "last active output frame to map inside the source span");
     failures += Expect(
-        !timeline.ResolveSourceFrame(99, 1, 100).has_value(),
-        "output before the span to be rejected");
+        timeline.ResolveSourceFrame(99, 1, 100).kind ==
+            AudioCursorResolutionKind::PendingGeneration,
+        "output before first presentation to remain pending");
     failures += Expect(
-        !timeline.ResolveSourceFrame(200, 1, 100).has_value(),
-        "exclusive output end to be rejected");
+        timeline.ResolveSourceFrame(200, 1, 100).kind ==
+            AudioCursorResolutionKind::Unmapped,
+        "exclusive output end to be unmapped");
     failures += Expect(
-        !timeline.ResolveSourceFrame(150, 1, 0).has_value(),
+        timeline.ResolveSourceFrame(150, 1, 0).kind ==
+            AudioCursorResolutionKind::Unmapped,
         "zero source length to be rejected");
     return failures;
 }
@@ -142,11 +155,12 @@ int TestLargeIntegerInterpolation() {
 
     int failures = 0;
     failures += Expect(
-        timeline.ResolveSourceFrame(
-            denominator - 1,
-            4,
-            denominator * 4) ==
-            (denominator - 1) * 2,
+        ResolvesTo(
+            timeline.ResolveSourceFrame(
+                denominator - 1,
+                4,
+                denominator * 4),
+            (denominator - 1) * 2),
         "quotient/remainder interpolation to avoid a naive product overflow");
 
     AudioCursorTimeline fractional;
@@ -160,11 +174,12 @@ int TestLargeIntegerInterpolation() {
         false,
     });
     failures += Expect(
-        fractional.ResolveSourceFrame(
-            denominator,
-            5,
-            denominator * 2) ==
-            denominator - 1,
+        ResolvesTo(
+            fractional.ResolveSourceFrame(
+                denominator,
+                5,
+                denominator * 2),
+            denominator - 1),
         "fractional remainder interpolation to avoid product overflow");
     return failures;
 }
@@ -176,14 +191,15 @@ int TestLoopAndEndedSpans() {
 
     int failures = 0;
     failures += Expect(
-        timeline.ResolveSourceFrame(250, 1, 100) == 0,
+        ResolvesTo(timeline.ResolveSourceFrame(250, 1, 100), 0),
         "unwrapped loop span to wrap only in the source domain");
     failures += Expect(
-        timeline.ResolveSourceFrame(324, 1, 100) == 99,
+        ResolvesTo(timeline.ResolveSourceFrame(324, 1, 100), 99),
         "ended span to resolve through its last active output frame");
     failures += Expect(
-        !timeline.ResolveSourceFrame(325, 1, 100).has_value(),
-        "ended span active output end to remain exclusive");
+        timeline.ResolveSourceFrame(325, 1, 100).kind ==
+            AudioCursorResolutionKind::Unmapped,
+        "ended span active output end to remain unmapped");
     return failures;
 }
 
@@ -194,18 +210,21 @@ int TestEpochFilteringAndResynchronization() {
 
     int failures = 0;
     failures += Expect(
-        !timeline.ResolveSourceFrame(50, 2, 1000).has_value() &&
-            !timeline.ResolveSourceFrame(150, 2, 1000).has_value(),
-        "epoch 2 to ignore every queued epoch-1 span");
+        timeline.ResolveSourceFrame(50, 2, 1000).kind ==
+                AudioCursorResolutionKind::PendingGeneration &&
+            timeline.ResolveSourceFrame(150, 2, 1000).kind ==
+                AudioCursorResolutionKind::PendingGeneration,
+        "generation 2 to remain pending behind generation-1 spans");
 
     timeline.Publish({1000, 1100, 0, 100, 2, false, false});
     timeline.Publish({1050, 1150, 500, 600, 3, false, false});
     failures += Expect(
-        timeline.ResolveSourceFrame(1075, 3, 1000) == 525,
+        ResolvesTo(timeline.ResolveSourceFrame(1075, 3, 1000), 525),
         "newest epoch-3 resynchronization to supersede overlapping epoch 2");
     failures += Expect(
-        !timeline.ResolveSourceFrame(1025, 3, 1000).has_value(),
-        "current epoch to ignore still-queued pre-resynchronization audio");
+        timeline.ResolveSourceFrame(1025, 3, 1000).kind ==
+            AudioCursorResolutionKind::PendingGeneration,
+        "current generation before first presentation to remain pending");
     return failures;
 }
 
@@ -216,7 +235,7 @@ int TestNewestSpanAndBoundedCapacity() {
 
     int failures = 0;
     failures += Expect(
-        timeline.ResolveSourceFrame(150, 1, 1000) == 450,
+        ResolvesTo(timeline.ResolveSourceFrame(150, 1, 1000), 450),
         "newest matching span to win");
 
     AudioCursorTimeline bounded;
@@ -235,10 +254,11 @@ int TestNewestSpanAndBoundedCapacity() {
         });
     }
     failures += Expect(
-        !bounded.ResolveSourceFrame(5, 1, 1000).has_value(),
-        "a span overwritten beyond fixed capacity to be unavailable");
+        bounded.ResolveSourceFrame(5, 1, 1000).kind ==
+            AudioCursorResolutionKind::PendingGeneration,
+        "an output before the retained generation window to be pending");
     failures += Expect(
-        bounded.ResolveSourceFrame(395, 1, 1000) == 395,
+        ResolvesTo(bounded.ResolveSourceFrame(395, 1, 1000), 395),
         "newest fixed-ring span to remain available");
     return failures;
 }
@@ -357,8 +377,9 @@ int TestSingleWriterMultipleReaders() {
                 span.output_frame_begin + 2,
                 generation,
                 source_length);
-            if (resolved.has_value()) {
-                if (*resolved != span.source_frame_begin_unwrapped + 2) {
+            if (resolved.kind == AudioCursorResolutionKind::Resolved) {
+                if (resolved.source_frame !=
+                    span.source_frame_begin_unwrapped + 2) {
                     failed.store(true, std::memory_order_relaxed);
                 }
                 observed_first[index].store(true, std::memory_order_release);
@@ -406,11 +427,12 @@ int TestSingleWriterMultipleReaders() {
             read_counts[1].load(std::memory_order_relaxed) >= minimum_reads,
         "both readers to overlap the single writer");
     failures += Expect(
-        timeline.ResolveSourceFrame(
-            final_span.output_frame_begin + 2,
-            publication_count,
-            source_length) ==
-            final_span.source_frame_begin_unwrapped + 2,
+        ResolvesTo(
+            timeline.ResolveSourceFrame(
+                final_span.output_frame_begin + 2,
+                publication_count,
+                source_length),
+            final_span.source_frame_begin_unwrapped + 2),
         "final publication to remain coherent after the concurrent run");
     return failures;
 }
@@ -426,7 +448,7 @@ int TestPublishAndResolveDoNotAllocateOrFree() {
 
     int failures = 0;
     failures += Expect(
-        resolved == 50,
+        ResolvesTo(resolved, 50),
         "probed publish and resolve result to remain usable");
     failures += Expect(
         counts.allocations == 0 && counts.deallocations == 0,

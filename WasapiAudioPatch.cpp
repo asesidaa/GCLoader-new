@@ -115,7 +115,9 @@ std::string counters_text(const AudioRuntimeCountersSnapshot& counters) {
         << "render_callbacks=" << counters.render_callbacks
         << " late_event_wakes=" << counters.late_event_wakes
         << " silence_fallbacks=" << counters.silence_fallbacks
-        << " cursor_timeline_failures=" << counters.cursor_timeline_failures
+        << " pending_cursor_queries=" << counters.pending_cursor_queries
+        << " unmapped_cursor_failures="
+        << counters.unmapped_cursor_failures
         << " endpoint_hresult_failures=" << counters.endpoint_hresult_failures
         << " native_rate_buffers=" << counters.mixer.native_rate_buffers
         << " sample_format_converted_buffers="

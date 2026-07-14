@@ -29,12 +29,23 @@ struct AudioRenderSpan {
     bool source_ended{};
 };
 
+enum class AudioCursorResolutionKind : std::uint8_t {
+    Resolved,
+    PendingGeneration,
+    Unmapped,
+};
+
+struct AudioCursorResolution {
+    AudioCursorResolutionKind kind{};
+    std::uint64_t source_frame{};
+};
+
 class AudioCursorTimeline {
 public:
     void Publish(const AudioRenderSpan&) noexcept;
-    std::optional<std::uint64_t> ResolveSourceFrame(
+    AudioCursorResolution ResolveSourceFrame(
         std::uint64_t output_frame,
-        std::uint64_t epoch,
+        std::uint64_t generation,
         std::uint64_t source_length_frames) const noexcept;
 
 private:

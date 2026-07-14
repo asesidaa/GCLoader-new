@@ -374,7 +374,9 @@ public:
         return 0;
     }
 
-    void CountCursorTimelineFailure() noexcept override {}
+    void CountPendingCursorQuery() noexcept override {}
+
+    void CountUnmappedCursorFailure() noexcept override {}
 };
 
 class FakeEngineFactory final : public IExclusiveEngineFactory {
@@ -744,14 +746,15 @@ int test_production_diagnostics_use_injected_platform_actions() {
     counters.render_callbacks = 11;
     counters.late_event_wakes = 12;
     counters.silence_fallbacks = 13;
-    counters.cursor_timeline_failures = 14;
-    counters.endpoint_hresult_failures = 15;
-    counters.mixer.native_rate_buffers = 16;
-    counters.mixer.sample_format_converted_buffers = 17;
-    counters.mixer.sample_rate_converted_buffers = 18;
-    counters.mixer.native_gameplay_buffers = 19;
-    counters.mixer.active_voices = 20;
-    counters.mixer.maximum_simultaneous_voices = 21;
+    counters.pending_cursor_queries = 14;
+    counters.unmapped_cursor_failures = 15;
+    counters.endpoint_hresult_failures = 16;
+    counters.mixer.native_rate_buffers = 17;
+    counters.mixer.sample_format_converted_buffers = 18;
+    counters.mixer.sample_rate_converted_buffers = 19;
+    counters.mixer.native_gameplay_buffers = 20;
+    counters.mixer.active_voices = 21;
+    counters.mixer.maximum_simultaneous_voices = 22;
     gc::audio::detail::ReportAudioRuntimeSummary(counters, actions);
 
     failures += expect(
@@ -764,14 +767,15 @@ int test_production_diagnostics_use_injected_platform_actions() {
              "render_callbacks=11",
              "late_event_wakes=12",
              "silence_fallbacks=13",
-             "cursor_timeline_failures=14",
-             "endpoint_hresult_failures=15",
-             "native_rate_buffers=16",
-             "sample_format_converted_buffers=17",
-             "sample_rate_converted_buffers=18",
-             "native_gameplay_buffers=19",
-             "active_voices=20",
-             "maximum_simultaneous_voices=21",
+             "pending_cursor_queries=14",
+             "unmapped_cursor_failures=15",
+             "endpoint_hresult_failures=16",
+             "native_rate_buffers=17",
+             "sample_format_converted_buffers=18",
+             "sample_rate_converted_buffers=19",
+             "native_gameplay_buffers=20",
+             "active_voices=21",
+             "maximum_simultaneous_voices=22",
          }) {
         failures += expect(
             contains(summary, required),
@@ -794,7 +798,7 @@ int test_production_diagnostics_use_injected_platform_actions() {
             contains(diagnostics.errors.back(), "stage=ReleaseRenderBuffer") &&
             contains(diagnostics.errors.back(), "hresult=0x800710DF") &&
             contains(diagnostics.errors.back(), "format=pcm16/44100Hz/2ch/16bit") &&
-            contains(diagnostics.errors.back(), "maximum_simultaneous_voices=21"),
+            contains(diagnostics.errors.back(), "maximum_simultaneous_voices=22"),
         "runtime fatal logs endpoint stage HRESULT format and counters");
     failures += expect(
         diagnostics.messages.size() == 1 &&

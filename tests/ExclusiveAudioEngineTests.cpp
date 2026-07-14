@@ -25,6 +25,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using gc::audio::AudioCursorTimeline;
+using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioFailure;
 using gc::audio::AudioFailureStage;
 using gc::audio::AudioLockRegions;
@@ -1149,7 +1150,11 @@ int TestVoiceClockSummaryAndRenderSafety() {
             source.timeline->ResolveSourceFrame(
                 *first_rendered_frame,
                 1,
-                kFrames) == 0,
+                kFrames).kind == AudioCursorResolutionKind::Resolved &&
+            source.timeline->ResolveSourceFrame(
+                *first_rendered_frame,
+                1,
+                kFrames).source_frame == 0,
         "clock mapping resolves the first post-prefill frame to source zero");
 
     fixture.api->PushClock(
@@ -1195,11 +1200,12 @@ int TestVoiceClockSummaryAndRenderSafety() {
         "no observer callback in warmed render events");
 
     failures += Expect(
-        !source.timeline->ResolveSourceFrame(0, 1, kFrames).has_value() &&
+        source.timeline->ResolveSourceFrame(0, 1, kFrames).kind ==
+                AudioCursorResolutionKind::PendingGeneration &&
             source.timeline->ResolveSourceFrame(kFrames, 1, kFrames)
-                .has_value() &&
+                .kind == AudioCursorResolutionKind::Resolved &&
             source.timeline->ResolveSourceFrame(2 * kFrames, 1, kFrames)
-                .has_value(),
+                .kind == AudioCursorResolutionKind::Resolved,
         "voice timeline starts after silent prefill and advances by periods");
 
     fixture.api->PushClock(
@@ -1214,7 +1220,8 @@ int TestVoiceClockSummaryAndRenderSafety() {
     failures += Expect(
         !engine->CurrentOutputFrame().has_value(),
         "unmappable successful clock sample returns no frame");
-    engine->CountCursorTimelineFailure();
+    engine->CountPendingCursorQuery();
+    engine->CountUnmappedCursorFailure();
 
     failures += Expect(
         WaitUntil([&] {
@@ -1224,7 +1231,8 @@ int TestVoiceClockSummaryAndRenderSafety() {
                 counters.render_callbacks >= 4 &&
                 counters.late_event_wakes == 1 &&
                 counters.silence_fallbacks == 0 &&
-                counters.cursor_timeline_failures == 1;
+                counters.pending_cursor_queries == 1 &&
+                counters.unmapped_cursor_failures == 1;
         }),
         "periodic summary includes final render counters");
     {
@@ -1232,7 +1240,7 @@ int TestVoiceClockSummaryAndRenderSafety() {
         const auto& summary = fixture.observer_state->summary;
         failures += Expect(
             summary.endpoint_hresult_failures == 0,
-            "unmappable clock increments only cursor timeline failures");
+            "cursor classifications do not increment endpoint failures");
         failures += Expect(
             summary.mixer.native_rate_buffers == 1 &&
                 summary.mixer.sample_format_converted_buffers == 1 &&

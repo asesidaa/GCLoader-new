@@ -19,6 +19,8 @@
 namespace {
 
 using gc::audio::AudioCursorTimeline;
+using gc::audio::AudioCursorResolution;
+using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioLockRegions;
 using gc::audio::AudioSnapshot;
 using gc::audio::MiniaudioMixer;
@@ -40,6 +42,17 @@ int Expect(bool condition, std::string_view name) {
 
 int ExpectNear(float actual, float expected, std::string_view name) {
     return Expect(std::abs(actual - expected) < 0.015F, name);
+}
+
+bool ResolvesTo(
+    const AudioCursorResolution& resolution,
+    std::uint64_t source_frame) noexcept {
+    return resolution.kind == AudioCursorResolutionKind::Resolved &&
+        resolution.source_frame == source_frame;
+}
+
+bool DoesNotResolve(const AudioCursorResolution& resolution) noexcept {
+    return resolution.kind != AudioCursorResolutionKind::Resolved;
 }
 
 WAVEFORMATEX Pcm(WORD channels, DWORD rate, WORD bits) {
@@ -422,7 +435,7 @@ int TestVoiceRetainsSourceOwners() {
         const auto timeline = timeline_weak.lock();
         failures += Expect(
             timeline != nullptr &&
-                timeline->ResolveSourceFrame(700, 70, 8) == 0,
+                ResolvesTo(timeline->ResolveSourceFrame(700, 70, 8), 0),
             "retained timeline receives render span");
     }
 
@@ -795,9 +808,12 @@ int TestNativeLoopAdvancesAcrossDiscontinuity() {
         IdentifiedSample(16),
         "native-gap block starts after skipped source frames");
     failures += Expect(
-        source->timeline->ResolveSourceFrame(108, 100, 32) == 8 &&
-            source->timeline->ResolveSourceFrame(115, 100, 32) == 15 &&
-            source->timeline->ResolveSourceFrame(116, 100, 32) == 16,
+        ResolvesTo(
+            source->timeline->ResolveSourceFrame(108, 100, 32), 8) &&
+            ResolvesTo(
+                source->timeline->ResolveSourceFrame(115, 100, 32), 15) &&
+            ResolvesTo(
+                source->timeline->ResolveSourceFrame(116, 100, 32), 16),
         "native-gap timeline covers skipped and rendered intervals");
     return failures;
 }
@@ -853,8 +869,10 @@ int TestNonLoopingVoiceEndsInsideDiscontinuity() {
             voice->audible_until_output_frame() == 112,
         "gap-end drain boundary is inside skipped interval");
     failures += Expect(
-        source->timeline->ResolveSourceFrame(111, 101, 12) == 11 &&
-            !source->timeline->ResolveSourceFrame(112, 101, 12).has_value(),
+        ResolvesTo(
+            source->timeline->ResolveSourceFrame(111, 101, 12), 11) &&
+            DoesNotResolve(
+                source->timeline->ResolveSourceFrame(112, 101, 12)),
         "gap-end timeline stops at source end");
     return failures;
 }
@@ -901,9 +919,12 @@ int TestLoopWrapsAcrossDiscontinuity() {
         IdentifiedSample(6),
         "gap-wrap block starts at wrapped source frame");
     failures += Expect(
-        source->timeline->ResolveSourceFrame(108, 102, 10) == 8 &&
-            source->timeline->ResolveSourceFrame(110, 102, 10) == 0 &&
-            source->timeline->ResolveSourceFrame(116, 102, 10) == 6,
+        ResolvesTo(
+            source->timeline->ResolveSourceFrame(108, 102, 10), 8) &&
+            ResolvesTo(
+                source->timeline->ResolveSourceFrame(110, 102, 10), 0) &&
+            ResolvesTo(
+                source->timeline->ResolveSourceFrame(116, 102, 10), 6),
         "gap-wrap timeline advances modulo source length");
     return failures;
 }
@@ -961,7 +982,9 @@ int TestConvertedRatesUseCumulativeGapMapping() {
 
         const auto expected = rate == 22050U ? 11U : 23U;
         failures += Expect(
-            source->timeline->ResolveSourceFrame(122, epoch, 64) == expected,
+            ResolvesTo(
+                source->timeline->ResolveSourceFrame(122, epoch, 64),
+                expected),
             "converted gaps retain cumulative fractional phase");
     }
     return failures;
@@ -1010,7 +1033,8 @@ int TestDiscontinuityResetsConverterHistory() {
         true,
         "gap-reset emits only new positive converter history");
     failures += Expect(
-        source->timeline->ResolveSourceFrame(132, 103, 32) == 16,
+        ResolvesTo(
+            source->timeline->ResolveSourceFrame(132, 103, 32), 16),
         "gap-reset block timeline begins at direct mapped position");
     return failures;
 }
@@ -1074,10 +1098,12 @@ int TestExplicitGenerationWinsOverDiscontinuity() {
             IdentifiedSample(expected_source),
             "gap-precedence explicit source anchor wins");
         failures += Expect(
-            source->timeline->ResolveSourceFrame(
-                116,
-                new_epoch,
-                32) == expected_source,
+            ResolvesTo(
+                source->timeline->ResolveSourceFrame(
+                    116,
+                    new_epoch,
+                    32),
+                expected_source),
             "gap-precedence new generation begins without old gap");
     }
     return failures;
@@ -1211,8 +1237,9 @@ int main() {
     failures += ExpectStereoMono(output, "mono duplication to equal L/R");
     failures += ExpectNear(output[0], 0.5F, "first mono sample near 0.5");
     failures += Expect(
-        mono->timeline->ResolveSourceFrame(104, 1, 4) == 0 &&
-            mono->timeline->ResolveSourceFrame(107, 1, 4) == 3,
+        ResolvesTo(mono->timeline->ResolveSourceFrame(104, 1, 4), 0) &&
+            ResolvesTo(
+                mono->timeline->ResolveSourceFrame(107, 1, 4), 3),
         "loop span crosses source length in the unwrapped domain");
     failures += Expect(
         !mono_voice->audible_until_output_frame().has_value(),
@@ -1308,8 +1335,10 @@ int main() {
         false,
         "22.05 kHz steady converter phase remains monotonic");
     failures += Expect(
-        rate_22050->timeline->ResolveSourceFrame(412, 10, 32) == 6 &&
-            rate_22050->timeline->ResolveSourceFrame(415, 10, 32) == 7,
+        ResolvesTo(
+            rate_22050->timeline->ResolveSourceFrame(412, 10, 32), 6) &&
+            ResolvesTo(
+                rate_22050->timeline->ResolveSourceFrame(415, 10, 32), 7),
         "22.05 kHz cumulative phase maps the second block exactly");
     rate_22050_voice->Stop();
     failures += Expect(
@@ -1323,8 +1352,10 @@ int main() {
         true,
         "22.05 kHz reset transient then only new positive epoch");
     failures += Expect(
-        rate_22050->timeline->ResolveSourceFrame(416, 11, 32) == 16 &&
-            !rate_22050->timeline->ResolveSourceFrame(416, 10, 32).has_value(),
+        ResolvesTo(
+            rate_22050->timeline->ResolveSourceFrame(416, 11, 32), 16) &&
+            DoesNotResolve(
+                rate_22050->timeline->ResolveSourceFrame(416, 10, 32)),
         "22.05 kHz seek changes published epoch and position");
     failures += Expect(
         rate_22050_voice->Seek(0, 12) == DS_OK,
@@ -1346,8 +1377,10 @@ int main() {
         true,
         "22.05 kHz latest seek wins before one render");
     failures += Expect(
-        rate_22050->timeline->ResolveSourceFrame(432, 14, 32) == 16 &&
-            !rate_22050->timeline->ResolveSourceFrame(432, 13, 32).has_value(),
+        ResolvesTo(
+            rate_22050->timeline->ResolveSourceFrame(432, 14, 32), 16) &&
+            DoesNotResolve(
+                rate_22050->timeline->ResolveSourceFrame(432, 13, 32)),
         "22.05 kHz latest epoch is the only published seek epoch");
     rate_22050_voice->Stop();
 
@@ -1370,8 +1403,10 @@ int main() {
         false,
         "48 kHz steady converter phase remains monotonic");
     failures += Expect(
-        rate_48000->timeline->ResolveSourceFrame(512, 20, 64) == 13 &&
-            rate_48000->timeline->ResolveSourceFrame(515, 20, 64) == 16,
+        ResolvesTo(
+            rate_48000->timeline->ResolveSourceFrame(512, 20, 64), 13) &&
+            ResolvesTo(
+                rate_48000->timeline->ResolveSourceFrame(515, 20, 64), 16),
         "48 kHz cumulative phase maps the second block exactly");
     failures += Expect(
         rate_48000_voice->Seek(32, 21) == DS_OK,
@@ -1383,8 +1418,10 @@ int main() {
         true,
         "48 kHz reset transient then only new positive epoch");
     failures += Expect(
-        rate_48000->timeline->ResolveSourceFrame(516, 21, 64) == 32 &&
-            !rate_48000->timeline->ResolveSourceFrame(516, 20, 64).has_value(),
+        ResolvesTo(
+            rate_48000->timeline->ResolveSourceFrame(516, 21, 64), 32) &&
+            DoesNotResolve(
+                rate_48000->timeline->ResolveSourceFrame(516, 20, 64)),
         "48 kHz seek changes published epoch and position");
     rate_48000_voice->Stop();
     failures += Expect(
@@ -1399,8 +1436,10 @@ int main() {
         false,
         "48 kHz latest stopped seek emits no prior positive history");
     failures += Expect(
-        rate_48000->timeline->ResolveSourceFrame(524, 23, 64) == 0 &&
-            !rate_48000->timeline->ResolveSourceFrame(524, 22, 64).has_value(),
+        ResolvesTo(
+            rate_48000->timeline->ResolveSourceFrame(524, 23, 64), 0) &&
+            DoesNotResolve(
+                rate_48000->timeline->ResolveSourceFrame(524, 22, 64)),
         "48 kHz latest stopped-seek epoch is published");
     failures += Expect(
         rate_48000_voice->Seek(64, 24) == DSERR_INVALIDPARAM,

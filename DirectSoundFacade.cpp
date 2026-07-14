@@ -1,6 +1,7 @@
 #include "DirectSoundFacade.h"
 
 #include <cstring>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -26,6 +27,13 @@ WAVEFORMATEX OutputWaveFormat() noexcept {
         .wBitsPerSample = kOutputBitsPerSample,
         .cbSize = 0,
     };
+}
+
+std::uint64_t NextPlaybackGeneration(
+    std::uint64_t generation) noexcept {
+    return generation == std::numeric_limits<std::uint64_t>::max()
+        ? 1
+        : generation + 1;
 }
 
 } // namespace
@@ -498,7 +506,6 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
 
     const auto output_frame = engine_.CurrentOutputFrame();
     if (!output_frame.has_value()) {
-        engine_.CountCursorTimelineFailure();
         return last;
     }
     const auto draining = audible_until.has_value() &&
@@ -506,16 +513,20 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
     if (!mixing && !draining) {
         return last;
     }
-    const auto source_frame = timeline_->ResolveSourceFrame(
+    const auto resolution = timeline_->ResolveSourceFrame(
         *output_frame,
-        epoch_,
+        playback_generation_,
         buffer_bytes_ / format_.block_align);
-    if (!source_frame.has_value()) {
-        engine_.CountCursorTimelineFailure();
+    if (resolution.kind == AudioCursorResolutionKind::PendingGeneration) {
+        engine_.CountPendingCursorQuery();
         return last;
     }
-    last_reported_source_frame_ = *source_frame;
-    return *source_frame;
+    if (resolution.kind == AudioCursorResolutionKind::Unmapped) {
+        engine_.CountUnmappedCursorFailure();
+        return last;
+    }
+    last_reported_source_frame_ = resolution.source_frame;
+    return resolution.source_frame;
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
@@ -592,7 +603,6 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) {
             if (output_frame.has_value()) {
                 audible = *output_frame < *audible_until;
             } else {
-                engine_.CountCursorTimelineFailure();
                 audible = true;
             }
         }
@@ -674,9 +684,19 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
         return DSERR_INVALIDPARAM;
     }
     std::lock_guard control_lock(control_mutex_);
-    return voice_->Play(
+    const auto generation = NextPlaybackGeneration(
+        playback_generation_);
+    const auto anchor = voice_->at_end()
+        ? std::uint64_t{0}
+        : last_reported_source_frame_;
+    const auto result = voice_->Play(
         (flags & DSBPLAY_LOOPING) != 0,
-        epoch_);
+        generation);
+    if (SUCCEEDED(result)) {
+        playback_generation_ = generation;
+        last_reported_source_frame_ = anchor;
+    }
+    return result;
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
@@ -687,9 +707,14 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
     }
     std::lock_guard control_lock(control_mutex_);
     const auto source_frame = position / format_.block_align;
-    const auto epoch = ++epoch_;
-    last_reported_source_frame_ = source_frame;
-    return voice_->Seek(source_frame, epoch);
+    const auto generation = NextPlaybackGeneration(
+        playback_generation_);
+    const auto result = voice_->Seek(source_frame, generation);
+    if (SUCCEEDED(result)) {
+        playback_generation_ = generation;
+        last_reported_source_frame_ = source_frame;
+    }
+    return result;
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFormat(

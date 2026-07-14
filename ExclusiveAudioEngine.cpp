@@ -428,7 +428,8 @@ ExclusiveAudioEngine::SnapshotCounters() const noexcept {
         render_callbacks_.load(std::memory_order_relaxed),
         late_event_wakes_.load(std::memory_order_relaxed),
         silence_fallbacks_.load(std::memory_order_relaxed),
-        cursor_timeline_failures_.load(std::memory_order_relaxed),
+        pending_cursor_queries_.load(std::memory_order_relaxed),
+        unmapped_cursor_failures_.load(std::memory_order_relaxed),
         endpoint_hresult_failures_.load(std::memory_order_relaxed),
         mixer_ != nullptr ? mixer_->diagnostics() : MixerDiagnosticsSnapshot{},
     };
@@ -494,8 +495,12 @@ std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept {
     return endpoint_buffer_frames_.load(std::memory_order_acquire);
 }
 
-void ExclusiveAudioEngine::CountCursorTimelineFailure() noexcept {
-    cursor_timeline_failures_.fetch_add(1, std::memory_order_relaxed);
+void ExclusiveAudioEngine::CountPendingCursorQuery() noexcept {
+    pending_cursor_queries_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ExclusiveAudioEngine::CountUnmappedCursorFailure() noexcept {
+    unmapped_cursor_failures_.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace gc::audio
