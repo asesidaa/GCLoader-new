@@ -152,6 +152,7 @@ set(SOURCES
         FrameratePatch.cpp
         iDmacDrv32.cpp
         InputManager.cpp
+        InputSnapshotState.cpp
         NesysHookTransaction.cpp
         NesysNetworkConfig.cpp
         NesysServiceLauncher.cpp
@@ -409,6 +410,15 @@ target_link_libraries(ConfigFeatureTests PRIVATE
         reflectcpp
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
+
+add_executable(InputSnapshotStateTests
+        InputSnapshotState.cpp
+        tests/InputSnapshotStateTests.cpp
+)
+target_include_directories(InputSnapshotStateTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
 
 add_executable(RegistryConfigOverrideTests
         NesysServiceProcess.cpp
