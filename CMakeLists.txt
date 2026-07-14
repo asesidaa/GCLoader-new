@@ -152,6 +152,7 @@ set(SOURCES
         FrameratePatch.cpp
         iDmacDrv32.cpp
         InputManager.cpp
+        InputPollingRuntime.cpp
         InputSnapshotState.cpp
         NesysHookTransaction.cpp
         NesysNetworkConfig.cpp
