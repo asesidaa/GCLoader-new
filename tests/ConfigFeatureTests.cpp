@@ -698,14 +698,25 @@ int main() {
         reparsed_wasapi.experimental().wasapi_exclusive_buffer_ms(),
         20,
         "WASAPI buffer TOML round trip");
-    const auto endpoint_minimum_buffer = parse_config(replace_once(
+    failures += expect_bool(
+        std::string_view(kWasapiExclusiveBufferTooltip).find(
+            "Value must be greater than zero") != std::string_view::npos,
+        true,
+        "WASAPI buffer tooltip rejects zero");
+    failures += expect_bool(
+        std::string_view(kWasapiExclusiveBufferTooltip).find(
+            "Values below the endpoint minimum fail") !=
+            std::string_view::npos,
+        true,
+        "WASAPI buffer tooltip rejects below-minimum values");
+    const auto invalid_zero_buffer = parse_config(replace_once(
         std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig,
         "wasapi_exclusive_buffer_ms = 10",
         "wasapi_exclusive_buffer_ms = 0"));
     failures += expect_u32(
-        endpoint_minimum_buffer.experimental().wasapi_exclusive_buffer_ms(),
+        invalid_zero_buffer.experimental().wasapi_exclusive_buffer_ms(),
         0,
-        "explicit endpoint-minimum WASAPI buffer");
+        "zero WASAPI buffer remains representable for endpoint validation");
     failures += expect_key(custom.keyboard().card_read(), SDLK_F8, "custom card_read");
 
     failures += expect_parse_failure(kRequiredConfigPrefix, "missing card_read and experimental table");

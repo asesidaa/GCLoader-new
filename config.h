@@ -59,6 +59,12 @@ using WasapiBufferMillisecondsConfigValue = unsigned long;
 static_assert(
     sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));
 
+inline constexpr char kWasapiExclusiveBufferTooltip[] =
+    "Fixed exclusive buffer duration for this game launch.\n"
+    "Default is 10 ms. Value must be greater than zero.\n"
+    "Values below the endpoint minimum fail initialization.\n"
+    "Restart the game after changing it.";
+
 struct ExperimentalConfig
 {
     rfl::Rename<"enable_120fps_timer_patches", bool> enable_120fps_timer_patches = false;

@@ -78,12 +78,12 @@ is reported, and `FrameratePatch.cpp` is unchanged.
 
 ### Task 2: Operator handoff
 
-- [ ] **Step 6: Report static evidence without runtime overclaim**
+- [x] **Step 6: Report static evidence without runtime overclaim**
 
 Report the exact configure, build, and CTest results; DLL path and SHA-256; new
 failure/counter behavior; and any remaining unrelated working-tree files.
 
-- [ ] **Step 7: Give the manual acceptance checklist**
+- [x] **Step 7: Give the manual acceptance checklist**
 
 The operator deploys and verifies at 10 ms:
 
@@ -106,12 +106,16 @@ Only the operator's result closes gameplay acceptance.
   MSVC compiler and Ninja; no dependency path was supplied manually.
 - The complete default build exited successfully and produced an x86
   `iDmacDrv32.dll` (`14C machine`).
-- Complete CTest passed 21/21 with zero failures.
+- Complete CTest passed 21/21 with zero failures in 8.16 seconds.
 - DLL SHA-256:
-  `D3A1C036003CBE1173152387D2DA8D1C7D0ECBE8F8791A22C5DDF76584968A36`.
+  `9763B7495F599AF00FFD3D1E0CB4AFB56B8C623831B2D433D0EB67755A2B1E78`.
 - Ninja records 348 dependencies for the production
   `WasapiAudioPatch.cpp.obj`, including `ExclusiveAudioEngine.h` and
   `WasapiAudioPatchInternal.h`.
+- A final configuration-contract audit removed the obsolete GUI instruction to
+  use zero for the endpoint minimum. The shared tooltip contract is covered by
+  `ConfigFeatureTests`, and both `ConfigFeatureTests` and `ConfigGUI` rebuilt
+  successfully before the complete verification pass.
 - The owned commit range has no whitespace errors, the worktree is clean, and
   `FrameratePatch.cpp` is absent from the changed-file set.
 - Deployment, game launch, and operator gameplay acceptance were not performed

@@ -592,10 +592,7 @@ int main(int argc, char *argv[]) {
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "Fixed exclusive buffer duration for this game launch.\n"
-                "Default is 10 ms; use 0 for the endpoint minimum.\n"
-                "Restart the game after changing it.");
+            ImGui::SetTooltip("%s", kWasapiExclusiveBufferTooltip);
         }
 
         // --- Mode Specific Settings ---
