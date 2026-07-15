@@ -26,26 +26,26 @@ enum class GameplayInputStyle {
 struct KeyboardConfig
 {
     // Direction names are FastIO labels, not logical booster directions.
-    rfl::Rename<"p1_up", SDL_Keycode> p1_up = SDLK_W;
-    rfl::Rename<"p1_down", SDL_Keycode> p1_down = SDLK_A;
-    rfl::Rename<"p1_left", SDL_Keycode> p1_left = SDLK_UP;
-    rfl::Rename<"p1_right", SDL_Keycode> p1_right = SDLK_LEFT;
-    rfl::Rename<"p1_button1", SDL_Keycode> p1_button1 = SDLK_SPACE;
+    rfl::Rename<"p1_up", SdlKeycodeConfigValue> p1_up = SDLK_W;
+    rfl::Rename<"p1_down", SdlKeycodeConfigValue> p1_down = SDLK_A;
+    rfl::Rename<"p1_left", SdlKeycodeConfigValue> p1_left = SDLK_UP;
+    rfl::Rename<"p1_right", SdlKeycodeConfigValue> p1_right = SDLK_LEFT;
+    rfl::Rename<"p1_button1", SdlKeycodeConfigValue> p1_button1 = SDLK_SPACE;
 
-    rfl::Rename<"p2_up", SDL_Keycode> p2_up = SDLK_S;
-    rfl::Rename<"p2_down", SDL_Keycode> p2_down = SDLK_D;
-    rfl::Rename<"p2_left", SDL_Keycode> p2_left = SDLK_DOWN;
-    rfl::Rename<"p2_right", SDL_Keycode> p2_right = SDLK_RIGHT;
-    rfl::Rename<"p2_button1", SDL_Keycode> p2_button1 = SDLK_K;
+    rfl::Rename<"p2_up", SdlKeycodeConfigValue> p2_up = SDLK_S;
+    rfl::Rename<"p2_down", SdlKeycodeConfigValue> p2_down = SDLK_D;
+    rfl::Rename<"p2_left", SdlKeycodeConfigValue> p2_left = SDLK_DOWN;
+    rfl::Rename<"p2_right", SdlKeycodeConfigValue> p2_right = SDLK_RIGHT;
+    rfl::Rename<"p2_button1", SdlKeycodeConfigValue> p2_button1 = SDLK_K;
 
-    rfl::Rename<"test", SDL_Keycode> test = SDLK_T;
-    rfl::Rename<"service1", SDL_Keycode> service1 = SDLK_F1; // F1
-    rfl::Rename<"service2", SDL_Keycode> service2 = SDLK_I; // I
-    rfl::Rename<"service3", SDL_Keycode> service3 = SDLK_P; // P
-    rfl::Rename<"p1_start", SDL_Keycode> p1_start = SDLK_1;
-    rfl::Rename<"p2_start", SDL_Keycode> p2_start = SDLK_2;
-    rfl::Rename<"p2_service", SDL_Keycode> p2_service = SDLK_F2; // F2
-    rfl::Rename<"card_read", SDL_Keycode> card_read = SDLK_F4;
+    rfl::Rename<"test", SdlKeycodeConfigValue> test = SDLK_T;
+    rfl::Rename<"service1", SdlKeycodeConfigValue> service1 = SDLK_F1; // F1
+    rfl::Rename<"service2", SdlKeycodeConfigValue> service2 = SDLK_I; // I
+    rfl::Rename<"service3", SdlKeycodeConfigValue> service3 = SDLK_P; // P
+    rfl::Rename<"p1_start", SdlKeycodeConfigValue> p1_start = SDLK_1;
+    rfl::Rename<"p2_start", SdlKeycodeConfigValue> p2_start = SDLK_2;
+    rfl::Rename<"p2_service", SdlKeycodeConfigValue> p2_service = SDLK_F2; // F2
+    rfl::Rename<"card_read", SdlKeycodeConfigValue> card_read = SDLK_F4;
 };
 
 struct NesysConfig
@@ -53,8 +53,7 @@ struct NesysConfig
     rfl::Rename<"server_ip", std::string> server_ip = "127.0.0.1";
 };
 
-// SDL_Keycode aliases std::uint32_t, so its string Reflector also matches a
-// raw std::uint32_t. Windows unsigned long is a distinct 32-bit numeric type.
+// Windows unsigned long is a distinct 32-bit numeric type.
 using WasapiBufferMillisecondsConfigValue = unsigned long;
 static_assert(
     sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));

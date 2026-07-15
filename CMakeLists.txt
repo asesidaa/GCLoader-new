@@ -41,7 +41,7 @@ include(FetchContent)
 FetchContent_Declare(
         SDL3
         GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG 5ac37a8ffcf89da390404c1016833d56e2d67ae4 # v3.2.12
+        GIT_TAG f87239e71e42da91ca317a12eefb82cfbf3393eb # v3.4.12
         # URL https://github.com/libsdl-org/SDL/releases/download/preview-3.1.6/SDL3-3.1.6.tar.gz
 )
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -53,7 +53,7 @@ FetchContent_MakeAvailable(SDL3)
 FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-        GIT_TAG 05c06c5bbca226b72ffb40fc0caaef33bcaf6f74
+        GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
 )
 FetchContent_MakeAvailable(minhook)
 
@@ -99,13 +99,13 @@ set(SAFETYHOOK_FETCH_ZYDIS ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
         safetyhook
         GIT_REPOSITORY https://github.com/cursey/safetyhook.git
-        GIT_TAG v0.6.9
+        GIT_TAG v0.7.0
 )
 FetchContent_MakeAvailable(safetyhook)
 
 FetchContent_Declare(
         reflectcpp
-        URL https://github.com/getml/reflect-cpp/archive/refs/tags/v0.20.0.zip
+        URL https://github.com/getml/reflect-cpp/archive/refs/tags/v0.25.0.zip
 )
 set(REFLECTCPP_TOML ON CACHE BOOL "" FORCE)
 set(REFLECTCPP_XML OFF CACHE BOOL "" FORCE)
@@ -116,12 +116,12 @@ FetchContent_MakeAvailable(reflectcpp)
 FetchContent_Declare(
         plog
         GIT_REPOSITORY https://github.com/SergiusTheBest/plog
-        GIT_TAG 1.1.10
+        GIT_TAG 1.1.11
 )
 FetchContent_MakeAvailable(plog)
 
 FetchContent_Declare(imgui_external
-        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b.tar.gz
+        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.8.tar.gz
         EXCLUDE_FROM_ALL
 )
 FetchContent_MakeAvailable(imgui_external)

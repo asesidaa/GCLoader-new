@@ -224,23 +224,44 @@ inline SDL_GamepadAxis StringToGamepadAxis(const std::string& str) {
     return SDL_GAMEPAD_AXIS_INVALID; // Default fallback
 }
 
+// reflect-cpp 0.24+ handles primitive types before consulting custom
+// reflectors. SDL_Keycode is a Uint32 alias, so give persisted key bindings a
+// distinct type while preserving transparent SDL_Keycode access at runtime.
+struct SdlKeycodeConfigValue {
+    SDL_Keycode value = SDLK_UNKNOWN;
+
+    constexpr SdlKeycodeConfigValue() noexcept = default;
+    constexpr SdlKeycodeConfigValue(SDL_Keycode keycode) noexcept
+        : value(keycode) {}
+
+    constexpr SdlKeycodeConfigValue& operator=(SDL_Keycode keycode) noexcept {
+        value = keycode;
+        return *this;
+    }
+
+    constexpr operator SDL_Keycode&() noexcept {
+        return value;
+    }
+
+    constexpr operator const SDL_Keycode&() const noexcept {
+        return value;
+    }
+};
+
 
 namespace rfl {
 
     template <>
-    struct Reflector<SDL_Keycode> {
-        // Tell rfl to represent SDL_Keycode as a std::string in intermediate steps
+    struct Reflector<SdlKeycodeConfigValue> {
+        // Tell rfl to represent persisted keycodes as strings.
         using ReflType = std::string;
 
-        // Convert from the string representation (read from TOML) to SDL_Keycode
-        static SDL_Keycode to(const ReflType& str) noexcept {
-            // Use the helper function for the actual conversion logic
-            // Mark noexcept as the helper currently doesn't throw (it returns UNKNOWN)
-            return StringToKeycode(str);
+        static SdlKeycodeConfigValue to(const ReflType& str) noexcept {
+            return {StringToKeycode(str)};
         }
         
-        static ReflType from(const SDL_Keycode& key) {
-            return KeycodeToString(key);
+        static ReflType from(const SdlKeycodeConfigValue& key) {
+            return KeycodeToString(key.value);
         }
         
     };
