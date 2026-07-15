@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <queue>
 #include <string>
+#include "CardScanState.h"
 #include "config.h"
 #include "MinHook.h"
 #include "TestModeStorageRedirect.h"
@@ -232,7 +233,7 @@ int handleSetAddress(jprot_encoder *r)
 	return 2;
 }
 
-static bool cardInserted = false;
+static gc::rfid::CardScanState g_cardScanState;
 
 // 0x26 -- read general-purpose input
 int handleReadGeneralPurposeInput(jprot_encoder *r, DWORD arg1)
@@ -240,7 +241,7 @@ int handleReadGeneralPurposeInput(jprot_encoder *r, DWORD arg1)
 	r->report(JVS_REPORT_OK);
 	for(DWORD i = 0; i < arg1; i++)
 	{
-		if (cardInserted)
+		if (g_cardScanState.IsPresent())
 			r->push(0x19); // This should be only injected with first package of the 3, but does not seem to care.
 		else
 			r->push(0);
@@ -260,7 +261,7 @@ int handleReadGeneralPurposeOutput(jprot_encoder *r, DWORD arg1)
 	//OutputDebugStringA("Requested card data!");
 #endif
 	r->report(JVS_REPORT_OK);
-	if(cardInserted)
+	if(g_cardScanState.Consume())
 	{
 		for(int i = 0; i < 0x18; i++)
 		{
@@ -1017,7 +1018,7 @@ static DWORD WINAPI InsertCardThread(LPVOID)
 		{
 			if (!keyDown)
 			{
-				cardInserted = !cardInserted;
+				g_cardScanState.Arm();
 				keyDown = true;
 			}
 		}
@@ -1040,7 +1041,7 @@ void RfidEmuInit()
 	if (g_cardReadVirtualKey == 0)
 	{
 		PLOG_WARNING << "RFID: configured card_read key '" << KeycodeToString(cardReadKey)
-		             << "' cannot be mapped to a Win32 virtual key; card toggle disabled";
+		             << "' cannot be mapped to a Win32 virtual key; card scan disabled";
 	}
 	else
 	{

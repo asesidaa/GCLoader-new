@@ -412,6 +412,14 @@ target_link_libraries(ConfigFeatureTests PRIVATE
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
 
+add_executable(CardScanStateTests
+        tests/CardScanStateTests.cpp
+)
+target_include_directories(CardScanStateTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME CardScanStateTests COMMAND CardScanStateTests)
+
 add_executable(InputSnapshotStateTests
         InputSnapshotState.cpp
         tests/InputSnapshotStateTests.cpp
