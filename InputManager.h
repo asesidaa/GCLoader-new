@@ -16,6 +16,8 @@ public:
     InputManager& operator=(const InputManager&) = delete;
 
     void HandleEvent(const SDL_Event& event);
+    void HandleKeyboardVirtualKey(int virtual_key, bool pressed);
+    void ClearKeyboardInput() noexcept;
     std::uint32_t GetInput() const noexcept;
     void ReinitializeGamepad();
 

@@ -1,5 +1,6 @@
 #include "InputManager.h"
 
+#include "WinKeyMapping.h"
 #include "plog/Log.h"
 
 namespace {
@@ -308,6 +309,102 @@ void InputManager::UpdateKeyState(SDL_Keycode key, bool pressed)
     {
         m_snapshotState.Set(RightBoosterButton, source, pressed);
     }
+}
+
+void InputManager::HandleKeyboardVirtualKey(
+    int virtual_key,
+    bool pressed)
+{
+    if (virtual_key == 0)
+    {
+        return;
+    }
+
+    using enum gc::input::LogicalInput;
+    constexpr auto source = gc::input::InputSource::Keyboard;
+    const auto matches = [virtual_key](SDL_Keycode configured_key) {
+        return SdlKeycodeToVirtualKey(configured_key) == virtual_key;
+    };
+
+    if (matches(keyService1))
+    {
+        m_snapshotState.Set(Service1, source, pressed);
+    }
+    if (matches(keyService2))
+    {
+        m_snapshotState.Set(Service2, source, pressed);
+    }
+    if (matches(keyService3))
+    {
+        m_snapshotState.Set(Service3, source, pressed);
+    }
+    if (matches(keyP1Start))
+    {
+        m_snapshotState.Set(P1Start, source, pressed);
+    }
+    if (matches(keyP2Start))
+    {
+        m_snapshotState.Set(P2Start, source, pressed);
+    }
+    if (matches(keyTest))
+    {
+        m_snapshotState.Set(Test, source, pressed);
+    }
+    if (matches(keyP2Service))
+    {
+        m_snapshotState.Set(P2Service, source, pressed);
+    }
+
+    if (m_inputMode != InputMode::Keyboard)
+    {
+        return;
+    }
+
+    if (matches(keyP1Up))
+    {
+        m_snapshotState.Set(LeftBoosterUp, source, pressed);
+    }
+    if (matches(keyP2Up))
+    {
+        m_snapshotState.Set(LeftBoosterDown, source, pressed);
+    }
+    if (matches(keyP1Down))
+    {
+        m_snapshotState.Set(LeftBoosterLeft, source, pressed);
+    }
+    if (matches(keyP2Down))
+    {
+        m_snapshotState.Set(LeftBoosterRight, source, pressed);
+    }
+    if (matches(keyP1Button1))
+    {
+        m_snapshotState.Set(LeftBoosterButton, source, pressed);
+    }
+    if (matches(keyP1Left))
+    {
+        m_snapshotState.Set(RightBoosterUp, source, pressed);
+    }
+    if (matches(keyP2Left))
+    {
+        m_snapshotState.Set(RightBoosterDown, source, pressed);
+    }
+    if (matches(keyP1Right))
+    {
+        m_snapshotState.Set(RightBoosterLeft, source, pressed);
+    }
+    if (matches(keyP2Right))
+    {
+        m_snapshotState.Set(RightBoosterRight, source, pressed);
+    }
+    if (matches(keyP2Button1))
+    {
+        m_snapshotState.Set(RightBoosterButton, source, pressed);
+    }
+}
+
+void InputManager::ClearKeyboardInput() noexcept
+{
+    m_snapshotState.ClearKeyboard();
 }
 
 void InputManager::UpdateButtonState(

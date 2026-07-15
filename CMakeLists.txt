@@ -421,6 +421,36 @@ target_include_directories(InputSnapshotStateTests PRIVATE
 )
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
 
+add_executable(InputPollingRuntimeStartupTests
+        config.cpp
+        InputManager.cpp
+        InputPollingRuntime.cpp
+        InputSnapshotState.cpp
+        NesysNetworkConfig.cpp
+        RegistryConfig.cpp
+        tests/InputPollingRuntimeStartupTests.cpp
+)
+target_include_directories(InputPollingRuntimeStartupTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${SDL3_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+target_link_libraries(InputPollingRuntimeStartupTests PRIVATE
+        SDL3-static
+        ntdll
+        tomlplusplus::tomlplusplus
+        reflectcpp
+)
+add_test(
+        NAME InputPollingRuntimeStartupTests
+        COMMAND InputPollingRuntimeStartupTests
+)
+set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
+        TIMEOUT 5
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 add_executable(RegistryConfigOverrideTests
         NesysServiceProcess.cpp
         RegistryConfig.cpp

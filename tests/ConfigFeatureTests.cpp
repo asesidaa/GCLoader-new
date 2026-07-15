@@ -1049,6 +1049,10 @@ wasapi_exclusive_buffer_ms = 10
 )toml");
     failures += expect_key(punctuation.keyboard().card_read(), SDLK_SEMICOLON, "semicolon card_read");
     failures += expect_string(KeycodeToString(SDLK_SEMICOLON), ";", "semicolon display name");
+    failures += expect_vk(
+        SdlKeycodeToVirtualKey(punctuation.keyboard().card_read()),
+        VK_OEM_1,
+        "semicolon Win32 input");
 
     return failures == 0 ? 0 : 1;
 }

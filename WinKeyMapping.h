@@ -43,6 +43,17 @@ inline int SdlKeycodeToVirtualKey(SDL_Keycode key) noexcept {
     case SDLK_7: return '7';
     case SDLK_8: return '8';
     case SDLK_9: return '9';
+    case SDLK_APOSTROPHE: return VK_OEM_7;
+    case SDLK_COMMA: return VK_OEM_COMMA;
+    case SDLK_MINUS: return VK_OEM_MINUS;
+    case SDLK_PERIOD: return VK_OEM_PERIOD;
+    case SDLK_SLASH: return VK_OEM_2;
+    case SDLK_SEMICOLON: return VK_OEM_1;
+    case SDLK_EQUALS: return VK_OEM_PLUS;
+    case SDLK_LEFTBRACKET: return VK_OEM_4;
+    case SDLK_BACKSLASH: return VK_OEM_5;
+    case SDLK_RIGHTBRACKET: return VK_OEM_6;
+    case SDLK_GRAVE: return VK_OEM_3;
     case SDLK_F1: return VK_F1;
     case SDLK_F2: return VK_F2;
     case SDLK_F3: return VK_F3;
