@@ -466,6 +466,17 @@ target_include_directories(ComPortStateTests PRIVATE
 )
 add_test(NAME ComPortStateTests COMMAND ComPortStateTests)
 
+add_executable(Kernel32HookTests
+        Win32Hooks/MinHookTransaction.cpp
+        tests/Win32Hooks/Kernel32HookTests.cpp
+)
+target_include_directories(Kernel32HookTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${minhook_SOURCE_DIR}/include
+)
+target_link_libraries(Kernel32HookTests PRIVATE minhook)
+add_test(NAME Kernel32HookTests COMMAND Kernel32HookTests)
+
 add_executable(InputSnapshotStateTests
         InputSnapshotState.cpp
         tests/InputSnapshotStateTests.cpp
