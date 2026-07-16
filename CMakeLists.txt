@@ -467,12 +467,23 @@ target_include_directories(ComPortStateTests PRIVATE
 add_test(NAME ComPortStateTests COMMAND ComPortStateTests)
 
 add_executable(Kernel32HookTests
+        Rfid/ComPortState.cpp
+        Rfid/Runtime.cpp
+        Rfid/State.cpp
+        Rfid/TaitoCommands.cpp
+        Rfid/Jvs/Decoder.cpp
+        Rfid/Jvs/Device.cpp
+        Rfid/Jvs/Encoder.cpp
+        TestModeStorage/Redirector.cpp
+        TestModeStorage/Hooks.cpp
+        Win32Hooks/Kernel32Hooks.cpp
         Win32Hooks/MinHookTransaction.cpp
         tests/Win32Hooks/Kernel32HookTests.cpp
 )
 target_include_directories(Kernel32HookTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${minhook_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(Kernel32HookTests PRIVATE minhook)
 add_test(NAME Kernel32HookTests COMMAND Kernel32HookTests)
