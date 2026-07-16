@@ -10,7 +10,7 @@
 #include "Rfid/State.h"
 #include "config.h"
 #include "MinHook.h"
-#include "TestModeStorageRedirect.h"
+#include "TestModeStorage/Redirector.h"
 #include "WinKeyMapping.h"
 #include "plog/Log.h"
 

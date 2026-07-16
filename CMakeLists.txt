@@ -168,7 +168,7 @@ set(SOURCES
         SwitchInputPolicy.cpp
         SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
-        TestModeStorageRedirect.cpp
+        TestModeStorage/Redirector.cpp
         WasapiAudioPatch.cpp
         WasapiAudioTypes.cpp
         WasapiEndpoint.cpp
@@ -600,11 +600,13 @@ target_include_directories(NesysServicePatchTests PRIVATE
 add_test(NAME NesysServicePatchTests COMMAND NesysServicePatchTests)
 
 add_executable(TestModeStorageRedirectTests
-        TestModeStorageRedirect.cpp
-        tests/TestModeStorageRedirectTests.cpp
+        TestModeStorage/Redirector.cpp
+        TestModeStorage/Hooks.cpp
+        tests/TestModeStorage/TestModeStorageRedirectTests.cpp
 )
 target_include_directories(TestModeStorageRedirectTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${plog_SOURCE_DIR}/include
 )
 add_test(NAME TestModeStorageRedirectTests COMMAND TestModeStorageRedirectTests)
 
