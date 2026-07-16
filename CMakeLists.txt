@@ -444,6 +444,21 @@ target_include_directories(JvsDeviceTests PRIVATE
 )
 add_test(NAME JvsDeviceTests COMMAND JvsDeviceTests)
 
+add_executable(ComPortStateTests
+        Rfid/ComPortState.cpp
+        Rfid/State.cpp
+        Rfid/TaitoCommands.cpp
+        Rfid/Jvs/Decoder.cpp
+        Rfid/Jvs/Device.cpp
+        Rfid/Jvs/Encoder.cpp
+        tests/Rfid/ComPortStateTests.cpp
+)
+target_include_directories(ComPortStateTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${plog_SOURCE_DIR}/include
+)
+add_test(NAME ComPortStateTests COMMAND ComPortStateTests)
+
 add_executable(InputSnapshotStateTests
         InputSnapshotState.cpp
         tests/InputSnapshotStateTests.cpp
