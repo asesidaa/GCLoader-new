@@ -436,6 +436,7 @@ add_test(NAME JvsCodecTests COMMAND JvsCodecTests)
 add_executable(JvsDeviceTests
         Rfid/Jvs/Device.cpp
         Rfid/State.cpp
+        Rfid/TaitoCommands.cpp
         tests/Rfid/JvsDeviceTests.cpp
 )
 target_include_directories(JvsDeviceTests PRIVATE

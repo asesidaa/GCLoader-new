@@ -1,4 +1,5 @@
 #include "Rfid/Jvs/Device.h"
+#include "Rfid/TaitoCommands.h"
 
 #include <algorithm>
 #include <array>
@@ -375,6 +376,79 @@ int test_errors_and_retransmission()
     return failures;
 }
 
+int test_taito_commands()
+{
+    using namespace gc::rfid;
+    using namespace gc::rfid::jvs;
+
+    int failures = 0;
+    State state;
+    state.assigned_address = Address{0x01};
+    Device device{state};
+
+    constexpr std::array<std::uint8_t, 2> two_parameters{0x00, 0x00};
+    const auto query_01 = HandleTaitoCommand(
+        taito_command::query_01, two_parameters);
+    const auto query_03 = HandleTaitoCommand(
+        taito_command::query_03, two_parameters);
+    const auto notify_04 = HandleTaitoCommand(
+        taito_command::notify_04, two_parameters);
+    const auto notify_05 = HandleTaitoCommand(
+        taito_command::notify_05, two_parameters);
+    failures += expect(query_01 && query_01->consumed == 2,
+                       "Taito 01 consumes command and one parameter");
+    failures += expect(query_03 && query_03->consumed == 2,
+                       "Taito 03 consumes command and one parameter");
+    failures += expect(notify_04 && notify_04->consumed == 1,
+                       "Taito 04 consumes only its command");
+    failures += expect(notify_05 && notify_05->consumed == 3,
+                       "Taito 05 consumes command and two parameters");
+    failures += expect(
+        !HandleTaitoCommand(CommandId{0x02}, two_parameters),
+        "unowned command is not claimed by Taito dispatch");
+
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x01, 0x00})),
+        {0x01, 0x01, 0x01},
+        "Taito query 01");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x03, 0x00})),
+        {0x01, 0x01, 0x01},
+        "Taito query 03");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x04})),
+        {0x01, 0x01},
+        "Taito notify 04");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x05, 0x00, 0x00})),
+        {0x01, 0x01},
+        "Taito notify 05");
+
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x01})),
+        {0x01, 0x02},
+        "truncated Taito query 01");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x03})),
+        {0x01, 0x02},
+        "truncated Taito query 03");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x05, 0x00})),
+        {0x01, 0x02},
+        "truncated Taito notify 05");
+
+    failures += expect_acknowledgement(
+        device.HandlePacket(
+            packet(Address{0x01}, {0x11, 0x01, 0x00, 0x12})),
+        {0x01, 0x01, 0x13, 0x01, 0x01, 0x01, 0x30},
+        "mixed standard and Taito commands");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x02})),
+        {0x02},
+        "unowned custom command remains unknown");
+    return failures;
+}
+
 } // namespace
 
 int main()
@@ -384,6 +458,7 @@ int main()
         test_identity_and_capabilities() +
         test_inputs_and_coins() +
         test_card_output_and_overflow() +
-        test_errors_and_retransmission();
+        test_errors_and_retransmission() +
+        test_taito_commands();
     return failures == 0 ? 0 : 1;
 }

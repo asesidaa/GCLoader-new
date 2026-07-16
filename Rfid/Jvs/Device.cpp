@@ -1,4 +1,5 @@
 #include "Rfid/Jvs/Device.h"
+#include "Rfid/TaitoCommands.h"
 
 #include <algorithm>
 #include <array>
@@ -166,6 +167,21 @@ std::optional<DeviceResponse> Device::HandlePacket(
     while (!cursor.remaining.empty()) {
         const auto command_bytes = cursor.Take(1);
         const CommandId command_id{(*command_bytes)[0]};
+
+        if (const auto taito = HandleTaitoCommand(
+                command_id, cursor.remaining)) {
+            const auto parameter_count = taito->consumed - 1;
+            if (!cursor.Take(parameter_count)) {
+                return invalid_input();
+            }
+            if (!append_report(taito->report) ||
+                !AppendOrOverflow(
+                    writer,
+                    std::span{taito->data}.first(taito->data_size))) {
+                return DeviceResponse{acknowledgement};
+            }
+            continue;
+        }
 
         switch (command_id.value) {
         case command::reset.value: {
