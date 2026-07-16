@@ -5,7 +5,7 @@
 #include "InputManager.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
-#include "RfidEmu.h"
+#include "Rfid/Feature.h"
 #include "SDL3/SDL.h"
 #include "FrameratePatch.h"
 #include "NesysServicePatch.h"
@@ -57,8 +57,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     return FALSE;
                 }
 
-                RfidEmuInit();
-                PLOG_DEBUG << "Rfid init complete!" << std::endl;
+                const auto rfid_result = gc::rfid::InitializeFeature();
+                if (!rfid_result) {
+                    PLOG_ERROR
+                        << "RFID/JVS feature initialization failed at stage "
+                        << static_cast<int>(rfid_result.error().stage);
+                    return FALSE;
+                }
+                PLOG_DEBUG << "RFID/JVS feature init complete!";
 
                 FrameratePatchInit();
                 PLOG_DEBUG

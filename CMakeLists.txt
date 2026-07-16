@@ -161,14 +161,23 @@ set(SOURCES
         NesysServiceProcess.cpp
         RegistryConfig.cpp
         RegistryConfigOverride.cpp
+        Rfid/Feature.cpp
+        Rfid/ComPortState.cpp
+        Rfid/Runtime.cpp
         Rfid/State.cpp
-        RfidEmu.cpp
+        Rfid/TaitoCommands.cpp
+        Rfid/Jvs/Decoder.cpp
+        Rfid/Jvs/Device.cpp
+        Rfid/Jvs/Encoder.cpp
         ServerAddressOverride.cpp
         SessionLog.cpp
         SwitchInputPolicy.cpp
         SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
         TestModeStorage/Redirector.cpp
+        TestModeStorage/Hooks.cpp
+        Win32Hooks/Kernel32Hooks.cpp
+        Win32Hooks/MinHookTransaction.cpp
         WasapiAudioPatch.cpp
         WasapiAudioTypes.cpp
         WasapiEndpoint.cpp
