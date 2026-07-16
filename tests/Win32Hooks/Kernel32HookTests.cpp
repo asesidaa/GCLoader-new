@@ -1,9 +1,12 @@
 #include "Rfid/Jvs/Encoder.h"
 #include "Rfid/Runtime.h"
+#include "Rfid/Trace.h"
 #include "TestModeStorage/Hooks.h"
 #include "TestModeStorage/Redirector.h"
 #include "Win32Hooks/Kernel32Hooks.h"
 #include "Win32Hooks/MinHookTransaction.h"
+#include "plog/Appenders/IAppender.h"
+#include "plog/Init.h"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +17,7 @@
 #include <expected>
 #include <filesystem>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,6 +25,40 @@
 #include <vector>
 
 namespace {
+
+class CaptureAppender final : public plog::IAppender {
+public:
+    void write(const plog::Record& record) override
+    {
+#if PLOG_CHAR_IS_UTF8
+        const std::string message{record.getMessage()};
+#else
+        const auto message = plog::util::toNarrow(record.getMessage());
+#endif
+        std::scoped_lock lock{mutex_};
+        messages_.push_back(message);
+    }
+
+    void Clear()
+    {
+        std::scoped_lock lock{mutex_};
+        messages_.clear();
+    }
+
+    [[nodiscard]] bool Contains(std::string_view text) const
+    {
+        std::scoped_lock lock{mutex_};
+        return std::ranges::any_of(messages_, [text](const auto& message) {
+            return message.find(text) != std::string::npos;
+        });
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::vector<std::string> messages_;
+};
+
+CaptureAppender g_capture_appender;
 
 using gc::win32_hooks::HookInstallError;
 using gc::win32_hooks::HookInstallStage;
@@ -1247,10 +1285,97 @@ int test_non_emulated_forwarding()
     return failures;
 }
 
+int test_diagnostic_formatting()
+{
+    using gc::rfid::trace::FormatBytes;
+    using gc::win32_hooks::HookInstallStageName;
+
+    int failures = 0;
+    constexpr std::array bytes{
+        std::byte{0xE0}, std::byte{0x00}, std::byte{0xD0},
+        std::byte{0xFF}, std::byte{0x42}};
+
+    failures += expect(
+        FormatBytes({}) == "<empty>",
+        "empty RFID trace bytes are explicit");
+    failures += expect(
+        FormatBytes(bytes) == "e0 00 d0 ff 42",
+        "RFID trace bytes use stable lowercase hex");
+    failures += expect(
+        FormatBytes(bytes, 3) == "e0 00 d0 ... (+2 bytes)",
+        "RFID trace bytes report bounded truncation");
+    failures += expect(
+        HookInstallStageName(HookInstallStage::resolve_export) ==
+            std::string_view{"resolve_export"} &&
+            HookInstallStageName(HookInstallStage::enable) ==
+                std::string_view{"enable"},
+        "hook installation stages have stable diagnostic names");
+    return failures;
+}
+
+int test_diagnostic_logging()
+{
+    using gc::win32_hooks::Kernel32Hooks;
+
+    int failures = 0;
+    g_capture_appender.Clear();
+
+    FakeBackend backend;
+    g_fake = &backend;
+    LPVOID original{};
+    const std::array requests{
+        HookRequest{
+            .module_name = L"kernel32.dll",
+            .export_name = "TraceApi",
+            .detour = target_at(99),
+            .original = &original,
+        }};
+    gc::win32_hooks::MinHookTransaction transaction{
+        FakeResolver(), FakeMinHook()};
+    failures += expect(
+        transaction.Install(requests).has_value(),
+        "diagnostic hook transaction installs");
+    failures += expect(
+        g_capture_appender.Contains(
+            "RFID hooks: enabled export=TraceApi") &&
+            g_capture_appender.Contains(
+                "RFID hooks: transaction committed count=1"),
+        "hook transaction logs the enabled export and commit count");
+
+    WorkerFake worker;
+    gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
+    gc::testmode_storage::Hooks storage{false};
+    Kernel32Hooks hooks{runtime, storage, OriginalApi()};
+    const auto handle = hooks.CreateFileA(
+        "COM2", GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+        OPEN_EXISTING, 0, nullptr);
+    failures += expect(
+        handle == gc::rfid::EmulatedComHandle() &&
+            g_capture_appender.Contains(
+                "RFID COM2 trace api=CreateFileA result=success"),
+        "COM2 open is present in diagnostic log");
+
+    const auto request = encode(gc::rfid::jvs::Address{0xFF}, {0xF1, 0x01});
+    DWORD written{};
+    failures += expect(
+        hooks.WriteFile(
+            handle, request.bytes().data(),
+            static_cast<DWORD>(request.bytes().size()),
+            &written, nullptr),
+        "diagnostic request write succeeds");
+    failures += expect(
+        g_capture_appender.Contains("RFID COM2 trace api=WriteFile") &&
+            g_capture_appender.Contains("RFID JVS decoded address=0xff") &&
+            g_capture_appender.Contains("RFID JVS queued reply bytes="),
+        "COM and JVS boundaries are present in diagnostic log");
+    return failures;
+}
+
 } // namespace
 
 int main()
 {
+    plog::init(plog::info, &g_capture_appender);
     const int failures =
         test_success_and_already_initialized() +
         test_resolution_failures() +
@@ -1260,6 +1385,8 @@ int main()
         test_kernel32_request_sets() +
         test_create_file_and_storage_routing() +
         test_emulated_com_contract() +
-        test_non_emulated_forwarding();
+        test_non_emulated_forwarding() +
+        test_diagnostic_formatting() +
+        test_diagnostic_logging();
     return failures == 0 ? 0 : 1;
 }

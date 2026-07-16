@@ -1,5 +1,7 @@
 #include "Win32Hooks/MinHookTransaction.h"
 
+#include "plog/Log.h"
+
 #include <array>
 #include <cstddef>
 
@@ -44,9 +46,13 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
     std::span<const HookRequest> requests) noexcept
 {
     if (committed_) {
+        PLOG_INFO << "RFID hooks: transaction already committed";
         return {};
     }
     if (requests.size() > kMaxOwnedKernel32Hooks) {
+        PLOG_ERROR
+            << "RFID hooks: transaction rejected count="
+            << requests.size() << " capacity=" << kMaxOwnedKernel32Hooks;
         return std::unexpected(HookInstallError{
             .stage = HookInstallStage::too_many_hooks,
             .win32_error = ERROR_INSUFFICIENT_BUFFER,
@@ -54,8 +60,11 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
     }
     if (requests.empty()) {
         committed_ = true;
+        PLOG_INFO << "RFID hooks: transaction committed count=0";
         return {};
     }
+
+    PLOG_INFO << "RFID hooks: transaction begin count=" << requests.size();
 
     std::array<ResolvedHook, kMaxOwnedKernel32Hooks> resolved{};
     std::size_t resolved_count = 0;
@@ -64,6 +73,9 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             resolver_.get_module_handle_w(request.module_name);
         if (module == nullptr) {
             const auto error = GetLastError();
+            PLOG_ERROR
+                << "RFID hooks: resolve module failed export="
+                << request.export_name << " win32_error=" << error;
             return std::unexpected(HookInstallError{
                 .stage = HookInstallStage::resolve_module,
                 .export_name = request.export_name,
@@ -75,6 +87,9 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             resolver_.get_proc_address(module, request.export_name);
         if (procedure == nullptr) {
             const auto error = GetLastError();
+            PLOG_ERROR
+                << "RFID hooks: resolve export failed export="
+                << request.export_name << " win32_error=" << error;
             return std::unexpected(HookInstallError{
                 .stage = HookInstallStage::resolve_export,
                 .export_name = request.export_name,
@@ -86,16 +101,25 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             .request = &request,
             .target = reinterpret_cast<LPVOID>(procedure),
         };
+        PLOG_INFO
+            << "RFID hooks: resolved export=" << request.export_name
+            << " target=" << reinterpret_cast<LPVOID>(procedure);
     }
 
     const auto initialize_status = minhook_.initialize();
     if (initialize_status != MH_OK &&
         initialize_status != MH_ERROR_ALREADY_INITIALIZED) {
+        PLOG_ERROR
+            << "RFID hooks: MinHook initialization failed status="
+            << static_cast<int>(initialize_status);
         return std::unexpected(HookInstallError{
             .stage = HookInstallStage::initialize,
             .minhook_status = initialize_status,
         });
     }
+    PLOG_INFO
+        << "RFID hooks: MinHook initialization status="
+        << static_cast<int>(initialize_status);
 
     for (std::size_t index = 0; index < resolved_count; ++index) {
         const auto& hook = resolved[index];
@@ -108,10 +132,19 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
                 .target = hook.target,
                 .minhook_status = status,
             };
+            PLOG_ERROR
+                << "RFID hooks: create failed export="
+                << hook.request->export_name
+                << " target=" << hook.target
+                << " status=" << static_cast<int>(status);
             Rollback();
             return std::unexpected(error);
         }
         created_[created_count_++] = hook.target;
+        PLOG_INFO
+            << "RFID hooks: created export="
+            << hook.request->export_name
+            << " target=" << hook.target;
     }
 
     for (std::size_t index = 0; index < resolved_count; ++index) {
@@ -124,18 +157,32 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
                 .target = hook.target,
                 .minhook_status = status,
             };
+            PLOG_ERROR
+                << "RFID hooks: enable failed export="
+                << hook.request->export_name
+                << " target=" << hook.target
+                << " status=" << static_cast<int>(status);
             Rollback();
             return std::unexpected(error);
         }
         enabled_[enabled_count_++] = hook.target;
+        PLOG_INFO
+            << "RFID hooks: enabled export="
+            << hook.request->export_name
+            << " target=" << hook.target;
     }
 
     committed_ = true;
+    PLOG_INFO
+        << "RFID hooks: transaction committed count=" << resolved_count;
     return {};
 }
 
 void MinHookTransaction::Rollback() noexcept
 {
+    PLOG_WARNING
+        << "RFID hooks: rollback begin enabled=" << enabled_count_
+        << " created=" << created_count_;
     while (enabled_count_ != 0) {
         --enabled_count_;
         static_cast<void>(minhook_.disable(enabled_[enabled_count_]));
@@ -147,6 +194,7 @@ void MinHookTransaction::Rollback() noexcept
         created_[created_count_] = nullptr;
     }
     committed_ = false;
+    PLOG_WARNING << "RFID hooks: rollback complete";
 }
 
 } // namespace gc::win32_hooks

@@ -1,5 +1,6 @@
 #include "Rfid/ComPortState.h"
 
+#include "Rfid/Trace.h"
 #include "plog/Log.h"
 
 #include <algorithm>
@@ -20,6 +21,18 @@ namespace {
     value.Parity = NOPARITY;
     value.StopBits = ONESTOPBIT;
     return value;
+}
+
+[[nodiscard]] const char* FramingErrorName(
+    jvs::FramingError error) noexcept
+{
+    switch (error) {
+    case jvs::FramingError::InvalidEscape:
+        return "invalid_escape";
+    case jvs::FramingError::ZeroByteCount:
+        return "zero_byte_count";
+    }
+    return "unknown";
 }
 
 } // namespace
@@ -150,15 +163,45 @@ std::expected<std::size_t, DWORD> ComPortState::Write(
             [this](auto&& decoded) {
                 using Event = std::remove_cvref_t<decltype(decoded)>;
                 if constexpr (std::same_as<Event, jvs::DecodedPacket>) {
+                    PLOG_INFO
+                        << "RFID JVS decoded address=0x" << std::hex
+                        << static_cast<unsigned int>(decoded.address.value)
+                        << std::dec
+                        << " byte_count="
+                        << static_cast<unsigned int>(decoded.byte_count)
+                        << " payload="
+                        << trace::FormatBytes(
+                               std::as_bytes(decoded.payload()));
                     if (auto response = device_.HandlePacket(decoded)) {
                         QueueResponse(std::move(*response));
+                    } else {
+                        PLOG_INFO
+                            << "RFID JVS no reply address=0x" << std::hex
+                            << static_cast<unsigned int>(
+                                   decoded.address.value)
+                            << std::dec;
                     }
                 } else if constexpr (
                     std::same_as<Event, jvs::ChecksumFailure>) {
+                    PLOG_WARNING
+                        << "RFID JVS checksum failure address=0x"
+                        << std::hex
+                        << static_cast<unsigned int>(decoded.address.value)
+                        << " expected=0x"
+                        << static_cast<unsigned int>(decoded.expected)
+                        << " actual=0x"
+                        << static_cast<unsigned int>(decoded.actual)
+                        << std::dec
+                        << " byte_count="
+                        << static_cast<unsigned int>(decoded.byte_count);
                     if (auto response =
                             device_.HandleChecksumFailure(decoded)) {
                         QueueResponse(jvs::DeviceResponse{*response});
                     }
+                } else {
+                    PLOG_WARNING
+                        << "RFID JVS framing error="
+                        << FramingErrorName(decoded);
                 }
             },
             std::move(event));
@@ -242,6 +285,12 @@ void ComPortState::QueueResponse(jvs::DeviceResponse response) noexcept
         if (last_reply_) {
             pending_reply_ = *last_reply_;
             read_cursor_ = 0;
+            PLOG_INFO
+                << "RFID JVS retransmit queued bytes="
+                << trace::FormatBytes(pending_reply_->bytes());
+        } else {
+            PLOG_WARNING
+                << "RFID JVS retransmit requested without prior reply";
         }
         return;
     }
@@ -257,6 +306,9 @@ void ComPortState::QueueResponse(jvs::DeviceResponse response) noexcept
     pending_reply_ = *encoded;
     last_reply_ = *encoded;
     read_cursor_ = 0;
+    PLOG_INFO
+        << "RFID JVS queued reply bytes="
+        << trace::FormatBytes(pending_reply_->bytes());
 }
 
 void ComPortState::RecordSequencingViolation() noexcept

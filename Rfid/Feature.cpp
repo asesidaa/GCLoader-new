@@ -97,8 +97,22 @@ std::expected<void, FeatureError> InitializeFeature() noexcept
     state->kernel32.Activate();
     const auto requests =
         state->kernel32.BuildRequests(storage_enabled);
+    PLOG_INFO
+        << "RFID hooks: requested COM hooks=14 storage hooks="
+        << (storage_enabled ? 10 : 0)
+        << " total=" << requests.requests().size();
     const auto installed = state->transaction.Install(requests.requests());
     if (!installed) {
+        const auto& error = installed.error();
+        PLOG_ERROR
+            << "RFID hooks: installation failed stage="
+            << gc::win32_hooks::HookInstallStageName(error.stage)
+            << " export="
+            << (error.export_name == nullptr ? "<none>" : error.export_name)
+            << " target=" << error.target
+            << " win32_error=" << error.win32_error
+            << " minhook_status="
+            << static_cast<int>(error.minhook_status);
         state->kernel32.Deactivate();
         return std::unexpected(FeatureError{
             .stage = FeatureFailureStage::hook_installation,
@@ -107,6 +121,8 @@ std::expected<void, FeatureError> InitializeFeature() noexcept
     }
 
     g_feature_state = state.release();
+    PLOG_INFO
+        << "RFID/JVS feature active hooks=" << requests.requests().size();
     return {};
 }
 

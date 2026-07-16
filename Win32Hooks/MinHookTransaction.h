@@ -42,6 +42,28 @@ enum class HookInstallStage {
     enable,
 };
 
+[[nodiscard]] constexpr const char* HookInstallStageName(
+    HookInstallStage stage) noexcept
+{
+    switch (stage) {
+    case HookInstallStage::none:
+        return "none";
+    case HookInstallStage::too_many_hooks:
+        return "too_many_hooks";
+    case HookInstallStage::resolve_module:
+        return "resolve_module";
+    case HookInstallStage::resolve_export:
+        return "resolve_export";
+    case HookInstallStage::initialize:
+        return "initialize";
+    case HookInstallStage::create:
+        return "create";
+    case HookInstallStage::enable:
+        return "enable";
+    }
+    return "unknown";
+}
+
 struct HookInstallError {
     HookInstallStage stage{};
     LPCSTR export_name{};
