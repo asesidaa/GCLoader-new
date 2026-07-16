@@ -415,11 +415,18 @@ target_link_libraries(ConfigFeatureTests PRIVATE
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
 
 add_executable(RfidRuntimeTests
+        Rfid/Runtime.cpp
+        Rfid/ComPortState.cpp
         Rfid/State.cpp
+        Rfid/TaitoCommands.cpp
+        Rfid/Jvs/Decoder.cpp
+        Rfid/Jvs/Device.cpp
+        Rfid/Jvs/Encoder.cpp
         tests/Rfid/RfidRuntimeTests.cpp
 )
 target_include_directories(RfidRuntimeTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${plog_SOURCE_DIR}/include
 )
 add_test(NAME RfidRuntimeTests COMMAND RfidRuntimeTests)
 
