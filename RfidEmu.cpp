@@ -2,11 +2,12 @@
 
 // ORIGINALL BASED ON ttx_monitor, modified for RFID. https://github.com/zxmarcos/ttx_monitor
 
+#include <cstddef>
 #include <filesystem>
 #include <iomanip>
 #include <queue>
 #include <string>
-#include "CardScanState.h"
+#include "Rfid/State.h"
 #include "config.h"
 #include "MinHook.h"
 #include "TestModeStorageRedirect.h"
@@ -249,10 +250,6 @@ int handleReadGeneralPurposeInput(jprot_encoder *r, DWORD arg1)
 	return 2 + arg1;
 }
 
-// Dumped from my own Japanese Lord Vermilion Nesica XLive card -Reaver
-static BYTE cardData[0x18] = { 0x04, 0xC2, 0x3D, 0xDA, 0x6F, 0x52, 0x80, 0x00, 0x37, 0x30, 0x32, 0x30, 0x33, 0x39, 0x32, 0x30, 0x31, 0x30, 0x32, 0x38, 0x31, 0x35, 0x30, 0x32 };
-
-
 // 0x32 -- read general-purpose output. This is very confusing 0x32 0x01 0x00 returns 0x01 (0x18 times 0x00) 0x01
 // See JVSP manual for more information.
 int handleReadGeneralPurposeOutput(jprot_encoder *r, DWORD arg1)
@@ -265,7 +262,7 @@ int handleReadGeneralPurposeOutput(jprot_encoder *r, DWORD arg1)
 	{
 		for(int i = 0; i < 0x18; i++)
 		{
-			r->push(cardData[i]);
+			r->push(gc::rfid::kCardData[static_cast<std::size_t>(i)]);
 		}
 	}
 	else

@@ -1,4 +1,4 @@
-#include "CardScanState.h"
+#include "Rfid/State.h"
 
 #include <iostream>
 
@@ -46,6 +46,29 @@ int main()
         state.IsPresent(),
         false,
         "later payload read clears card state");
+
+    gc::rfid::State device_state;
+    device_state.assigned_address = gc::rfid::jvs::Address{0x7F};
+    device_state.coins = {12, 34};
+    device_state.card_scan.Arm();
+    device_state.ResetBus();
+
+    failures += expect(
+        device_state.assigned_address.has_value(),
+        false,
+        "bus reset clears assigned address");
+    failures += expect(
+        device_state.coins[0] == 0,
+        true,
+        "bus reset clears P1 coins");
+    failures += expect(
+        device_state.coins[1] == 0,
+        true,
+        "bus reset clears P2 coins");
+    failures += expect(
+        device_state.card_scan.IsPresent(),
+        true,
+        "bus reset preserves physical card presence");
 
     return failures == 0 ? 0 : 1;
 }

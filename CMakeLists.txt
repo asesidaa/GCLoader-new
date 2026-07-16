@@ -161,6 +161,7 @@ set(SOURCES
         NesysServiceProcess.cpp
         RegistryConfig.cpp
         RegistryConfigOverride.cpp
+        Rfid/State.cpp
         RfidEmu.cpp
         ServerAddressOverride.cpp
         SessionLog.cpp
@@ -183,6 +184,7 @@ set(GUI_SOURCES
 
 add_library(iDmacDrv32 SHARED ${SOURCES})
 target_include_directories(iDmacDrv32 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
         ${SDL3_SOURCE_DIR}/include
         ${minhook_SOURCE_DIR}/include
         ${reflectcpp_SOURCE_DIR}/include
@@ -412,13 +414,14 @@ target_link_libraries(ConfigFeatureTests PRIVATE
 )
 add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
 
-add_executable(CardScanStateTests
-        tests/CardScanStateTests.cpp
+add_executable(RfidRuntimeTests
+        Rfid/State.cpp
+        tests/Rfid/RfidRuntimeTests.cpp
 )
-target_include_directories(CardScanStateTests PRIVATE
+target_include_directories(RfidRuntimeTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
-add_test(NAME CardScanStateTests COMMAND CardScanStateTests)
+add_test(NAME RfidRuntimeTests COMMAND RfidRuntimeTests)
 
 add_executable(JvsCodecTests
         Rfid/Jvs/Decoder.cpp
