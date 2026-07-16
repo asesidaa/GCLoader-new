@@ -420,6 +420,15 @@ target_include_directories(CardScanStateTests PRIVATE
 )
 add_test(NAME CardScanStateTests COMMAND CardScanStateTests)
 
+add_executable(JvsCodecTests
+        Rfid/Jvs/Decoder.cpp
+        tests/Rfid/JvsCodecTests.cpp
+)
+target_include_directories(JvsCodecTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME JvsCodecTests COMMAND JvsCodecTests)
+
 add_executable(InputSnapshotStateTests
         InputSnapshotState.cpp
         tests/InputSnapshotStateTests.cpp
