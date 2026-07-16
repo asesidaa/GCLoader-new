@@ -17,6 +17,7 @@
 - Treat `H:\gc\artifacts\GCLoader` as the source and commit tree. Treat `H:\gc` as runtime/deployment state.
 - Preserve all valid standard and Taito request/response behavior currently used by `game471.exe`. Apply safe standard-defined behavior to malformed or unsupported traffic.
 - Preserve arbitrary `std::uint8_t` address, command, packet-status, and report values. Classification helpers must not reject custom values.
+- Model the complete host-board connection: dispatch every complete command packet and checksum failure regardless of destination address. Use `0xFF` classification only inside commands with broadcast-specific semantics.
 - Use any modern facility supported by the active x86 MSVC/STL when it strengthens an invariant; do not use unavailable `<scope>` facilities merely because they are associated with newer standards.
 - Decode escaping before byte-count and checksum processing. A raw `0xE0` resynchronizes the stream; a trailing `0xD0` remains pending across chunks.
 - Derive storage from the wire limits: 255 decoded bytes after the count and a conservative 515-byte encoded-frame capacity. Do not add arbitrary 1 KiB protocol buffers.
@@ -43,7 +44,7 @@
 | `Rfid/Jvs/Types.h` | Open protocol value types, bounded packets, typed decode events, statuses, reports, and frame capacities |
 | `Rfid/Jvs/Decoder.h/.cpp` | Incremental raw-byte synchronization, unescaping, byte-count, checksum, and event production |
 | `Rfid/Jvs/Encoder.h/.cpp` | Bounded checksum calculation and structural escaping |
-| `Rfid/Jvs/Device.h/.cpp` | Address routing, standard JVS commands, multi-command semantics, and acknowledgement construction |
+| `Rfid/Jvs/Device.h/.cpp` | Host-board dispatch at every address, standard JVS commands, multi-command semantics, and acknowledgement construction |
 | `Rfid/State.h/.cpp` | Address, coin, card-presence, card-payload, and device state |
 | `Rfid/TaitoCommands.h/.cpp` | Taito-only command recognition and responses |
 | `Rfid/ComPortState.h/.cpp` | Stateful serial configuration, incremental writes, pending reply, reads, and modem state |
@@ -634,9 +635,9 @@ Build decoded packets with a checked local helper and assert the exact acknowled
 
 Also assert:
 
-- Unassigned normal-address packets and packets for another assigned address are ignored.
+- The exact acknowledgement payloads above are returned unchanged at host address `0x00`, the assigned address, arbitrary standard/custom addresses, and broadcast address `0xFF`.
 - Reset and address assignment are accepted only through their broadcast semantics.
-- An addressed checksum failure returns payload `03`.
+- A checksum failure at any address returns payload `03`.
 - `20` with impossible player/byte parameters returns status `01` and report `02` without input data.
 - `30`, `31`, or `32` with invalid output parameters returns status `01` and report `03` while discarding output bytes.
 - An unknown command changes packet status to `02`, stops parsing later commands, and retains reports already produced earlier in the packet.
@@ -729,24 +730,9 @@ struct RequestCursor {
 
 Use the named `command::*` values from `Types.h`. Implement every row in the golden table directly. For each successful command append one report followed by its data. On insufficient input, append `report::invalid_input_parameter` and stop because no complete later command can be located safely. On invalid output values, consume the declared command extent, append `report::invalid_output_parameter`, and do not mutate state.
 
-Address routing must be explicit:
+Do not add a top-level address-admission predicate. This emulator represents the host board for the complete connection and therefore dispatches standard and Taito commands at every `std::uint8_t` address. Preserve the original implementation's acknowledgement payload bytes independently of the request address.
 
-~~~cpp
-const bool is_reset =
-    !packet.payload().empty() && packet.payload().front() == 0xF0;
-const bool is_set_address =
-    !packet.payload().empty() && packet.payload().front() == 0xF1;
-const bool accepts_broadcast =
-    packet.address.is_broadcast() && (is_reset || is_set_address);
-const bool accepts_assigned =
-    state_.assigned_address &&
-    packet.address == *state_.assigned_address;
-if (!accepts_broadcast && !accepts_assigned) {
-    return std::nullopt;
-}
-~~~
-
-Do not constrain the value assigned by `F1`. A custom address remains valid device state.
+Use `packet.address.is_broadcast()` only inside reset and address-assignment handling, whose command semantics require broadcast. Do not constrain the value assigned by `F1`; a custom address remains valid device state but never becomes a routing filter. `HandleChecksumFailure` likewise returns status `03` without filtering on the assigned address.
 
 - [ ] **Step 5: Run the standard device characterization matrix**
 

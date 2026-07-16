@@ -174,7 +174,7 @@ The wire format is standard, but the values carried by it are extensible:
 
 These types expose named helpers and comparisons without rejecting custom values. Standard values are `inline constexpr` constants in a standard-value namespace. Helpers such as `is_master()`, `is_standard_slave()`, and `is_broadcast()` classify an address but do not validate construction.
 
-The decoder never rejects a packet merely because its address or command is not standard. Address matching belongs to the device-routing layer, and command interpretation belongs to the selected device.
+The decoder never rejects a packet merely because its address or command is not standard. The emulation represents the host board for the complete JVS connection, so the device layer dispatches every complete packet regardless of its destination address. The address remains available for diagnostics and command-specific semantics; command interpretation belongs to the selected device.
 
 ### Decoded packets
 
@@ -248,9 +248,10 @@ The encoder returns `std::expected<EncodedFrame, EncodeError>`. Encoding fails i
 
 `gc::rfid::jvs::Device` owns standard request/acknowledgement behavior:
 
-- Packets for an unassigned address are ignored.
-- Broadcast commands are handled only where their command semantics allow it.
-- A checksum failure on an applicable packet returns packet status `0x03`.
+- Every complete packet is dispatched regardless of whether its address is `0x00`, the currently assigned address, another standard or custom address, or `0xFF`.
+- The assigned address is retained as emulated bus state and is never a packet-admission filter.
+- Address `0xFF` remains classified as broadcast. Broadcast-only requirements are enforced by the individual commands whose semantics require them, including reset and address assignment, rather than by global routing.
+- A checksum failure at any address returns packet status `0x03`.
 - An unsupported command returns packet status `0x02`.
 - Commands following an unsupported command in the same packet are discarded.
 - Reports for commands successfully executed before the unsupported command are retained.
@@ -258,7 +259,7 @@ The encoder returns `std::expected<EncodedFrame, EncodeError>`. Encoding fails i
 - Invalid output-command parameters return report `0x03` and discard the output data.
 - An acknowledgement that cannot fit the standard limit returns packet status `0x04`.
 
-Standard JVS handlers and Taito-specific handlers remain visibly separate. Taito commands are not mislabeled as standard commands. Future custom devices, including a dongle implementation, may introduce their own address routing and command handlers without modifying the codec.
+Standard JVS handlers and Taito-specific handlers remain visibly separate. Taito commands are not mislabeled as standard commands. Their successful acknowledgement payloads remain byte-for-byte identical to the original implementation at every address. Future custom devices, including a dongle implementation, may introduce their own command handlers without modifying the codec or adding a global address filter.
 
 ## Stateful COM-Port Emulation
 
@@ -429,6 +430,7 @@ Tests use the committed standard and cover:
 Tests cover:
 
 - Standard reset and address assignment.
+- Address-independent dispatch at `0x00`, assigned, arbitrary custom, and broadcast addresses while preserving the original acknowledgement payloads.
 - Multiple commands and ordered reports.
 - Unsupported-command truncation with earlier reports retained.
 - Input and output parameter-error variants.
