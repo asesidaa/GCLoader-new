@@ -422,6 +422,7 @@ add_test(NAME CardScanStateTests COMMAND CardScanStateTests)
 
 add_executable(JvsCodecTests
         Rfid/Jvs/Decoder.cpp
+        Rfid/Jvs/Encoder.cpp
         tests/Rfid/JvsCodecTests.cpp
 )
 target_include_directories(JvsCodecTests PRIVATE

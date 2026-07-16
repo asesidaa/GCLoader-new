@@ -1,10 +1,12 @@
 #include "Rfid/Jvs/Decoder.h"
+#include "Rfid/Jvs/Encoder.h"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <ranges>
 #include <span>
 #include <utility>
 #include <variant>
@@ -69,6 +71,47 @@ int expect_page16_packet(
         !payload_matches ||
         !checksum || *checksum != 0xB4) {
         std::cerr << name << ": decoded fields differ\n";
+        return 1;
+    }
+    return 0;
+}
+
+int expect_round_trip(
+    Address address,
+    std::span<const std::uint8_t> payload,
+    const char* name)
+{
+    const auto encoded = gc::rfid::jvs::EncodePacket(address, payload);
+    if (!encoded) {
+        std::cerr << name << ": encoding failed\n";
+        return 1;
+    }
+    if (encoded->size > gc::rfid::jvs::kMaxEncodedFrameSize) {
+        std::cerr << name << ": encoded size exceeded capacity\n";
+        return 1;
+    }
+
+    int failures = 0;
+    for (std::size_t split = 0; split <= encoded->size; ++split) {
+        Decoder decoder;
+        std::vector<DecodeEvent> events;
+        consume(decoder, encoded->bytes().first(split), events);
+        consume(decoder, encoded->bytes().subspan(split), events);
+        if (events.size() != 1 ||
+            !std::holds_alternative<DecodedPacket>(events.front())) {
+            ++failures;
+            continue;
+        }
+        const auto& packet = std::get<DecodedPacket>(events.front());
+        if (packet.address != address ||
+            !std::ranges::equal(packet.payload(), payload)) {
+            ++failures;
+        }
+    }
+
+    if (failures != 0) {
+        std::cerr << name << ": " << failures
+                  << " split round trips failed\n";
         return 1;
     }
     return 0;
@@ -209,6 +252,82 @@ int main()
                 std::get<ChecksumFailure>(events.front()).address ==
                     Address{0xFF},
             "checksum failure event");
+    }
+
+    {
+        constexpr std::array<std::uint8_t, 4> payload{
+            0xD0, 0x00, 0xE0, 0x00};
+        const auto encoded = gc::rfid::jvs::EncodePacket(
+            Address{0xFF}, payload);
+        failures += expect(encoded.has_value(), "PDF page 16 encode");
+        if (encoded) {
+            failures += expect(
+                std::ranges::equal(encoded->bytes(), kPage16Encoded),
+                "PDF page 16 encoded bytes");
+        }
+    }
+
+    {
+        std::array<std::uint8_t, gc::rfid::jvs::kMaxPayloadSize + 1>
+            too_large{};
+        const auto encoded = gc::rfid::jvs::EncodePacket(
+            Address{0x01}, too_large);
+        failures += expect(
+            !encoded &&
+                encoded.error() ==
+                    gc::rfid::jvs::EncodeError::PayloadTooLarge,
+            "payload over 254 bytes rejected");
+    }
+
+    {
+        std::array<std::uint8_t, gc::rfid::jvs::kMaxPayloadSize>
+            payload{};
+        constexpr std::array<std::size_t, 8> lengths{
+            0, 1, 2, 0xCF, 0xD0, 0xDF, 0xE0, 0xFE};
+        for (const auto length : lengths) {
+            for (std::size_t index = 0; index < length; ++index) {
+                payload[index] = static_cast<std::uint8_t>(
+                    (index * 73 + length * 19) & 0xFF);
+            }
+            if (length > 0) {
+                payload[0] = 0xD0;
+            }
+            if (length > 1) {
+                payload[1] = 0xE0;
+            }
+            const Address address_value{
+                static_cast<std::uint8_t>(
+                    length % 2 == 0 ? 0xD0 : 0xE0)};
+            failures += expect_round_trip(
+                address_value,
+                std::span{payload}.first(length),
+                "generated encode/decode");
+        }
+    }
+
+    {
+        constexpr std::array<std::uint8_t, 1> checksum_d0{0xCD};
+        constexpr std::array<std::uint8_t, 1> checksum_e0{0xDD};
+        failures += expect_round_trip(
+            Address{0x01}, checksum_d0, "escaped D0 checksum");
+        failures += expect_round_trip(
+            Address{0x01}, checksum_e0, "escaped E0 checksum");
+    }
+
+    {
+        std::array<std::uint8_t, gc::rfid::jvs::kMaxPayloadSize>
+            maximum{};
+        maximum.fill(0xD0);
+        const auto encoded = gc::rfid::jvs::EncodePacket(
+            Address{0xE0}, maximum);
+        failures += expect(encoded.has_value(), "maximum payload encodes");
+        if (encoded) {
+            failures += expect(
+                encoded->size <= gc::rfid::jvs::kMaxEncodedFrameSize,
+                "maximum frame stays bounded");
+        }
+        failures += expect_round_trip(
+            Address{0xE0}, maximum, "maximum payload round trip");
     }
 
     return failures == 0 ? 0 : 1;
