@@ -433,6 +433,16 @@ target_include_directories(JvsCodecTests PRIVATE
 )
 add_test(NAME JvsCodecTests COMMAND JvsCodecTests)
 
+add_executable(JvsDeviceTests
+        Rfid/Jvs/Device.cpp
+        Rfid/State.cpp
+        tests/Rfid/JvsDeviceTests.cpp
+)
+target_include_directories(JvsDeviceTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+add_test(NAME JvsDeviceTests COMMAND JvsDeviceTests)
+
 add_executable(InputSnapshotStateTests
         InputSnapshotState.cpp
         tests/InputSnapshotStateTests.cpp
