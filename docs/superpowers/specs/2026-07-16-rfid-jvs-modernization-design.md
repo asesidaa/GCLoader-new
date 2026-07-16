@@ -399,9 +399,14 @@ Diagnostics:
 
 - Identify framing, checksum, command, capacity, hook-installation, and worker-start failures distinctly.
 - Include address, command, decoded length, and failure stage where safe.
-- Avoid logging every consumed byte.
+- Emit one feature-activation summary after the complete hook transaction succeeds.
+- Keep successful hook resolution, COM calls, JVS decoding, retransmission, and reply queuing silent. These paths are normal operation and may execute on every poll.
+- Log hook-installation failures, rollback, Win32 emulation failures, malformed frames, checksum failures, sequencing violations, and invalid retransmission requests.
+- Include a bounded byte dump only on an actual I/O failure where the bytes help diagnose that failure; never dump successful traffic.
 - Never log card payloads or other sensitive data.
 - Preserve the original Win32 error for calls forwarded to the real API.
+
+There is no production trace-mode setting. Investigation-only success tracing is removed once runtime compatibility has been established, rather than retained as dormant logging code.
 
 ## Automated Verification
 
