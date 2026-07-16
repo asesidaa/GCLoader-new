@@ -89,12 +89,22 @@ int test_addressing_and_reset()
     State state;
     Device device{state};
 
-    failures += expect(
-        !device.HandlePacket(packet(Address{0x01}, {0x11})),
-        "unassigned device ignores normal packet");
-    failures += expect(
-        !device.HandlePacket(packet(address::broadcast, {0x11})),
-        "unassigned device ignores broadcast normal command");
+    constexpr std::array destinations{
+        address::master,
+        Address{0x01},
+        Address{0x20},
+        Address{0x80},
+        address::broadcast};
+    for (const auto destination : destinations) {
+        failures += expect_acknowledgement(
+            device.HandlePacket(packet(destination, {0x11})),
+            {0x01, 0x01, 0x13},
+            "standard response bytes are address-independent");
+        failures += expect_acknowledgement(
+            device.HandlePacket(packet(destination, {0x01, 0x00})),
+            {0x01, 0x01, 0x01},
+            "Taito response bytes are address-independent");
+    }
 
     auto response = device.HandlePacket(
         packet(address::broadcast, {command::set_address.value, 0x80}));
@@ -105,9 +115,10 @@ int test_addressing_and_reset()
         state.assigned_address == Address{0x80},
         "custom address is retained");
 
-    failures += expect(
-        !device.HandlePacket(packet(Address{0x01}, {0x11})),
-        "different assigned address is ignored");
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x11})),
+        {0x01, 0x01, 0x13},
+        "assigned state does not filter another address");
     failures += expect_acknowledgement(
         device.HandlePacket(packet(Address{0x80}, {0x11})),
         {0x01, 0x01, 0x13},
@@ -370,9 +381,14 @@ int test_errors_and_retransmission()
         .byte_count = 2,
         .expected = 0x10,
         .actual = 0x11};
+    const auto other_checksum_response =
+        device.HandleChecksumFailure(other_failure);
     failures += expect(
-        !device.HandleChecksumFailure(other_failure),
-        "checksum failure for another address is ignored");
+        other_checksum_response &&
+            std::ranges::equal(
+                other_checksum_response->bytes(),
+                std::initializer_list<std::uint8_t>{0x03}),
+        "checksum failure response is address-independent");
     return failures;
 }
 

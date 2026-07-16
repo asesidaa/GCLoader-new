@@ -128,18 +128,6 @@ std::optional<DeviceResponse> Device::HandlePacket(
         return std::nullopt;
     }
 
-    const bool is_reset = payload.front() == command::reset.value;
-    const bool is_set_address =
-        payload.front() == command::set_address.value;
-    const bool accepts_broadcast =
-        packet.address.is_broadcast() && (is_reset || is_set_address);
-    const bool accepts_assigned =
-        state_.assigned_address &&
-        packet.address == *state_.assigned_address;
-    if (!accepts_broadcast && !accepts_assigned) {
-        return std::nullopt;
-    }
-
     Acknowledgement acknowledgement;
     ReplyWriter writer{acknowledgement};
     RequestCursor cursor{payload};
@@ -440,13 +428,8 @@ std::optional<DeviceResponse> Device::HandlePacket(
 }
 
 std::optional<Acknowledgement> Device::HandleChecksumFailure(
-    const ChecksumFailure& failure) noexcept
+    const ChecksumFailure&) noexcept
 {
-    if (!state_.assigned_address ||
-        failure.address != *state_.assigned_address) {
-        return std::nullopt;
-    }
-
     Acknowledgement acknowledgement;
     acknowledgement.payload.front() = status::checksum_error.value;
     return acknowledgement;

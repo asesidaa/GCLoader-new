@@ -192,6 +192,29 @@ int test_fragmented_requests()
     return failures;
 }
 
+int test_host_board_address_dispatch()
+{
+    using namespace gc::rfid::jvs;
+
+    int failures = 0;
+    ComPortState port;
+    const auto request = encode_request(
+        address::master, {0x01, 0x02});
+    const auto write = port.Write(request.bytes(), false);
+    failures += expect(
+        write && *write == request.size,
+        "host-board Taito request write count");
+
+    constexpr std::array expected{
+        std::byte{0xE0}, std::byte{0x00}, std::byte{0x04},
+        std::byte{0x01}, std::byte{0x01}, std::byte{0x01},
+        std::byte{0x07}};
+    failures += expect(
+        std::ranges::equal(drain(port), expected),
+        "host-board Taito request preserves legacy reply bytes");
+    return failures;
+}
+
 int test_pending_reply_and_reads()
 {
     using namespace gc::rfid::jvs;
@@ -421,6 +444,7 @@ int main()
     const int failures =
         test_serial_configuration() +
         test_fragmented_requests() +
+        test_host_board_address_dispatch() +
         test_pending_reply_and_reads() +
         test_pipeline_rejection() +
         test_retransmission_and_checksum() +
