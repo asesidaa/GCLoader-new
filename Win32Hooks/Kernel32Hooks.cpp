@@ -4,7 +4,6 @@
 #include "plog/Log.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <iomanip>
 #include <limits>
 #include <span>
@@ -142,15 +141,6 @@ HANDLE Kernel32Hooks::CreateFileA(
             SetLastError(opened.error());
             return INVALID_HANDLE_VALUE;
         }
-        PLOG_INFO
-            << "RFID COM2 trace api=CreateFileA result=success handle=0x"
-            << std::hex
-            << reinterpret_cast<std::uintptr_t>(*opened)
-            << std::dec
-            << " access=0x" << std::hex << desired_access
-            << " share=0x" << share_mode
-            << " disposition=0x" << creation_disposition
-            << " flags=0x" << flags_and_attributes << std::dec;
         return *opened;
     }
 
@@ -178,15 +168,6 @@ HANDLE Kernel32Hooks::CreateFileW(
             SetLastError(opened.error());
             return INVALID_HANDLE_VALUE;
         }
-        PLOG_INFO
-            << "RFID COM2 trace api=CreateFileW result=success handle=0x"
-            << std::hex
-            << reinterpret_cast<std::uintptr_t>(*opened)
-            << std::dec
-            << " access=0x" << std::hex << desired_access
-            << " share=0x" << share_mode
-            << " disposition=0x" << creation_disposition
-            << " flags=0x" << flags_and_attributes << std::dec;
         return *opened;
     }
 
@@ -242,12 +223,6 @@ BOOL Kernel32Hooks::WriteFile(
         return Fail(ERROR_ARITHMETIC_OVERFLOW);
     }
     *bytes_written = static_cast<DWORD>(*result);
-    PLOG_INFO
-        << "RFID COM2 trace api=WriteFile result=success requested="
-        << bytes_to_write
-        << " written=" << *bytes_written
-        << " pending=" << rfid_.port().PendingByteCount()
-        << " bytes=" << gc::rfid::trace::FormatBytes(bytes);
     return TRUE;
 }
 
@@ -296,14 +271,6 @@ BOOL Kernel32Hooks::ReadFile(
         return Fail(ERROR_ARITHMETIC_OVERFLOW);
     }
     *bytes_read = static_cast<DWORD>(*result);
-    PLOG_INFO
-        << "RFID COM2 trace api=ReadFile result=success requested="
-        << bytes_to_read
-        << " read=" << *bytes_read
-        << " pending=" << rfid_.port().PendingByteCount()
-        << " bytes="
-        << gc::rfid::trace::FormatBytes(
-               std::span<const std::byte>{destination.data(), *result});
     return TRUE;
 }
 
@@ -313,7 +280,6 @@ BOOL Kernel32Hooks::CloseHandle(HANDLE object) noexcept
         return originals_.close_handle(object);
     }
     rfid_.CloseCom2();
-    PLOG_INFO << "RFID COM2 trace api=CloseHandle result=success";
     return TRUE;
 }
 
@@ -331,9 +297,6 @@ BOOL Kernel32Hooks::GetCommModemStatus(
         return Fail(ERROR_INVALID_PARAMETER);
     }
     *modem_status = rfid_.port().ModemStatus();
-    PLOG_INFO
-        << "RFID COM2 trace api=GetCommModemStatus result=success status=0x"
-        << std::hex << *modem_status << std::dec;
     return TRUE;
 }
 
@@ -352,9 +315,6 @@ BOOL Kernel32Hooks::EscapeCommFunction(
             << " error=" << result.error();
         return Fail(result.error());
     }
-    PLOG_INFO
-        << "RFID COM2 trace api=EscapeCommFunction result=success"
-        << " function=" << function;
     return TRUE;
 }
 
@@ -372,13 +332,6 @@ BOOL Kernel32Hooks::ClearCommError(
     if (status != nullptr) {
         *status = rfid_.port().CommStatus();
     }
-    PLOG_INFO
-        << "RFID COM2 trace api=ClearCommError result=success"
-        << " errors_ptr=" << errors
-        << " errors=" << (errors == nullptr ? 0 : *errors)
-        << " status_ptr=" << status
-        << " cbInQue=" << (status == nullptr ? 0 : status->cbInQue)
-        << " cbOutQue=" << (status == nullptr ? 0 : status->cbOutQue);
     return TRUE;
 }
 
@@ -395,9 +348,6 @@ BOOL Kernel32Hooks::SetCommMask(HANDLE file, DWORD event_mask) noexcept
             << " error=" << result.error();
         return Fail(result.error());
     }
-    PLOG_INFO
-        << "RFID COM2 trace api=SetCommMask result=success mask=0x"
-        << std::hex << event_mask << std::dec;
     return TRUE;
 }
 
@@ -418,10 +368,6 @@ BOOL Kernel32Hooks::SetupComm(
             << " error=" << result.error();
         return Fail(result.error());
     }
-    PLOG_INFO
-        << "RFID COM2 trace api=SetupComm result=success"
-        << " input_queue=" << input_queue
-        << " output_queue=" << output_queue;
     return TRUE;
 }
 
@@ -437,22 +383,6 @@ BOOL Kernel32Hooks::GetCommState(HANDLE file, LPDCB dcb) noexcept
         return Fail(ERROR_INVALID_PARAMETER);
     }
     *dcb = rfid_.port().GetCommState();
-    PLOG_INFO
-        << "RFID COM2 trace api=GetCommState result=success"
-        << " length=" << dcb->DCBlength
-        << " baud=" << dcb->BaudRate
-        << " binary=" << dcb->fBinary
-        << " parity_check=" << dcb->fParity
-        << " outx_cts=" << dcb->fOutxCtsFlow
-        << " outx_dsr=" << dcb->fOutxDsrFlow
-        << " dtr_control=" << dcb->fDtrControl
-        << " dsr_sensitivity=" << dcb->fDsrSensitivity
-        << " out_x=" << dcb->fOutX
-        << " in_x=" << dcb->fInX
-        << " rts_control=" << dcb->fRtsControl
-        << " byte_size=" << static_cast<unsigned int>(dcb->ByteSize)
-        << " parity=" << static_cast<unsigned int>(dcb->Parity)
-        << " stop_bits=" << static_cast<unsigned int>(dcb->StopBits);
     return TRUE;
 }
 
@@ -488,22 +418,6 @@ BOOL Kernel32Hooks::SetCommState(HANDLE file, LPDCB dcb) noexcept
             << " stop_bits=" << static_cast<unsigned int>(dcb->StopBits);
         return Fail(result.error());
     }
-    PLOG_INFO
-        << "RFID COM2 trace api=SetCommState result=success"
-        << " length=" << dcb->DCBlength
-        << " baud=" << dcb->BaudRate
-        << " binary=" << dcb->fBinary
-        << " parity_check=" << dcb->fParity
-        << " outx_cts=" << dcb->fOutxCtsFlow
-        << " outx_dsr=" << dcb->fOutxDsrFlow
-        << " dtr_control=" << dcb->fDtrControl
-        << " dsr_sensitivity=" << dcb->fDsrSensitivity
-        << " out_x=" << dcb->fOutX
-        << " in_x=" << dcb->fInX
-        << " rts_control=" << dcb->fRtsControl
-        << " byte_size=" << static_cast<unsigned int>(dcb->ByteSize)
-        << " parity=" << static_cast<unsigned int>(dcb->Parity)
-        << " stop_bits=" << static_cast<unsigned int>(dcb->StopBits);
     return TRUE;
 }
 
@@ -527,13 +441,6 @@ BOOL Kernel32Hooks::SetCommTimeouts(
             << result.error();
         return Fail(result.error());
     }
-    PLOG_INFO
-        << "RFID COM2 trace api=SetCommTimeouts result=success"
-        << " read_interval=" << timeouts->ReadIntervalTimeout
-        << " read_multiplier=" << timeouts->ReadTotalTimeoutMultiplier
-        << " read_constant=" << timeouts->ReadTotalTimeoutConstant
-        << " write_multiplier=" << timeouts->WriteTotalTimeoutMultiplier
-        << " write_constant=" << timeouts->WriteTotalTimeoutConstant;
     return TRUE;
 }
 
@@ -551,13 +458,6 @@ BOOL Kernel32Hooks::GetCommTimeouts(
         return Fail(ERROR_INVALID_PARAMETER);
     }
     *timeouts = rfid_.port().GetCommTimeouts();
-    PLOG_INFO
-        << "RFID COM2 trace api=GetCommTimeouts result=success"
-        << " read_interval=" << timeouts->ReadIntervalTimeout
-        << " read_multiplier=" << timeouts->ReadTotalTimeoutMultiplier
-        << " read_constant=" << timeouts->ReadTotalTimeoutConstant
-        << " write_multiplier=" << timeouts->WriteTotalTimeoutMultiplier
-        << " write_constant=" << timeouts->WriteTotalTimeoutConstant;
     return TRUE;
 }
 

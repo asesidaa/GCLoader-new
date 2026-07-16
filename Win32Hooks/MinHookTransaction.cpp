@@ -46,7 +46,6 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
     std::span<const HookRequest> requests) noexcept
 {
     if (committed_) {
-        PLOG_INFO << "RFID hooks: transaction already committed";
         return {};
     }
     if (requests.size() > kMaxOwnedKernel32Hooks) {
@@ -60,11 +59,8 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
     }
     if (requests.empty()) {
         committed_ = true;
-        PLOG_INFO << "RFID hooks: transaction committed count=0";
         return {};
     }
-
-    PLOG_INFO << "RFID hooks: transaction begin count=" << requests.size();
 
     std::array<ResolvedHook, kMaxOwnedKernel32Hooks> resolved{};
     std::size_t resolved_count = 0;
@@ -101,9 +97,6 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             .request = &request,
             .target = reinterpret_cast<LPVOID>(procedure),
         };
-        PLOG_INFO
-            << "RFID hooks: resolved export=" << request.export_name
-            << " target=" << reinterpret_cast<LPVOID>(procedure);
     }
 
     const auto initialize_status = minhook_.initialize();
@@ -117,10 +110,6 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             .minhook_status = initialize_status,
         });
     }
-    PLOG_INFO
-        << "RFID hooks: MinHook initialization status="
-        << static_cast<int>(initialize_status);
-
     for (std::size_t index = 0; index < resolved_count; ++index) {
         const auto& hook = resolved[index];
         const auto status = minhook_.create(
@@ -141,10 +130,6 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             return std::unexpected(error);
         }
         created_[created_count_++] = hook.target;
-        PLOG_INFO
-            << "RFID hooks: created export="
-            << hook.request->export_name
-            << " target=" << hook.target;
     }
 
     for (std::size_t index = 0; index < resolved_count; ++index) {
@@ -166,15 +151,9 @@ std::expected<void, HookInstallError> MinHookTransaction::Install(
             return std::unexpected(error);
         }
         enabled_[enabled_count_++] = hook.target;
-        PLOG_INFO
-            << "RFID hooks: enabled export="
-            << hook.request->export_name
-            << " target=" << hook.target;
     }
 
     committed_ = true;
-    PLOG_INFO
-        << "RFID hooks: transaction committed count=" << resolved_count;
     return {};
 }
 

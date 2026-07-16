@@ -97,10 +97,6 @@ std::expected<void, FeatureError> InitializeFeature() noexcept
     state->kernel32.Activate();
     const auto requests =
         state->kernel32.BuildRequests(storage_enabled);
-    PLOG_INFO
-        << "RFID hooks: requested COM hooks=14 storage hooks="
-        << (storage_enabled ? 10 : 0)
-        << " total=" << requests.requests().size();
     const auto installed = state->transaction.Install(requests.requests());
     if (!installed) {
         const auto& error = installed.error();

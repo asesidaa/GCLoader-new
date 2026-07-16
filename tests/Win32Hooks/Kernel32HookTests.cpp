@@ -1313,7 +1313,7 @@ int test_diagnostic_formatting()
     return failures;
 }
 
-int test_diagnostic_logging()
+int test_successful_operations_are_not_traced()
 {
     using gc::win32_hooks::Kernel32Hooks;
 
@@ -1334,13 +1334,7 @@ int test_diagnostic_logging()
         FakeResolver(), FakeMinHook()};
     failures += expect(
         transaction.Install(requests).has_value(),
-        "diagnostic hook transaction installs");
-    failures += expect(
-        g_capture_appender.Contains(
-            "RFID hooks: enabled export=TraceApi") &&
-            g_capture_appender.Contains(
-                "RFID hooks: transaction committed count=1"),
-        "hook transaction logs the enabled export and commit count");
+        "quiet hook transaction installs");
 
     WorkerFake worker;
     gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
@@ -1350,10 +1344,24 @@ int test_diagnostic_logging()
         "COM2", GENERIC_READ | GENERIC_WRITE, 0, nullptr,
         OPEN_EXISTING, 0, nullptr);
     failures += expect(
-        handle == gc::rfid::EmulatedComHandle() &&
-            g_capture_appender.Contains(
-                "RFID COM2 trace api=CreateFileA result=success"),
-        "COM2 open is present in diagnostic log");
+        handle == gc::rfid::EmulatedComHandle(),
+        "quiet COM2 open succeeds");
+
+    DCB dcb{};
+    COMMTIMEOUTS timeouts{};
+    DWORD modem_status{};
+    DWORD errors{};
+    COMSTAT status{};
+    failures += expect(
+        hooks.SetupComm(handle, 0x204, 0x204) &&
+            hooks.SetCommMask(handle, 1) &&
+            hooks.GetCommState(handle, &dcb) &&
+            hooks.SetCommState(handle, &dcb) &&
+            hooks.GetCommTimeouts(handle, &timeouts) &&
+            hooks.SetCommTimeouts(handle, &timeouts) &&
+            hooks.GetCommModemStatus(handle, &modem_status) &&
+            hooks.EscapeCommFunction(handle, SETDTR),
+        "quiet COM2 setup succeeds");
 
     const auto request = encode(gc::rfid::jvs::Address{0xFF}, {0xF1, 0x01});
     DWORD written{};
@@ -1362,12 +1370,33 @@ int test_diagnostic_logging()
             handle, request.bytes().data(),
             static_cast<DWORD>(request.bytes().size()),
             &written, nullptr),
-        "diagnostic request write succeeds");
+        "quiet request write succeeds");
+
     failures += expect(
-        g_capture_appender.Contains("RFID COM2 trace api=WriteFile") &&
-            g_capture_appender.Contains("RFID JVS decoded address=0xff") &&
-            g_capture_appender.Contains("RFID JVS queued reply bytes="),
-        "COM and JVS boundaries are present in diagnostic log");
+        hooks.ClearCommError(handle, &errors, &status),
+        "quiet queue query succeeds");
+    std::array<std::byte, 64> reply{};
+    DWORD read{};
+    failures += expect(
+        hooks.ReadFile(
+            handle, reply.data(), static_cast<DWORD>(reply.size()),
+            &read, nullptr) &&
+            read != 0 && hooks.CloseHandle(handle),
+        "quiet reply read and close succeed");
+
+    failures += expect(
+        !g_capture_appender.Contains("RFID hooks: transaction") &&
+            !g_capture_appender.Contains("RFID hooks: resolved export=") &&
+            !g_capture_appender.Contains("RFID hooks: created export=") &&
+            !g_capture_appender.Contains("RFID hooks: enabled export=") &&
+            !g_capture_appender.Contains(
+                "RFID hooks: MinHook initialization") &&
+            !g_capture_appender.Contains("RFID COM2 trace api=") &&
+            !g_capture_appender.Contains("RFID JVS decoded") &&
+            !g_capture_appender.Contains("RFID JVS no reply") &&
+            !g_capture_appender.Contains("RFID JVS retransmit queued") &&
+            !g_capture_appender.Contains("RFID JVS queued reply"),
+        "successful hook, COM, and JVS operations are not traced");
     return failures;
 }
 
@@ -1387,6 +1416,6 @@ int main()
         test_emulated_com_contract() +
         test_non_emulated_forwarding() +
         test_diagnostic_formatting() +
-        test_diagnostic_logging();
+        test_successful_operations_are_not_traced();
     return failures == 0 ? 0 : 1;
 }
