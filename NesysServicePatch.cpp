@@ -10,7 +10,9 @@
 #include <Windows.h>
 
 #include <atomic>
+#include <cstdint>
 #include <iomanip>
+#include <intrin.h>
 #include <memory>
 #include <vector>
 
@@ -29,6 +31,40 @@ enum class InitializationState {
 std::atomic<InitializationState> g_initialization{
     InitializationState::Uninitialized};
 std::unique_ptr<OwnedMinHookTransaction> g_owned_hooks;
+decltype(&ExitProcess) g_original_exit_process = nullptr;
+
+__declspec(noreturn) void WINAPI service_exit_process_detour(
+    UINT exit_code) {
+    const auto caller = reinterpret_cast<std::uintptr_t>(
+        _ReturnAddress());
+    const auto image_base = reinterpret_cast<std::uintptr_t>(
+        GetModuleHandleW(nullptr));
+    const auto caller_rva = image_base != 0 && caller >= image_base
+        ? caller - image_base
+        : caller;
+
+    try {
+        PLOG_INFO
+            << "NesysServicePatch: service ExitProcess"
+            << " exit_code=0x" << std::hex << exit_code
+            << " caller_rva=0x" << caller_rva
+            << std::dec;
+    } catch (...) {
+    }
+
+    g_original_exit_process(exit_code);
+    __assume(0);
+}
+
+void append_service_exit_diagnostic_hook_request(
+    std::vector<ApiHookRequest>& requests) {
+    requests.push_back({
+        L"kernel32.dll",
+        "ExitProcess",
+        reinterpret_cast<LPVOID>(&service_exit_process_detour),
+        reinterpret_cast<LPVOID*>(&g_original_exit_process),
+    });
+}
 
 const char* stage_name(HookInstallStage stage) noexcept {
     switch (stage) {
@@ -109,6 +145,9 @@ bool initialize_feature_plan(
     }
     if (plan.registry_config_override) {
         AppendRegistryOverrideHookRequests(requests);
+    }
+    if (role == ProcessRole::Service) {
+        append_service_exit_diagnostic_hook_request(requests);
     }
     if (plan.service_launcher) {
         AppendNesysServiceLauncherHookRequest(requests);
@@ -194,6 +233,11 @@ bool initialize_feature_plan(
             PLOG_INFO
                 << "NesysServicePatch: component active"
                 << " name=service_ping_redirect";
+        }
+        if (role == ProcessRole::Service) {
+            PLOG_INFO
+                << "NesysServicePatch: component active"
+                << " name=service_exit_diagnostics";
         }
         PLOG_INFO
             << "NesysServicePatch: all role hooks active"

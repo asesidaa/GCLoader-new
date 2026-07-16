@@ -203,8 +203,10 @@ NesysFeaturePlan ResolveNesysFeaturePlan(
         plan.api_hook_count += 3;
     }
 
-    if (role == ProcessRole::Game && plan.enabled) {
-        plan.service_launcher = true;
+    if (plan.enabled) {
+        if (role == ProcessRole::Game) {
+            plan.service_launcher = true;
+        }
         ++plan.api_hook_count;
     }
 

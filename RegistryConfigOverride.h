@@ -38,6 +38,7 @@ struct RegistryOverrideValues {
     DWORD game_kind{0};
     DWORD event_next_time{0};
     DWORD condition_time{0};
+    DWORD traffic_count{0};
     DWORD log_level{0};
     std::string news_path;
     std::string event_path;
@@ -77,7 +78,10 @@ public:
 
 private:
     bool IsTracked(HKEY key) const noexcept;
+    bool IsSynthetic(HKEY key) const noexcept;
+    HKEY SyntheticHandle() const noexcept;
     void LogFirstTrackedOpen() noexcept;
+    void LogFirstSyntheticOpen(LSTATUS physical_status) noexcept;
     void LogFirstOverride(
         std::size_t index,
         const char* value_name,
@@ -87,8 +91,10 @@ private:
     const RegistryOverrideValues values_;
     mutable std::mutex tracked_mutex_;
     std::unordered_set<HKEY> tracked_handles_;
+    std::size_t synthetic_open_count_{0};
     std::atomic_bool tracked_open_logged_{false};
-    std::array<std::atomic_bool, 8> override_logged_{};
+    std::atomic_bool synthetic_open_logged_{false};
+    std::array<std::atomic_bool, 9> override_logged_{};
 };
 
 bool InitializeRegistryConfigOverride(

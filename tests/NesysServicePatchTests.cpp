@@ -307,17 +307,17 @@ int main() {
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, false, true),
         NesysFeaturePlan{
-            true, false, true, false, false, true, false, false, 3},
+            true, false, true, false, false, true, false, false, 4},
         "service registry-only");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, true, false),
         NesysFeaturePlan{
-            true, true, false, true, true, false, false, true, 10},
+            true, true, false, true, true, false, false, true, 11},
         "service network-only");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, true, true),
         NesysFeaturePlan{
-            true, true, true, true, true, true, false, true, 13},
+            true, true, true, true, true, true, false, true, 14},
         "service combined");
 
     return failures == 0 ? 0 : 1;

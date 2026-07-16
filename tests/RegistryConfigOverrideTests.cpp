@@ -496,10 +496,11 @@ int main() {
         const char* name;
         DWORD value;
     };
-    constexpr std::array<DwordCase, 4> dword_cases{{
+    constexpr std::array<DwordCase, 5> dword_cases{{
         {"GameKind", 303802},
         {"EventNextTime", 0},
         {"ConditionTime", 1},
+        {"TrafficCount", 0},
         {"LogLevel", 2},
     }};
     for (const auto& test : dword_cases) {
@@ -529,35 +530,8 @@ int main() {
             test.value);
     }
 
-    DWORD pass_reserved = 0;
-    DWORD pass_type = 0;
-    DWORD pass_size = 1;
-    BYTE pass_data = 0;
-    state.query_status = ERROR_ACCESS_DENIED;
-    failures += expect_status(
-        service.Query(
-            fake_query,
-            service_handle,
-            "TrafficCount",
-            &pass_reserved,
-            &pass_type,
-            &pass_data,
-            &pass_size),
-        ERROR_ACCESS_DENIED,
-        "TrafficCount original failure preserved");
-    failures += expect(
-        state.last_query_handle == service_handle &&
-            state.last_value_name == "TrafficCount" &&
-            state.last_reserved == &pass_reserved &&
-            state.last_type == &pass_type &&
-            state.last_data == &pass_data &&
-            state.last_data_size == &pass_size,
-        "pass-through query arguments unchanged");
-    state.query_status = ERROR_FILE_NOT_FOUND;
-
     const int before_pass_through = state.query_calls;
-    constexpr std::array<const char*, 4> service_pass_through{
-        "TrafficCount",
+    constexpr std::array<const char*, 3> service_pass_through{
         "CoinCredit",
         "NetworkAddress",
         "Country",
@@ -693,6 +667,38 @@ int main() {
     failures += expect(
         state.query_calls == before_failed_handle + 1,
         "failed-open handle passes through");
+
+    state.open_status = ERROR_FILE_NOT_FOUND;
+    HKEY synthetic_service_handle = nullptr;
+    const int before_synthetic_open = state.open_calls;
+    failures += expect_status(
+        service.Open(
+            fake_open,
+            HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\taito\\typex",
+            0,
+            KEY_READ,
+            &synthetic_service_handle),
+        ERROR_SUCCESS,
+        "missing physical service key uses synthetic handle");
+    failures += expect(
+        state.open_calls == before_synthetic_open + 1 &&
+            synthetic_service_handle != nullptr,
+        "synthetic service open preserves original-first probe");
+    failures += expect_dword_override(
+        service,
+        state,
+        synthetic_service_handle,
+        "TrafficCount",
+        0);
+    const int before_synthetic_close = state.close_calls;
+    failures += expect_status(
+        service.Close(fake_close, synthetic_service_handle),
+        ERROR_SUCCESS,
+        "synthetic service handle close");
+    failures += expect(
+        state.close_calls == before_synthetic_close,
+        "synthetic service close does not reach native registry");
 
     const auto second_handle = reinterpret_cast<HKEY>(0x1002);
     track(

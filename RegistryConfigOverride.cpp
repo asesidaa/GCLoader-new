@@ -20,6 +20,7 @@ constexpr std::array<const char*, 3> kRegistryExports{
     "RegQueryValueExA",
     "RegCloseKey",
 };
+constexpr DWORD kServiceTrafficCount = 0;
 
 enum class OwnedValueIndex : std::size_t {
     Country = 0,
@@ -30,6 +31,7 @@ enum class OwnedValueIndex : std::size_t {
     NewsPath = 5,
     EventPath = 6,
     LogPath = 7,
+    TrafficCount = 8,
 };
 
 struct RegistryValueView {
@@ -99,6 +101,12 @@ std::optional<RegistryValueView> find_owned_value(
             "ConditionTime",
             values.condition_time,
             OwnedValueIndex::ConditionTime);
+    }
+    if (EqualsIgnoreCaseAscii(value_name, "TrafficCount")) {
+        return dword_view(
+            "TrafficCount",
+            values.traffic_count,
+            OwnedValueIndex::TrafficCount);
     }
     if (EqualsIgnoreCaseAscii(value_name, "LogLevel")) {
         return dword_view(
@@ -233,6 +241,7 @@ std::optional<RegistryOverrideValues> CreateRegistryOverrideValues(
         static_cast<DWORD>(nesys.game_kind()),
         static_cast<DWORD>(nesys.event_next_time()),
         static_cast<DWORD>(nesys.condition_time()),
+        kServiceTrafficCount,
         static_cast<DWORD>(nesys.log_level()),
         nesys.news_path(),
         nesys.event_path(),
@@ -255,6 +264,19 @@ void RegistryConfigOverride::LogFirstTrackedOpen() noexcept {
         PLOG_INFO
             << "RegistryConfigOverride: first tracked Type X open"
             << " role=" << ProcessRoleName(role_);
+    } catch (...) {
+    }
+}
+
+void RegistryConfigOverride::LogFirstSyntheticOpen(
+    LSTATUS physical_status) noexcept {
+    if (synthetic_open_logged_.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+    try {
+        PLOG_INFO
+            << "RegistryConfigOverride: synthetic service Type X key"
+            << " physical_status=" << physical_status;
     } catch (...) {
     }
 }
@@ -288,10 +310,26 @@ LSTATUS RegistryConfigOverride::Open(
     }
     const LSTATUS status =
         original(root, subkey, options, access, result);
-    if (status != ERROR_SUCCESS ||
+    const bool type_x_open = is_type_x_open(root, subkey);
+    if (status != ERROR_SUCCESS) {
+        if (role_ != ProcessRole::Service ||
+            !type_x_open ||
+            result == nullptr) {
+            return status;
+        }
+        {
+            std::scoped_lock lock(tracked_mutex_);
+            ++synthetic_open_count_;
+            *result = SyntheticHandle();
+        }
+        LogFirstSyntheticOpen(status);
+        LogFirstTrackedOpen();
+        return ERROR_SUCCESS;
+    }
+    if (
         result == nullptr ||
         *result == nullptr ||
-        !is_type_x_open(root, subkey)) {
+        !type_x_open) {
         return status;
     }
     {
@@ -307,6 +345,16 @@ bool RegistryConfigOverride::IsTracked(HKEY key) const noexcept {
     return tracked_handles_.contains(key);
 }
 
+bool RegistryConfigOverride::IsSynthetic(HKEY key) const noexcept {
+    std::scoped_lock lock(tracked_mutex_);
+    return key == SyntheticHandle() && synthetic_open_count_ != 0;
+}
+
+HKEY RegistryConfigOverride::SyntheticHandle() const noexcept {
+    return reinterpret_cast<HKEY>(
+        const_cast<RegistryConfigOverride*>(this));
+}
+
 LSTATUS RegistryConfigOverride::Query(
     RegQueryValueExAFn original,
     HKEY key,
@@ -318,7 +366,8 @@ LSTATUS RegistryConfigOverride::Query(
     if (original == nullptr) {
         return ERROR_INVALID_FUNCTION;
     }
-    if (!IsTracked(key)) {
+    const bool synthetic = IsSynthetic(key);
+    if (!synthetic && !IsTracked(key)) {
         return original(
             key,
             value_name,
@@ -329,6 +378,9 @@ LSTATUS RegistryConfigOverride::Query(
     }
     const auto owned = find_owned_value(role_, values_, value_name);
     if (!owned.has_value()) {
+        if (synthetic) {
+            return ERROR_FILE_NOT_FOUND;
+        }
         return original(
             key,
             value_name,
@@ -359,6 +411,10 @@ LSTATUS RegistryConfigOverride::Close(
         return ERROR_INVALID_FUNCTION;
     }
     std::scoped_lock lock(tracked_mutex_);
+    if (key == SyntheticHandle() && synthetic_open_count_ != 0) {
+        --synthetic_open_count_;
+        return ERROR_SUCCESS;
+    }
     const LSTATUS status = original(key);
     if (status == ERROR_SUCCESS) {
         tracked_handles_.erase(key);
