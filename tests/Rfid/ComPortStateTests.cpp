@@ -206,12 +206,48 @@ int test_host_board_address_dispatch()
         "host-board Taito request write count");
 
     constexpr std::array expected{
-        std::byte{0xE0}, std::byte{0x00}, std::byte{0x04},
-        std::byte{0x01}, std::byte{0x01}, std::byte{0x01},
-        std::byte{0x07}};
+        std::byte{0xE0}, // SYNC
+        std::byte{0x00}, // destination: master
+        std::byte{0x04}, // status + report + data + SUM
+        std::byte{0x01}, // packet status: normal
+        std::byte{0x01}, // command report: normal
+        std::byte{0x01}, // Taito command 0x01 response data
+        std::byte{0x07}}; // SUM
     failures += expect(
         std::ranges::equal(drain(port), expected),
-        "host-board Taito request preserves legacy reply bytes");
+        "host-board Taito request preserves original reply frame");
+    return failures;
+}
+
+int test_combined_rfid_poll_preserves_original_reply()
+{
+    using namespace gc::rfid::jvs;
+
+    int failures = 0;
+    ComPortState port;
+    failures += assign_and_drain(port);
+
+    const auto request = encode_request(
+        Address{0x01}, {0x26, 0x01, 0x61, 0x32, 0x01, 0x00});
+    const auto write = port.Write(request.bytes(), false);
+    failures += expect(
+        write && *write == request.size,
+        "combined RFID poll write count");
+
+    std::array<std::byte, 33> expected{};
+    expected[0] = std::byte{0xE0};  // SYNC
+    expected[1] = std::byte{0x00};  // destination: master
+    expected[2] = std::byte{0x1E};  // bytes through SUM
+    expected[3] = std::byte{0x01};  // packet status: normal
+    expected[4] = std::byte{0x01};  // command 0x26 report: normal
+    expected[5] = std::byte{0x00};  // misc. input: card absent
+    expected[6] = std::byte{0x01};  // command 0x32 report: normal
+    // expected[7..30] is the empty 24-byte RFID card payload.
+    expected[31] = std::byte{0x01}; // RFID transfer terminal value
+    expected[32] = std::byte{0x22}; // SUM
+    failures += expect(
+        std::ranges::equal(drain(port), expected),
+        "combined RFID poll preserves original reply bytes");
     return failures;
 }
 
@@ -445,6 +481,7 @@ int main()
         test_serial_configuration() +
         test_fragmented_requests() +
         test_host_board_address_dispatch() +
+        test_combined_rfid_poll_preserves_original_reply() +
         test_pending_reply_and_reads() +
         test_pipeline_rejection() +
         test_retransmission_and_checksum() +

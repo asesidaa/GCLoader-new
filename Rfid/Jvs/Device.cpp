@@ -19,7 +19,7 @@ constexpr std::uint16_t kMaximumCoinCount = 0x3FFF;
 constexpr std::string_view kRfidId =
     "TAITO CORP.;RFID CTRL P.C.B.;Ver1.00;";
 
-constexpr std::array<std::uint8_t, 10> kLegacyFeatureBytes{
+constexpr std::array<std::uint8_t, 10> kRfidFeatureData{
     0x01, 0x07, 0x00, 0x08, 0x00,
     0x12, 0x08, 0x00, 0x00, 0x00};
 
@@ -244,7 +244,7 @@ std::optional<DeviceResponse> Device::HandlePacket(
 
         case command::capabilities.value:
             if (!append_report(report::ok) ||
-                !AppendOrOverflow(writer, kLegacyFeatureBytes)) {
+                !AppendOrOverflow(writer, kRfidFeatureData)) {
                 return DeviceResponse{acknowledgement};
             }
             break;
@@ -314,6 +314,15 @@ std::optional<DeviceResponse> Device::HandlePacket(
             if (!parameters) {
                 return invalid_input();
             }
+
+            // This RFID controller extends command 0x26 with one request-side
+            // selector byte per requested input byte. The original handler
+            // advanced by 2 + byte_count. Clamp that extension to the packet
+            // boundary so the observed behavior is retained without an
+            // out-of-bounds cursor advance.
+            const auto selector_count = std::min<std::size_t>(
+                (*parameters)[0], cursor.remaining.size());
+            static_cast<void>(cursor.Take(selector_count));
 
             if (!append_report(report::ok)) {
                 return DeviceResponse{acknowledgement};
