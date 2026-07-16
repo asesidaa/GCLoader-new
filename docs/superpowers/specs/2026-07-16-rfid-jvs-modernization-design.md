@@ -35,6 +35,15 @@ The relevant sections are:
 
 The standard is authoritative for JVS framing and standard command semantics.
 
+### Informative English JVS reference
+
+The repository also includes an English draft for readable field-level descriptions:
+
+- [JAMMA Video Standard English Draft (`jvs_wip.pdf`)](../../references/jvs_wip.pdf)
+- SHA-256: `76BF75A66ADD2A86EC889E4AD28906D9C97BC36EF76D9EC1A31309173BD41139`
+
+Useful printed pages are page 7 for framing and request/acknowledge fields, page 11 for packet status and command report codes, page 18 for miscellaneous-switch input `0x26`, page 19 for generic output `0x32`, and pages 21-22 for Taito Type X commands. The official Third Edition remains normative. Game traffic and the original implementation remain authoritative for the RFID controller's board-specific extensions.
+
 ### Game binary evidence
 
 The analyzed database is `H:\gc\game471.exe.i64`. Read-only daemon-backed IDA analysis established:
@@ -252,6 +261,7 @@ The encoder returns `std::expected<EncodedFrame, EncodeError>`. Encoding fails i
 - The assigned address is retained as emulated bus state and is never a packet-admission filter.
 - Address `0xFF` remains classified as broadcast. Broadcast-only requirements are enforced by the individual commands whose semantics require them, including reset and address assignment, rather than by global routing.
 - A checksum failure at any address returns packet status `0x03`.
+- The RFID controller's observed `0x26` request includes one selector byte per requested input byte. Dispatch consumes those selector bytes before locating the next concatenated command, clamped to the remaining packet so the original behavior cannot advance out of bounds.
 - An unsupported command returns packet status `0x02`.
 - Commands following an unsupported command in the same packet are discarded.
 - Reports for commands successfully executed before the unsupported command are retained.

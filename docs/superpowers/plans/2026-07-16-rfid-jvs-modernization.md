@@ -12,10 +12,13 @@
 
 **Normative Reference:** [JAMMA VIDEO Standard, Third Edition](../../references/JVST_VER3.pdf), SHA-256 `E1D4128B21A896C7C299AE5DBC1009B51E11D2E2AEDCC46AA5DD090EA7AB7A88`.
 
+**Informative English Reference:** [JAMMA Video Standard English Draft](../../references/jvs_wip.pdf), SHA-256 `76BF75A66ADD2A86EC889E4AD28906D9C97BC36EF76D9EC1A31309173BD41139`.
+
 ## Global Constraints
 
 - Treat `H:\gc\artifacts\GCLoader` as the source and commit tree. Treat `H:\gc` as runtime/deployment state.
 - Preserve all valid standard and Taito request/response behavior currently used by `game471.exe`. Apply safe standard-defined behavior to malformed or unsupported traffic.
+- Preserve the RFID controller's observed `26 count selector[count]` request extension. Consume at most the remaining packet bytes for the selectors before parsing the next concatenated command.
 - Preserve arbitrary `std::uint8_t` address, command, packet-status, and report values. Classification helpers must not reject custom values.
 - Model the complete host-board connection: dispatch every complete command packet and checksum failure regardless of destination address. Use `0xFF` classification only inside commands with broadcast-specific semantics.
 - Use any modern facility supported by the active x86 MSVC/STL when it strengthens an invariant; do not use unavailable `<scope>` facilities merely because they are associated with newer standards.
@@ -625,6 +628,7 @@ Build decoded packets with a checked local helper and assert the exact acknowled
 | `21 02` | `01 01 00 00 00 00` |
 | `26 03` with no card | `01 01 00 00 00` |
 | `26 03` with armed card | `01 01 19 19 19` without consuming the card |
+| `26 01 61 32 01 00` with no card | `01 01 00 01` + 24 zero bytes + `01`; `61` is consumed as the RFID selector byte before command `32` |
 | `31 01 00 05` then `21 02` | P1 coin count becomes five and is returned big-endian |
 | `30 01 00 02` then `21 02` | P1 coin count becomes three |
 | `30 01 00 09` | P1 coin count saturates at zero |
