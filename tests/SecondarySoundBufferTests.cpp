@@ -95,10 +95,14 @@ DSBUFFERDESC BufferDescription(
 
 class MixerEngineServices final : public IAudioEngineServices {
 public:
-    MixerEngineServices() {
+    explicit MixerEngineServices(
+        std::uint32_t output_sample_rate = kGamePrimarySampleRate,
+        std::uint32_t endpoint_frames = 4)
+        : output_sample_rate_(output_sample_rate),
+          endpoint_frames_(endpoint_frames) {
         ma_result result = MA_ERROR;
         mixer_ = MiniaudioMixer::Create(
-            4, kGamePrimarySampleRate, nullptr, &result);
+            endpoint_frames_, output_sample_rate_, nullptr, &result);
         initialized = result == MA_SUCCESS && mixer_ != nullptr;
     }
 
@@ -139,7 +143,11 @@ public:
     }
 
     std::uint32_t endpoint_buffer_frames() const noexcept override {
-        return 4;
+        return endpoint_frames_;
+    }
+
+    std::uint32_t output_sample_rate() const noexcept override {
+        return output_sample_rate_;
     }
 
     void CountPendingCursorQuery() noexcept override {
@@ -193,6 +201,8 @@ public:
     std::weak_ptr<AudioCursorTimeline> observed_timeline;
 
 private:
+    std::uint32_t output_sample_rate_{};
+    std::uint32_t endpoint_frames_{};
     std::unique_ptr<MiniaudioMixer> mixer_;
     std::mutex output_frame_read_mutex_;
     std::condition_variable output_frame_read_condition_;
@@ -638,6 +648,47 @@ int TestVolumePlaybackAndCursors() {
     return failures;
 }
 
+int Test48kEndpointWriteCursorProjection() {
+    constexpr std::uint32_t endpoint_rate = 48'000;
+    constexpr std::uint32_t endpoint_frames = 480;
+    constexpr std::uint32_t source_frames = 1'000;
+    MixerEngineServices engine(endpoint_rate, endpoint_frames);
+    auto wave = PcmFormat(kGamePrimarySampleRate, 2, 16);
+    const auto source_block_align = wave.nBlockAlign;
+    auto descriptor = BufferDescription(
+        &wave,
+        source_frames * source_block_align);
+    IDirectSoundBuffer8* buffer{};
+    int failures = Expect(
+        engine.initialized &&
+            CreateBuffer(engine, descriptor, &buffer) == DS_OK,
+        "48 kHz endpoint cursor buffer creation");
+    if (buffer == nullptr) {
+        return failures + 1;
+    }
+
+    const std::vector<std::int16_t> samples(source_frames * 2, 8'192);
+    failures += Expect(
+        FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, DSBPLAY_LOOPING) == DS_OK,
+        "48 kHz endpoint cursor buffer publication");
+    std::vector<float> output(endpoint_frames * 2);
+    failures += Expect(
+        engine.Render(0, output).result == MA_SUCCESS,
+        "48 kHz endpoint resolves a 44.1 kHz play span");
+    engine.output_frame = 0;
+    DWORD play_cursor{};
+    DWORD write_cursor{};
+    failures += Expect(
+        buffer->GetCurrentPosition(&play_cursor, &write_cursor) == DS_OK &&
+            write_cursor ==
+                ((play_cursor / source_block_align + 441) % source_frames) *
+                    source_block_align,
+        "48 kHz endpoint write cursor projects a 10 ms 44.1 kHz source lead");
+    buffer->Release();
+    return failures;
+}
+
 int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     MixerEngineServices engine;
     auto wave = PcmFormat();
@@ -1057,6 +1108,7 @@ int main() {
     failures += TestCapsAndFormats();
     failures += TestLockUnlockPublication();
     failures += TestVolumePlaybackAndCursors();
+    failures += Test48kEndpointWriteCursorProjection();
     failures += TestNonLoopingFinalSpanDrainsByEndpointClock();
     failures += TestResetBufferIgnoresStaleFinalDrainRecord();
     failures += TestSeekRestoreUnsupportedAndLifetime();

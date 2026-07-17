@@ -103,6 +103,10 @@ public:
         return 4;
     }
 
+    std::uint32_t output_sample_rate() const noexcept override {
+        return kGamePrimarySampleRate;
+    }
+
     void CountPendingCursorQuery() noexcept override {}
 
     void CountUnmappedCursorFailure() noexcept override {}

@@ -32,7 +32,9 @@ using gc::audio::AudioLockRegions;
 using gc::audio::AudioRuntimeCountersSnapshot;
 using gc::audio::AudioSnapshot;
 using gc::audio::AudioStartupFailure;
+using gc::audio::EndpointFormatKind;
 using gc::audio::EndpointInitialization;
+using gc::audio::EndpointPcmFormat;
 using gc::audio::ExclusiveAudioEngine;
 using gc::audio::IAudioEngineObserver;
 using gc::audio::IWasapiApi;
@@ -52,10 +54,12 @@ constexpr auto kPeriod = static_cast<REFERENCE_TIME>(1'814);
 constexpr HRESULT kWaitFailure = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
 
 constexpr std::uint64_t ClockPositionForOutputFrame(
-    std::uint64_t frame) noexcept {
+    std::uint64_t frame,
+    std::uint32_t output_sample_rate =
+        gc::audio::kGamePrimarySampleRate) noexcept {
     return kInitialClock +
-        (frame * kClockFrequency + gc::audio::kOutputSampleRate - 1) /
-            gc::audio::kOutputSampleRate;
+        (frame * kClockFrequency + output_sample_rate - 1) /
+            output_sample_rate;
 }
 
 int Expect(bool condition, std::string_view name) {
@@ -295,6 +299,12 @@ struct FakeWasapiState {
     AllocationProbe* allocations{};
     std::wstring endpoint_name{L"Fake Speakers"};
     std::wstring endpoint_id{L"fake-endpoint-id"};
+    std::uint32_t supported_output_rate{
+        gc::audio::kGamePrimarySampleRate};
+    EndpointFormatKind supported_format_kind{
+        EndpointFormatKind::LegacyPcm};
+    std::array<EndpointPcmFormat, 4> probed_formats{};
+    std::uint32_t format_probe_count{};
 
     void Record(ApiCall call) noexcept {
         const auto index = call_count.fetch_add(1, std::memory_order_relaxed);
@@ -396,9 +406,22 @@ public:
     }
 
     HRESULT IsExactFormatSupported(
-        const gc::audio::EndpointPcmFormat&) noexcept override {
+        const EndpointPcmFormat& format) noexcept override {
         state_->Record(ApiCall::IsExactFormatSupported);
-        return state_->MaybeFail(ApiCall::IsExactFormatSupported);
+        if (state_->format_probe_count < state_->probed_formats.size()) {
+            state_->probed_formats[state_->format_probe_count] = format;
+        }
+        ++state_->format_probe_count;
+        const auto injected = state_->MaybeFail(
+            ApiCall::IsExactFormatSupported);
+        if (injected != S_OK) {
+            return injected;
+        }
+        return format.wave_format().nSamplesPerSec ==
+                    state_->supported_output_rate &&
+                format.kind == state_->supported_format_kind
+            ? S_OK
+            : AUDCLNT_E_UNSUPPORTED_FORMAT;
     }
 
     HRESULT GetDevicePeriod(
@@ -422,7 +445,7 @@ public:
         state_->Record(ApiCall::GetBufferSize);
         *frames = static_cast<std::uint32_t>(
             gc::audio::ReferenceTimeToFramesCeil(
-                kPeriod, gc::audio::kOutputSampleRate));
+                kPeriod, gc::audio::kGamePrimarySampleRate));
         return state_->MaybeFail(ApiCall::GetBufferSize);
     }
 
@@ -719,7 +742,7 @@ WAVEFORMATEX Pcm16Mono() noexcept {
     WAVEFORMATEX format{};
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nChannels = 1;
-    format.nSamplesPerSec = gc::audio::kOutputSampleRate;
+    format.nSamplesPerSec = gc::audio::kGamePrimarySampleRate;
     format.wBitsPerSample = 16;
     format.nBlockAlign = 2;
     format.nAvgBytesPerSec =
@@ -1329,8 +1352,9 @@ int TestVoiceClockSummaryAndRenderSafety() {
         "voice produces nonzero PCM16");
 
     constexpr auto kFirstRenderedBlockClockTicks =
-        (kFrames * kClockFrequency + gc::audio::kOutputSampleRate - 1) /
-        gc::audio::kOutputSampleRate;
+        (kFrames * kClockFrequency +
+         gc::audio::kGamePrimarySampleRate - 1) /
+        gc::audio::kGamePrimarySampleRate;
     fixture.api->PushClock(
         kInitialClock + kFirstRenderedBlockClockTicks,
         late_qpc);
@@ -1403,7 +1427,8 @@ int TestVoiceClockSummaryAndRenderSafety() {
         late_qpc + 4 * kPeriod);
     const auto mapped = engine->CurrentOutputFrame();
     failures += Expect(
-        mapped.has_value() && *mapped == gc::audio::kOutputSampleRate,
+        mapped.has_value() &&
+            *mapped == gc::audio::kGamePrimarySampleRate,
         "CurrentOutputFrame maps IAudioClock through endpoint mapper");
 
     engine->CountPendingCursorQuery();
@@ -1447,6 +1472,92 @@ int TestVoiceClockSummaryAndRenderSafety() {
     engine.reset();
     voice.reset();
     failures += ExpectOwnerThreadCleanup(fixture, "voice runtime audio thread");
+    return failures;
+}
+
+int TestSelected48kEngineRate() {
+    int failures = 0;
+    EngineFixture fixture;
+    fixture.api->supported_output_rate =
+        gc::audio::kFallbackEndpointSampleRate;
+    fixture.api->supported_format_kind = EndpointFormatKind::LegacyPcm;
+    auto engine = fixture.Start();
+    failures += Expect(
+        engine != nullptr &&
+            engine->output_sample_rate() ==
+                gc::audio::kFallbackEndpointSampleRate &&
+            fixture.observer_state->startup.has_selected_format &&
+            fixture.observer_state->startup.selected_format.wave_format()
+                    .nSamplesPerSec ==
+                gc::audio::kFallbackEndpointSampleRate &&
+            fixture.api->format_probe_count == 3,
+        "engine publishes selected 48 kHz fallback");
+    if (engine == nullptr) {
+        return failures + 1;
+    }
+
+    auto source = MakeConstantSource(failures);
+    ma_result voice_result = MA_ERROR;
+    auto voice = engine->CreateVoice(
+        source.format,
+        source.snapshot,
+        source.timeline,
+        VoiceUsage::GameplayNativeCandidate,
+        &voice_result);
+    failures += Expect(
+        voice != nullptr && voice_result == MA_SUCCESS &&
+            voice->Play(true, 48) == DS_OK,
+        "44.1 kHz gameplay voice starts on selected 48 kHz engine");
+    if (voice == nullptr) {
+        engine.reset();
+        return failures + 1;
+    }
+
+    for (std::uint64_t packet = 1; packet <= 2; ++packet) {
+        fixture.api->PushClock(
+            ClockPositionForOutputFrame(
+                packet * kFrames,
+                gc::audio::kFallbackEndpointSampleRate),
+            kInitialClock + packet * kPeriod);
+        fixture.api->PushWait();
+        failures += Expect(
+            WaitUntil([&] {
+                return fixture.api->submission_count.load(
+                           std::memory_order_acquire) >= packet;
+            }),
+            "selected 48 kHz engine renders gameplay packet");
+    }
+    failures += Expect(
+        std::any_of(
+            fixture.api->submissions[1].begin(),
+            fixture.api->submissions[1].end(),
+            [](std::int16_t sample) { return sample != 0; }),
+        "selected 48 kHz engine resamples gameplay audio");
+
+    fixture.api->PushClock(
+        kInitialClock + kClockFrequency,
+        kInitialClock + kClockFrequency);
+    const auto mapped = engine->CurrentOutputFrame();
+    failures += Expect(
+        mapped.has_value() &&
+            *mapped == gc::audio::kFallbackEndpointSampleRate,
+        "engine clock mapper uses selected 48 kHz domain");
+
+    fixture.api->PushWait(E_ABORT);
+    failures += Expect(
+        WaitForFatal(fixture) &&
+            fixture.observer_state->fatal_counters.mixer
+                    .native_rate_buffers == 0 &&
+            fixture.observer_state->fatal_counters.mixer
+                    .sample_rate_converted_buffers == 1 &&
+            fixture.observer_state->fatal_counters.mixer
+                    .native_gameplay_buffers == 1,
+        "selected 48 kHz mixer classifies 44.1 kHz gameplay conversion");
+    voice->Stop();
+    engine.reset();
+    voice.reset();
+    failures += ExpectOwnerThreadCleanup(
+        fixture, "selected 48 kHz audio thread");
     return failures;
 }
 
@@ -1647,6 +1758,7 @@ int main() {
     failures += TestPreStartClockOriginAndRecoverableGapPacing();
     failures += TestChronicAndInvalidClockPacingFailures();
     failures += TestVoiceClockSummaryAndRenderSafety();
+    failures += TestSelected48kEngineRate();
     failures += TestConcurrentVoiceCreation();
     failures += TestExactRuntimeFailureStages();
     failures += TestExplicitTestShutdown();

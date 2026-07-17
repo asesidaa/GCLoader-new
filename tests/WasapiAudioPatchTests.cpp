@@ -374,6 +374,10 @@ public:
         return 0;
     }
 
+    std::uint32_t output_sample_rate() const noexcept override {
+        return gc::audio::kGamePrimarySampleRate;
+    }
+
     void CountPendingCursorQuery() noexcept override {}
 
     void CountUnmappedCursorFailure() noexcept override {}
@@ -712,6 +716,10 @@ int test_production_diagnostics_use_injected_platform_actions() {
     initialization.stream_latency_available = true;
     initialization.actual_buffer_frames = 147;
     initialization.alignment_retry = true;
+    initialization.selected_format = gc::audio::MakeEndpointPcm16Format(
+        gc::audio::kGamePrimarySampleRate,
+        gc::audio::EndpointFormatKind::LegacyPcm);
+    initialization.has_selected_format = true;
     gc::audio::detail::ReportAudioStartupSucceeded(
         initialization,
         actions);
@@ -849,6 +857,10 @@ int test_pacing_specific_diagnostics() {
     gc::audio::EndpointInitialization unavailable{};
     unavailable.endpoint_id = L"latency-unavailable";
     unavailable.stream_latency_result = E_NOTIMPL;
+    unavailable.selected_format = gc::audio::MakeEndpointPcm16Format(
+        gc::audio::kGamePrimarySampleRate,
+        gc::audio::EndpointFormatKind::LegacyPcm);
+    unavailable.has_selected_format = true;
     gc::audio::detail::ReportAudioStartupSucceeded(unavailable, actions);
     failures += expect(
         diagnostics.info.size() == 1 &&

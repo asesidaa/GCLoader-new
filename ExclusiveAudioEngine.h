@@ -88,6 +88,7 @@ public:
         ma_result*) noexcept override;
     std::optional<std::uint64_t> CurrentOutputFrame() noexcept override;
     std::uint32_t endpoint_buffer_frames() const noexcept override;
+    std::uint32_t output_sample_rate() const noexcept override;
     void CountPendingCursorQuery() noexcept override;
     void CountUnmappedCursorFailure() noexcept override;
 
@@ -151,6 +152,7 @@ private:
     std::atomic_uint32_t failure_stage_{};
     std::atomic_long failure_result_{S_OK};
     std::atomic_uint32_t endpoint_buffer_frames_{};
+    std::atomic_uint32_t output_sample_rate_{};
     std::atomic_uint64_t submitted_frames_{};
     std::atomic_uint64_t render_callbacks_{};
     std::atomic_uint64_t late_event_wakes_{};

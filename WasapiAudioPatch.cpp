@@ -158,9 +158,11 @@ std::string hresult_hex(HRESULT result) {
 }
 
 std::string startup_text(const EndpointInitialization& initialization) {
+    const auto output_sample_rate =
+        initialization.selected_format.wave_format().nSamplesPerSec;
     const double actual_ms =
         static_cast<double>(initialization.actual_buffer_frames) * 1000.0 /
-        static_cast<double>(kOutputSampleRate);
+        static_cast<double>(output_sample_rate);
     std::ostringstream stream;
     stream << std::fixed << std::setprecision(3)
         << "WASAPI audio startup requested_backend=wasapi_exclusive"
@@ -200,7 +202,7 @@ std::string startup_text(const EndpointInitialization& initialization) {
         << (initialization.alignment_retry ? "true" : "false")
         << " mmcss_profile=\"Pro Audio\""
         << " mmcss_priority=\"Critical\""
-        << " mixer_rate_hz=" << kOutputSampleRate
+        << " mixer_rate_hz=" << output_sample_rate
         << " mixer_channels=" << kOutputChannels;
     return stream.str();
 }

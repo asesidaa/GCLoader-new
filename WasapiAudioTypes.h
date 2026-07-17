@@ -12,14 +12,11 @@ namespace gc::audio {
 
 inline constexpr std::uint32_t kGamePrimarySampleRate = 44'100;
 inline constexpr std::uint32_t kFallbackEndpointSampleRate = 48'000;
-inline constexpr std::uint32_t kOutputSampleRate = kGamePrimarySampleRate;
 inline constexpr std::uint16_t kOutputChannels = 2;
 inline constexpr std::uint16_t kOutputBitsPerSample = 16;
 inline constexpr std::uint16_t kOutputBlockAlign = 4;
 inline constexpr std::uint32_t kGamePrimaryAverageBytesPerSecond =
     kGamePrimarySampleRate * kOutputBlockAlign;
-inline constexpr std::uint32_t kOutputAverageBytesPerSecond =
-    kGamePrimaryAverageBytesPerSecond;
 inline constexpr REFERENCE_TIME kReferenceTimesPerSecond = 10'000'000;
 
 enum class SourceSampleFormat : std::uint8_t { Pcm16, Pcm24 };

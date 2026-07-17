@@ -211,7 +211,22 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         initialization_ = std::move(attempted);
         endpoint_initialized = true;
         const auto frames = initialization_.actual_buffer_frames;
+        const auto output_sample_rate = initialization_.has_selected_format
+            ? initialization_.selected_format.wave_format().nSamplesPerSec
+            : 0;
+        if (!initialization_.has_selected_format ||
+            !initialization_.selected_format.valid() ||
+            !IsSupportedEndpointSampleRate(output_sample_rate)) {
+            failure = {AudioFailureStage::InitializeMixer, E_INVALIDARG};
+            CleanupEndpointOnAudioThread();
+            SignalInitializationFailure(
+                failure, std::move(initialization_));
+            SetEvent(audio_exited_event_);
+            return;
+        }
         endpoint_buffer_frames_.store(frames, std::memory_order_release);
+        output_sample_rate_.store(
+            output_sample_rate, std::memory_order_release);
 
         if (!detail::CanAddressOutputSamples(frames)) {
             failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
@@ -225,7 +240,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         ma_result mixer_result = MA_ERROR;
         mixer_ = MiniaudioMixer::Create(
             frames,
-            kOutputSampleRate,
+            output_sample_rate,
             mixer_allocations_,
             &mixer_result);
         if (mixer_ == nullptr) {
@@ -254,8 +269,8 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             initial_clock.position,
             initialization_.clock_frequency,
             0,
-            kOutputSampleRate);
-        pacing_tracker_.emplace(frames, kOutputSampleRate);
+            output_sample_rate);
+        pacing_tracker_.emplace(frames, output_sample_rate);
         submitted_frames_.store(
             pacing_tracker_->submitted_tail(),
             std::memory_order_release);
@@ -274,7 +289,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         last_qpc_100ns_ = 0;
         has_last_qpc_sample_ = false;
         actual_period_100ns_ = FramesToReferenceTime(
-            frames, kOutputSampleRate);
+            frames, output_sample_rate);
         initialization_succeeded_.store(true, std::memory_order_release);
         SetEvent(initialization_event_);
 
@@ -601,6 +616,10 @@ ExclusiveAudioEngine::CurrentOutputFrame() noexcept {
 
 std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept {
     return endpoint_buffer_frames_.load(std::memory_order_acquire);
+}
+
+std::uint32_t ExclusiveAudioEngine::output_sample_rate() const noexcept {
+    return output_sample_rate_.load(std::memory_order_acquire);
 }
 
 void ExclusiveAudioEngine::CountPendingCursorQuery() noexcept {

@@ -22,6 +22,7 @@ public:
     virtual std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept = 0;
     virtual std::uint32_t endpoint_buffer_frames() const noexcept = 0;
+    virtual std::uint32_t output_sample_rate() const noexcept = 0;
     virtual void CountPendingCursorQuery() noexcept = 0;
     virtual void CountUnmappedCursorFailure() noexcept = 0;
 };
