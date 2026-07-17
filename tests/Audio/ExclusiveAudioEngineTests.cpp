@@ -1,5 +1,5 @@
-#include "ExclusiveAudioEngine.h"
-#include "ExclusiveAudioEngineInternal.h"
+#include "Audio/Wasapi/ExclusiveAudioEngine.h"
+#include "Audio/Wasapi/ExclusiveAudioEngineInternal.h"
 
 #include <audioclient.h>
 

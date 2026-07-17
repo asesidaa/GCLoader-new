@@ -1,4 +1,4 @@
-#include "DirectSoundFacade.h"
+#include "Audio/DirectSound/DirectSoundFacade.h"
 
 #include <cstring>
 #include <limits>

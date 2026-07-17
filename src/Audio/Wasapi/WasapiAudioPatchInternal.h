@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ExclusiveAudioEngine.h"
-#include "WasapiAudioPatch.h"
+#include "Audio/Wasapi/ExclusiveAudioEngine.h"
+#include "Audio/Wasapi/WasapiAudioPatch.h"
 
 #include <condition_variable>
 #include <cstdint>

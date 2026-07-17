@@ -1,6 +1,6 @@
 #pragma once
 
-#include "MiniaudioMixer.h"
+#include "Audio/Mixer/MiniaudioMixer.h"
 
 #include <Windows.h>
 

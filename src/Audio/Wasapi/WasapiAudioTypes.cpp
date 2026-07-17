@@ -1,4 +1,4 @@
-#include "WasapiAudioTypes.h"
+#include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <ks.h>
 #include <ksmedia.h>

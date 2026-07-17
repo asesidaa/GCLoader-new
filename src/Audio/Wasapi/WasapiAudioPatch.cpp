@@ -1,8 +1,8 @@
-#include "WasapiAudioPatch.h"
+#include "Audio/Wasapi/WasapiAudioPatch.h"
 
-#include "DirectSoundFacade.h"
-#include "ExclusiveAudioEngine.h"
-#include "WasapiAudioPatchInternal.h"
+#include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/Wasapi/ExclusiveAudioEngine.h"
+#include "Audio/Wasapi/WasapiAudioPatchInternal.h"
 #include "Config/config.h"
 
 #include "plog/Log.h"

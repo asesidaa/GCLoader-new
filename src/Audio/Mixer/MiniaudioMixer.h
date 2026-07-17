@@ -1,8 +1,8 @@
 #pragma once
 
-#include "AudioCursorTimeline.h"
-#include "AudioSnapshot.h"
-#include "WasapiAudioTypes.h"
+#include "Audio/Mixer/AudioCursorTimeline.h"
+#include "Audio/Mixer/AudioSnapshot.h"
+#include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <atomic>
 #include <cstdint>

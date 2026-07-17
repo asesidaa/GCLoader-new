@@ -1,4 +1,4 @@
-#include "AudioSnapshot.h"
+#include "Audio/Mixer/AudioSnapshot.h"
 
 #include <Windows.h>
 #include <dsound.h>

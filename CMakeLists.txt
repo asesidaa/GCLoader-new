@@ -13,12 +13,6 @@ add_subdirectory(tools)
 add_subdirectory(tests)
 
 set(SOURCES
-        AudioCursorTimeline.cpp
-        AudioSnapshot.cpp
-        DirectSoundFacade.cpp
-        ExclusiveAudioEngine.cpp
-        MiniaudioMixer.cpp
-        OutputPacingTracker.cpp
         CountdownTimerFreeze.cpp
         dllmain.cpp
         FrameratePatch.cpp
@@ -48,9 +42,6 @@ set(SOURCES
         TestModeStorage/Hooks.cpp
         Win32Hooks/Kernel32Hooks.cpp
         Win32Hooks/MinHookTransaction.cpp
-        WasapiAudioPatch.cpp
-        WasapiAudioTypes.cpp
-        WasapiEndpoint.cpp
 )
 
 add_library(iDmacDrv32 SHARED ${SOURCES})
@@ -64,6 +55,7 @@ target_include_directories(iDmacDrv32 PRIVATE
 )
 
 target_link_libraries(iDmacDrv32 PRIVATE
+        gc_audio
         gc_config
         SDL3-static
         dsound
@@ -80,169 +72,15 @@ target_link_libraries(iDmacDrv32 PRIVATE
         reflectcpp
 )
 
-add_executable(AudioFormatTests
-        WasapiAudioTypes.cpp
-        tests/AudioFormatTests.cpp
-)
-target_include_directories(AudioFormatTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(AudioFormatTests PRIVATE miniaudio)
-add_test(NAME AudioFormatTests COMMAND AudioFormatTests)
 
-add_executable(AudioSnapshotTests
-        AudioSnapshot.cpp
-        tests/AudioSnapshotTests.cpp
-)
-target_include_directories(AudioSnapshotTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_test(NAME AudioSnapshotTests COMMAND AudioSnapshotTests)
 
-add_executable(AudioCursorTimelineTests
-        AudioCursorTimeline.cpp
-        tests/AudioCursorTimelineTests.cpp
-)
-target_include_directories(AudioCursorTimelineTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(AudioCursorTimelineTests PRIVATE miniaudio)
-add_test(NAME AudioCursorTimelineTests COMMAND AudioCursorTimelineTests)
 
-add_executable(OutputPacingTrackerTests
-        OutputPacingTracker.cpp
-        tests/OutputPacingTrackerTests.cpp
-)
-target_include_directories(OutputPacingTrackerTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_test(NAME OutputPacingTrackerTests COMMAND OutputPacingTrackerTests)
 
-add_executable(MiniaudioMixerTests
-        WasapiAudioTypes.cpp
-        AudioSnapshot.cpp
-        AudioCursorTimeline.cpp
-        MiniaudioMixer.cpp
-        tests/MiniaudioMixerTests.cpp
-)
-target_include_directories(MiniaudioMixerTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(MiniaudioMixerTests PRIVATE miniaudio)
-add_test(NAME MiniaudioMixerTests COMMAND MiniaudioMixerTests)
 
-add_executable(SecondarySoundBufferTests
-        WasapiAudioTypes.cpp
-        AudioSnapshot.cpp
-        AudioCursorTimeline.cpp
-        MiniaudioMixer.cpp
-        DirectSoundFacade.cpp
-        tests/SecondarySoundBufferTests.cpp
-)
-target_include_directories(SecondarySoundBufferTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(SecondarySoundBufferTests PRIVATE
-        miniaudio
-        dsound
-        dxguid
-)
-add_test(NAME SecondarySoundBufferTests COMMAND SecondarySoundBufferTests)
 
-add_executable(DirectSoundDeviceTests
-        WasapiAudioTypes.cpp
-        AudioSnapshot.cpp
-        AudioCursorTimeline.cpp
-        MiniaudioMixer.cpp
-        DirectSoundFacade.cpp
-        tests/DirectSoundDeviceTests.cpp
-)
-target_include_directories(DirectSoundDeviceTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(DirectSoundDeviceTests PRIVATE
-        miniaudio
-        dsound
-        dxguid
-)
-add_test(NAME DirectSoundDeviceTests COMMAND DirectSoundDeviceTests)
 
-add_executable(WasapiEndpointTests
-        WasapiAudioTypes.cpp
-        WasapiEndpoint.cpp
-        tests/WasapiEndpointTests.cpp
-)
-target_include_directories(WasapiEndpointTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(WasapiEndpointTests PRIVATE
-        miniaudio
-        ole32
-        uuid
-        avrt
-        propsys
-)
-add_test(NAME WasapiEndpointTests COMMAND WasapiEndpointTests)
 
-add_executable(ExclusiveAudioEngineTests
-        WasapiAudioTypes.cpp
-        AudioSnapshot.cpp
-        AudioCursorTimeline.cpp
-        MiniaudioMixer.cpp
-        DirectSoundFacade.cpp
-        WasapiEndpoint.cpp
-        OutputPacingTracker.cpp
-        ExclusiveAudioEngine.cpp
-        tests/ExclusiveAudioEngineTests.cpp
-)
-target_include_directories(ExclusiveAudioEngineTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(ExclusiveAudioEngineTests PRIVATE
-        miniaudio
-        dsound
-        dxguid
-        ole32
-        uuid
-        avrt
-        propsys
-)
-add_test(NAME ExclusiveAudioEngineTests COMMAND ExclusiveAudioEngineTests)
 
-add_executable(WasapiAudioPatchTests
-        WasapiAudioTypes.cpp
-        AudioSnapshot.cpp
-        AudioCursorTimeline.cpp
-        MiniaudioMixer.cpp
-        DirectSoundFacade.cpp
-        WasapiEndpoint.cpp
-        OutputPacingTracker.cpp
-        ExclusiveAudioEngine.cpp
-        WasapiAudioPatch.cpp
-        tests/WasapiAudioPatchTests.cpp
-)
-target_include_directories(WasapiAudioPatchTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${SDL3_SOURCE_DIR}/include
-        ${minhook_SOURCE_DIR}/include
-        ${reflectcpp_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(WasapiAudioPatchTests PRIVATE
-        gc_config
-        SDL3-static
-        minhook
-        miniaudio
-        dsound
-        dxguid
-        ole32
-        uuid
-        avrt
-        propsys
-        tomlplusplus::tomlplusplus
-        reflectcpp
-)
-add_test(NAME WasapiAudioPatchTests COMMAND WasapiAudioPatchTests)
 
 add_executable(CountdownTimerFreezeTests
         tests/CountdownTimerFreezeTests.cpp

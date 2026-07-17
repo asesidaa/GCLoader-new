@@ -1,4 +1,4 @@
-#include "DirectSoundFacade.h"
+#include "Audio/DirectSound/DirectSoundFacade.h"
 
 #include <ks.h>
 #include <ksmedia.h>

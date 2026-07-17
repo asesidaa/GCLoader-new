@@ -1,6 +1,6 @@
 #pragma once
 
-#include "WasapiAudioTypes.h"
+#include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <array>
 #include <cstddef>

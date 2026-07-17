@@ -1,9 +1,9 @@
 #pragma once
 
-#include "AudioCursorTimeline.h"
-#include "DirectSoundFacade.h"
-#include "OutputPacingTracker.h"
-#include "WasapiEndpoint.h"
+#include "Audio/Mixer/AudioCursorTimeline.h"
+#include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/Wasapi/OutputPacingTracker.h"
+#include "Audio/Wasapi/WasapiEndpoint.h"
 
 #include <Windows.h>
 

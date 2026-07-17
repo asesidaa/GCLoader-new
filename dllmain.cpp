@@ -12,7 +12,7 @@
 #include "NesysServiceProcess.h"
 #include "SessionLog.h"
 #include "SwitchInputPatch.h"
-#include "WasapiAudioPatch.h"
+#include "Audio/Wasapi/WasapiAudioPatch.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"

@@ -1,5 +1,5 @@
-#include "WasapiAudioPatch.h"
-#include "WasapiAudioPatchInternal.h"
+#include "Audio/Wasapi/WasapiAudioPatch.h"
+#include "Audio/Wasapi/WasapiAudioPatchInternal.h"
 
 #include <audioclient.h>
 

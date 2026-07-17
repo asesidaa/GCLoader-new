@@ -1,4 +1,4 @@
-#include "WasapiEndpoint.h"
+#include "Audio/Wasapi/WasapiEndpoint.h"
 
 #include <audioclient.h>
 
