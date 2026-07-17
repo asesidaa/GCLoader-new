@@ -1,143 +1,11 @@
 cmake_minimum_required(VERSION 3.31)
 project(GCLoader VERSION 1.0.0 LANGUAGES C CXX)
 
-# CMake 4.2 can decode localized MSVC /showIncludes output twice on a
-# Simplified Chinese host. Ninja then records zero header dependencies because
-# its generated prefix is mojibake. Repair only that detected value; leave all
-# other locales and generators untouched.
-if(MSVC AND CMAKE_GENERATOR MATCHES "^Ninja" AND
-        CMAKE_CL_SHOWINCLUDES_PREFIX MATCHES "^娉")
-    set(CMAKE_C_CL_SHOWINCLUDES_PREFIX "注意: 包含文件:  ")
-    set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "注意: 包含文件:  ")
-    set(CMAKE_CL_SHOWINCLUDES_PREFIX "注意: 包含文件:  ")
-endif()
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(ProjectOptions)
 
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-set(CMAKE_CXX_STANDARD 23)
-if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE INTERNAL "")
-endif()
 find_package(Git REQUIRED)
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-# Set warning level
-if(MSVC)
-    add_compile_options(/W3)
-    # Set the source file encoding to UTF-8
-    add_compile_options(/utf-8)
-else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
-
-add_definitions(-DNOMINMAX)
-
-include(FetchContent)
-
-# Fetch SDL3
-FetchContent_Declare(
-        SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG f87239e71e42da91ca317a12eefb82cfbf3393eb # v3.4.12
-        # URL https://github.com/libsdl-org/SDL/releases/download/preview-3.1.6/SDL3-3.1.6.tar.gz
-)
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
-set(SDL_TEST OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(SDL3)
-
-# Fetch Minhook
-FetchContent_Declare(
-        minhook
-        GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-        GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
-)
-FetchContent_MakeAvailable(minhook)
-
-set(MINIAUDIO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
-set(MINIAUDIO_INSTALL OFF CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_EXTRA_NODES ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_LIBVORBIS ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_LIBOPUS ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_DEVICEIO ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_DECODING ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_ENCODING ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_RESOURCE_MANAGER ON CACHE BOOL "" FORCE)
-set(MINIAUDIO_NO_GENERATION ON CACHE BOOL "" FORCE)
-FetchContent_Declare(
-        miniaudio
-        GIT_REPOSITORY https://github.com/mackron/miniaudio.git
-        GIT_TAG 9634bedb5b5a2ca38c1ee7108a9358a4e233f14d
-)
-FetchContent_MakeAvailable(miniaudio)
-target_compile_definitions(miniaudio PUBLIC
-        MA_NO_DEVICE_IO
-        MA_NO_DECODING
-        MA_NO_ENCODING
-        MA_NO_RESOURCE_MANAGER
-        MA_NO_GENERATION
-)
-
-FetchContent_Declare(
-        tomlplusplus
-        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-        GIT_TAG v3.4.0
-)
-FetchContent_MakeAvailable(tomlplusplus)
-export(TARGETS tomlplusplus_tomlplusplus  FILE "${CMAKE_BINARY_DIR}/tomlplusplus-config.cmake")
-set(tomlplusplus_DIR "${CMAKE_BINARY_DIR}")
-
-set(SAFETYHOOK_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(SAFETYHOOK_BUILD_TEST OFF CACHE BOOL "" FORCE)
-set(SAFETYHOOK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(SAFETYHOOK_FETCH_ZYDIS ON CACHE BOOL "" FORCE)
-FetchContent_Declare(
-        safetyhook
-        GIT_REPOSITORY https://github.com/cursey/safetyhook.git
-        GIT_TAG v0.7.0
-)
-FetchContent_MakeAvailable(safetyhook)
-
-FetchContent_Declare(
-        reflectcpp
-        URL https://github.com/getml/reflect-cpp/archive/refs/tags/v0.25.0.zip
-)
-set(REFLECTCPP_TOML ON CACHE BOOL "" FORCE)
-set(REFLECTCPP_XML OFF CACHE BOOL "" FORCE)
-set(REFLECTCPP_USE_VCPKG OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(reflectcpp)
-
-# Fetch plog
-FetchContent_Declare(
-        plog
-        GIT_REPOSITORY https://github.com/SergiusTheBest/plog
-        GIT_TAG 1.1.11
-)
-FetchContent_MakeAvailable(plog)
-
-FetchContent_Declare(imgui_external
-        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.92.8.tar.gz
-        EXCLUDE_FROM_ALL
-)
-FetchContent_MakeAvailable(imgui_external)
-
-add_library(imgui
-        ${imgui_external_SOURCE_DIR}/imgui.cpp
-        ${imgui_external_SOURCE_DIR}/imgui_draw.cpp
-        ${imgui_external_SOURCE_DIR}/imgui_tables.cpp
-        ${imgui_external_SOURCE_DIR}/imgui_widgets.cpp
-        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
-        ${imgui_external_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
-)
-
-target_include_directories(imgui PUBLIC ${imgui_external_SOURCE_DIR}
-        ${SDL3_SOURCE_DIR}/include)
+include(Dependencies)
 
 set(SOURCES
         AudioCursorTimeline.cpp
@@ -640,11 +508,6 @@ target_include_directories(TestModeStorageRedirectTests PRIVATE
         ${plog_SOURCE_DIR}/include
 )
 add_test(NAME TestModeStorageRedirectTests COMMAND TestModeStorageRedirectTests)
-
-
-if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
 
 # Define the .def file
 set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/iDmacDrv32.def")
