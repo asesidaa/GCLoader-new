@@ -545,6 +545,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
         const auto write_frame = ProjectWriteCursorFrame(
             source_frame,
             engine_.endpoint_buffer_frames(),
+            kOutputSampleRate,
             format_.sample_rate,
             buffer_bytes_ / format_.block_align);
         *write_cursor = static_cast<DWORD>(

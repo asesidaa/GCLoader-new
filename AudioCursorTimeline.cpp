@@ -1,7 +1,5 @@
 #include "AudioCursorTimeline.h"
 
-#include "WasapiAudioTypes.h"
-
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -287,21 +285,24 @@ AudioCursorResolution AudioCursorTimeline::ResolveSourceFrame(
 void EndpointClockMapper::Reset(
     std::uint64_t position,
     std::uint64_t frequency,
-    std::uint64_t output_frame) noexcept {
+    std::uint64_t output_frame,
+    std::uint32_t output_sample_rate) noexcept {
     origin_position_ = position;
     frequency_ = frequency;
     origin_output_frame_ = output_frame;
+    output_sample_rate_ = output_sample_rate;
 }
 
 std::optional<std::uint64_t> EndpointClockMapper::ToOutputFrame(
     std::uint64_t position) const noexcept {
-    if (frequency_ == 0 || position < origin_position_) {
+    if (frequency_ == 0 || output_sample_rate_ == 0 ||
+        position < origin_position_) {
         return std::nullopt;
     }
 
     const auto elapsed_frames = ScaleFloor(
         position - origin_position_,
-        kOutputSampleRate,
+        output_sample_rate_,
         frequency_);
     if (!elapsed_frames.has_value() || *elapsed_frames >
         std::numeric_limits<std::uint64_t>::max() - origin_output_frame_) {
@@ -325,16 +326,17 @@ std::uint64_t SourceFrameToByte(
 std::uint64_t ProjectWriteCursorFrame(
     std::uint64_t play_frame,
     std::uint32_t endpoint_buffer_frames,
+    std::uint32_t output_sample_rate,
     std::uint32_t source_rate,
     std::uint64_t source_length_frames) noexcept {
-    if (source_length_frames == 0) {
+    if (source_length_frames == 0 || output_sample_rate == 0) {
         return 0;
     }
 
     const auto source_frames_ahead = ScaleCeil(
         endpoint_buffer_frames,
         source_rate,
-        kOutputSampleRate);
+        output_sample_rate);
     if (!source_frames_ahead.has_value()) {
         return 0;
     }

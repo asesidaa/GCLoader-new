@@ -70,7 +70,7 @@ int Expect(bool condition, std::string_view name) {
 }
 
 int TestPrefillAndSequentialProgression() {
-    OutputPacingTracker tracker(441);
+    OutputPacingTracker tracker(441, 44'100);
     const auto first = tracker.Plan(0);
     int failures = Expect(
         first.kind == OutputPacingDecisionKind::Sequential &&
@@ -101,7 +101,7 @@ int TestPrefillAndSequentialProgression() {
 }
 
 int TestGapAlignment() {
-    OutputPacingTracker tracker(441);
+    OutputPacingTracker tracker(441, 44'100);
     const auto first = tracker.Plan(0);
     tracker.Commit(first);
 
@@ -113,7 +113,7 @@ int TestGapAlignment() {
             boundary.submitted_lead_frames == 0,
         "presentation exactly at the tail to use the next sequential slot");
 
-    OutputPacingTracker one_gap(441);
+    OutputPacingTracker one_gap(441, 44'100);
     const auto initial = one_gap.Plan(0);
     one_gap.Commit(initial);
     const auto gap = one_gap.Plan(900);
@@ -125,7 +125,7 @@ int TestGapAlignment() {
             gap.submitted_lead_frames == -18,
         "one missed packet slot to align to the next packet boundary");
 
-    OutputPacingTracker multiple(441);
+    OutputPacingTracker multiple(441, 44'100);
     const auto multiple_initial = multiple.Plan(0);
     multiple.Commit(multiple_initial);
     const auto multiple_gap = multiple.Plan(2000);
@@ -139,12 +139,16 @@ int TestGapAlignment() {
 }
 
 int TestInvalidClockAndCommitRejections() {
-    OutputPacingTracker zero(0);
+    OutputPacingTracker zero(0, 44'100);
     int failures = Expect(
         zero.Plan(0).kind == OutputPacingDecisionKind::InvalidClock,
         "zero packet frames to be invalid");
+    OutputPacingTracker zero_rate(441, 0);
+    failures += Expect(
+        zero_rate.Plan(0).kind == OutputPacingDecisionKind::InvalidClock,
+        "zero output rate to be invalid");
 
-    OutputPacingTracker regression(441);
+    OutputPacingTracker regression(441, 44'100);
     const auto forward = regression.Plan(100);
     failures += Expect(
         forward.kind == OutputPacingDecisionKind::Sequential &&
@@ -152,7 +156,7 @@ int TestInvalidClockAndCommitRejections() {
                 OutputPacingDecisionKind::InvalidClock,
         "presentation regression to be invalid");
 
-    OutputPacingTracker overflow(10);
+    OutputPacingTracker overflow(10, 44'100);
     failures += Expect(
         overflow.Plan(std::numeric_limits<std::uint64_t>::max()).kind ==
             OutputPacingDecisionKind::InvalidClock,
@@ -161,13 +165,13 @@ int TestInvalidClockAndCommitRejections() {
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     const auto packet = std::numeric_limits<std::uint32_t>::max();
     const auto last_boundary = maximum - maximum % packet;
-    OutputPacingTracker block_overflow(packet);
+    OutputPacingTracker block_overflow(packet, 44'100);
     failures += Expect(
         block_overflow.Plan(last_boundary).kind ==
             OutputPacingDecisionKind::InvalidClock,
         "block-end overflow to be invalid");
 
-    OutputPacingTracker commit(441);
+    OutputPacingTracker commit(441, 44'100);
     auto decision = commit.Plan(0);
     auto mismatched = decision;
     ++mismatched.block_end;
@@ -182,7 +186,7 @@ int TestInvalidClockAndCommitRejections() {
 }
 
 int TestRollingGapPolicy() {
-    OutputPacingTracker tracker(10);
+    OutputPacingTracker tracker(10, 44'100);
     const auto first = tracker.Plan(0);
     tracker.Commit(first);
     const auto gap1 = tracker.Plan(21);
@@ -197,7 +201,7 @@ int TestRollingGapPolicy() {
             !tracker.Commit(gap3),
         "the third gap inside one hardware second to be fatal");
 
-    OutputPacingTracker expiry(10);
+    OutputPacingTracker expiry(10, 44'100);
     const auto old1 = expiry.Plan(11);
     expiry.Commit(old1);
     const auto old2 = expiry.Plan(31);
@@ -214,11 +218,21 @@ int TestRollingGapPolicy() {
             new2.kind == OutputPacingDecisionKind::RecoverableGap &&
             new3.kind == OutputPacingDecisionKind::ChronicGap,
         "gap events at least one hardware second old to expire");
+
+    OutputPacingTracker expiry_48000(10, 48'000);
+    const auto rate48_old1 = expiry_48000.Plan(11);
+    expiry_48000.Commit(rate48_old1);
+    const auto rate48_old2 = expiry_48000.Plan(31);
+    expiry_48000.Commit(rate48_old2);
+    const auto rate48_new = expiry_48000.Plan(48'011);
+    failures += Expect(
+        rate48_new.kind == OutputPacingDecisionKind::RecoverableGap,
+        "48 kHz gap expires at exactly 48,000 output frames");
     return failures;
 }
 
 int TestPlanningDoesNotAllocate() {
-    OutputPacingTracker tracker(441);
+    OutputPacingTracker tracker(441, 44'100);
     allocation_probe::Begin();
     const auto first = tracker.Plan(0);
     const auto committed = tracker.Commit(first);

@@ -281,15 +281,18 @@ int TestCursorHelpers() {
             gc::audio::SourceFrameToByte(25, 0) == 0,
         "zero alignment and source-byte overflow to return zero safely");
     failures += Expect(
-        gc::audio::ProjectWriteCursorFrame(90, 133, 44100, 100) == 23,
+        gc::audio::ProjectWriteCursorFrame(
+            90, 133, 44100, 44100, 100) == 23,
         "one 44.1 kHz endpoint period to project to write frame 23");
     failures += Expect(
-        gc::audio::ProjectWriteCursorFrame(90, 133, 22050, 100) == 57,
+        gc::audio::ProjectWriteCursorFrame(
+            90, 133, 44100, 22050, 100) == 57,
         "one endpoint period at 22.05 kHz to project to write frame 57");
     failures += Expect(
         gc::audio::ProjectWriteCursorFrame(
             0,
             max_dword,
+            44100,
             max_dword,
             max_uint64) == 418293516215865ULL,
         "maximum declared endpoint and source rates to ceil without overflow");
@@ -298,18 +301,31 @@ int TestCursorHelpers() {
             max_uint64 - 1,
             2,
             44100,
+            44100,
             max_uint64) == 1,
         "write-frame modular addition to survive uint64 wrap");
     failures += Expect(
         gc::audio::ProjectWriteCursorFrame(
             max_uint64 - 17,
             max_dword,
+            44100,
             max_dword,
             max_uint64 - 3) == 418293516215851ULL,
         "maximum-rate write projection to add modulo without overflow");
     failures += Expect(
-        gc::audio::ProjectWriteCursorFrame(90, 133, 44100, 0) == 0,
+        gc::audio::ProjectWriteCursorFrame(
+            90, 133, 44100, 44100, 0) == 0,
         "zero source length projection to return zero safely");
+    failures += Expect(
+        gc::audio::ProjectWriteCursorFrame(
+            90, 441, 44100, 44100, 1000) ==
+            gc::audio::ProjectWriteCursorFrame(
+                90, 480, 48000, 44100, 1000),
+        "equal ten-millisecond periods project equal source-time lead");
+    failures += Expect(
+        gc::audio::ProjectWriteCursorFrame(
+            90, 480, 0, 44100, 1000) == 0,
+        "zero output rate projection to return zero safely");
     return failures;
 }
 
@@ -320,7 +336,7 @@ int TestEndpointClockMapping() {
         !mapper.ToOutputFrame(10000).has_value(),
         "clock mapping before reset to fail");
 
-    mapper.Reset(10000, 10000000, 500);
+    mapper.Reset(10000, 10000000, 500, 44100);
     failures += Expect(
         mapper.ToOutputFrame(10010000) == 44600,
         "one device-clock second to map to 44,100 output frames");
@@ -328,10 +344,19 @@ int TestEndpointClockMapping() {
         !mapper.ToOutputFrame(9999).has_value(),
         "a device position regressing before the origin to fail");
 
-    mapper.Reset(10000, 0, 500);
+    mapper.Reset(10000, 10000000, 500, 48000);
+    failures += Expect(
+        mapper.ToOutputFrame(10010000) == 48500,
+        "one device-clock second to map to 48,000 output frames");
+
+    mapper.Reset(10000, 0, 500, 44100);
     failures += Expect(
         !mapper.ToOutputFrame(10010000).has_value(),
         "zero clock frequency to invalidate mapping");
+    mapper.Reset(10000, 10000000, 500, 0);
+    failures += Expect(
+        !mapper.ToOutputFrame(10010000).has_value(),
+        "zero output rate to invalidate mapping");
     return failures;
 }
 

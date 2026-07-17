@@ -250,8 +250,9 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         clock_mapper_.Reset(
             initial_clock.position,
             initialization_.clock_frequency,
-            0);
-        pacing_tracker_.emplace(frames);
+            0,
+            kOutputSampleRate);
+        pacing_tracker_.emplace(frames, kOutputSampleRate);
         submitted_frames_.store(
             pacing_tracker_->submitted_tail(),
             std::memory_order_release);

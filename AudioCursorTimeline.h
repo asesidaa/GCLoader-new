@@ -64,7 +64,8 @@ public:
     void Reset(
         std::uint64_t position,
         std::uint64_t frequency,
-        std::uint64_t output_frame) noexcept;
+        std::uint64_t output_frame,
+        std::uint32_t output_sample_rate) noexcept;
     std::optional<std::uint64_t> ToOutputFrame(
         std::uint64_t position) const noexcept;
 
@@ -72,6 +73,7 @@ private:
     std::uint64_t origin_position_{};
     std::uint64_t frequency_{};
     std::uint64_t origin_output_frame_{};
+    std::uint32_t output_sample_rate_{};
 };
 
 // DirectSound cursor byte offsets occupy the DWORD domain. Returns zero when
@@ -82,6 +84,7 @@ std::uint64_t SourceFrameToByte(
 std::uint64_t ProjectWriteCursorFrame(
     std::uint64_t play_frame,
     std::uint32_t endpoint_buffer_frames,
+    std::uint32_t output_sample_rate,
     std::uint32_t source_rate,
     std::uint64_t source_length_frames) noexcept;
 

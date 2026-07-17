@@ -5,8 +5,6 @@
 namespace gc::audio {
 namespace {
 
-constexpr std::uint64_t kGapWindowFrames = 44'100;
-
 std::int64_t SaturatingSignedDifference(
     std::uint64_t left,
     std::uint64_t right) noexcept {
@@ -47,13 +45,15 @@ bool AlignUp(
 } // namespace
 
 OutputPacingTracker::OutputPacingTracker(
-    std::uint32_t packet_frames) noexcept
+    std::uint32_t packet_frames,
+    std::uint32_t output_sample_rate) noexcept
     : packet_frames_(packet_frames),
+      gap_window_frames_(output_sample_rate),
       submitted_tail_(packet_frames) {}
 
 OutputPacingDecision OutputPacingTracker::Plan(
     std::uint64_t presented_frame) noexcept {
-    if (packet_frames_ == 0 ||
+    if (packet_frames_ == 0 || gap_window_frames_ == 0 ||
         (has_last_presentation_ &&
          presented_frame < last_presented_frame_)) {
         return {.kind = OutputPacingDecisionKind::InvalidClock};
@@ -95,7 +95,7 @@ OutputPacingDecision OutputPacingTracker::Plan(
 
 bool OutputPacingTracker::Commit(
     const OutputPacingDecision& decision) noexcept {
-    if (packet_frames_ == 0 ||
+    if (packet_frames_ == 0 || gap_window_frames_ == 0 ||
         (decision.kind != OutputPacingDecisionKind::Sequential &&
          decision.kind != OutputPacingDecisionKind::RecoverableGap) ||
         decision.discontinuity_begin != submitted_tail_ ||
@@ -122,7 +122,7 @@ bool OutputPacingTracker::RecordGap(
     std::uint64_t presented_frame) noexcept {
     std::uint8_t retained{};
     for (std::uint8_t index = 0; index < gap_count_; ++index) {
-        if (presented_frame - gap_positions_[index] < kGapWindowFrames) {
+        if (presented_frame - gap_positions_[index] < gap_window_frames_) {
             gap_positions_[retained++] = gap_positions_[index];
         }
     }
