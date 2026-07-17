@@ -1,6 +1,7 @@
 add_library(gc_runtime_patches STATIC
         Framerate/FramerateDiagnostics.cpp
         Framerate/FrameratePatch.cpp
+        Framerate/FrameratePatchPlan.cpp
         Framerate/FramerateMonitor.cpp
         Framerate/FramerateProfile.cpp
         Framerate/FrameratePatchTransaction.cpp
