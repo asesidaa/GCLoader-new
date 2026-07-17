@@ -4,7 +4,7 @@
 #include "TestModeStorage/Hooks.h"
 #include "TestModeStorage/Redirector.h"
 #include "Win32Hooks/Kernel32Hooks.h"
-#include "Win32Hooks/MinHookTransaction.h"
+#include "Platform/Win32/Hooking/MinHookTransaction.h"
 #include "plog/Appenders/IAppender.h"
 #include "plog/Init.h"
 

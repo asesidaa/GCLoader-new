@@ -1,0 +1,3 @@
+add_executable(TestModeStorageRedirectTests TestModeStorageRedirectTests.cpp)
+target_link_libraries(TestModeStorageRedirectTests PRIVATE gc_test_mode_storage)
+add_test(NAME TestModeStorageRedirectTests COMMAND TestModeStorageRedirectTests)

@@ -2,7 +2,7 @@
 
 #include "Rfid/Runtime.h"
 #include "TestModeStorage/Hooks.h"
-#include "Win32Hooks/MinHookTransaction.h"
+#include "Platform/Win32/Hooking/MinHookTransaction.h"
 
 #include <Windows.h>
 

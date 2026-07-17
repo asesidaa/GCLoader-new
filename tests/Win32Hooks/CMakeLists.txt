@@ -1,0 +1,3 @@
+add_executable(Kernel32HookTests Kernel32HookTests.cpp)
+target_link_libraries(Kernel32HookTests PRIVATE gc_win32_hooks)
+add_test(NAME Kernel32HookTests COMMAND Kernel32HookTests)

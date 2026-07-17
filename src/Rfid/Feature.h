@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Win32Hooks/MinHookTransaction.h"
+#include "Platform/Win32/Hooking/MinHookTransaction.h"
 
 #include <Windows.h>
 
