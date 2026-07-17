@@ -1,4 +1,4 @@
-#include "SwitchInputPatch.h"
+#include "Input/Switch/SwitchInputPatch.h"
 
 #include <cstddef>
 #include <cstdint>

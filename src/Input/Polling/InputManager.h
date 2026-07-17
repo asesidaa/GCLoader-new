@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "InputSnapshotState.h"
+#include "Input/Polling/InputSnapshotState.h"
 #include "Config/config.h"
 
 class InputManager {

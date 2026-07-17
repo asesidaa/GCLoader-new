@@ -1,4 +1,4 @@
-#include "SwitchInputPolicy.h"
+#include "Input/Switch/SwitchInputPolicy.h"
 
 #include <array>
 #include <cstddef>

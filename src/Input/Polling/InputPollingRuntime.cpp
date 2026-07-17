@@ -1,6 +1,6 @@
-#include "InputPollingRuntime.h"
+#include "Input/Polling/InputPollingRuntime.h"
 
-#include "InputManager.h"
+#include "Input/Polling/InputManager.h"
 #include "Config/config.h"
 #include "plog/Log.h"
 

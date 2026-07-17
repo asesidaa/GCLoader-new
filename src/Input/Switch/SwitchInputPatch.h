@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SwitchInputPolicy.h"
+#include "Input/Switch/SwitchInputPolicy.h"
 
 #include <algorithm>
 #include <array>

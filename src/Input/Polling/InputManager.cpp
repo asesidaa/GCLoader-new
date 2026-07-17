@@ -1,4 +1,4 @@
-#include "InputManager.h"
+#include "Input/Polling/InputManager.h"
 
 #include "Platform/Win32/KeyMapping.h"
 #include "plog/Log.h"

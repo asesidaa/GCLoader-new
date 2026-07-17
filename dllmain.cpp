@@ -2,7 +2,7 @@
 #include <windows.h>
 #include <filesystem>
 #include <string>
-#include "InputManager.h"
+#include "Input/Polling/InputManager.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
@@ -11,7 +11,7 @@
 #include "NesysServicePatch.h"
 #include "NesysServiceProcess.h"
 #include "SessionLog.h"
-#include "SwitchInputPatch.h"
+#include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/Wasapi/WasapiAudioPatch.h"
 
 #ifndef _M_IX86

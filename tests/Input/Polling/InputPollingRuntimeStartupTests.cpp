@@ -1,4 +1,4 @@
-#include "InputPollingRuntime.h"
+#include "Input/Polling/InputPollingRuntime.h"
 
 #include <Windows.h>
 

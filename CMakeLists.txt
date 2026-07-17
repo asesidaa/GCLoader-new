@@ -17,9 +17,6 @@ set(SOURCES
         dllmain.cpp
         FrameratePatch.cpp
         iDmacDrv32.cpp
-        InputManager.cpp
-        InputPollingRuntime.cpp
-        InputSnapshotState.cpp
         NesysHookTransaction.cpp
         NesysServiceLauncher.cpp
         NesysServicePatch.cpp
@@ -35,8 +32,6 @@ set(SOURCES
         Rfid/Jvs/Encoder.cpp
         ServerAddressOverride.cpp
         SessionLog.cpp
-        SwitchInputPolicy.cpp
-        SwitchInputPatch.cpp
         SyntheticNetworkAdapter.cpp
         TestModeStorage/Redirector.cpp
         TestModeStorage/Hooks.cpp
@@ -57,6 +52,7 @@ target_include_directories(iDmacDrv32 PRIVATE
 target_link_libraries(iDmacDrv32 PRIVATE
         gc_audio
         gc_config
+        gc_input
         SDL3-static
         dsound
         dxguid
@@ -164,43 +160,6 @@ target_include_directories(Kernel32HookTests PRIVATE
 target_link_libraries(Kernel32HookTests PRIVATE minhook)
 add_test(NAME Kernel32HookTests COMMAND Kernel32HookTests)
 
-add_executable(InputSnapshotStateTests
-        InputSnapshotState.cpp
-        tests/InputSnapshotStateTests.cpp
-)
-target_include_directories(InputSnapshotStateTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
-
-add_executable(InputPollingRuntimeStartupTests
-        InputManager.cpp
-        InputPollingRuntime.cpp
-        InputSnapshotState.cpp
-        tests/InputPollingRuntimeStartupTests.cpp
-)
-target_include_directories(InputPollingRuntimeStartupTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${SDL3_SOURCE_DIR}/include
-        ${reflectcpp_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(InputPollingRuntimeStartupTests PRIVATE
-        gc_config
-        SDL3-static
-        ntdll
-        tomlplusplus::tomlplusplus
-        reflectcpp
-)
-add_test(
-        NAME InputPollingRuntimeStartupTests
-        COMMAND InputPollingRuntimeStartupTests
-)
-set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
-        TIMEOUT 5
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
 add_executable(RegistryConfigOverrideTests
         NesysServiceProcess.cpp
         RegistryConfigOverride.cpp
@@ -265,24 +224,6 @@ target_include_directories(ServerAddressOverrideTests PRIVATE
 target_link_libraries(ServerAddressOverrideTests PRIVATE
         gc_nesys_network_config)
 add_test(NAME ServerAddressOverrideTests COMMAND ServerAddressOverrideTests)
-
-add_executable(SwitchInputPolicyTests
-        SwitchInputPolicy.cpp
-        tests/SwitchInputPolicyTests.cpp
-)
-target_include_directories(SwitchInputPolicyTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_test(NAME SwitchInputPolicyTests COMMAND SwitchInputPolicyTests)
-
-add_executable(SwitchInputPatchTests
-        SwitchInputPolicy.cpp
-        tests/SwitchInputPatchTests.cpp
-)
-target_include_directories(SwitchInputPatchTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_test(NAME SwitchInputPatchTests COMMAND SwitchInputPatchTests)
 
 add_executable(NesysServicePatchTests
         NesysServiceLauncher.cpp

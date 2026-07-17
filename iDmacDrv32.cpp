@@ -1,5 +1,5 @@
 ﻿#include <windows.h>
-#include "InputPollingRuntime.h"
+#include "Input/Polling/InputPollingRuntime.h"
 #include "RegisterOpTypes.h"
 #include "plog/Log.h"
 #include "plog/Initializers/RollingFileInitializer.h"
