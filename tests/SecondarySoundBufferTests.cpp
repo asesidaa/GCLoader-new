@@ -33,6 +33,7 @@ using gc::audio::MixerVoice;
 using gc::audio::NormalizedSourceFormat;
 using gc::audio::SecondarySoundBuffer;
 using gc::audio::VoiceUsage;
+using gc::audio::kGamePrimarySampleRate;
 
 constexpr DWORD kStaticFlags =
     DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME |
@@ -96,7 +97,8 @@ class MixerEngineServices final : public IAudioEngineServices {
 public:
     MixerEngineServices() {
         ma_result result = MA_ERROR;
-        mixer_ = MiniaudioMixer::Create(4, nullptr, &result);
+        mixer_ = MiniaudioMixer::Create(
+            4, kGamePrimarySampleRate, nullptr, &result);
         initialized = result == MA_SUCCESS && mixer_ != nullptr;
     }
 

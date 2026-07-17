@@ -139,8 +139,6 @@ HRESULT NormalizeSourceFormat(
     result.sample_rate = source->nSamplesPerSec;
     result.average_bytes_per_second = source->nAvgBytesPerSec;
     result.sample_format_converted = true;
-    result.sample_rate_converted =
-        source->nSamplesPerSec != kGamePrimarySampleRate;
     result.game_native_pcm16 =
         source->nSamplesPerSec == kGamePrimarySampleRate &&
         source->wBitsPerSample == 16;

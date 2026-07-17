@@ -50,7 +50,6 @@ struct NormalizedSourceFormat {
     std::uint32_t sample_rate{};
     std::uint32_t average_bytes_per_second{};
     bool sample_format_converted{};
-    bool sample_rate_converted{};
     bool game_native_pcm16{};
 };
 

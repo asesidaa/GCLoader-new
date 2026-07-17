@@ -68,10 +68,6 @@ int main() {
                         DS_OK,
                     case_name + " observed PCM accepted");
                 failures += expect(
-                    normalized.sample_rate_converted ==
-                        (rate != gc::audio::kGamePrimarySampleRate),
-                    case_name + " rate conversion classification");
-                failures += expect(
                     normalized.game_native_pcm16 ==
                         (rate == gc::audio::kGamePrimarySampleRate &&
                          bits == 16),

@@ -100,6 +100,7 @@ struct MiniaudioMixerState {
     std::shared_ptr<const ma_allocation_callbacks> allocation_callbacks_owner;
     ma_engine engine{};
     std::uint32_t period_frames{};
+    std::uint32_t output_sample_rate{};
     std::atomic_uint64_t render_id{};
     std::atomic_uint64_t native_rate_buffers{};
     std::atomic_uint64_t sample_format_converted_buffers{};
@@ -498,7 +499,7 @@ bool MappedSourceFrame(
     if (!ScaleFloor(
             epoch_output_frame,
             voice.format.sample_rate,
-            kOutputSampleRate,
+            voice.mixer->output_sample_rate,
             &scaled) ||
         scaled > std::numeric_limits<std::uint64_t>::max() -
             voice.epoch_source_start) {
@@ -551,8 +552,9 @@ bool PublishMappedSpans(
     bool source_ended) noexcept {
     const auto divisor = std::gcd<std::uint64_t>(
         voice.format.sample_rate,
-        kOutputSampleRate);
-    const auto reduced_output_period = kOutputSampleRate / divisor;
+        voice.mixer->output_sample_rate);
+    const auto reduced_output_period =
+        voice.mixer->output_sample_rate / divisor;
     std::uint64_t output_offset{};
 
     while (output_offset < output_frames) {
@@ -634,7 +636,7 @@ bool OutputFramesUntilSourceEnd(
         voice.source_length_frames - voice.epoch_source_start;
     const auto total_output_frames = CeilScale(
         source_frames,
-        kOutputSampleRate,
+        voice.mixer->output_sample_rate,
         voice.format.sample_rate);
     *output_frames = total_output_frames > voice.epoch_output_frames
         ? total_output_frames - voice.epoch_output_frames
@@ -886,7 +888,10 @@ void VoiceNodeProcess(
             render->frame_count);
     const auto represented_output = std::min<std::uint64_t>(
         produced,
-        CeilScale(consumed, kOutputSampleRate, voice.format.sample_rate));
+        CeilScale(
+            consumed,
+            voice.mixer->output_sample_rate,
+            voice.format.sample_rate));
     const auto published_output = std::min<std::uint64_t>(
         represented_output,
         remaining_output);
@@ -1031,18 +1036,22 @@ MiniaudioMixer::~MiniaudioMixer() = default;
 
 std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
     std::uint32_t period_frames,
+    std::uint32_t output_sample_rate,
     const ma_allocation_callbacks* callbacks,
     ma_result* result) noexcept {
-    return CreateWithOwner(period_frames, callbacks, {}, result);
+    return CreateWithOwner(
+        period_frames, output_sample_rate, callbacks, {}, result);
 }
 
 std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
     std::uint32_t period_frames,
+    std::uint32_t output_sample_rate,
     std::shared_ptr<const ma_allocation_callbacks> callbacks,
     ma_result* result) noexcept {
     const auto* const borrowed_callbacks = callbacks.get();
     return CreateWithOwner(
         period_frames,
+        output_sample_rate,
         borrowed_callbacks,
         std::move(callbacks),
         result);
@@ -1050,13 +1059,15 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
 
 std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
     std::uint32_t period_frames,
+    std::uint32_t output_sample_rate,
     const ma_allocation_callbacks* callbacks,
     std::shared_ptr<const ma_allocation_callbacks> callback_owner,
     ma_result* result) noexcept {
     if (result != nullptr) {
         *result = MA_INVALID_ARGS;
     }
-    if (period_frames == 0) {
+    if (period_frames == 0 ||
+        !IsSupportedEndpointSampleRate(output_sample_rate)) {
         return nullptr;
     }
 
@@ -1064,11 +1075,12 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
         auto state = std::make_shared<MiniaudioMixerState>();
         state->allocation_callbacks_owner = std::move(callback_owner);
         state->period_frames = period_frames;
+        state->output_sample_rate = output_sample_rate;
 
         auto config = ma_engine_config_init();
         config.noDevice = MA_TRUE;
         config.channels = kOutputChannels;
-        config.sampleRate = kOutputSampleRate;
+        config.sampleRate = output_sample_rate;
         config.periodSizeInFrames = period_frames;
         config.defaultVolumeSmoothTimeInPCMFrames = 0;
         config.monoExpansionMode = ma_mono_expansion_mode_duplicate;
@@ -1130,7 +1142,7 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
             format.channels,
             kOutputChannels,
             format.sample_rate,
-            kOutputSampleRate);
+            state_->output_sample_rate);
         converter_config.resampling.algorithm = ma_resample_algorithm_linear;
         converter_config.resampling.linear.lpfOrder = 0;
         auto init_result = ma_data_converter_init(
@@ -1203,13 +1215,13 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
         voice_state->node_attached = true;
 
         state_->native_rate_buffers.fetch_add(
-            format.sample_rate == kOutputSampleRate ? 1 : 0,
+            format.sample_rate == state_->output_sample_rate ? 1 : 0,
             std::memory_order_seq_cst);
         state_->sample_format_converted_buffers.fetch_add(
             format.sample_format_converted ? 1 : 0,
             std::memory_order_seq_cst);
         state_->sample_rate_converted_buffers.fetch_add(
-            format.sample_rate_converted ? 1 : 0,
+            format.sample_rate != state_->output_sample_rate ? 1 : 0,
             std::memory_order_seq_cst);
         state_->native_gameplay_buffers.fetch_add(
             usage == VoiceUsage::GameplayNativeCandidate &&

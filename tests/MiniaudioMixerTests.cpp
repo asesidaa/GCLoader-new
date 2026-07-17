@@ -28,6 +28,8 @@ using gc::audio::MixerRenderTimeline;
 using gc::audio::MixerVoice;
 using gc::audio::NormalizedSourceFormat;
 using gc::audio::VoiceUsage;
+using gc::audio::kFallbackEndpointSampleRate;
+using gc::audio::kGamePrimarySampleRate;
 
 constexpr std::uint32_t kPeriodFrames = 8;
 
@@ -391,7 +393,8 @@ float IdentifiedSample(std::size_t index) {
 int TestVoiceRetainsSourceOwners() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "source-owner mixer creation");
@@ -453,6 +456,7 @@ int TestVoiceRetainsMixerState() {
     ma_result result = MA_ERROR;
     auto mixer = MiniaudioMixer::Create(
         kPeriodFrames,
+        kGamePrimarySampleRate,
         &callbacks,
         &result);
     failures += Expect(
@@ -503,7 +507,8 @@ int TestVoiceRetainsMixerState() {
 int TestConcurrentVoiceStateAccounting() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "concurrent-state mixer creation");
@@ -675,7 +680,8 @@ int TestAudibleDrainPublicationRejectsStaleRunAndEpoch() {
 int TestConcurrentSeeksKeepTerminalDrainObservable() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "concurrent-seek mixer creation");
@@ -760,7 +766,8 @@ int TestConcurrentSeeksKeepTerminalDrainObservable() {
 int TestNativeLoopAdvancesAcrossDiscontinuity() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "native-gap mixer creation");
@@ -821,7 +828,8 @@ int TestNativeLoopAdvancesAcrossDiscontinuity() {
 int TestNonLoopingVoiceEndsInsideDiscontinuity() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "gap-end mixer creation");
@@ -880,7 +888,8 @@ int TestNonLoopingVoiceEndsInsideDiscontinuity() {
 int TestLoopWrapsAcrossDiscontinuity() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "gap-wrap mixer creation");
@@ -933,7 +942,8 @@ int TestConvertedRatesUseCumulativeGapMapping() {
     int failures = 0;
     for (const auto rate : {22050U, 48000U}) {
         ma_result result = MA_ERROR;
-        auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+        auto mixer = MiniaudioMixer::Create(
+            kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
         failures += Expect(
             result == MA_SUCCESS && mixer != nullptr,
             "converted-gap mixer creation");
@@ -993,7 +1003,8 @@ int TestConvertedRatesUseCumulativeGapMapping() {
 int TestDiscontinuityResetsConverterHistory() {
     int failures = 0;
     ma_result result = MA_ERROR;
-    auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
     failures += Expect(
         result == MA_SUCCESS && mixer != nullptr,
         "gap-reset mixer creation");
@@ -1043,7 +1054,8 @@ int TestExplicitGenerationWinsOverDiscontinuity() {
     int failures = 0;
     for (const bool replay : {false, true}) {
         ma_result result = MA_ERROR;
-        auto mixer = MiniaudioMixer::Create(kPeriodFrames, nullptr, &result);
+        auto mixer = MiniaudioMixer::Create(
+            kPeriodFrames, kGamePrimarySampleRate, nullptr, &result);
         failures += Expect(
             result == MA_SUCCESS && mixer != nullptr,
             "gap-precedence mixer creation");
@@ -1109,6 +1121,203 @@ int TestExplicitGenerationWinsOverDiscontinuity() {
     return failures;
 }
 
+int TestRuntimeOutputRateContract() {
+    int failures = 0;
+    ma_result result = MA_SUCCESS;
+    auto zero_rate = MiniaudioMixer::Create(
+        kPeriodFrames, 0, nullptr, &result);
+    failures += Expect(
+        result == MA_INVALID_ARGS && zero_rate == nullptr,
+        "zero output rate rejection");
+
+    result = MA_SUCCESS;
+    auto unsupported_rate = MiniaudioMixer::Create(
+        kPeriodFrames, 96'000, nullptr, &result);
+    failures += Expect(
+        result == MA_INVALID_ARGS && unsupported_rate == nullptr,
+        "unsupported output rate rejection");
+
+    constexpr std::uint32_t period_frames = 480;
+    result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(
+        period_frames,
+        kFallbackEndpointSampleRate,
+        nullptr,
+        &result);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "48 kHz mixer creation");
+    if (mixer == nullptr) {
+        return failures + 1;
+    }
+
+    const auto game_bytes = Pcm16Bytes(
+        std::vector<std::int16_t>(kGamePrimarySampleRate, 16'384));
+    auto game_source = MakeSource(
+        Pcm(1, kGamePrimarySampleRate, 16),
+        game_bytes,
+        failures,
+        "48 kHz mixer game source normalization");
+    const auto endpoint_bytes = Pcm16Bytes(
+        std::vector<std::int16_t>(period_frames, 8'192));
+    auto endpoint_source = MakeSource(
+        Pcm(1, kFallbackEndpointSampleRate, 16),
+        endpoint_bytes,
+        failures,
+        "48 kHz mixer native source normalization");
+    auto game_voice = MakeVoice(
+        *mixer,
+        *game_source,
+        VoiceUsage::GameplayNativeCandidate,
+        failures,
+        "48 kHz mixer game voice creation");
+    auto endpoint_voice = MakeVoice(
+        *mixer,
+        *endpoint_source,
+        VoiceUsage::General,
+        failures,
+        "48 kHz mixer native voice creation");
+    if (game_voice == nullptr || endpoint_voice == nullptr) {
+        return failures + 1;
+    }
+
+    const auto diagnostics = mixer->diagnostics();
+    failures += Expect(
+        diagnostics.native_rate_buffers == 1 &&
+            diagnostics.sample_rate_converted_buffers == 1,
+        "48 kHz mixer classifies rates against its output rate");
+    failures += Expect(
+        diagnostics.native_gameplay_buffers == 1,
+        "44.1 kHz PCM16 remains game-native on a 48 kHz mixer");
+
+    constexpr std::uint64_t playback_epoch = 500;
+    failures += Expect(
+        game_voice->Play(true, playback_epoch) == DS_OK,
+        "44.1 kHz game voice starts on 48 kHz mixer");
+    std::vector<float> output(period_frames * 2);
+    for (std::uint64_t block = 0; block < 100; ++block) {
+        const auto rendered = mixer->Render(
+            output,
+            MixerRenderTimeline{block * period_frames, 0});
+        failures += Expect(
+            rendered.result == MA_SUCCESS &&
+                rendered.frames_read == period_frames,
+            "44.1 to 48 kHz sustained render");
+    }
+    failures += Expect(
+        std::any_of(
+            output.begin(),
+            output.end(),
+            [](float sample) { return std::abs(sample) > 0.1F; }),
+        "44.1 to 48 kHz sustained render is audible");
+    failures += Expect(
+        ResolvesTo(
+            game_source->timeline->ResolveSourceFrame(
+                47'999,
+                playback_epoch,
+                kGamePrimarySampleRate),
+            44'099),
+        "one second of 48 kHz output maps to the last 44.1 kHz frame");
+
+    constexpr std::uint64_t seek_epoch = 501;
+    failures += Expect(
+        game_voice->Seek(22'050, seek_epoch) == DS_OK,
+        "48 kHz mixer seek accepts game-rate source position");
+    auto rendered = mixer->Render(
+        output,
+        MixerRenderTimeline{48'000, 0});
+    failures += Expect(
+        rendered.result == MA_SUCCESS &&
+            rendered.frames_read == period_frames,
+        "48 kHz mixer post-seek render");
+    failures += Expect(
+        ResolvesTo(
+            game_source->timeline->ResolveSourceFrame(
+                48'000,
+                seek_epoch,
+                kGamePrimarySampleRate),
+            22'050),
+        "48 kHz mixer seek starts a new mapping epoch");
+
+    rendered = mixer->Render(
+        output,
+        MixerRenderTimeline{48'960, 480});
+    failures += Expect(
+        rendered.result == MA_SUCCESS &&
+            rendered.frames_read == period_frames,
+        "48 kHz mixer discontinuity render");
+    failures += Expect(
+        ResolvesTo(
+            game_source->timeline->ResolveSourceFrame(
+                48'960,
+                seek_epoch,
+                kGamePrimarySampleRate),
+            22'932),
+        "48 kHz mixer advances a 44.1 kHz source across a gap");
+
+    constexpr std::uint64_t loop_epoch = 502;
+    failures += Expect(
+        game_voice->Seek(44'000, loop_epoch) == DS_OK,
+        "48 kHz mixer loop-boundary seek");
+    rendered = mixer->Render(
+        output,
+        MixerRenderTimeline{49'440, 0});
+    failures += Expect(
+        rendered.result == MA_SUCCESS &&
+            rendered.frames_read == period_frames,
+        "48 kHz mixer loop-boundary render");
+    failures += Expect(
+        ResolvesTo(
+            game_source->timeline->ResolveSourceFrame(
+                49'640,
+                loop_epoch,
+                kGamePrimarySampleRate),
+            83),
+        "48 kHz mixer preserves loop mapping through rate conversion");
+    game_voice->Stop();
+
+    const auto short_bytes = Pcm16Bytes(
+        std::vector<std::int16_t>(441, 12'288));
+    auto short_source = MakeSource(
+        Pcm(1, kGamePrimarySampleRate, 16),
+        short_bytes,
+        failures,
+        "48 kHz mixer drain source normalization");
+    auto short_voice = MakeVoice(
+        *mixer,
+        *short_source,
+        VoiceUsage::General,
+        failures,
+        "48 kHz mixer drain voice creation");
+    if (short_voice == nullptr) {
+        return failures + 1;
+    }
+    constexpr std::uint64_t drain_epoch = 503;
+    failures += Expect(
+        short_voice->Play(false, drain_epoch) == DS_OK,
+        "48 kHz mixer nonlooping play");
+    rendered = mixer->Render(
+        output,
+        MixerRenderTimeline{49'920, 0});
+    failures += Expect(
+        rendered.result == MA_SUCCESS &&
+            rendered.frames_read == period_frames,
+        "48 kHz mixer terminal render");
+    failures += Expect(
+        short_voice->at_end() && !short_voice->playing() &&
+            short_voice->audible_until_output_frame() == 50'400,
+        "48 kHz mixer publishes the converted terminal drain boundary");
+    failures += Expect(
+        ResolvesTo(
+            short_source->timeline->ResolveSourceFrame(
+                50'399,
+                drain_epoch,
+                441),
+            440),
+        "48 kHz mixer maps the final drained output frame");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -1118,6 +1327,7 @@ int main() {
     ma_result create_result = MA_ERROR;
     auto mixer = MiniaudioMixer::Create(
         kPeriodFrames,
+        kGamePrimarySampleRate,
         &callbacks,
         &create_result);
     failures += Expect(
@@ -1479,6 +1689,7 @@ int main() {
     failures += TestConvertedRatesUseCumulativeGapMapping();
     failures += TestDiscontinuityResetsConverterHistory();
     failures += TestExplicitGenerationWinsOverDiscontinuity();
+    failures += TestRuntimeOutputRateContract();
 
     return failures == 0 ? 0 : 1;
 }

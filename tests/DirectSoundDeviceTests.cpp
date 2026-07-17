@@ -75,7 +75,8 @@ class MixerEngineServices final : public IAudioEngineServices {
 public:
     MixerEngineServices() {
         ma_result result = MA_ERROR;
-        mixer_ = MiniaudioMixer::Create(4, nullptr, &result);
+        mixer_ = MiniaudioMixer::Create(
+            4, kGamePrimarySampleRate, nullptr, &result);
         initialized = result == MA_SUCCESS && mixer_ != nullptr;
     }
 

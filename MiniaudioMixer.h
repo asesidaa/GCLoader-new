@@ -123,10 +123,12 @@ public:
 
     static std::unique_ptr<MiniaudioMixer> Create(
         std::uint32_t period_frames,
+        std::uint32_t output_sample_rate,
         const ma_allocation_callbacks* callbacks,
         ma_result* result) noexcept;
     static std::unique_ptr<MiniaudioMixer> Create(
         std::uint32_t period_frames,
+        std::uint32_t output_sample_rate,
         std::shared_ptr<const ma_allocation_callbacks> callbacks,
         ma_result* result) noexcept;
     std::unique_ptr<MixerVoice> CreateVoice(
@@ -143,6 +145,7 @@ public:
 private:
     static std::unique_ptr<MiniaudioMixer> CreateWithOwner(
         std::uint32_t period_frames,
+        std::uint32_t output_sample_rate,
         const ma_allocation_callbacks* callbacks,
         std::shared_ptr<const ma_allocation_callbacks> callback_owner,
         ma_result* result) noexcept;
