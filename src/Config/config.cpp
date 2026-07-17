@@ -17,6 +17,27 @@ namespace {
 constexpr std::string_view kObsoleteFramerateBoolean =
     "enable_120fps_" "timer_patches";
 
+std::expected<toml::table, std::string> ParseTomlSyntax(
+    std::string_view text) {
+#if TOML_EXCEPTIONS
+    try {
+        return toml::parse(text);
+    } catch (const toml::parse_error& error) {
+        return std::unexpected(
+            "Failed to parse config file: " +
+            std::string{error.description()});
+    }
+#else
+    auto result = toml::parse(text);
+    if (!result) {
+        return std::unexpected(
+            "Failed to parse config file: " +
+            std::string{result.error().description()});
+    }
+    return std::move(result).table();
+#endif
+}
+
 } // namespace
 
 std::expected<void, std::string> ValidateInputConfig(
@@ -52,14 +73,12 @@ std::expected<void, std::string> ValidateInputConfig(
 
 std::expected<InputConfig, std::string> ParseAndValidateInputConfig(
     std::string_view text) {
-    const auto syntax_result = toml::parse(text);
+    const auto syntax_result = ParseTomlSyntax(text);
     if (!syntax_result) {
-        return std::unexpected(
-            "Failed to parse config file: " +
-            std::string{syntax_result.error().description()});
+        return std::unexpected(syntax_result.error());
     }
 
-    const auto& syntax = syntax_result.table();
+    const auto& syntax = syntax_result.value();
     if (const auto* experimental = syntax["experimental"].as_table();
         experimental != nullptr &&
         experimental->contains(kObsoleteFramerateBoolean)) {

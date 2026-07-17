@@ -916,6 +916,9 @@ int main() {
     const auto native_config =
         std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
     failures += expect_parse_failure(
+        "[experimental]\ntarget_fps = [",
+        "malformed TOML syntax");
+    failures += expect_parse_failure(
         replace_once(native_config, "target_fps = 60", "target_fps = 59"),
         "target_fps below range");
     failures += expect_parse_failure(
