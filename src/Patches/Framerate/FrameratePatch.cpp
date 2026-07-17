@@ -1,6 +1,6 @@
-#include "FrameratePatch.h"
+#include "Patches/Framerate/FrameratePatch.h"
 
-#include "CountdownTimerFreeze.h"
+#include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Config/config.h"
 
 #include <Windows.h>

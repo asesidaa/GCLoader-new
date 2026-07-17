@@ -22,3 +22,5 @@ target_link_libraries(gc_rfid_feature PUBLIC
         gc_test_mode_storage
         gc_win32_hooks
 )
+
+add_subdirectory(Patches)

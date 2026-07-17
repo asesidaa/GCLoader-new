@@ -13,9 +13,7 @@ add_subdirectory(tools)
 add_subdirectory(tests)
 
 set(SOURCES
-        CountdownTimerFreeze.cpp
         dllmain.cpp
-        FrameratePatch.cpp
         iDmacDrv32.cpp
 )
 
@@ -36,6 +34,7 @@ target_link_libraries(iDmacDrv32 PRIVATE
         gc_logging
         gc_nesys
         gc_rfid_feature
+        gc_runtime_patches
         SDL3-static
         dsound
         dxguid
@@ -60,14 +59,6 @@ target_link_libraries(iDmacDrv32 PRIVATE
 
 
 
-
-add_executable(CountdownTimerFreezeTests
-        tests/CountdownTimerFreezeTests.cpp
-)
-target_include_directories(CountdownTimerFreezeTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-add_test(NAME CountdownTimerFreezeTests COMMAND CountdownTimerFreezeTests)
 
 # Define the .def file
 set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/iDmacDrv32.def")
