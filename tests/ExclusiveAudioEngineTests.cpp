@@ -395,7 +395,8 @@ public:
         return state_->MaybeFail(ApiCall::ActivateAudioClient);
     }
 
-    HRESULT IsExactFormatSupported(const WAVEFORMATEX&) noexcept override {
+    HRESULT IsExactFormatSupported(
+        const gc::audio::EndpointPcmFormat&) noexcept override {
         state_->Record(ApiCall::IsExactFormatSupported);
         return state_->MaybeFail(ApiCall::IsExactFormatSupported);
     }
@@ -412,7 +413,7 @@ public:
     HRESULT InitializeExclusiveEvent(
         REFERENCE_TIME,
         REFERENCE_TIME,
-        const WAVEFORMATEX&) noexcept override {
+        const gc::audio::EndpointPcmFormat&) noexcept override {
         state_->Record(ApiCall::InitializeExclusiveEvent);
         return state_->MaybeFail(ApiCall::InitializeExclusiveEvent);
     }

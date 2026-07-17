@@ -2,6 +2,8 @@
 
 #include "WasapiAudioTypes.h"
 
+#include <array>
+#include <cstddef>
 #include <memory>
 #include <span>
 #include <string>
@@ -47,6 +49,13 @@ struct AudioFailure {
     HRESULT result{S_OK};
 };
 
+inline constexpr std::size_t kEndpointFormatCandidateCount = 4;
+
+struct EndpointFormatAttempt {
+    EndpointPcmFormat format{};
+    HRESULT result{E_NOTIMPL};
+};
+
 struct EndpointInitialization {
     std::wstring endpoint_name;
     std::wstring endpoint_id;
@@ -60,6 +69,11 @@ struct EndpointInitialization {
     std::uint32_t actual_buffer_frames{};
     std::uint64_t clock_frequency{};
     bool alignment_retry{};
+    std::array<EndpointFormatAttempt, kEndpointFormatCandidateCount>
+        format_attempts{};
+    std::uint8_t format_attempt_count{};
+    EndpointPcmFormat selected_format{};
+    bool has_selected_format{};
 };
 
 struct EndpointClockPosition {
@@ -80,12 +94,12 @@ public:
         std::wstring*, std::wstring*) noexcept = 0;
     virtual HRESULT ActivateAudioClient() noexcept = 0;
     virtual HRESULT IsExactFormatSupported(
-        const WAVEFORMATEX&) noexcept = 0;
+        const EndpointPcmFormat&) noexcept = 0;
     virtual HRESULT GetDevicePeriod(
         REFERENCE_TIME*, REFERENCE_TIME*) noexcept = 0;
     virtual HRESULT InitializeExclusiveEvent(
         REFERENCE_TIME, REFERENCE_TIME,
-        const WAVEFORMATEX&) noexcept = 0;
+        const EndpointPcmFormat&) noexcept = 0;
     virtual HRESULT GetBufferSize(std::uint32_t*) noexcept = 0;
     virtual HRESULT GetStreamLatency(REFERENCE_TIME*) noexcept = 0;
     virtual void ReleaseAudioClient() noexcept = 0;

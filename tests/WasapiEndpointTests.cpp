@@ -20,15 +20,15 @@ namespace {
 using gc::audio::AudioFailure;
 using gc::audio::AudioFailureStage;
 using gc::audio::EndpointClockPosition;
+using gc::audio::EndpointFormatKind;
 using gc::audio::EndpointInitialization;
+using gc::audio::EndpointPcmFormat;
 using gc::audio::FramesToReferenceTime;
 using gc::audio::IWasapiApi;
+using gc::audio::MakeEndpointPcm16Format;
 using gc::audio::WasapiEndpoint;
-using gc::audio::kOutputAverageBytesPerSecond;
-using gc::audio::kOutputBitsPerSample;
-using gc::audio::kOutputBlockAlign;
 using gc::audio::kOutputChannels;
-using gc::audio::kOutputSampleRate;
+using gc::audio::kGamePrimarySampleRate;
 
 enum class Call {
     InitializeComMta,
@@ -86,17 +86,25 @@ public:
     }
 
     HRESULT IsExactFormatSupported(
-        const WAVEFORMATEX& format) noexcept override {
-        observed_supported_format = format;
+        const EndpointPcmFormat& format) noexcept override {
+        if (format_probe_call_count != nullptr) {
+            ++*format_probe_call_count;
+        }
+        probed_formats.push_back(format);
+        const auto index = std::min(
+            format_result_index++, format_results.size() - 1);
         const auto configured = Record(
             Call::IsExactFormatSupported,
-            format_result);
+            format_results[index]);
         return configured;
     }
 
     HRESULT GetDevicePeriod(
         REFERENCE_TIME* default_value,
         REFERENCE_TIME* minimum_value) noexcept override {
+        if (get_device_period_call_count != nullptr) {
+            ++*get_device_period_call_count;
+        }
         const auto result = Record(Call::GetDevicePeriod);
         if (SUCCEEDED(result)) {
             *default_value = default_period;
@@ -108,7 +116,7 @@ public:
     HRESULT InitializeExclusiveEvent(
         REFERENCE_TIME duration,
         REFERENCE_TIME periodicity,
-        const WAVEFORMATEX& format) noexcept override {
+        const EndpointPcmFormat& format) noexcept override {
         if (initialize_exclusive_call_count != nullptr) {
             ++*initialize_exclusive_call_count;
         }
@@ -250,7 +258,13 @@ public:
     std::uint32_t fail_occurrence{0};
     std::uint32_t matching_fail_call_count{};
     HRESULT fail_result{E_FAIL};
-    HRESULT format_result{S_OK};
+    std::array<HRESULT, 4> format_results{
+        S_OK,
+        AUDCLNT_E_UNSUPPORTED_FORMAT,
+        AUDCLNT_E_UNSUPPORTED_FORMAT,
+        AUDCLNT_E_UNSUPPORTED_FORMAT,
+    };
+    std::size_t format_result_index{};
     HRESULT first_initialize_result{S_OK};
     HRESULT retry_initialize_result{S_OK};
     HRESULT wait_result{S_OK};
@@ -265,16 +279,16 @@ public:
     std::uint32_t actual_frames{static_cast<std::uint32_t>(
         gc::audio::ReferenceTimeToFramesCeil(
             minimum_period,
-            kOutputSampleRate))};
-    std::uint64_t clock_frequency{kOutputSampleRate};
+            kGamePrimarySampleRate))};
+    std::uint64_t clock_frequency{kGamePrimarySampleRate};
     std::uint64_t clock_position{12'345};
     std::uint64_t clock_qpc{67'890};
     std::uint32_t initialize_count{};
     std::uint32_t buffer_size_count{};
-    WAVEFORMATEX observed_supported_format{};
+    std::vector<EndpointPcmFormat> probed_formats;
     std::vector<REFERENCE_TIME> initialize_durations;
     std::vector<REFERENCE_TIME> initialize_periodicities;
-    std::vector<WAVEFORMATEX> initialize_formats;
+    std::vector<EndpointPcmFormat> initialize_formats;
     std::array<BYTE, 4096> render_bytes{};
     std::vector<std::uint32_t> requested_render_frames;
     std::vector<std::uint32_t> released_render_frames;
@@ -284,17 +298,244 @@ public:
     std::shared_ptr<std::uint32_t> wrong_thread_shutdown_call_count;
     std::shared_ptr<std::uint32_t> render_buffer_call_count;
     std::shared_ptr<std::uint32_t> initialize_exclusive_call_count;
+    std::shared_ptr<std::uint32_t> format_probe_call_count;
+    std::shared_ptr<std::uint32_t> get_device_period_call_count;
     DWORD initializing_thread_id{};
 };
 
-bool IsExactPcm16(const WAVEFORMATEX& format) {
-    return format.wFormatTag == WAVE_FORMAT_PCM &&
-        format.nChannels == kOutputChannels &&
-        format.nSamplesPerSec == kOutputSampleRate &&
-        format.wBitsPerSample == kOutputBitsPerSample &&
-        format.nBlockAlign == kOutputBlockAlign &&
-        format.nAvgBytesPerSec == kOutputAverageBytesPerSecond &&
-        format.cbSize == 0;
+bool SameEndpointFormat(
+    const EndpointPcmFormat& left,
+    const EndpointPcmFormat& right) {
+    return left.size == right.size && left.kind == right.kind &&
+        std::memcmp(
+            &left.storage,
+            &right.storage,
+            sizeof(left.storage)) == 0;
+}
+
+bool IsExactPcm16(
+    const EndpointPcmFormat& format,
+    std::uint32_t rate = kGamePrimarySampleRate,
+    EndpointFormatKind kind = EndpointFormatKind::LegacyPcm) {
+    return SameEndpointFormat(
+        format,
+        MakeEndpointPcm16Format(rate, kind));
+}
+
+std::array<EndpointPcmFormat, 4> ExpectedEndpointFormats() {
+    return {
+        MakeEndpointPcm16Format(
+            44'100, EndpointFormatKind::LegacyPcm),
+        MakeEndpointPcm16Format(
+            44'100, EndpointFormatKind::ExtensiblePcm),
+        MakeEndpointPcm16Format(
+            48'000, EndpointFormatKind::LegacyPcm),
+        MakeEndpointPcm16Format(
+            48'000, EndpointFormatKind::ExtensiblePcm),
+    };
+}
+
+bool SameEndpointFormatPrefix(
+    const std::vector<EndpointPcmFormat>& actual,
+    const std::array<EndpointPcmFormat, 4>& expected,
+    std::size_t count) {
+    if (actual.size() != count) {
+        return false;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        if (!SameEndpointFormat(actual[index], expected[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool HasExpectedFormatAttempts(
+    const EndpointInitialization& initialization,
+    const std::array<EndpointPcmFormat, 4>& candidates,
+    const std::array<HRESULT, 4>& results,
+    std::size_t count) {
+    if (initialization.format_attempt_count != count) {
+        return false;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        if (!SameEndpointFormat(
+                initialization.format_attempts[index].format,
+                candidates[index]) ||
+            initialization.format_attempts[index].result != results[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int TestEndpointFormatNegotiation() {
+    struct SuccessCase {
+        std::array<HRESULT, 4> results;
+        std::size_t selected_index;
+        std::string_view name;
+    };
+    const std::array cases{
+        SuccessCase{{S_OK, E_UNEXPECTED, E_UNEXPECTED, E_UNEXPECTED},
+                    0, "44.1 kHz legacy negotiation"},
+        SuccessCase{{AUDCLNT_E_UNSUPPORTED_FORMAT, S_OK,
+                     E_UNEXPECTED, E_UNEXPECTED},
+                    1, "44.1 kHz extensible negotiation"},
+        SuccessCase{{AUDCLNT_E_UNSUPPORTED_FORMAT, S_FALSE,
+                     S_OK, E_UNEXPECTED},
+                    2, "48 kHz legacy negotiation"},
+        SuccessCase{{S_FALSE, AUDCLNT_E_UNSUPPORTED_FORMAT,
+                     AUDCLNT_E_UNSUPPORTED_FORMAT, S_OK},
+                    3, "48 kHz extensible negotiation"},
+    };
+    const auto candidates = ExpectedEndpointFormats();
+    int failures = 0;
+    for (const auto& value : cases) {
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->format_results = value.results;
+        const auto selected_rate = candidates[value.selected_index]
+            .wave_format().nSamplesPerSec;
+        api->actual_frames = selected_rate / 100;
+        auto* observed = api.get();
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api), 100'000, &attempted, &failure);
+        failures += Expect(endpoint != nullptr, value.name);
+        if (endpoint == nullptr) {
+            ++failures;
+            continue;
+        }
+
+        const auto attempt_count = value.selected_index + 1;
+        failures += Expect(
+            SameEndpointFormatPrefix(
+                observed->probed_formats, candidates, attempt_count),
+            "negotiation probes exact descriptors in deterministic order");
+        failures += Expect(
+            HasExpectedFormatAttempts(
+                attempted, candidates, value.results, attempt_count),
+            "negotiation records every exact HRESULT and descriptor");
+        failures += Expect(
+            attempted.has_selected_format &&
+                SameEndpointFormat(
+                    attempted.selected_format,
+                    candidates[value.selected_index]) &&
+                observed->initialize_formats.size() == 1 &&
+                SameEndpointFormat(
+                    observed->initialize_formats.front(),
+                    candidates[value.selected_index]),
+            "negotiation initializes with the exact selected descriptor");
+        failures += Expect(
+            attempted.actual_buffer_frames == selected_rate / 100,
+            "ordinary 10 ms frames use the selected endpoint rate");
+    }
+    return failures;
+}
+
+int TestEndpointFormatNegotiationFailures() {
+    const auto candidates = ExpectedEndpointFormats();
+    int failures = 0;
+    {
+        const std::array<HRESULT, 4> results{
+            S_FALSE,
+            AUDCLNT_E_UNSUPPORTED_FORMAT,
+            S_FALSE,
+            AUDCLNT_E_UNSUPPORTED_FORMAT,
+        };
+        auto probes = std::make_shared<std::uint32_t>();
+        auto periods = std::make_shared<std::uint32_t>();
+        auto initializations = std::make_shared<std::uint32_t>();
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->format_results = results;
+        api->format_probe_call_count = probes;
+        api->get_device_period_call_count = periods;
+        api->initialize_exclusive_call_count = initializations;
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api), 100'000, &attempted, &failure);
+        failures += Expect(
+            endpoint == nullptr &&
+                failure.stage == AudioFailureStage::IsFormatSupported &&
+                failure.result == AUDCLNT_E_UNSUPPORTED_FORMAT &&
+                *probes == 4 && *periods == 0 && *initializations == 0 &&
+                HasExpectedFormatAttempts(
+                    attempted, candidates, results, results.size()) &&
+                !attempted.has_selected_format,
+            "all nonexact formats collapse to unsupported after four probes");
+    }
+    {
+        const std::array<HRESULT, 4> results{
+            AUDCLNT_E_UNSUPPORTED_FORMAT,
+            AUDCLNT_E_DEVICE_INVALIDATED,
+            S_OK,
+            S_OK,
+        };
+        auto probes = std::make_shared<std::uint32_t>();
+        auto periods = std::make_shared<std::uint32_t>();
+        auto initializations = std::make_shared<std::uint32_t>();
+        auto api = std::make_unique<FakeWasapiApi>();
+        api->format_results = results;
+        api->format_probe_call_count = probes;
+        api->get_device_period_call_count = periods;
+        api->initialize_exclusive_call_count = initializations;
+        EndpointInitialization attempted{};
+        AudioFailure failure{};
+        auto endpoint = WasapiEndpoint::Create(
+            std::move(api), 100'000, &attempted, &failure);
+        failures += Expect(
+            endpoint == nullptr &&
+                failure.stage == AudioFailureStage::IsFormatSupported &&
+                failure.result == AUDCLNT_E_DEVICE_INVALIDATED &&
+                *probes == 2 && *periods == 0 && *initializations == 0 &&
+                HasExpectedFormatAttempts(
+                    attempted, candidates, results, 2) &&
+                !attempted.has_selected_format,
+            "operational probe failure aborts without trying later formats");
+    }
+    return failures;
+}
+
+int TestSelected48kExtensibleAlignmentRetry() {
+    auto api = std::make_unique<FakeWasapiApi>();
+    api->format_results = {
+        S_FALSE,
+        AUDCLNT_E_UNSUPPORTED_FORMAT,
+        AUDCLNT_E_UNSUPPORTED_FORMAT,
+        S_OK,
+    };
+    api->first_initialize_result = AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
+    api->aligned_frames = 480;
+    api->actual_frames = 480;
+    auto* observed = api.get();
+    EndpointInitialization attempted{};
+    AudioFailure failure{};
+    auto endpoint = WasapiEndpoint::Create(
+        std::move(api), 100'000, &attempted, &failure);
+
+    int failures = Expect(
+        endpoint != nullptr,
+        "48 kHz extensible alignment retry creation");
+    if (endpoint == nullptr) {
+        return failures + 1;
+    }
+    failures += Expect(
+        observed->initialize_formats.size() == 2 &&
+            SameEndpointFormat(
+                observed->initialize_formats[0],
+                observed->initialize_formats[1]) &&
+            observed->initialize_formats[0].kind ==
+                EndpointFormatKind::ExtensiblePcm &&
+            observed->initialize_formats[0].wave_format().nSamplesPerSec ==
+                48'000,
+        "alignment retry retains selected 48 kHz extensible descriptor");
+    failures += Expect(
+        attempted.has_selected_format && attempted.alignment_retry &&
+            attempted.requested_duration == 100'000 &&
+            attempted.actual_buffer_frames == 480,
+        "48 kHz alignment metadata uses selected-rate frames");
+    return failures;
 }
 
 int TestDirectSuccessAndRuntimeForwarding() {
@@ -336,7 +577,8 @@ int TestDirectSuccessAndRuntimeForwarding() {
         observed->calls == expected_initialization,
         "direct initialization exact call order");
     failures += Expect(
-        IsExactPcm16(observed->observed_supported_format) &&
+        observed->probed_formats.size() == 1 &&
+            IsExactPcm16(observed->probed_formats.front()) &&
             observed->initialize_formats.size() == 1 &&
             IsExactPcm16(observed->initialize_formats.front()),
         "exact PCM16 44.1 kHz format in support and initialize calls");
@@ -457,7 +699,7 @@ int TestConfiguredDurationPolicy() {
         api->actual_frames = static_cast<std::uint32_t>(
             gc::audio::ReferenceTimeToFramesCeil(
                 100'000,
-                kOutputSampleRate));
+                kGamePrimarySampleRate));
         auto* observed = api.get();
         EndpointInitialization attempted{};
         AudioFailure failure{};
@@ -584,7 +826,7 @@ int TestAlignmentRetryUsesAuthoritativeFrames() {
         "alignment retry performs exactly two activations and initializations");
     const auto aligned_duration = FramesToReferenceTime(
         observed->aligned_frames,
-        kOutputSampleRate);
+        kGamePrimarySampleRate);
     failures += Expect(
         observed->initialize_durations ==
                 std::vector<REFERENCE_TIME>{
@@ -646,18 +888,6 @@ int TestInitializationRejectionsAndStages() {
         AudioFailureStage::GetActualBufferSize,
         AUDCLNT_E_BUFFER_SIZE_ERROR,
         "retry actual size must equal reported aligned size");
-    failures += ExpectCreateFailure(
-        [](FakeWasapiApi& api) { api.format_result = S_FALSE; },
-        AudioFailureStage::IsFormatSupported,
-        S_FALSE,
-        "closest format S_FALSE rejected");
-    failures += ExpectCreateFailure(
-        [](FakeWasapiApi& api) {
-            api.format_result = AUDCLNT_E_UNSUPPORTED_FORMAT;
-        },
-        AudioFailureStage::IsFormatSupported,
-        AUDCLNT_E_UNSUPPORTED_FORMAT,
-        "unsupported exact format rejected");
     failures += ExpectCreateFailure(
         [](FakeWasapiApi& api) {
             api.first_initialize_result = AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED;
@@ -761,7 +991,7 @@ int TestUnaddressableOutputSizesAreRejected() {
         auto shutdown_calls = std::make_shared<std::uint32_t>();
         auto api = std::make_unique<FakeWasapiApi>();
         api->minimum_period = FramesToReferenceTime(
-            unaddressable_frames, kOutputSampleRate);
+            unaddressable_frames, kGamePrimarySampleRate);
         api->actual_frames = unaddressable_frames;
         api->shutdown_call_count = shutdown_calls;
         const auto configured_duration = api->minimum_period;
@@ -929,6 +1159,9 @@ int TestOwnerThreadShutdownIsIdempotent() {
 
 int main() {
     int failures = 0;
+    failures += TestEndpointFormatNegotiation();
+    failures += TestEndpointFormatNegotiationFailures();
+    failures += TestSelected48kExtensibleAlignmentRetry();
     failures += TestDirectSuccessAndRuntimeForwarding();
     failures += TestStreamLatencyFailureIsMetadataOnly();
     failures += TestConfiguredDurationPolicy();

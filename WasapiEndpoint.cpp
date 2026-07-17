@@ -15,18 +15,6 @@
 namespace gc::audio {
 namespace {
 
-WAVEFORMATEX OutputFormat() noexcept {
-    return {
-        .wFormatTag = WAVE_FORMAT_PCM,
-        .nChannels = kOutputChannels,
-        .nSamplesPerSec = kOutputSampleRate,
-        .nAvgBytesPerSec = kOutputAverageBytesPerSecond,
-        .nBlockAlign = kOutputBlockAlign,
-        .wBitsPerSample = kOutputBitsPerSample,
-        .cbSize = 0,
-    };
-}
-
 constexpr bool CanAddressOutputBuffer(std::uint32_t frames) noexcept {
     return frames <=
         std::numeric_limits<std::size_t>::max() / kOutputChannels;
@@ -167,12 +155,12 @@ public:
     }
 
     HRESULT IsExactFormatSupported(
-        const WAVEFORMATEX& format) noexcept override {
+        const EndpointPcmFormat& format) noexcept override {
         return client_ == nullptr
             ? E_UNEXPECTED
             : client_->IsFormatSupported(
                   AUDCLNT_SHAREMODE_EXCLUSIVE,
-                  &format,
+                  &format.wave_format(),
                   nullptr);
     }
 
@@ -187,7 +175,7 @@ public:
     HRESULT InitializeExclusiveEvent(
         REFERENCE_TIME buffer_duration,
         REFERENCE_TIME periodicity,
-        const WAVEFORMATEX& format) noexcept override {
+        const EndpointPcmFormat& format) noexcept override {
         return client_ == nullptr
             ? E_UNEXPECTED
             : client_->Initialize(
@@ -195,7 +183,7 @@ public:
                   AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                   buffer_duration,
                   periodicity,
-                  &format,
+                  &format.wave_format(),
                   nullptr);
     }
 
@@ -445,15 +433,47 @@ HRESULT WasapiEndpoint::Initialize(
             failure);
     }
 
-    const auto output_format = OutputFormat();
-    result = api_->IsExactFormatSupported(output_format);
-    if (result != S_OK) {
+    const std::array candidates{
+        MakeEndpointPcm16Format(
+            kGamePrimarySampleRate,
+            EndpointFormatKind::LegacyPcm),
+        MakeEndpointPcm16Format(
+            kGamePrimarySampleRate,
+            EndpointFormatKind::ExtensiblePcm),
+        MakeEndpointPcm16Format(
+            kFallbackEndpointSampleRate,
+            EndpointFormatKind::LegacyPcm),
+        MakeEndpointPcm16Format(
+            kFallbackEndpointSampleRate,
+            EndpointFormatKind::ExtensiblePcm),
+    };
+    for (const auto& candidate : candidates) {
+        result = api_->IsExactFormatSupported(candidate);
+        initialization_.format_attempts[
+            initialization_.format_attempt_count++] = {candidate, result};
+        if (result == S_OK) {
+            initialization_.selected_format = candidate;
+            initialization_.has_selected_format = true;
+            break;
+        }
+        if (result == AUDCLNT_E_UNSUPPORTED_FORMAT || SUCCEEDED(result)) {
+            continue;
+        }
         return Fail(
             AudioFailureStage::IsFormatSupported,
             result,
             attempted,
             failure);
     }
+    if (!initialization_.has_selected_format) {
+        return Fail(
+            AudioFailureStage::IsFormatSupported,
+            AUDCLNT_E_UNSUPPORTED_FORMAT,
+            attempted,
+            failure);
+    }
+    const auto selected_rate =
+        initialization_.selected_format.wave_format().nSamplesPerSec;
 
     result = api_->GetDevicePeriod(
         &initialization_.default_period,
@@ -481,7 +501,7 @@ HRESULT WasapiEndpoint::Initialize(
     result = api_->InitializeExclusiveEvent(
         requested,
         requested,
-        output_format);
+        initialization_.selected_format);
     std::uint32_t aligned_frames{};
     if (result == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
         initialization_.alignment_retry = true;
@@ -515,7 +535,7 @@ HRESULT WasapiEndpoint::Initialize(
         }
         requested = FramesToReferenceTime(
             aligned_frames,
-            kOutputSampleRate);
+            selected_rate);
         initialization_.requested_duration = requested;
         if (attempted != nullptr) {
             *attempted = initialization_;
@@ -523,7 +543,7 @@ HRESULT WasapiEndpoint::Initialize(
         result = api_->InitializeExclusiveEvent(
             requested,
             requested,
-            output_format);
+            initialization_.selected_format);
         if (FAILED(result)) {
             return Fail(
                 AudioFailureStage::RetryInitializeExclusive,
@@ -549,10 +569,10 @@ HRESULT WasapiEndpoint::Initialize(
     }
     const auto ordinary_floor = ReferenceTimeToFramesFloor(
         initialization_.requested_duration,
-        kOutputSampleRate);
+        selected_rate);
     const auto ordinary_ceil = ReferenceTimeToFramesCeil(
         initialization_.requested_duration,
-        kOutputSampleRate);
+        selected_rate);
     if (initialization_.actual_buffer_frames == 0 ||
         !CanAddressOutputBuffer(initialization_.actual_buffer_frames) ||
         (initialization_.alignment_retry &&
