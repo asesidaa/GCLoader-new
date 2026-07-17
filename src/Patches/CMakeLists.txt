@@ -1,5 +1,6 @@
 add_library(gc_runtime_patches STATIC
         Framerate/FrameratePatch.cpp
+        Framerate/FramerateMonitor.cpp
         Framerate/FramerateProfile.cpp
         Countdown/CountdownTimerFreeze.cpp
 )

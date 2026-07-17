@@ -7,3 +7,8 @@ add_executable(FramerateProfileTests
         Framerate/FramerateProfileTests.cpp)
 target_link_libraries(FramerateProfileTests PRIVATE gc_runtime_patches)
 add_test(NAME FramerateProfileTests COMMAND FramerateProfileTests)
+
+add_executable(FramerateMonitorTests
+        Framerate/FramerateMonitorTests.cpp)
+target_link_libraries(FramerateMonitorTests PRIVATE gc_runtime_patches)
+add_test(NAME FramerateMonitorTests COMMAND FramerateMonitorTests)
