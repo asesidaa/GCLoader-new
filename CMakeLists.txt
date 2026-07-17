@@ -17,11 +17,6 @@ set(SOURCES
         dllmain.cpp
         FrameratePatch.cpp
         iDmacDrv32.cpp
-        NesysHookTransaction.cpp
-        NesysServiceLauncher.cpp
-        NesysServicePatch.cpp
-        NesysServiceProcess.cpp
-        RegistryConfigOverride.cpp
         Rfid/Feature.cpp
         Rfid/ComPortState.cpp
         Rfid/Runtime.cpp
@@ -30,9 +25,6 @@ set(SOURCES
         Rfid/Jvs/Decoder.cpp
         Rfid/Jvs/Device.cpp
         Rfid/Jvs/Encoder.cpp
-        ServerAddressOverride.cpp
-        SessionLog.cpp
-        SyntheticNetworkAdapter.cpp
         TestModeStorage/Redirector.cpp
         TestModeStorage/Hooks.cpp
         Win32Hooks/Kernel32Hooks.cpp
@@ -53,6 +45,8 @@ target_link_libraries(iDmacDrv32 PRIVATE
         gc_audio
         gc_config
         gc_input
+        gc_logging
+        gc_nesys
         SDL3-static
         dsound
         dxguid
@@ -159,83 +153,6 @@ target_include_directories(Kernel32HookTests PRIVATE
 )
 target_link_libraries(Kernel32HookTests PRIVATE minhook)
 add_test(NAME Kernel32HookTests COMMAND Kernel32HookTests)
-
-add_executable(RegistryConfigOverrideTests
-        NesysServiceProcess.cpp
-        RegistryConfigOverride.cpp
-        tests/RegistryConfigOverrideTests.cpp
-)
-target_include_directories(RegistryConfigOverrideTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${minhook_SOURCE_DIR}/include
-        ${reflectcpp_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(RegistryConfigOverrideTests PRIVATE gc_config)
-add_test(
-        NAME RegistryConfigOverrideTests
-        COMMAND RegistryConfigOverrideTests
-)
-
-add_executable(SessionLogTests
-        SessionLog.cpp
-        tests/SessionLogTests.cpp
-)
-target_include_directories(SessionLogTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${plog_SOURCE_DIR}/include
-)
-add_test(NAME SessionLogTests COMMAND SessionLogTests)
-
-add_executable(NesysHookTransactionTests
-        NesysHookTransaction.cpp
-        tests/NesysHookTransactionTests.cpp
-)
-target_include_directories(NesysHookTransactionTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${minhook_SOURCE_DIR}/include
-)
-target_link_libraries(NesysHookTransactionTests PRIVATE minhook)
-add_test(NAME NesysHookTransactionTests COMMAND NesysHookTransactionTests)
-
-add_executable(SyntheticNetworkAdapterTests
-        SyntheticNetworkAdapter.cpp
-        tests/SyntheticNetworkAdapterTests.cpp
-)
-target_include_directories(SyntheticNetworkAdapterTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${minhook_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(SyntheticNetworkAdapterTests PRIVATE
-        safetyhook::safetyhook
-)
-add_test(NAME SyntheticNetworkAdapterTests COMMAND SyntheticNetworkAdapterTests)
-
-add_executable(ServerAddressOverrideTests
-        ServerAddressOverride.cpp
-        tests/ServerAddressOverrideTests.cpp
-)
-target_include_directories(ServerAddressOverrideTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${minhook_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(ServerAddressOverrideTests PRIVATE
-        gc_nesys_network_config)
-add_test(NAME ServerAddressOverrideTests COMMAND ServerAddressOverrideTests)
-
-add_executable(NesysServicePatchTests
-        NesysServiceLauncher.cpp
-        NesysServiceProcess.cpp
-        tests/NesysServicePatchTests.cpp
-)
-target_include_directories(NesysServicePatchTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${minhook_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-add_test(NAME NesysServicePatchTests COMMAND NesysServicePatchTests)
 
 add_executable(TestModeStorageRedirectTests
         TestModeStorage/Redirector.cpp

@@ -2,7 +2,7 @@
 
 #include <Windows.h>
 
-#include "NesysHookTransaction.h"
+#include "Nesys/NesysHookTransaction.h"
 
 #include <vector>
 

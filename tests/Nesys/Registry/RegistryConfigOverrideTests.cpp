@@ -1,4 +1,4 @@
-#include "RegistryConfigOverride.h"
+#include "Nesys/Registry/RegistryConfigOverride.h"
 
 #include <Windows.h>
 

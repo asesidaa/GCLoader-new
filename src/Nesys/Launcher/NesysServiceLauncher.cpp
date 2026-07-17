@@ -1,6 +1,6 @@
-#include "NesysServiceLauncher.h"
+#include "Nesys/Launcher/NesysServiceLauncher.h"
 
-#include "NesysServiceProcess.h"
+#include "Nesys/NesysServiceProcess.h"
 
 #include <string>
 #include <string_view>

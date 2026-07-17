@@ -8,9 +8,9 @@
 #include "Rfid/Feature.h"
 #include "SDL3/SDL.h"
 #include "FrameratePatch.h"
-#include "NesysServicePatch.h"
-#include "NesysServiceProcess.h"
-#include "SessionLog.h"
+#include "Nesys/NesysServicePatch.h"
+#include "Nesys/NesysServiceProcess.h"
+#include "Logging/SessionLog.h"
 #include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/Wasapi/WasapiAudioPatch.h"
 

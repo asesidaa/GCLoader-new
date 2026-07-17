@@ -1,4 +1,4 @@
-#include "SessionLog.h"
+#include "Logging/SessionLog.h"
 
 #include "plog/Converters/NativeEOLConverter.h"
 #include "plog/Converters/UTF8Converter.h"

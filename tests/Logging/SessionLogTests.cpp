@@ -1,4 +1,4 @@
-#include "SessionLog.h"
+#include "Logging/SessionLog.h"
 
 #include <Windows.h>
 

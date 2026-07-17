@@ -3,7 +3,7 @@
 #include <WinSock2.h>
 #include <Windows.h>
 
-#include "NesysServiceProcess.h"
+#include "Nesys/NesysServiceProcess.h"
 
 namespace gc::nesys_service {
 

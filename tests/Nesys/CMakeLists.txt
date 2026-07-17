@@ -1,0 +1,22 @@
+add_executable(NesysHookTransactionTests NesysHookTransactionTests.cpp)
+target_link_libraries(NesysHookTransactionTests PRIVATE gc_nesys)
+add_test(NAME NesysHookTransactionTests COMMAND NesysHookTransactionTests)
+
+add_executable(NesysServicePatchTests NesysServicePatchTests.cpp)
+target_link_libraries(NesysServicePatchTests PRIVATE gc_nesys)
+add_test(NAME NesysServicePatchTests COMMAND NesysServicePatchTests)
+
+add_executable(ServerAddressOverrideTests
+        Network/ServerAddressOverrideTests.cpp)
+target_link_libraries(ServerAddressOverrideTests PRIVATE gc_nesys)
+add_test(NAME ServerAddressOverrideTests COMMAND ServerAddressOverrideTests)
+
+add_executable(SyntheticNetworkAdapterTests
+        Network/SyntheticNetworkAdapterTests.cpp)
+target_link_libraries(SyntheticNetworkAdapterTests PRIVATE gc_nesys)
+add_test(NAME SyntheticNetworkAdapterTests COMMAND SyntheticNetworkAdapterTests)
+
+add_executable(RegistryConfigOverrideTests
+        Registry/RegistryConfigOverrideTests.cpp)
+target_link_libraries(RegistryConfigOverrideTests PRIVATE gc_nesys)
+add_test(NAME RegistryConfigOverrideTests COMMAND RegistryConfigOverrideTests)

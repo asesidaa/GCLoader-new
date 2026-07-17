@@ -1,5 +1,5 @@
-#include "NesysServiceLauncher.h"
-#include "NesysServiceProcess.h"
+#include "Nesys/Launcher/NesysServiceLauncher.h"
+#include "Nesys/NesysServiceProcess.h"
 
 #include <Windows.h>
 #include <iostream>

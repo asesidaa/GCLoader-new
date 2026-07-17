@@ -2,8 +2,8 @@
 
 #include <Windows.h>
 
-#include "NesysHookTransaction.h"
-#include "NesysServiceProcess.h"
+#include "Nesys/NesysHookTransaction.h"
+#include "Nesys/NesysServiceProcess.h"
 #include "Config/RegistryConfig.h"
 
 #include <array>

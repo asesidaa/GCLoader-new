@@ -2,7 +2,7 @@
 
 #include <Windows.h>
 
-#include "NesysServiceProcess.h"
+#include "Nesys/NesysServiceProcess.h"
 
 #include "plog/Appenders/IAppender.h"
 #include "plog/Util.h"

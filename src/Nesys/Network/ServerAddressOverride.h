@@ -3,9 +3,9 @@
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 
-#include "NesysHookTransaction.h"
+#include "Nesys/NesysHookTransaction.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
-#include "NesysServiceProcess.h"
+#include "Nesys/NesysServiceProcess.h"
 
 #include <compare>
 #include <map>

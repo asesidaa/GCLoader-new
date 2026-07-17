@@ -4,8 +4,8 @@
 #include <RTInfo.h>
 #include <Iphlpapi.h>
 
-#include "NesysHookTransaction.h"
-#include "NesysServiceProcess.h"
+#include "Nesys/NesysHookTransaction.h"
+#include "Nesys/NesysServiceProcess.h"
 
 #include <array>
 #include <cstdint>

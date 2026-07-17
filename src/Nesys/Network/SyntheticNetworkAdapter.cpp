@@ -1,4 +1,4 @@
-#include "SyntheticNetworkAdapter.h"
+#include "Nesys/Network/SyntheticNetworkAdapter.h"
 
 #include <algorithm>
 #include <atomic>

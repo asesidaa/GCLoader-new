@@ -1,10 +1,10 @@
-#include "NesysServicePatch.h"
+#include "Nesys/NesysServicePatch.h"
 
-#include "NesysHookTransaction.h"
-#include "NesysServiceLauncher.h"
-#include "RegistryConfigOverride.h"
-#include "ServerAddressOverride.h"
-#include "SyntheticNetworkAdapter.h"
+#include "Nesys/NesysHookTransaction.h"
+#include "Nesys/Launcher/NesysServiceLauncher.h"
+#include "Nesys/Registry/RegistryConfigOverride.h"
+#include "Nesys/Network/ServerAddressOverride.h"
+#include "Nesys/Network/SyntheticNetworkAdapter.h"
 #include "Config/config.h"
 
 #include <Windows.h>
