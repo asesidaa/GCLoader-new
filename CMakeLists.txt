@@ -6,6 +6,14 @@ include(ProjectOptions)
 find_package(Git REQUIRED)
 include(Dependencies)
 
+set(GC_DIST_DIR "${CMAKE_BINARY_DIR}/dist")
+file(MAKE_DIRECTORY "${GC_DIST_DIR}")
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/config.toml"
+        "${GC_DIST_DIR}/config.toml"
+        COPYONLY
+)
+
 enable_testing()
 add_subdirectory(src)
 add_subdirectory(tools)

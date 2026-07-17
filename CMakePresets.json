@@ -1,0 +1,58 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "msvc32-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "msvc32-debug",
+      "displayName": "MSVC x86 Debug",
+      "inherits": "msvc32-base",
+      "binaryDir": "${sourceDir}/build-msvc32-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "msvc32-release",
+      "displayName": "MSVC x86 RelWithDebInfo",
+      "inherits": "msvc32-base",
+      "binaryDir": "${sourceDir}/build-msvc32-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msvc32-debug",
+      "configurePreset": "msvc32-debug"
+    },
+    {
+      "name": "msvc32-release",
+      "configurePreset": "msvc32-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "msvc32-debug",
+      "configurePreset": "msvc32-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "msvc32-release",
+      "configurePreset": "msvc32-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
