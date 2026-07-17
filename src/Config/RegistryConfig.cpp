@@ -1,4 +1,4 @@
-#include "RegistryConfig.h"
+#include "Config/RegistryConfig.h"
 
 #include <limits>
 

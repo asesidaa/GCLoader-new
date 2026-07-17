@@ -1,6 +1,6 @@
 #include "SwitchInputPatch.h"
 
-#include "config.h"
+#include "Config/config.h"
 
 #include <Windows.h>
 #include <atomic>

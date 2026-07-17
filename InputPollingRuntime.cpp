@@ -1,7 +1,7 @@
 #include "InputPollingRuntime.h"
 
 #include "InputManager.h"
-#include "config.h"
+#include "Config/config.h"
 #include "plog/Log.h"
 
 #include <Windows.h>

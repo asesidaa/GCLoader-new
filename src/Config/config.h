@@ -10,8 +10,8 @@
 #include <vector> // If you had lists, not needed here
 
 // Make sure parsers are included *before* defining structs that use them
-#include "SdlRflParsers.h"
-#include "RegistryConfig.h"
+#include "Config/SdlRflParsers.h"
+#include "Config/RegistryConfig.h"
 
 enum class InputMode {
     Keyboard,

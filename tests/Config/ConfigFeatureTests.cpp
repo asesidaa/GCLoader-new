@@ -1,6 +1,6 @@
-#include "config.h"
-#include "NesysNetworkConfig.h"
-#include "WinKeyMapping.h"
+#include "Config/config.h"
+#include "Nesys/Network/NesysNetworkConfig.h"
+#include "Platform/Win32/KeyMapping.h"
 
 #include <Windows.h>
 #include <array>

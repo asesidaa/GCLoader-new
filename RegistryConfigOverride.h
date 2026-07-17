@@ -4,7 +4,7 @@
 
 #include "NesysHookTransaction.h"
 #include "NesysServiceProcess.h"
-#include "RegistryConfig.h"
+#include "Config/RegistryConfig.h"
 
 #include <array>
 #include <atomic>

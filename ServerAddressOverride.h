@@ -4,7 +4,7 @@
 #include <WS2tcpip.h>
 
 #include "NesysHookTransaction.h"
-#include "NesysNetworkConfig.h"
+#include "Nesys/Network/NesysNetworkConfig.h"
 #include "NesysServiceProcess.h"
 
 #include <compare>

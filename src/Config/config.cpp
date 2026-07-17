@@ -1,5 +1,5 @@
-﻿#include "config.h"
-#include "NesysNetworkConfig.h"
+﻿#include "Config/config.h"
+#include "Nesys/Network/NesysNetworkConfig.h"
 #include <filesystem>
 #include <fstream>
 #include "rfl/toml.hpp"

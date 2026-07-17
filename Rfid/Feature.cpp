@@ -3,8 +3,8 @@
 #include "Rfid/Runtime.h"
 #include "TestModeStorage/Hooks.h"
 #include "Win32Hooks/Kernel32Hooks.h"
-#include "WinKeyMapping.h"
-#include "config.h"
+#include "Platform/Win32/KeyMapping.h"
+#include "Config/config.h"
 #include "plog/Log.h"
 
 #include <iomanip>

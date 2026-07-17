@@ -1,6 +1,6 @@
 #include "InputManager.h"
 
-#include "WinKeyMapping.h"
+#include "Platform/Win32/KeyMapping.h"
 #include "plog/Log.h"
 
 namespace {

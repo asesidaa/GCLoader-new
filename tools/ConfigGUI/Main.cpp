@@ -6,8 +6,8 @@
 #include "backends/imgui_impl_sdl3.h"
 #include "backends/imgui_impl_sdlrenderer3.h"
 #include "misc/cpp/imgui_stdlib.h"
-#include "NesysNetworkConfig.h"
-#include "RegistryConfig.h"
+#include "Nesys/Network/NesysNetworkConfig.h"
+#include "Config/RegistryConfig.h"
 
 #include <rfl/toml.hpp>
 #include <algorithm>
@@ -20,7 +20,7 @@
 #include <optional>
 #include <map>
 #include <variant>
-#include "config.h"
+#include "Config/config.h"
 
 
 // --- Global State (for simplicity in example) ---

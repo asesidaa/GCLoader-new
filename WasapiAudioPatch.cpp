@@ -3,7 +3,7 @@
 #include "DirectSoundFacade.h"
 #include "ExclusiveAudioEngine.h"
 #include "WasapiAudioPatchInternal.h"
-#include "config.h"
+#include "Config/config.h"
 
 #include "plog/Log.h"
 

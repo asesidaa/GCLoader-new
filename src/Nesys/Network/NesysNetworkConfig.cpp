@@ -1,4 +1,4 @@
-#include "NesysNetworkConfig.h"
+#include "Nesys/Network/NesysNetworkConfig.h"
 
 #include <charconv>
 #include <system_error>

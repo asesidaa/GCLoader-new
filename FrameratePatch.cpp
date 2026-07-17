@@ -1,7 +1,7 @@
 #include "FrameratePatch.h"
 
 #include "CountdownTimerFreeze.h"
-#include "config.h"
+#include "Config/config.h"
 
 #include <Windows.h>
 #include <atomic>

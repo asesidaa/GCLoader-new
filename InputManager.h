@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "InputSnapshotState.h"
-#include "config.h"
+#include "Config/config.h"
 
 class InputManager {
 public:

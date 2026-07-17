@@ -5,7 +5,7 @@
 #include "RegistryConfigOverride.h"
 #include "ServerAddressOverride.h"
 #include "SyntheticNetworkAdapter.h"
-#include "config.h"
+#include "Config/config.h"
 
 #include <Windows.h>
 

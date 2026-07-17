@@ -1,0 +1,3 @@
+add_executable(ConfigFeatureTests ConfigFeatureTests.cpp)
+target_link_libraries(ConfigFeatureTests PRIVATE gc_config)
+add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)

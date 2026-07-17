@@ -7,6 +7,11 @@ include(ProjectOptions)
 find_package(Git REQUIRED)
 include(Dependencies)
 
+enable_testing()
+add_subdirectory(src)
+add_subdirectory(tools)
+add_subdirectory(tests)
+
 set(SOURCES
         AudioCursorTimeline.cpp
         AudioSnapshot.cpp
@@ -15,7 +20,6 @@ set(SOURCES
         MiniaudioMixer.cpp
         OutputPacingTracker.cpp
         CountdownTimerFreeze.cpp
-        config.cpp
         dllmain.cpp
         FrameratePatch.cpp
         iDmacDrv32.cpp
@@ -23,11 +27,9 @@ set(SOURCES
         InputPollingRuntime.cpp
         InputSnapshotState.cpp
         NesysHookTransaction.cpp
-        NesysNetworkConfig.cpp
         NesysServiceLauncher.cpp
         NesysServicePatch.cpp
         NesysServiceProcess.cpp
-        RegistryConfig.cpp
         RegistryConfigOverride.cpp
         Rfid/Feature.cpp
         Rfid/ComPortState.cpp
@@ -51,17 +53,10 @@ set(SOURCES
         WasapiEndpoint.cpp
 )
 
-set(GUI_SOURCES
-        config.cpp
-        GUI_main.cpp
-        NesysNetworkConfig.cpp
-        RegistryConfig.cpp
-)
-
-
 add_library(iDmacDrv32 SHARED ${SOURCES})
 target_include_directories(iDmacDrv32 PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/src
         ${SDL3_SOURCE_DIR}/include
         ${minhook_SOURCE_DIR}/include
         ${reflectcpp_SOURCE_DIR}/include
@@ -69,6 +64,7 @@ target_include_directories(iDmacDrv32 PRIVATE
 )
 
 target_link_libraries(iDmacDrv32 PRIVATE
+        gc_config
         SDL3-static
         dsound
         dxguid
@@ -83,22 +79,6 @@ target_link_libraries(iDmacDrv32 PRIVATE
         tomlplusplus::tomlplusplus
         reflectcpp
 )
-
-add_executable(ConfigGUI ${GUI_SOURCES})
-target_include_directories(ConfigGUI PRIVATE
-        ${SDL3_SOURCE_DIR}/include
-        ${reflectcpp_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(ConfigGUI PRIVATE
-        SDL3-static
-        ntdll
-        tomlplusplus::tomlplusplus
-        reflectcpp
-        imgui
-)
-
-enable_testing()
 
 add_executable(AudioFormatTests
         WasapiAudioTypes.cpp
@@ -239,9 +219,6 @@ add_executable(WasapiAudioPatchTests
         OutputPacingTracker.cpp
         ExclusiveAudioEngine.cpp
         WasapiAudioPatch.cpp
-        NesysNetworkConfig.cpp
-        RegistryConfig.cpp
-        config.cpp
         tests/WasapiAudioPatchTests.cpp
 )
 target_include_directories(WasapiAudioPatchTests PRIVATE
@@ -252,6 +229,7 @@ target_include_directories(WasapiAudioPatchTests PRIVATE
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(WasapiAudioPatchTests PRIVATE
+        gc_config
         SDL3-static
         minhook
         miniaudio
@@ -273,23 +251,6 @@ target_include_directories(CountdownTimerFreezeTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME CountdownTimerFreezeTests COMMAND CountdownTimerFreezeTests)
-
-add_executable(ConfigFeatureTests
-        NesysNetworkConfig.cpp
-        RegistryConfig.cpp
-        tests/ConfigFeatureTests.cpp
-)
-target_include_directories(ConfigFeatureTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${SDL3_SOURCE_DIR}/include
-        ${reflectcpp_SOURCE_DIR}/include
-        ${plog_SOURCE_DIR}/include
-)
-target_link_libraries(ConfigFeatureTests PRIVATE
-        tomlplusplus::tomlplusplus
-        reflectcpp
-)
-add_test(NAME ConfigFeatureTests COMMAND ConfigFeatureTests)
 
 add_executable(RfidRuntimeTests
         Rfid/Runtime.cpp
@@ -375,12 +336,9 @@ target_include_directories(InputSnapshotStateTests PRIVATE
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
 
 add_executable(InputPollingRuntimeStartupTests
-        config.cpp
         InputManager.cpp
         InputPollingRuntime.cpp
         InputSnapshotState.cpp
-        NesysNetworkConfig.cpp
-        RegistryConfig.cpp
         tests/InputPollingRuntimeStartupTests.cpp
 )
 target_include_directories(InputPollingRuntimeStartupTests PRIVATE
@@ -390,6 +348,7 @@ target_include_directories(InputPollingRuntimeStartupTests PRIVATE
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(InputPollingRuntimeStartupTests PRIVATE
+        gc_config
         SDL3-static
         ntdll
         tomlplusplus::tomlplusplus
@@ -406,7 +365,6 @@ set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
 
 add_executable(RegistryConfigOverrideTests
         NesysServiceProcess.cpp
-        RegistryConfig.cpp
         RegistryConfigOverride.cpp
         tests/RegistryConfigOverrideTests.cpp
 )
@@ -416,6 +374,7 @@ target_include_directories(RegistryConfigOverrideTests PRIVATE
         ${reflectcpp_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
+target_link_libraries(RegistryConfigOverrideTests PRIVATE gc_config)
 add_test(
         NAME RegistryConfigOverrideTests
         COMMAND RegistryConfigOverrideTests
@@ -457,7 +416,6 @@ target_link_libraries(SyntheticNetworkAdapterTests PRIVATE
 add_test(NAME SyntheticNetworkAdapterTests COMMAND SyntheticNetworkAdapterTests)
 
 add_executable(ServerAddressOverrideTests
-        NesysNetworkConfig.cpp
         ServerAddressOverride.cpp
         tests/ServerAddressOverrideTests.cpp
 )
@@ -466,6 +424,8 @@ target_include_directories(ServerAddressOverrideTests PRIVATE
         ${minhook_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
+target_link_libraries(ServerAddressOverrideTests PRIVATE
+        gc_nesys_network_config)
 add_test(NAME ServerAddressOverrideTests COMMAND ServerAddressOverrideTests)
 
 add_executable(SwitchInputPolicyTests
