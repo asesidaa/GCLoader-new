@@ -24,3 +24,44 @@ target_link_libraries(gc_rfid_feature PUBLIC
 )
 
 add_subdirectory(Patches)
+
+add_library(iDmacDrv32 SHARED
+        Loader/DllMain.cpp
+        Driver/iDmac/iDmacDrv32.cpp
+)
+target_include_directories(iDmacDrv32 PRIVATE
+        ${PROJECT_SOURCE_DIR}/src
+        ${SDL3_SOURCE_DIR}/include
+        ${minhook_SOURCE_DIR}/include
+        ${reflectcpp_SOURCE_DIR}/include
+        ${plog_SOURCE_DIR}/include
+)
+target_link_libraries(iDmacDrv32 PRIVATE
+        gc_audio
+        gc_config
+        gc_input
+        gc_logging
+        gc_nesys
+        gc_rfid_feature
+        gc_runtime_patches
+        SDL3-static
+        dsound
+        dxguid
+        ntdll
+        ole32
+        uuid
+        avrt
+        propsys
+        minhook
+        miniaudio
+        safetyhook::safetyhook
+        tomlplusplus::tomlplusplus
+        reflectcpp
+)
+
+set(DEF_FILE
+        "${CMAKE_CURRENT_SOURCE_DIR}/Driver/iDmac/iDmacDrv32.def")
+if(MSVC)
+    set_target_properties(iDmacDrv32 PROPERTIES
+            LINK_FLAGS "/DEF:${DEF_FILE}")
+endif()

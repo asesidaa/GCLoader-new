@@ -1,6 +1,6 @@
 ﻿#include <windows.h>
 #include "Input/Polling/InputPollingRuntime.h"
-#include "RegisterOpTypes.h"
+#include "Driver/iDmac/RegisterOpTypes.h"
 #include "plog/Log.h"
 #include "plog/Initializers/RollingFileInitializer.h"
 #include <format>
