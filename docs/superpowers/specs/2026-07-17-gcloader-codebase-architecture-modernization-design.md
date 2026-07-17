@@ -41,7 +41,7 @@ Project-specific terms are defined in the repository root `CONTEXT.md`.
 
 ## Goals
 
-- Put every production C++ source under one `src/` tree.
+- Put every DLL/runtime C++ source under one `src/` tree and tool-only C++ source under `tools/`.
 - Organize production and test paths by feature ownership.
 - Give each source package explicit CMake target ownership.
 - Link tests against the same compiled implementation used by `iDmacDrv32`.
@@ -78,6 +78,8 @@ The initiative preserves:
 - Lazy input startup and intentionally process-lifetime state where existing designs require it.
 
 Internal source compatibility is deliberately not preserved. All callers are updated directly, and obsolete root-level headers are deleted after migration.
+
+One approved tool-only behavior change is explicit: ConfigGUI may begin with the current defaults when `config.toml` does not exist. An existing file that cannot be read, parsed, or validated remains an error and is never silently replaced with defaults.
 
 ## Target Repository Layout
 
@@ -118,6 +120,7 @@ GCLoader/
     Win32Hooks/
     Platform/
       Win32/
+        KeyMapping.h
         Hooking/
   tools/
     ConfigGUI/
@@ -140,6 +143,36 @@ GCLoader/
 Headers remain beside their implementations. GCLoader does not expose an installed C++ SDK, so a separate public `include/` tree would add a shallow publishing Interface without a real consumer.
 
 `Win32Hooks` remains a higher-level Adapter package because it deliberately routes Kernel32 calls into RFID and test-mode storage. `Platform/Win32/Hooking` is lower-level MinHook infrastructure and never depends on a feature.
+
+### Subproject 1 migration map
+
+Subproject 1 uses this mechanical ownership map. It may rename a file to state its existing role, but it does not move behavior between files.
+
+| Current source | Subproject 1 destination |
+|---|---|
+| `dllmain.cpp` | `src/Loader/DllMain.cpp` |
+| `SessionLog.*` | `src/Logging/SessionLog.*` |
+| `config.*`, `RegistryConfig.*`, `SdlRflParsers.h` | `src/Config/` |
+| `WinKeyMapping.h` | `src/Platform/Win32/KeyMapping.h` |
+| `iDmacDrv32.cpp`, `iDmacDrv32.def`, `RegisterOpTypes.h`, `keycodes.h` | `src/Driver/iDmac/` |
+| `InputManager.*`, `InputPollingRuntime.*`, `InputSnapshotState.*` | `src/Input/Polling/` |
+| `SwitchInputPolicy.*`, `SwitchInputPatch.*` | `src/Input/Switch/` |
+| `DirectSoundFacade.*` | `src/Audio/DirectSound/` |
+| `MiniaudioMixer.*`, `AudioSnapshot.*`, `AudioCursorTimeline.*` | `src/Audio/Mixer/` |
+| `WasapiAudioPatch*`, `WasapiEndpoint.*`, `ExclusiveAudioEngine*`, `OutputPacingTracker.*`, `WasapiAudioTypes.*` | `src/Audio/Wasapi/` |
+| `NesysServiceProcess.*`, `NesysServicePatch.*`, `NesysHookTransaction.*` | `src/Nesys/` |
+| `NesysServiceLauncher.*` | `src/Nesys/Launcher/` |
+| `NesysNetworkConfig.*`, `ServerAddressOverride.*`, `SyntheticNetworkAdapter.*` | `src/Nesys/Network/` |
+| `RegistryConfigOverride.*` | `src/Nesys/Registry/` |
+| `FrameratePatch.*` | `src/Patches/Framerate/` |
+| `CountdownTimerFreeze.*` | `src/Patches/Countdown/` |
+| `Rfid/**` | `src/Rfid/**` |
+| `TestModeStorage/**` | `src/TestModeStorage/**` |
+| `Win32Hooks/**` | `src/Win32Hooks/**`, except the existing general transaction may become the initial `src/Platform/Win32/Hooking/` implementation |
+| `GUI_main.cpp` | `tools/ConfigGUI/Main.cpp` |
+| `zero_decrypt.zip` | `tools/zero_decrypt.zip` unchanged |
+
+Tests move into the matching feature path without changing their executable or CTest names. `keycodes.h` is retained during the mechanical move even if the current usage audit finds no caller; deletion belongs to closeout after explicit proof.
 
 ## Dependency Direction
 
@@ -165,6 +198,8 @@ Rules:
 - Tests cross the same Interface as production callers unless a private algorithm has a deliberately internal test Seam.
 - A new Seam requires at least two production Adapters or otherwise demonstrated Leverage; a production Adapter plus a mock alone is insufficient.
 
+These are final-state dependency rules. Subproject 1 records transitional legacy edges, including whole-schema configuration access, Logging's process-role include, and feature-local hook transactions, instead of changing their behavior during a move. The later focused subprojects remove those recorded edges.
+
 ## CMake Architecture
 
 The root `CMakeLists.txt` is limited to the project declaration, common options, third-party dependency loading, top-level target composition, and `add_subdirectory` calls.
@@ -185,6 +220,8 @@ Each source package defines one or more internal static-library targets. Represe
 - `gc_test_mode_storage`
 - `gc_win32_hooks`
 - `gc_runtime_patches`
+
+Subproject 1 creates targets only for coherent Implementations that already exist. It does not add empty targets or pass-through Interfaces for future `gc_game_image` or `gc_fastio` behavior; later focused subprojects introduce those targets when their Implementations move behind the approved Interfaces.
 
 RFID core and feature composition remain separate targets so `gc_win32_hooks` can route to RFID runtime without creating a target cycle back through `Rfid/Feature.cpp`.
 
@@ -212,10 +249,10 @@ std::expected<void, ConfigError>
 Save(const std::filesystem::path&, const ConfigDocument&);
 ```
 
-Exact names may be refined in the focused configuration spec, but the Interface semantics are fixed:
+The focused configuration spec selects the final C++ symbol names, but these Interface semantics are fixed:
 
 - Runtime loading requires an existing, complete, valid file.
-- ConfigGUI may start from defaults when the file is absent.
+- ConfigGUI may start from defaults only when the file is absent; every other load error remains an error.
 - Runtime and GUI use identical parsing, keycode codecs, and semantic validation.
 - Saving serializes only a valid document.
 - Config performs no logging, dialogs, or process termination.
@@ -285,7 +322,7 @@ Switch input remains under `Input/Switch`, not under general runtime patches, be
 
 ## iDmac and FastIO
 
-The exported C functions remain ABI Adapters at the immutable game-facing Seam. They validate pointer arguments, initialize required caller outputs, translate typed internal failures to the established return values, and contain no register switch.
+The exported C functions remain ABI Adapters at the immutable game-facing Seam. They initialize required caller outputs for characterized calls, translate typed internal failures to the established return values, and contain no register switch. The focused iDmac/FastIO spec must characterize invalid pointer behavior before changing it; this umbrella design does not invent a new invalid-call contract.
 
 `Driver/FastIo` owns:
 
@@ -399,7 +436,7 @@ No exception crosses `DllMain`, an iDmac export, a hooked Win32 Interface, a COM
 ### Subproject 1: Source/build foundation
 
 - Record current tests and export inventory.
-- Move every production source under the approved `src/` tree.
+- Move every DLL/runtime source under the approved `src/` tree.
 - Move ConfigGUI sources under `tools/ConfigGUI`.
 - Move `zero_decrypt.zip` unchanged to `tools/zero_decrypt.zip`.
 - Mirror test paths by feature.
@@ -490,7 +527,7 @@ Each later subproject receives a focused design spec and implementation plan bef
 
 - Every known register value and unknown-command behavior.
 - Every exported stub's current return/output behavior.
-- Pointer validation and initialized outputs.
+- Required output initialization and characterized invalid-call behavior.
 - Open/close and lazy input lifecycle.
 - Unchanged export names, calling conventions, and ordinals.
 
@@ -506,7 +543,7 @@ Subproject 1 is mechanical and requires build/static verification; it does not c
 
 The architecture-modernization initiative is complete when:
 
-- Every production source is under the approved `src/` tree.
+- Every DLL/runtime source is under the approved `src/` tree, and ConfigGUI source is under `tools/ConfigGUI`.
 - Tests mirror feature paths and link shared production implementations.
 - Root CMake is a thin composition file.
 - RFID, audio, and NESYS use one owned MinHook installation Module.
@@ -517,4 +554,3 @@ The architecture-modernization initiative is complete when:
 - Loader owns reverse-order attach rollback.
 - External contracts and approved game-visible behavior remain unchanged.
 - Focused tests, the full x86 build, the complete CTest suite, static audits, and required user runtime acceptance all pass.
-
