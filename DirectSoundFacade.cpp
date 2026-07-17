@@ -17,12 +17,12 @@ constexpr DWORD kObservedStaticFlags =
     DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME |
     DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER;
 
-WAVEFORMATEX OutputWaveFormat() noexcept {
+WAVEFORMATEX GamePrimaryWaveFormat() noexcept {
     return {
         .wFormatTag = WAVE_FORMAT_PCM,
         .nChannels = kOutputChannels,
-        .nSamplesPerSec = kOutputSampleRate,
-        .nAvgBytesPerSec = kOutputAverageBytesPerSecond,
+        .nSamplesPerSec = kGamePrimarySampleRate,
+        .nAvgBytesPerSec = kGamePrimaryAverageBytesPerSecond,
         .nBlockAlign = kOutputBlockAlign,
         .wBitsPerSample = kOutputBitsPerSample,
         .cbSize = 0,
@@ -129,7 +129,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFormat(
     if (allocated < required) {
         return DSERR_INVALIDPARAM;
     }
-    *destination = OutputWaveFormat();
+    *destination = GamePrimaryWaveFormat();
     return DS_OK;
 }
 
@@ -183,7 +183,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFormat(
     if (format == nullptr) {
         return DSERR_INVALIDPARAM;
     }
-    return IsExactOutputFormat(*format) ? DS_OK : DSERR_BADFORMAT;
+    return IsExactGamePrimaryFormat(*format) ? DS_OK : DSERR_BADFORMAT;
 }
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetVolume(LONG) {
@@ -428,7 +428,7 @@ HRESULT SecondarySoundBuffer::Create(
             descriptor.dwFlags == kObservedStaticFlags ||
             descriptor.dwFlags ==
                 (kObservedStaticFlags | DSBCAPS_CTRLPOSITIONNOTIFY);
-        const auto usage = format.native_rate_pcm16 && observed_usage
+        const auto usage = format.game_native_pcm16 && observed_usage
             ? VoiceUsage::GameplayNativeCandidate
             : VoiceUsage::General;
         ma_result voice_result = MA_ERROR;

@@ -16,11 +16,11 @@ using gc::audio::MiniaudioMixer;
 using gc::audio::MixerVoice;
 using gc::audio::NormalizedSourceFormat;
 using gc::audio::VoiceUsage;
-using gc::audio::kOutputAverageBytesPerSecond;
+using gc::audio::kGamePrimaryAverageBytesPerSecond;
+using gc::audio::kGamePrimarySampleRate;
 using gc::audio::kOutputBitsPerSample;
 using gc::audio::kOutputBlockAlign;
 using gc::audio::kOutputChannels;
-using gc::audio::kOutputSampleRate;
 
 constexpr DWORD kSecondaryFlags =
     DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME |
@@ -34,12 +34,12 @@ int Expect(bool condition, std::string_view name) {
     return 1;
 }
 
-WAVEFORMATEX OutputFormat() {
+WAVEFORMATEX GamePrimaryFormat() {
     return {
         .wFormatTag = WAVE_FORMAT_PCM,
         .nChannels = kOutputChannels,
-        .nSamplesPerSec = kOutputSampleRate,
-        .nAvgBytesPerSec = kOutputAverageBytesPerSecond,
+        .nSamplesPerSec = kGamePrimarySampleRate,
+        .nAvgBytesPerSec = kGamePrimaryAverageBytesPerSecond,
         .nBlockAlign = kOutputBlockAlign,
         .wBitsPerSample = kOutputBitsPerSample,
         .cbSize = 0,
@@ -253,7 +253,7 @@ int TestPrimaryValidationAndIdentity() {
         device->CreateSoundBuffer(&nonzero_bytes, &created, nullptr) ==
             DSERR_INVALIDPARAM,
         "primary source byte storage rejection");
-    auto wave = OutputFormat();
+    auto wave = GamePrimaryFormat();
     auto source_format = PrimaryDescription(
         DSBCAPS_PRIMARYBUFFER,
         0,
@@ -356,7 +356,7 @@ int TestPrimaryFormatCapabilitiesAndVtable() {
         return failures + 1;
     }
 
-    auto output = OutputFormat();
+    auto output = GamePrimaryFormat();
     failures += Expect(
         primary->SetFormat(&output) == DS_OK,
         "exact output primary format acceptance");
@@ -401,8 +401,9 @@ int TestPrimaryFormatCapabilitiesAndVtable() {
             written == sizeof(WAVEFORMATEX) &&
             copied.wFormatTag == WAVE_FORMAT_PCM &&
             copied.nChannels == kOutputChannels &&
-            copied.nSamplesPerSec == kOutputSampleRate &&
-            copied.nAvgBytesPerSec == kOutputAverageBytesPerSecond &&
+            copied.nSamplesPerSec == kGamePrimarySampleRate &&
+            copied.nAvgBytesPerSec ==
+                kGamePrimaryAverageBytesPerSecond &&
             copied.nBlockAlign == kOutputBlockAlign &&
             copied.wBitsPerSample == kOutputBitsPerSample &&
             copied.cbSize == 0,
@@ -469,7 +470,7 @@ int TestSecondaryRoutingAndUnsupportedDeviceMethods() {
         return failures + 1;
     }
 
-    auto wave = OutputFormat();
+    auto wave = GamePrimaryFormat();
     auto descriptor = SecondaryDescription(&wave);
     IDirectSoundBuffer* secondary{};
     failures += Expect(

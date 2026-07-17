@@ -1213,7 +1213,7 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
             std::memory_order_seq_cst);
         state_->native_gameplay_buffers.fetch_add(
             usage == VoiceUsage::GameplayNativeCandidate &&
-                    format.native_rate_pcm16
+                    format.game_native_pcm16
                 ? 1
                 : 0,
             std::memory_order_seq_cst);

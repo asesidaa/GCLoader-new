@@ -14,7 +14,8 @@ bool IsObservedChannelCount(WORD channels) noexcept {
 }
 
 bool IsObservedSampleRate(DWORD rate) noexcept {
-    return rate == 22050 || rate == kOutputSampleRate || rate == 48000;
+    return rate == 22050 || rate == kGamePrimarySampleRate ||
+        rate == kFallbackEndpointSampleRate;
 }
 
 bool IsObservedBitsPerSample(WORD bits) noexcept {
@@ -34,19 +35,46 @@ bool IsCanonicalChannelMask(WORD channels, DWORD mask) noexcept {
         mask == (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT);
 }
 
-ConversionPath ClassifyConversionPath(DWORD rate, WORD bits) noexcept {
-    if (rate == kOutputSampleRate) {
-        return bits == 16
-            ? ConversionPath::NativeRatePcm16
-            : ConversionPath::NativeRatePcm24;
-    }
+} // namespace
 
-    return bits == 16
-        ? ConversionPath::LinearResampledPcm16
-        : ConversionPath::LinearResampledPcm24;
+bool IsSupportedEndpointSampleRate(std::uint32_t rate) noexcept {
+    return rate == kGamePrimarySampleRate ||
+        rate == kFallbackEndpointSampleRate;
 }
 
-} // namespace
+EndpointPcmFormat MakeEndpointPcm16Format(
+    std::uint32_t sample_rate,
+    EndpointFormatKind kind) noexcept {
+    if (!IsSupportedEndpointSampleRate(sample_rate)) {
+        return {};
+    }
+
+    EndpointPcmFormat result{};
+    result.kind = kind;
+    auto& format = result.storage.Format;
+    format.wFormatTag = kind == EndpointFormatKind::LegacyPcm
+        ? WAVE_FORMAT_PCM
+        : WAVE_FORMAT_EXTENSIBLE;
+    format.nChannels = kOutputChannels;
+    format.nSamplesPerSec = sample_rate;
+    format.nAvgBytesPerSec = sample_rate * kOutputBlockAlign;
+    format.nBlockAlign = kOutputBlockAlign;
+    format.wBitsPerSample = kOutputBitsPerSample;
+    if (kind == EndpointFormatKind::LegacyPcm) {
+        format.cbSize = 0;
+        result.size = sizeof(WAVEFORMATEX);
+        return result;
+    }
+
+    format.cbSize = static_cast<WORD>(
+        sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX));
+    result.storage.Samples.wValidBitsPerSample = kOutputBitsPerSample;
+    result.storage.dwChannelMask =
+        SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    result.storage.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+    result.size = sizeof(WAVEFORMATEXTENSIBLE);
+    return result;
+}
 
 HRESULT NormalizeSourceFormat(
     const WAVEFORMATEX* source,
@@ -102,9 +130,6 @@ HRESULT NormalizeSourceFormat(
     result.sample_format = source->wBitsPerSample == 16
         ? SourceSampleFormat::Pcm16
         : SourceSampleFormat::Pcm24;
-    result.path = ClassifyConversionPath(
-        source->nSamplesPerSec,
-        source->wBitsPerSample);
     result.miniaudio_format = source->wBitsPerSample == 16
         ? ma_format_s16
         : ma_format_s24;
@@ -115,22 +140,22 @@ HRESULT NormalizeSourceFormat(
     result.average_bytes_per_second = source->nAvgBytesPerSec;
     result.sample_format_converted = true;
     result.sample_rate_converted =
-        source->nSamplesPerSec != kOutputSampleRate;
-    result.native_rate_pcm16 =
-        source->nSamplesPerSec == kOutputSampleRate &&
+        source->nSamplesPerSec != kGamePrimarySampleRate;
+    result.game_native_pcm16 =
+        source->nSamplesPerSec == kGamePrimarySampleRate &&
         source->wBitsPerSample == 16;
 
     *normalized = result;
     return DS_OK;
 }
 
-bool IsExactOutputFormat(const WAVEFORMATEX& format) noexcept {
+bool IsExactGamePrimaryFormat(const WAVEFORMATEX& format) noexcept {
     return format.wFormatTag == WAVE_FORMAT_PCM &&
         format.nChannels == kOutputChannels &&
-        format.nSamplesPerSec == kOutputSampleRate &&
+        format.nSamplesPerSec == kGamePrimarySampleRate &&
         format.wBitsPerSample == kOutputBitsPerSample &&
         format.nBlockAlign == kOutputBlockAlign &&
-        format.nAvgBytesPerSec == kOutputAverageBytesPerSecond &&
+        format.nAvgBytesPerSec == kGamePrimaryAverageBytesPerSecond &&
         (format.cbSize == 0 || format.cbSize == sizeof(WAVEFORMATEX));
 }
 

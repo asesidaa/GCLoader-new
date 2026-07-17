@@ -48,18 +48,6 @@ int expect(bool condition, std::string_view name) {
     return 1;
 }
 
-gc::audio::ConversionPath expected_path(DWORD rate, WORD bits) {
-    if (rate == gc::audio::kOutputSampleRate) {
-        return bits == 16
-            ? gc::audio::ConversionPath::NativeRatePcm16
-            : gc::audio::ConversionPath::NativeRatePcm24;
-    }
-
-    return bits == 16
-        ? gc::audio::ConversionPath::LinearResampledPcm16
-        : gc::audio::ConversionPath::LinearResampledPcm24;
-}
-
 } // namespace
 
 int main() {
@@ -81,18 +69,16 @@ int main() {
                     case_name + " observed PCM accepted");
                 failures += expect(
                     normalized.sample_rate_converted ==
-                        (rate != gc::audio::kOutputSampleRate),
+                        (rate != gc::audio::kGamePrimarySampleRate),
                     case_name + " rate conversion classification");
                 failures += expect(
-                    normalized.native_rate_pcm16 ==
-                        (rate == gc::audio::kOutputSampleRate && bits == 16),
-                    case_name + " native-rate PCM16 classification");
+                    normalized.game_native_pcm16 ==
+                        (rate == gc::audio::kGamePrimarySampleRate &&
+                         bits == 16),
+                    case_name + " game-native PCM16 classification");
                 failures += expect(
                     normalized.sample_format_converted,
                     case_name + " integer-to-float classification");
-                failures += expect(
-                    normalized.path == expected_path(rate, bits),
-                    case_name + " conversion path");
                 failures += expect(
                     normalized.sample_format ==
                         (bits == 16
@@ -141,11 +127,6 @@ int main() {
                 normalized_extensible.wave.SubFormat,
                 KSDATAFORMAT_SUBTYPE_PCM),
         "extensible fields preserved");
-    failures += expect(
-        normalized_extensible.path ==
-            gc::audio::ConversionPath::LinearResampledPcm24,
-        "extensible PCM24 conversion path");
-
     const auto valid_source = pcm(2, 44100, 16);
     failures += expect(
         gc::audio::NormalizeSourceFormat(nullptr, &normalized_extensible) ==
@@ -247,19 +228,68 @@ int main() {
         "legacy IEEE-float tag rejected");
 
     failures += expect(
-        gc::audio::IsExactOutputFormat(valid_source),
-        "exact PCM16 stereo 44.1 kHz output accepted");
+        gc::audio::IsExactGamePrimaryFormat(valid_source),
+        "exact PCM16 stereo 44.1 kHz game primary accepted");
     const auto non_output_rate = pcm(2, 48000, 16);
     failures += expect(
-        !gc::audio::IsExactOutputFormat(non_output_rate),
-        "48 kHz output rejected");
+        !gc::audio::IsExactGamePrimaryFormat(non_output_rate),
+        "48 kHz game primary rejected");
     const auto mono_output = pcm(1, 44100, 16);
     failures += expect(
-        !gc::audio::IsExactOutputFormat(mono_output),
-        "mono output rejected");
+        !gc::audio::IsExactGamePrimaryFormat(mono_output),
+        "mono game primary rejected");
     failures += expect(
-        !gc::audio::IsExactOutputFormat(legacy_float),
-        "float output rejected");
+        !gc::audio::IsExactGamePrimaryFormat(legacy_float),
+        "float game primary rejected");
+
+    for (const DWORD rate : {
+             gc::audio::kGamePrimarySampleRate,
+             gc::audio::kFallbackEndpointSampleRate}) {
+        for (const auto kind : {
+                 gc::audio::EndpointFormatKind::LegacyPcm,
+                 gc::audio::EndpointFormatKind::ExtensiblePcm}) {
+            const auto endpoint = gc::audio::MakeEndpointPcm16Format(
+                rate,
+                kind);
+            const auto& wave = endpoint.wave_format();
+            const bool extensible_kind =
+                kind == gc::audio::EndpointFormatKind::ExtensiblePcm;
+            failures += expect(
+                endpoint.valid() &&
+                    endpoint.size ==
+                        (extensible_kind
+                             ? sizeof(WAVEFORMATEXTENSIBLE)
+                             : sizeof(WAVEFORMATEX)) &&
+                    wave.wFormatTag ==
+                        (extensible_kind
+                             ? WAVE_FORMAT_EXTENSIBLE
+                             : WAVE_FORMAT_PCM) &&
+                    wave.nChannels == gc::audio::kOutputChannels &&
+                    wave.nSamplesPerSec == rate &&
+                    wave.wBitsPerSample ==
+                        gc::audio::kOutputBitsPerSample &&
+                    wave.nBlockAlign == gc::audio::kOutputBlockAlign &&
+                    wave.nAvgBytesPerSec ==
+                        rate * gc::audio::kOutputBlockAlign &&
+                    wave.cbSize == (extensible_kind ? 22 : 0),
+                "canonical endpoint PCM16 scalar fields");
+            if (extensible_kind) {
+                failures += expect(
+                    endpoint.storage.Samples.wValidBitsPerSample == 16 &&
+                        endpoint.storage.dwChannelMask ==
+                            (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT) &&
+                        IsEqualGUID(
+                            endpoint.storage.SubFormat,
+                            KSDATAFORMAT_SUBTYPE_PCM),
+                    "canonical extensible endpoint PCM16 fields");
+            }
+        }
+    }
+    failures += expect(
+        !gc::audio::MakeEndpointPcm16Format(
+             32000,
+             gc::audio::EndpointFormatKind::LegacyPcm).valid(),
+        "unsupported endpoint rate rejected");
 
     failures += expect(
         gc::audio::ReferenceTimeToFramesCeil(30'000, 44100) == 133,
