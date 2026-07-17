@@ -9,6 +9,7 @@
 
 #include <dsound.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <exception>
 #include <iomanip>
@@ -38,8 +39,6 @@ constexpr std::string_view kPacingFailureMessage =
     "Please increase wasapi_exclusive_buffer_ms and restart the game.\n"
     "Set enable_wasapi_exclusive_audio = false and restart to restore "
     "the original DirectSound backend.";
-constexpr std::string_view kExactFormat =
-    "pcm16/44100Hz/2ch/16bit";
 constexpr REFERENCE_TIME kReferenceTimePerMillisecond = 10'000;
 
 constexpr REFERENCE_TIME BufferMillisecondsToReferenceTime(
@@ -157,19 +156,70 @@ std::string hresult_hex(HRESULT result) {
     return stream.str();
 }
 
+const char* descriptor_name(EndpointFormatKind kind) noexcept {
+    return kind == EndpointFormatKind::LegacyPcm
+        ? "legacy_pcm"
+        : "extensible_pcm";
+}
+
+std::string selected_format_text(
+    const EndpointInitialization& initialization) {
+    if (!initialization.has_selected_format ||
+        !initialization.selected_format.valid()) {
+        return "format=<none> descriptor=<none> fallback_rate=false";
+    }
+
+    const auto& wave = initialization.selected_format.wave_format();
+    std::ostringstream stream;
+    stream << "format=pcm16/" << wave.nSamplesPerSec
+           << "Hz/" << wave.nChannels
+           << "ch/" << wave.wBitsPerSample
+           << "bit descriptor="
+           << descriptor_name(initialization.selected_format.kind)
+           << " fallback_rate="
+           << (wave.nSamplesPerSec != kGamePrimarySampleRate
+                   ? "true"
+                   : "false");
+    return stream.str();
+}
+
+std::string format_attempts_text(
+    const EndpointInitialization& initialization) {
+    const auto attempt_count = std::min<std::size_t>(
+        initialization.format_attempt_count,
+        initialization.format_attempts.size());
+    std::ostringstream stream;
+    stream << "format_attempt_count=" << attempt_count
+           << " format_attempts=\"";
+    for (std::size_t index = 0; index < attempt_count; ++index) {
+        if (index != 0) {
+            stream << ',';
+        }
+        const auto& attempt = initialization.format_attempts[index];
+        stream << attempt.format.wave_format().nSamplesPerSec
+               << '/' << descriptor_name(attempt.format.kind)
+               << ':' << hresult_hex(attempt.result);
+    }
+    stream << '\"';
+    return stream.str();
+}
+
 std::string startup_text(const EndpointInitialization& initialization) {
-    const auto output_sample_rate =
-        initialization.selected_format.wave_format().nSamplesPerSec;
-    const double actual_ms =
-        static_cast<double>(initialization.actual_buffer_frames) * 1000.0 /
-        static_cast<double>(output_sample_rate);
+    const auto output_sample_rate = initialization.has_selected_format
+        ? initialization.selected_format.wave_format().nSamplesPerSec
+        : 0;
+    const double actual_ms = output_sample_rate == 0
+        ? 0.0
+        : static_cast<double>(initialization.actual_buffer_frames) * 1000.0 /
+            static_cast<double>(output_sample_rate);
     std::ostringstream stream;
     stream << std::fixed << std::setprecision(3)
         << "WASAPI audio startup requested_backend=wasapi_exclusive"
         << " active_backend=wasapi_exclusive"
         << " endpoint_name=\"" << utf8(initialization.endpoint_name) << "\""
         << " endpoint_id=\"" << utf8(initialization.endpoint_id) << "\""
-        << " format=" << kExactFormat
+        << ' ' << selected_format_text(initialization)
+        << ' ' << format_attempts_text(initialization)
         << " default_period_100ns=" << initialization.default_period
         << " default_period_ms="
         << static_cast<double>(initialization.default_period) / 10'000.0
@@ -219,7 +269,8 @@ std::string failure_text(
                 : utf8(initialization.endpoint_id))
         << "\" stage=" << audio_failure_stage_name(failure.stage)
         << " hresult=" << hresult_hex(failure.result)
-        << " format=" << kExactFormat
+        << ' ' << selected_format_text(initialization)
+        << ' ' << format_attempts_text(initialization)
         << " default_period_100ns=" << initialization.default_period
         << " minimum_period_100ns=" << initialization.minimum_period
         << " configured_duration_100ns="

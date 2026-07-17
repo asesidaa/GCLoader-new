@@ -604,7 +604,8 @@ int main(int argc, char *argv[]) {
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip(
-                "Uses the default console endpoint in exclusive 44.1 kHz PCM16 mode.\n"
+                "Uses the default console endpoint in exclusive stereo PCM16 mode.\n"
+                "Prefers exact 44.1 kHz and automatically falls back to exact 48 kHz.\n"
                 "Disable this option if exclusive endpoint initialization fails.");
         }
         auto& wasapi_exclusive_buffer_ms =

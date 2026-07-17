@@ -1,6 +1,8 @@
 #include "WasapiAudioPatch.h"
 #include "WasapiAudioPatchInternal.h"
 
+#include <audioclient.h>
+
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -481,6 +483,66 @@ AudioStartupFailure exact_startup_failure() {
     return failure;
 }
 
+void AddFormatAttempt(
+    gc::audio::EndpointInitialization& initialization,
+    std::uint32_t sample_rate,
+    gc::audio::EndpointFormatKind kind,
+    HRESULT result) {
+    const auto index = initialization.format_attempt_count++;
+    initialization.format_attempts[index] = {
+        gc::audio::MakeEndpointPcm16Format(sample_rate, kind),
+        result,
+    };
+}
+
+void SelectFormat(
+    gc::audio::EndpointInitialization& initialization,
+    std::uint32_t sample_rate,
+    gc::audio::EndpointFormatKind kind) {
+    initialization.selected_format =
+        gc::audio::MakeEndpointPcm16Format(sample_rate, kind);
+    initialization.has_selected_format = true;
+}
+
+void ResetFormatMetadata(
+    gc::audio::EndpointInitialization& initialization) {
+    initialization.format_attempts = {};
+    initialization.format_attempt_count = 0;
+    initialization.selected_format = {};
+    initialization.has_selected_format = false;
+}
+
+AudioStartupFailure all_unsupported_startup_failure() {
+    AudioStartupFailure failure{};
+    failure.failure = {
+        gc::audio::AudioFailureStage::IsFormatSupported,
+        AUDCLNT_E_UNSUPPORTED_FORMAT,
+    };
+    failure.attempted.endpoint_name = L"Unsupported endpoint";
+    failure.attempted.endpoint_id = L"unsupported-endpoint-id";
+    AddFormatAttempt(
+        failure.attempted,
+        44'100,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        S_FALSE);
+    AddFormatAttempt(
+        failure.attempted,
+        44'100,
+        gc::audio::EndpointFormatKind::ExtensiblePcm,
+        AUDCLNT_E_UNSUPPORTED_FORMAT);
+    AddFormatAttempt(
+        failure.attempted,
+        48'000,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        S_FALSE);
+    AddFormatAttempt(
+        failure.attempted,
+        48'000,
+        gc::audio::EndpointFormatKind::ExtensiblePcm,
+        AUDCLNT_E_UNSUPPORTED_FORMAT);
+    return failure;
+}
+
 bool same_failure(
     const AudioStartupFailure& left,
     const AudioStartupFailure& right) {
@@ -710,16 +772,31 @@ int test_production_diagnostics_use_injected_platform_actions() {
     initialization.default_period = 100'000;
     initialization.minimum_period = 20'000;
     initialization.configured_duration = 100'000;
-    initialization.requested_duration = 30'000;
+    initialization.requested_duration = 100'000;
     initialization.stream_latency = 50'000;
     initialization.stream_latency_result = S_OK;
     initialization.stream_latency_available = true;
-    initialization.actual_buffer_frames = 147;
-    initialization.alignment_retry = true;
-    initialization.selected_format = gc::audio::MakeEndpointPcm16Format(
-        gc::audio::kGamePrimarySampleRate,
+    initialization.actual_buffer_frames = 480;
+    initialization.alignment_retry = false;
+    AddFormatAttempt(
+        initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        AUDCLNT_E_UNSUPPORTED_FORMAT);
+    AddFormatAttempt(
+        initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::ExtensiblePcm,
+        S_FALSE);
+    AddFormatAttempt(
+        initialization,
+        48'000,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        S_OK);
+    SelectFormat(
+        initialization,
+        48'000,
         gc::audio::EndpointFormatKind::LegacyPcm);
-    initialization.has_selected_format = true;
     gc::audio::detail::ReportAudioStartupSucceeded(
         initialization,
         actions);
@@ -735,30 +812,71 @@ int test_production_diagnostics_use_injected_platform_actions() {
              "active_backend=wasapi_exclusive",
              "endpoint_name=\"Fake Pro Audio Endpoint\"",
              "endpoint_id=\"endpoint-id-123\"",
-             "format=pcm16/44100Hz/2ch/16bit",
+             "format=pcm16/48000Hz/2ch/16bit",
+             "descriptor=legacy_pcm",
+             "fallback_rate=true",
+             "format_attempt_count=3",
+             "format_attempts=\"44100/legacy_pcm:0x88890008,44100/extensible_pcm:0x00000001,48000/legacy_pcm:0x00000000\"",
              "default_period_100ns=100000",
              "default_period_ms=10.000",
              "minimum_period_100ns=20000",
              "minimum_period_ms=2.000",
              "configured_duration_100ns=100000",
              "configured_duration_ms=10.000",
-             "requested_duration_100ns=30000",
-             "requested_duration_ms=3.000",
+             "requested_duration_100ns=100000",
+             "requested_duration_ms=10.000",
              "stream_latency_100ns=50000",
              "stream_latency_ms=5.000",
-             "actual_buffer_frames=147",
-             "actual_buffer_ms=3.333",
+             "actual_buffer_frames=480",
+             "actual_buffer_ms=10.000",
              "exclusive_event_driven=true",
-             "alignment_retry=true",
+             "alignment_retry=false",
              "mmcss_profile=\"Pro Audio\"",
              "mmcss_priority=\"Critical\"",
-             "mixer_rate_hz=44100",
+             "mixer_rate_hz=48000",
              "mixer_channels=2",
          }) {
         failures += expect(
             contains(startup, required),
             "startup log contains every required field");
     }
+
+    DiagnosticState extensible_diagnostics;
+    g_diagnostics = &extensible_diagnostics;
+    auto extensible_initialization = initialization;
+    ResetFormatMetadata(extensible_initialization);
+    extensible_initialization.actual_buffer_frames = 441;
+    AddFormatAttempt(
+        extensible_initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        AUDCLNT_E_UNSUPPORTED_FORMAT);
+    AddFormatAttempt(
+        extensible_initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::ExtensiblePcm,
+        S_OK);
+    SelectFormat(
+        extensible_initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::ExtensiblePcm);
+    gc::audio::detail::ReportAudioStartupSucceeded(
+        extensible_initialization,
+        actions);
+    const std::string_view extensible_startup =
+        extensible_diagnostics.info.empty()
+        ? std::string_view{}
+        : extensible_diagnostics.info.back();
+    failures += expect(
+        contains(extensible_startup, "format=pcm16/44100Hz/2ch/16bit") &&
+            contains(extensible_startup, "descriptor=extensible_pcm") &&
+            contains(extensible_startup, "fallback_rate=false") &&
+            contains(extensible_startup, "format_attempt_count=2") &&
+            contains(
+                extensible_startup,
+                "format_attempts=\"44100/legacy_pcm:0x88890008,44100/extensible_pcm:0x00000000\""),
+        "44.1 kHz extensible startup reports descriptor and attempts");
+    g_diagnostics = &diagnostics;
 
     gc::audio::AudioRuntimeCountersSnapshot counters{};
     counters.render_callbacks = 11;
@@ -816,8 +934,34 @@ int test_production_diagnostics_use_injected_platform_actions() {
         gc::audio::AudioFailureStage::ReleaseRenderBuffer,
         HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_AVAILABLE),
     };
+    auto runtime_initialization = initialization;
+    ResetFormatMetadata(runtime_initialization);
+    AddFormatAttempt(
+        runtime_initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        AUDCLNT_E_UNSUPPORTED_FORMAT);
+    AddFormatAttempt(
+        runtime_initialization,
+        44'100,
+        gc::audio::EndpointFormatKind::ExtensiblePcm,
+        S_FALSE);
+    AddFormatAttempt(
+        runtime_initialization,
+        48'000,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        AUDCLNT_E_UNSUPPORTED_FORMAT);
+    AddFormatAttempt(
+        runtime_initialization,
+        48'000,
+        gc::audio::EndpointFormatKind::ExtensiblePcm,
+        S_OK);
+    SelectFormat(
+        runtime_initialization,
+        48'000,
+        gc::audio::EndpointFormatKind::ExtensiblePcm);
     gc::audio::detail::ReportAudioRuntimeFailure(
-        initialization,
+        runtime_initialization,
         runtime_failure,
         counters,
         actions);
@@ -827,9 +971,15 @@ int test_production_diagnostics_use_injected_platform_actions() {
             contains(diagnostics.errors.back(), "endpoint_id=\"endpoint-id-123\"") &&
             contains(diagnostics.errors.back(), "stage=ReleaseRenderBuffer") &&
             contains(diagnostics.errors.back(), "hresult=0x800710DF") &&
-            contains(diagnostics.errors.back(), "format=pcm16/44100Hz/2ch/16bit") &&
+            contains(diagnostics.errors.back(), "format=pcm16/48000Hz/2ch/16bit") &&
+            contains(diagnostics.errors.back(), "descriptor=extensible_pcm") &&
+            contains(diagnostics.errors.back(), "fallback_rate=true") &&
+            contains(diagnostics.errors.back(), "format_attempt_count=4") &&
+            contains(
+                diagnostics.errors.back(),
+                "format_attempts=\"44100/legacy_pcm:0x88890008,44100/extensible_pcm:0x00000001,48000/legacy_pcm:0x88890008,48000/extensible_pcm:0x00000000\"") &&
             contains(diagnostics.errors.back(), "maximum_simultaneous_voices=28"),
-        "runtime fatal logs endpoint stage HRESULT format and counters");
+        "runtime fatal retains selected format attempts and counters");
     failures += expect(
         diagnostics.messages.size() == 1 &&
             contains(
@@ -857,10 +1007,15 @@ int test_pacing_specific_diagnostics() {
     gc::audio::EndpointInitialization unavailable{};
     unavailable.endpoint_id = L"latency-unavailable";
     unavailable.stream_latency_result = E_NOTIMPL;
-    unavailable.selected_format = gc::audio::MakeEndpointPcm16Format(
+    AddFormatAttempt(
+        unavailable,
+        gc::audio::kGamePrimarySampleRate,
+        gc::audio::EndpointFormatKind::LegacyPcm,
+        S_OK);
+    SelectFormat(
+        unavailable,
         gc::audio::kGamePrimarySampleRate,
         gc::audio::EndpointFormatKind::LegacyPcm);
-    unavailable.has_selected_format = true;
     gc::audio::detail::ReportAudioStartupSucceeded(unavailable, actions);
     failures += expect(
         diagnostics.info.size() == 1 &&
@@ -973,15 +1128,21 @@ int test_null_production_api_and_startup_fatal_reporting() {
             allocation_failure.failure.result == E_OUTOFMEMORY,
         "null production WASAPI API publishes InitializeMixer E_OUTOFMEMORY");
 
-    const auto startup_failure = exact_startup_failure();
+    const auto startup_failure = all_unsupported_startup_failure();
     gc::audio::detail::ReportAudioStartupFailure(startup_failure, actions);
     failures += expect(
         diagnostics.errors.size() == 1 &&
-            contains(diagnostics.errors.back(), "endpoint_id=\"fake-endpoint-id\"") &&
-            contains(diagnostics.errors.back(), "stage=GetActualBufferSize") &&
-            contains(diagnostics.errors.back(), "hresult=0x8007000B") &&
-            contains(diagnostics.errors.back(), "format=pcm16/44100Hz/2ch/16bit"),
-        "startup fatal logs endpoint stage HRESULT and exact format");
+            contains(diagnostics.errors.back(), "endpoint_id=\"unsupported-endpoint-id\"") &&
+            contains(diagnostics.errors.back(), "stage=IsFormatSupported") &&
+            contains(diagnostics.errors.back(), "hresult=0x88890008") &&
+            contains(diagnostics.errors.back(), "format=<none>") &&
+            contains(diagnostics.errors.back(), "descriptor=<none>") &&
+            contains(diagnostics.errors.back(), "fallback_rate=false") &&
+            contains(diagnostics.errors.back(), "format_attempt_count=4") &&
+            contains(
+                diagnostics.errors.back(),
+                "format_attempts=\"44100/legacy_pcm:0x00000001,44100/extensible_pcm:0x88890008,48000/legacy_pcm:0x00000001,48000/extensible_pcm:0x88890008\""),
+        "startup fatal logs all unsupported format attempts");
     failures += expect(
         diagnostics.messages.size() == 1 &&
             contains(
