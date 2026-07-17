@@ -66,10 +66,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 }
                 PLOG_DEBUG << "RFID/JVS feature init complete!";
 
-                FrameratePatchInit();
+                if (!gc::framerate::FrameratePatchInit()) {
+                    PLOG_ERROR
+                        << "FrameratePatch: fail-closed DLL attach";
+                    return FALSE;
+                }
                 PLOG_DEBUG
-                    << "120 FPS runtime patch init complete!"
-                    << std::endl;
+                    << "Framerate runtime initialization complete!";
 
                 gc::switch_input::SwitchInputPatchInit();
                 PLOG_DEBUG

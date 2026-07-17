@@ -1,3 +1,7 @@
 #pragma once
 
-void FrameratePatchInit();
+namespace gc::framerate {
+
+[[nodiscard]] bool FrameratePatchInit();
+
+} // namespace gc::framerate

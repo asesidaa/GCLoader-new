@@ -27,3 +27,8 @@ add_executable(FrameratePatchPlanTests
         Framerate/FrameratePatchPlanTests.cpp)
 target_link_libraries(FrameratePatchPlanTests PRIVATE gc_runtime_patches)
 add_test(NAME FrameratePatchPlanTests COMMAND FrameratePatchPlanTests)
+
+add_executable(FramerateRuntimeTests
+        Framerate/FramerateRuntimeTests.cpp)
+target_link_libraries(FramerateRuntimeTests PRIVATE gc_runtime_patches)
+add_test(NAME FramerateRuntimeTests COMMAND FramerateRuntimeTests)
