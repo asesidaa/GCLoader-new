@@ -154,12 +154,12 @@ int main(int argc, char *argv[]) {
     if (ifs.is_open()) {
         std::string toml_content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
         ifs.close();
-        auto load_result = rfl::toml::read<InputConfig>(toml_content);
+        auto load_result = gc::config::ParseAndValidateInputConfig(toml_content);
         if (load_result) {
             g_config = *load_result;
             SDL_Log("Loaded configuration from %s", g_config_path.c_str());
         } else {
-            SDL_Log("Error parsing %s: %s", g_config_path.c_str(), load_result.error().what());
+            SDL_Log("Error parsing %s: %s", g_config_path.c_str(), load_result.error().c_str());
             SDL_DestroyRenderer(g_renderer);
             SDL_DestroyWindow(g_window);
             SDL_Quit();
@@ -571,10 +571,34 @@ int main(int argc, char *argv[]) {
             gc::registry_config::ValidateRegistryConfig(registry);
 
         ImGui::SeparatorText("Experimental");
-        bool enable_120fps_timer_patches = g_config.experimental().enable_120fps_timer_patches();
-        if (ImGui::Checkbox("120 FPS timer patches", &enable_120fps_timer_patches)) {
-            g_config.experimental().enable_120fps_timer_patches = enable_120fps_timer_patches;
+        auto& target_fps = g_config.experimental().target_fps();
+        constexpr gc::config::TargetFpsConfigValue minimum_target =
+            gc::config::kMinimumTargetFps;
+        constexpr gc::config::TargetFpsConfigValue maximum_target =
+            gc::config::kMaximumTargetFps;
+        if (ImGui::SliderScalar(
+                "Target FPS",
+                ImGuiDataType_U32,
+                &target_fps,
+                &minimum_target,
+                &maximum_target,
+                "%u",
+                ImGuiSliderFlags_AlwaysClamp)) {
             g_config_dirty = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Fixed framerate expected for this game launch (60-500).\n"
+                "GCLoader does not apply a frame cap. Configure the same cap in your driver or RTSS.\n"
+                "Restart the game after changing this value.");
+        }
+        if (!gc::config::IsGameplayValidatedTargetFps(
+                static_cast<std::uint32_t>(target_fps))) {
+            ImGui::TextColored(
+                ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
+                "This in-range value is formula-driven but not individually gameplay-validated.");
         }
         bool enable_timer_freeze_patches = g_config.experimental().enable_timer_freeze_patches();
         if (ImGui::Checkbox("Timer freeze patches", &enable_timer_freeze_patches)) {
@@ -746,7 +770,8 @@ int main(int argc, char *argv[]) {
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0.3f, 0.8f, 0.8f));
         }
         const bool configuration_valid =
-            nesys_server_ip_valid && registry_validation.valid();
+            nesys_server_ip_valid && registry_validation.valid() &&
+            gc::config::ValidateInputConfig(g_config).has_value();
         ImGui::BeginDisabled(!configuration_valid);
         if (ImGui::Button("Save Configuration") && g_config_dirty) {
             try {

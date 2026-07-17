@@ -1,13 +1,90 @@
-﻿#include "Config/config.h"
+#include "Config/config.h"
+
 #include "Nesys/Network/NesysNetworkConfig.h"
+
 #include <filesystem>
 #include <fstream>
-#include "rfl/toml.hpp"
+#include <iterator>
+
 #include "rfl/json.hpp"
+#include "rfl/toml.hpp"
+#include <toml++/toml.hpp>
+
+namespace gc::config {
+
+namespace {
+
+constexpr std::string_view kObsoleteFramerateBoolean =
+    "enable_120fps_" "timer_patches";
+
+} // namespace
+
+std::expected<void, std::string> ValidateInputConfig(
+    const InputConfig& value) {
+    const auto target = static_cast<std::uint32_t>(
+        value.experimental().target_fps());
+    if (!IsTargetFpsInRange(target)) {
+        return std::unexpected(
+            "Invalid [experimental].target_fps; expected an integer from 60 through 500");
+    }
+
+    try {
+        ValidateInputPollHertz(value.input_poll_hz());
+    } catch (const std::exception& error) {
+        return std::unexpected(error.what());
+    }
+
+    if (!gc::nesys_service::IsDottedDecimalIpv4(
+            value.nesys().server_ip())) {
+        return std::unexpected(
+            "Invalid [nesys].server_ip; expected dotted-decimal IPv4");
+    }
+
+    const auto registry_validation =
+        gc::registry_config::ValidateRegistryConfig(value.registry());
+    if (!registry_validation.valid()) {
+        return std::unexpected(
+            gc::registry_config::FirstRegistryValidationError(
+                registry_validation));
+    }
+    return {};
+}
+
+std::expected<InputConfig, std::string> ParseAndValidateInputConfig(
+    std::string_view text) {
+    const auto syntax_result = toml::parse(text);
+    if (!syntax_result) {
+        return std::unexpected(
+            "Failed to parse config file: " +
+            std::string{syntax_result.error().description()});
+    }
+
+    const auto& syntax = syntax_result.table();
+    if (const auto* experimental = syntax["experimental"].as_table();
+        experimental != nullptr &&
+        experimental->contains(kObsoleteFramerateBoolean)) {
+        return std::unexpected(
+            "Obsolete [experimental].enable_120fps_"
+            "timer_patches is not supported; replace it with target_fps = 60 through 500");
+    }
+
+    auto parsed = rfl::toml::read<InputConfig>(std::string{text});
+    if (!parsed) {
+        return std::unexpected(
+            "Failed to parse config file: " + parsed.error().what());
+    }
+    if (auto validation = ValidateInputConfig(parsed.value());
+        !validation) {
+        return std::unexpected(validation.error());
+    }
+    return std::move(parsed.value());
+}
+
+} // namespace gc::config
 
 ConfigManager::ConfigManager()
 {
-    const auto configPath = std::filesystem::current_path () / "config.toml";
+    const auto configPath = std::filesystem::current_path() / "config.toml";
     if (!std::filesystem::exists(configPath))
     {
         PLOG_ERROR << "Config file not found: " << configPath.c_str() << std::endl;
@@ -21,33 +98,16 @@ ConfigManager::ConfigManager()
         throw std::runtime_error("Failed to open config file");
     }
 
-    auto result = rfl::toml::read<InputConfig>(configFile);
-    if (result)
-    {
-        ValidateInputPollHertz(result.value().input_poll_hz());
-
-        const auto& server_ip = result.value().nesys().server_ip();
-        if (!gc::nesys_service::IsDottedDecimalIpv4(server_ip))
-        {
-            throw std::runtime_error(
-                "Invalid [nesys].server_ip; expected dotted-decimal IPv4");
-        }
-
-        const auto registry_validation =
-            gc::registry_config::ValidateRegistryConfig(result.value().registry());
-        if (!registry_validation.valid()) {
-            throw std::runtime_error(
-                gc::registry_config::FirstRegistryValidationError(
-                    registry_validation));
-        }
-
-        config = result.value();
-        PLOG_DEBUG << "Config file parsed successfully" << std::endl;
-        PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
-        return;
+    const std::string text{
+        std::istreambuf_iterator<char>{configFile},
+        std::istreambuf_iterator<char>{}};
+    auto result = gc::config::ParseAndValidateInputConfig(text);
+    if (!result) {
+        PLOG_ERROR << result.error() << std::endl;
+        throw std::runtime_error(result.error());
     }
 
-    auto error = result.error();
-    PLOG_ERROR << "Failed to parse config file: " << error.what() << std::endl;
-    throw std::runtime_error("Failed to parse config file: " + error.what());
+    config = std::move(result.value());
+    PLOG_DEBUG << "Config file parsed successfully" << std::endl;
+    PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
 }

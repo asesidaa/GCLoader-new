@@ -59,7 +59,7 @@ event_path = 'D:\system\DUA\event'
 log_path = 'D:\system\CmdFile\log'
 
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true

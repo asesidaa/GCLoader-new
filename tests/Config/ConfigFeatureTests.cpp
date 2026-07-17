@@ -1,4 +1,5 @@
 #include "Config/config.h"
+#include "Config/TargetFps.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
 #include "Platform/Win32/KeyMapping.h"
 
@@ -100,7 +101,7 @@ event_path = 'D:\system\DUA\event'
 log_path = 'D:\system\CmdFile\log'
 
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
@@ -150,7 +151,7 @@ event_path = 'D:\system\DUA\event'
 log_path = 'D:\system\CmdFile\log'
 
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
@@ -180,7 +181,7 @@ event_path = 'D:\system\DUA\event'
 log_path = 'D:\system\CmdFile\log'
 
 [experimental]
-enable_120fps_timer_patches = true
+target_fps = 240
 enable_testmode_storage_redirect = true
 enable_timer_freeze_patches = true
 enable_nesys_service_adapter_patch = false
@@ -189,23 +190,18 @@ wasapi_exclusive_buffer_ms = 20
 )toml";
 
 InputConfig parse_config(const std::string& toml) {
-    std::istringstream stream(toml);
-    auto result = rfl::toml::read<InputConfig>(stream);
+    auto result = gc::config::ParseAndValidateInputConfig(toml);
     if (!result) {
-        std::cerr << "Failed to parse test config: " << result.error().what() << "\n";
+        std::cerr << "Failed to parse test config: " << result.error() << "\n";
         std::exit(1);
     }
-
-    return result.value();
+    return std::move(result.value());
 }
 
 int expect_parse_failure(const std::string& toml, const char* name) {
-    std::istringstream stream(toml);
-    auto result = rfl::toml::read<InputConfig>(stream);
-    if (!result) {
+    if (!gc::config::ParseAndValidateInputConfig(toml)) {
         return 0;
     }
-
     std::cerr << "Expected parse failure for " << name << "\n";
     return 1;
 }
@@ -817,10 +813,10 @@ int main() {
         "10.23.45.67",
         "custom NESYS server round-trip");
 
-    failures += expect_bool(
-        upgraded_defaults.experimental().enable_120fps_timer_patches(),
-        false,
-        "upgraded default enable_120fps_timer_patches");
+    failures += expect_u32(
+        upgraded_defaults.experimental().target_fps(),
+        60,
+        "upgraded default target_fps");
     failures += expect_bool(
         upgraded_defaults.experimental().enable_timer_freeze_patches(),
         false,
@@ -866,10 +862,10 @@ int main() {
         custom.gameplay_input_style(),
         GameplayInputStyle::Switch,
         "custom gameplay_input_style");
-    failures += expect_bool(
-        custom.experimental().enable_120fps_timer_patches(),
-        true,
-        "custom enable_120fps_timer_patches");
+    failures += expect_u32(
+        custom.experimental().target_fps(),
+        240,
+        "custom target_fps");
     failures += expect_bool(
         custom.experimental().enable_timer_freeze_patches(),
         true,
@@ -900,6 +896,68 @@ int main() {
         reparsed_wasapi.experimental().wasapi_exclusive_buffer_ms(),
         20,
         "WASAPI buffer TOML round trip");
+
+    constexpr std::uint32_t accepted_targets[]{
+        60, 61, 120, 144, 165, 240, 360, 500,
+    };
+    for (const auto target : accepted_targets) {
+        auto text = replace_once(
+            std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig,
+            "target_fps = 60",
+            "target_fps = " + std::to_string(target));
+        const auto parsed = parse_config(text);
+        failures += expect_u32(
+            parsed.experimental().target_fps(), target, "accepted target_fps");
+        const auto round_trip = parse_config(rfl::toml::write(parsed));
+        failures += expect_u32(
+            round_trip.experimental().target_fps(), target, "target_fps round trip");
+    }
+
+    const auto native_config =
+        std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
+    failures += expect_parse_failure(
+        replace_once(native_config, "target_fps = 60", "target_fps = 59"),
+        "target_fps below range");
+    failures += expect_parse_failure(
+        replace_once(native_config, "target_fps = 60", "target_fps = 501"),
+        "target_fps above range");
+    failures += expect_parse_failure(
+        replace_once(native_config, "target_fps = 60", "target_fps = 120.0"),
+        "fractional target_fps");
+    failures += expect_parse_failure(
+        replace_once(native_config, "target_fps = 60\n", ""),
+        "missing target_fps");
+    failures += expect_parse_failure(
+        replace_once(
+            native_config,
+            "target_fps = 60",
+            "enable_120fps_timer_patches = false"),
+        "obsolete boolean only");
+    failures += expect_parse_failure(
+        replace_once(
+            native_config,
+            "target_fps = 60",
+            "target_fps = 60\nenable_120fps_timer_patches = false"),
+        "mixed target and obsolete boolean");
+
+    auto invalid_for_gui = parse_config(native_config);
+    invalid_for_gui.experimental().target_fps = 59;
+    failures += expect_bool(
+        gc::config::ValidateInputConfig(invalid_for_gui).has_value(),
+        false,
+        "GUI persistence rejects out-of-range target_fps");
+
+    failures += expect_bool(
+        gc::config::IsGameplayValidatedTargetFps(60) &&
+            gc::config::IsGameplayValidatedTargetFps(120) &&
+            gc::config::IsGameplayValidatedTargetFps(144) &&
+            gc::config::IsGameplayValidatedTargetFps(165) &&
+            gc::config::IsGameplayValidatedTargetFps(240) &&
+            gc::config::IsGameplayValidatedTargetFps(360) &&
+            !gc::config::IsGameplayValidatedTargetFps(200),
+        true,
+        "gameplay-validated target set");
+
     failures += expect_bool(
         std::string_view(kWasapiExclusiveBufferTooltip).find(
             "Value must be greater than zero") != std::string_view::npos,
@@ -937,11 +995,11 @@ enable_nesys_service_adapter_patch = true
 enable_wasapi_exclusive_audio = false
 wasapi_exclusive_buffer_ms = 10
 )toml",
-        "missing enable_120fps_timer_patches");
+        "missing target_fps");
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_nesys_service_adapter_patch = true
 enable_wasapi_exclusive_audio = false
@@ -951,7 +1009,7 @@ wasapi_exclusive_buffer_ms = 10
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
 enable_wasapi_exclusive_audio = false
@@ -961,7 +1019,7 @@ wasapi_exclusive_buffer_ms = 10
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_wasapi_exclusive_audio = false
@@ -971,7 +1029,7 @@ wasapi_exclusive_buffer_ms = 10
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
@@ -981,7 +1039,7 @@ wasapi_exclusive_buffer_ms = 10
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig + R"toml(
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true
@@ -1040,7 +1098,7 @@ event_path = 'D:\system\DUA\event'
 log_path = 'D:\system\CmdFile\log'
 
 [experimental]
-enable_120fps_timer_patches = false
+target_fps = 60
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 enable_nesys_service_adapter_patch = true

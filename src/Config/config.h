@@ -1,8 +1,10 @@
 ﻿#pragma once
 #include <cstdint>
+#include <expected>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <Windows.h>
 #include "plog/Log.h"
 #include "SDL3/SDL.h"
@@ -12,6 +14,7 @@
 // Make sure parsers are included *before* defining structs that use them
 #include "Config/SdlRflParsers.h"
 #include "Config/RegistryConfig.h"
+#include "Config/TargetFps.h"
 
 enum class InputMode {
     Keyboard,
@@ -85,7 +88,8 @@ inline constexpr char kWasapiExclusiveBufferTooltip[] =
 
 struct ExperimentalConfig
 {
-    rfl::Rename<"enable_120fps_timer_patches", bool> enable_120fps_timer_patches = false;
+    rfl::Rename<"target_fps", gc::config::TargetFpsConfigValue>
+        target_fps = gc::config::kMinimumTargetFps;
     rfl::Rename<"enable_testmode_storage_redirect", bool> enable_testmode_storage_redirect = false;
     rfl::Rename<"enable_timer_freeze_patches", bool> enable_timer_freeze_patches = false;
     rfl::Rename<"enable_nesys_service_adapter_patch", bool> enable_nesys_service_adapter_patch = true;
@@ -137,6 +141,15 @@ struct InputConfig
     rfl::Rename<"registry", RegistryConfig> registry;
     rfl::Rename<"experimental", ExperimentalConfig> experimental;
 };
+
+namespace gc::config {
+
+[[nodiscard]] std::expected<void, std::string> ValidateInputConfig(
+    const InputConfig& config);
+[[nodiscard]] std::expected<InputConfig, std::string>
+ParseAndValidateInputConfig(std::string_view text);
+
+} // namespace gc::config
 
 
 class ConfigManager
@@ -221,7 +234,10 @@ public:
     GameplayInputStyle GetGameplayInputStyle() const {
         return config.gameplay_input_style.value();
     }
-    bool GetEnable120FpsTimerPatches() const { return config.experimental.value().enable_120fps_timer_patches.value(); }
+    std::uint32_t GetTargetFps() const {
+        return static_cast<std::uint32_t>(
+            config.experimental.value().target_fps.value());
+    }
     bool GetEnableTestModeStorageRedirect() const { return config.experimental.value().enable_testmode_storage_redirect.value(); }
     bool GetEnableTimerFreezePatches() const { return config.experimental.value().enable_timer_freeze_patches.value(); }
     bool GetEnableNesysServiceAdapterPatch() const { return config.experimental.value().enable_nesys_service_adapter_patch.value(); }
