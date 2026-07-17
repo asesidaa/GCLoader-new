@@ -3,6 +3,7 @@ add_library(gc_runtime_patches STATIC
         Framerate/FrameratePatch.cpp
         Framerate/FramerateMonitor.cpp
         Framerate/FramerateProfile.cpp
+        Framerate/FrameratePatchTransaction.cpp
         Countdown/CountdownTimerFreeze.cpp
 )
 target_include_directories(gc_runtime_patches PUBLIC

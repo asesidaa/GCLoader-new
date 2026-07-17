@@ -17,3 +17,8 @@ add_executable(FramerateDiagnosticsTests
         Framerate/FramerateDiagnosticsTests.cpp)
 target_link_libraries(FramerateDiagnosticsTests PRIVATE gc_runtime_patches)
 add_test(NAME FramerateDiagnosticsTests COMMAND FramerateDiagnosticsTests)
+
+add_executable(FrameratePatchTransactionTests
+        Framerate/FrameratePatchTransactionTests.cpp)
+target_link_libraries(FrameratePatchTransactionTests PRIVATE gc_runtime_patches)
+add_test(NAME FrameratePatchTransactionTests COMMAND FrameratePatchTransactionTests)
