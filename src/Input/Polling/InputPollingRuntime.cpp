@@ -139,11 +139,14 @@ bool SDLCALL raw_keyboard_message_hook(void* userdata, MSG* message)
 {
     auto& context = *static_cast<RawKeyboardContext*>(userdata);
     if (message->message != WM_INPUT ||
-        context.input_manager == nullptr ||
-        GetForegroundWindow() != context.game_window)
+        context.input_manager == nullptr)
     {
         return true;
     }
+
+    const HWND foreground_window = GetForegroundWindow();
+    const bool foreground_matches =
+        foreground_window == context.game_window;
 
     RAWINPUT input{};
     UINT input_size = sizeof(input);
@@ -153,8 +156,21 @@ bool SDLCALL raw_keyboard_message_hook(void* userdata, MSG* message)
         &input,
         &input_size,
         sizeof(RAWINPUTHEADER));
-    if (read == static_cast<UINT>(-1) ||
-        input.header.dwType != RIM_TYPEKEYBOARD)
+    const DWORD read_error = read == static_cast<UINT>(-1)
+        ? GetLastError()
+        : ERROR_SUCCESS;
+    if (read == static_cast<UINT>(-1))
+    {
+        PLOG_WARNING << "Raw keyboard packet read failed: error="
+                     << read_error
+                     << " input_size=" << input_size
+                     << " foreground_hwnd="
+                     << static_cast<void*>(foreground_window)
+                     << " game_hwnd="
+                     << static_cast<void*>(context.game_window);
+        return true;
+    }
+    if (input.header.dwType != RIM_TYPEKEYBOARD)
     {
         return true;
     }
@@ -163,6 +179,25 @@ bool SDLCALL raw_keyboard_message_hook(void* userdata, MSG* message)
         normalize_raw_virtual_key(input.data.keyboard);
     const bool pressed =
         (input.data.keyboard.Flags & RI_KEY_BREAK) == 0;
+    PLOG_INFO << "Raw keyboard transition: raw_vk=0x"
+              << std::hex << input.data.keyboard.VKey
+              << " make_code=0x" << input.data.keyboard.MakeCode
+              << " flags=0x" << input.data.keyboard.Flags
+              << " normalized_vk=0x" << virtual_key
+              << std::dec
+              << " pressed=" << pressed
+              << " foreground_match=" << foreground_matches
+              << " message_hwnd="
+              << static_cast<void*>(message->hwnd)
+              << " foreground_hwnd="
+              << static_cast<void*>(foreground_window)
+              << " game_hwnd="
+              << static_cast<void*>(context.game_window);
+    if (!foreground_matches)
+    {
+        return true;
+    }
+
     context.input_manager->HandleKeyboardVirtualKey(
         virtual_key,
         pressed);
