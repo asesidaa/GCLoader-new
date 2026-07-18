@@ -4,7 +4,6 @@ add_library(gc_input STATIC
         Polling/InputSnapshotState.cpp
         Switch/SwitchInputPatch.cpp
         Switch/SwitchInputPolicy.cpp
-        XioOnly/XioOnlyInputPatch.cpp
 )
 target_include_directories(gc_input PUBLIC
         ${PROJECT_SOURCE_DIR}/src

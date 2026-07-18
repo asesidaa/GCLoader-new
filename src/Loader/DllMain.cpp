@@ -12,7 +12,6 @@
 #include "Nesys/NesysServiceProcess.h"
 #include "Logging/SessionLog.h"
 #include "Input/Switch/SwitchInputPatch.h"
-#include "Input/XioOnly/XioOnlyInputPatch.h"
 #include "Audio/Wasapi/WasapiAudioPatch.h"
 
 #ifndef _M_IX86
@@ -74,14 +73,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 }
                 PLOG_DEBUG
                     << "Framerate runtime initialization complete!";
-
-                if (!gc::xio_only_input::XioOnlyInputPatchInit()) {
-                    PLOG_ERROR
-                        << "XioOnlyInputPatch: fail-closed DLL attach";
-                    return FALSE;
-                }
-                PLOG_DEBUG
-                    << "XIO-only game input patch init complete!";
 
                 gc::switch_input::SwitchInputPatchInit();
                 PLOG_DEBUG

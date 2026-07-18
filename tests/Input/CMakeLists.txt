@@ -19,8 +19,3 @@ add_test(NAME SwitchInputPolicyTests COMMAND SwitchInputPolicyTests)
 add_executable(SwitchInputPatchTests Switch/SwitchInputPatchTests.cpp)
 target_link_libraries(SwitchInputPatchTests PRIVATE gc_input)
 add_test(NAME SwitchInputPatchTests COMMAND SwitchInputPatchTests)
-
-add_executable(XioOnlyInputPatchTests
-        XioOnly/XioOnlyInputPatchTests.cpp)
-target_link_libraries(XioOnlyInputPatchTests PRIVATE gc_input)
-add_test(NAME XioOnlyInputPatchTests COMMAND XioOnlyInputPatchTests)
