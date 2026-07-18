@@ -17,6 +17,29 @@ LRESULT CALLBACK game_window_proc(
     return DefWindowProcA(window, message, wparam, lparam);
 }
 
+bool is_message_only_window(HWND target)
+{
+    for (HWND window = FindWindowExA(
+             HWND_MESSAGE,
+             nullptr,
+             nullptr,
+             nullptr);
+         window != nullptr;
+         window = FindWindowExA(
+             HWND_MESSAGE,
+             window,
+             nullptr,
+             nullptr))
+    {
+        if (window == target)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 }
 
 int main()
@@ -103,13 +126,14 @@ int main()
     if (keyboard_registration == nullptr ||
         keyboard_registration->hwndTarget == nullptr ||
         keyboard_registration->hwndTarget == game_window ||
+        !is_message_only_window(keyboard_registration->hwndTarget) ||
         (keyboard_registration->dwFlags & RIDEV_INPUTSINK) !=
             RIDEV_INPUTSINK ||
         (keyboard_registration->dwFlags & RIDEV_NOLEGACY) != 0)
     {
         std::cerr
             << "Expected an input-sink, legacy-preserving keyboard registration "
-            << "targeting the hidden input window\n";
+            << "targeting a dedicated message-only input window\n";
         gc::input::CloseInputPollingRuntime();
         DestroyWindow(game_window);
         return 1;

@@ -39,34 +39,13 @@ struct RuntimeState {
     std::string startup_error;
 };
 
-struct RawKeyboardContext {
-    HWND game_window = nullptr;
-    InputManager* input_manager = nullptr;
-};
-
 struct WorkerResources {
     bool sdl_initialized = false;
-    bool message_hook_installed = false;
-    bool raw_keyboard_registered = false;
     SDL_Window* window = nullptr;
     std::unique_ptr<InputManager> input_manager;
-    RawKeyboardContext raw_keyboard_context;
 
     ~WorkerResources()
     {
-        if (message_hook_installed)
-        {
-            SDL_SetWindowsMessageHook(nullptr, nullptr);
-        }
-        if (raw_keyboard_registered)
-        {
-            RAWINPUTDEVICE keyboard{};
-            keyboard.usUsagePage = 0x01;
-            keyboard.usUsage = 0x06;
-            keyboard.dwFlags = RIDEV_REMOVE;
-            keyboard.hwndTarget = nullptr;
-            RegisterRawInputDevices(&keyboard, 1, sizeof(keyboard));
-        }
         input_manager.reset();
         if (window != nullptr)
         {
@@ -104,104 +83,6 @@ void signal_startup(
     state.startup_success = success;
     state.startup_error = std::move(message);
     SDL_SignalSemaphore(state.startup_semaphore);
-}
-
-int normalize_raw_virtual_key(const RAWKEYBOARD& keyboard) noexcept
-{
-    if (keyboard.VKey == 0 || keyboard.VKey == 0xFF)
-    {
-        return 0;
-    }
-
-    if (keyboard.VKey == VK_SHIFT)
-    {
-        return static_cast<int>(MapVirtualKeyW(
-            keyboard.MakeCode,
-            MAPVK_VSC_TO_VK_EX));
-    }
-    if (keyboard.VKey == VK_CONTROL)
-    {
-        return (keyboard.Flags & RI_KEY_E0) != 0
-            ? VK_RCONTROL
-            : VK_LCONTROL;
-    }
-    if (keyboard.VKey == VK_MENU)
-    {
-        return (keyboard.Flags & RI_KEY_E0) != 0
-            ? VK_RMENU
-            : VK_LMENU;
-    }
-
-    return keyboard.VKey;
-}
-
-bool SDLCALL raw_keyboard_message_hook(void* userdata, MSG* message)
-{
-    auto& context = *static_cast<RawKeyboardContext*>(userdata);
-    if (message->message != WM_INPUT ||
-        context.input_manager == nullptr)
-    {
-        return true;
-    }
-
-    const HWND foreground_window = GetForegroundWindow();
-    const bool foreground_matches =
-        foreground_window == context.game_window;
-
-    RAWINPUT input{};
-    UINT input_size = sizeof(input);
-    const UINT read = GetRawInputData(
-        reinterpret_cast<HRAWINPUT>(message->lParam),
-        RID_INPUT,
-        &input,
-        &input_size,
-        sizeof(RAWINPUTHEADER));
-    const DWORD read_error = read == static_cast<UINT>(-1)
-        ? GetLastError()
-        : ERROR_SUCCESS;
-    if (read == static_cast<UINT>(-1))
-    {
-        PLOG_WARNING << "Raw keyboard packet read failed: error="
-                     << read_error
-                     << " input_size=" << input_size
-                     << " foreground_hwnd="
-                     << static_cast<void*>(foreground_window)
-                     << " game_hwnd="
-                     << static_cast<void*>(context.game_window);
-        return true;
-    }
-    if (input.header.dwType != RIM_TYPEKEYBOARD)
-    {
-        return true;
-    }
-
-    const int virtual_key =
-        normalize_raw_virtual_key(input.data.keyboard);
-    const bool pressed =
-        (input.data.keyboard.Flags & RI_KEY_BREAK) == 0;
-    PLOG_INFO << "Raw keyboard transition: raw_vk=0x"
-              << std::hex << input.data.keyboard.VKey
-              << " make_code=0x" << input.data.keyboard.MakeCode
-              << " flags=0x" << input.data.keyboard.Flags
-              << " normalized_vk=0x" << virtual_key
-              << std::dec
-              << " pressed=" << pressed
-              << " foreground_match=" << foreground_matches
-              << " message_hwnd="
-              << static_cast<void*>(message->hwnd)
-              << " foreground_hwnd="
-              << static_cast<void*>(foreground_window)
-              << " game_hwnd="
-              << static_cast<void*>(context.game_window);
-    if (!foreground_matches)
-    {
-        return true;
-    }
-
-    context.input_manager->HandleKeyboardVirtualKey(
-        virtual_key,
-        pressed);
-    return true;
 }
 
 void drain_events_and_publish(
@@ -281,7 +162,9 @@ int SDLCALL input_worker(void* context)
         SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         SDL_SetHint(SDL_HINT_WINDOWS_GAMEINPUT, "0");
-        SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, "0");
+        SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD_EXCLUDE_HOTKEYS, "0");
+        SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD_INPUTSINK, "1");
+        SDL_SetHint(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1");
 
         if (!SDL_Init(
                 SDL_INIT_JOYSTICK |
@@ -355,47 +238,11 @@ int SDLCALL input_worker(void* context)
             return 1;
         }
 
-        const SDL_PropertiesID window_properties =
-            SDL_GetWindowProperties(resources.window);
-        const HWND input_window = static_cast<HWND>(
-            SDL_GetPointerProperty(
-                window_properties,
-                SDL_PROP_WINDOW_WIN32_HWND_POINTER,
-                nullptr));
-        if (input_window == nullptr)
-        {
-            fail_startup(
-                "SDL_GetWindowProperties",
-                "hidden SDL input window has no Win32 HWND");
-            return 1;
-        }
-
         resources.input_manager = std::make_unique<InputManager>();
-        resources.raw_keyboard_context.game_window = game_window;
-        resources.raw_keyboard_context.input_manager =
-            resources.input_manager.get();
-        SDL_SetWindowsMessageHook(
-            raw_keyboard_message_hook,
-            &resources.raw_keyboard_context);
-        resources.message_hook_installed = true;
-
-        RAWINPUTDEVICE keyboard{};
-        keyboard.usUsagePage = 0x01;
-        keyboard.usUsage = 0x06;
-        keyboard.dwFlags = RIDEV_INPUTSINK;
-        keyboard.hwndTarget = input_window;
-        if (!RegisterRawInputDevices(&keyboard, 1, sizeof(keyboard)))
-        {
-            const std::string detail =
-                "RegisterRawInputDevices failed with " +
-                std::to_string(GetLastError());
-            fail_startup("Register raw keyboard", detail.c_str());
-            return 1;
-        }
-        resources.raw_keyboard_registered = true;
         PLOG_INFO
-            << "Raw keyboard routed to hidden SDL window: "
-            << "input_sink=true, legacy_messages=true";
+            << "SDL raw keyboard backend enabled: "
+            << "input_sink=true, exclude_hotkeys=false, "
+            << "legacy_messages=true";
 
         drain_events_and_publish(
             *resources.input_manager,
