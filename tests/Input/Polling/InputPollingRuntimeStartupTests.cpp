@@ -103,12 +103,12 @@ int main()
     if (keyboard_registration == nullptr ||
         keyboard_registration->hwndTarget == nullptr ||
         keyboard_registration->hwndTarget == game_window ||
-        (keyboard_registration->dwFlags & RIDEV_NOLEGACY) !=
-            RIDEV_NOLEGACY ||
-        (keyboard_registration->dwFlags & RIDEV_INPUTSINK) != 0)
+        (keyboard_registration->dwFlags & RIDEV_INPUTSINK) !=
+            RIDEV_INPUTSINK ||
+        (keyboard_registration->dwFlags & RIDEV_NOLEGACY) != 0)
     {
         std::cerr
-            << "Expected a foreground-only, no-legacy keyboard registration "
+            << "Expected an input-sink, legacy-preserving keyboard registration "
             << "targeting the hidden input window\n";
         gc::input::CloseInputPollingRuntime();
         DestroyWindow(game_window);

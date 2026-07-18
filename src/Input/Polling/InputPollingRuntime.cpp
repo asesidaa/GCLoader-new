@@ -382,7 +382,7 @@ int SDLCALL input_worker(void* context)
         RAWINPUTDEVICE keyboard{};
         keyboard.usUsagePage = 0x01;
         keyboard.usUsage = 0x06;
-        keyboard.dwFlags = RIDEV_NOLEGACY;
+        keyboard.dwFlags = RIDEV_INPUTSINK;
         keyboard.hwndTarget = input_window;
         if (!RegisterRawInputDevices(&keyboard, 1, sizeof(keyboard)))
         {
@@ -395,7 +395,7 @@ int SDLCALL input_worker(void* context)
         resources.raw_keyboard_registered = true;
         PLOG_INFO
             << "Raw keyboard routed to hidden SDL window: "
-            << "foreground_only=true, legacy_messages=false";
+            << "input_sink=true, legacy_messages=true";
 
         drain_events_and_publish(
             *resources.input_manager,
