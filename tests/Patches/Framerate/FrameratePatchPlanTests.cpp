@@ -243,8 +243,8 @@ failures += Expect(native_hooks.size() == 1, "60 uses cadence hook only");
 failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
-failures += Expect(transformed_hooks.size() == 14,
-    "transformed mode has all 14 hooks");
+failures += Expect(transformed_hooks.size() == 25,
+    "transformed mode has all 25 hooks");
 failures += Expect(
     transformed_hooks.back().id == FramerateHookId::OuterFrame,
     "outer-frame hook installs last");
@@ -253,7 +253,7 @@ failures += Expect(
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 14> expected_hooks{{
+const std::array<FramerateHookContract, 25> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -280,6 +280,28 @@ const std::array<FramerateHookContract, 14> expected_hooks{{
         Pattern({0xF7, 0x79, 0x3C}), ""},
     {FramerateHookId::AudioResyncDiagnostic, 0x002401C4,
         Pattern({0x8B, 0x55, 0xF8}), ""},
+    {FramerateHookId::GameplayEffectAdvance, 0x00264E2D,
+        Pattern({0xE8, 0x6E, 0xBA, 0xF8, 0xFF}), ""},
+    {FramerateHookId::EffectCadence6, 0x0024063B,
+        Pattern({0x85, 0xD2}), ""},
+    {FramerateHookId::EffectCadence5, 0x002408D7,
+        Pattern({0x85, 0xD2}), ""},
+    {FramerateHookId::EffectCadence4, 0x00240C9C,
+        Pattern({0x85, 0xD2}), ""},
+    {FramerateHookId::EffectCadence16A, 0x00241213,
+        Pattern({0x85, 0xD2}), ""},
+    {FramerateHookId::EffectCadence16B, 0x0024123C,
+        Pattern({0x85, 0xC9}), ""},
+    {FramerateHookId::EffectCadence8, 0x00241268,
+        Pattern({0x85, 0xC0}), ""},
+    {FramerateHookId::RemoteCadenceA, 0x002632DB,
+        Pattern({0x85, 0xD2}), ""},
+    {FramerateHookId::RemoteCadenceB, 0x00263646,
+        Pattern({0x85, 0xD2}), ""},
+    {FramerateHookId::GameplayBlink, 0x0024A1B9,
+        Pattern({0xD1, 0xF8}), ""},
+    {FramerateHookId::PlayerPositionCountdown, 0x0024F0C6,
+        Pattern({0x83, 0xE9, 0x01}), ""},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24}), ""},
 }};

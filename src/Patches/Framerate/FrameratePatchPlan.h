@@ -40,6 +40,17 @@ enum class FramerateHookId {
     AudioSkipMargin,
     AudioSkipInterval,
     AudioResyncDiagnostic,
+    GameplayEffectAdvance,
+    EffectCadence6,
+    EffectCadence5,
+    EffectCadence4,
+    EffectCadence16A,
+    EffectCadence16B,
+    EffectCadence8,
+    RemoteCadenceA,
+    RemoteCadenceB,
+    GameplayBlink,
+    PlayerPositionCountdown,
     OuterFrame,
 };
 
