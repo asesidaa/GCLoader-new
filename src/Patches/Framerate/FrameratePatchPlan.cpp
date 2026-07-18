@@ -186,14 +186,30 @@ BuildFramerateDirectPatchPlan(
             InstructionPattern(
                 {0xC7, 0x00},
                 static_cast<std::uint32_t>(repeat_initial.value())),
-            "input repeat initial duration") &&
+            "XIO repeat initial duration") &&
         AddWrite(
             plan, executable_base, 0x00055CDD,
             Pattern(0xC7, 0x00, 0x08, 0x00, 0x00, 0x00),
             InstructionPattern(
                 {0xC7, 0x00},
                 static_cast<std::uint32_t>(repeat_next.value())),
-            "input repeat next duration") &&
+            "XIO repeat next duration") &&
+        AddWrite(
+            plan, executable_base, 0x0005F843,
+            Pattern(0xC7, 0x86, 0xD4, 0x02, 0x00, 0x00,
+                0x10, 0x00, 0x00, 0x00),
+            InstructionPattern(
+                {0xC7, 0x86, 0xD4, 0x02, 0x00, 0x00},
+                static_cast<std::uint32_t>(repeat_initial.value())),
+            "native keyboard repeat initial duration") &&
+        AddWrite(
+            plan, executable_base, 0x0005F84D,
+            Pattern(0xC7, 0x86, 0xD8, 0x02, 0x00, 0x00,
+                0x08, 0x00, 0x00, 0x00),
+            InstructionPattern(
+                {0xC7, 0x86, 0xD8, 0x02, 0x00, 0x00},
+                static_cast<std::uint32_t>(repeat_next.value())),
+            "native keyboard repeat next duration") &&
         AddWrite(
             plan, executable_base, 0x002645EE,
             Pattern(0xC7, 0x80, 0x14, 0x1D, 0x00, 0x00,

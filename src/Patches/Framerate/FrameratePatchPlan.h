@@ -18,7 +18,7 @@ enum class FrameratePatchPlanError {
 };
 
 struct FramerateDirectPatchPlan {
-    std::array<CheckedWrite, 13> writes{};
+    std::array<CheckedWrite, 15> writes{};
     std::size_t count{};
 
     [[nodiscard]] std::span<const CheckedWrite> view() const noexcept {

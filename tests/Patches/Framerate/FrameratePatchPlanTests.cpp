@@ -102,7 +102,7 @@ for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U, 500U}) {
     const auto profile = FramerateProfile::Create(target).value();
     const auto plan = BuildFramerateDirectPatchPlan(
         kFakeBase, profile, kFakeTargetOperand).value();
-    failures += Expect(plan.count == 13, "high target has 13 direct writes");
+    failures += Expect(plan.count == 15, "high target has 15 direct writes");
     failures += Expect(
         ReadFloatReplacement(plan, 0x002FC0A0) ==
             profile.frame_milliseconds(),
@@ -132,7 +132,17 @@ for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U, 500U}) {
         ReadInstructionImmediate(plan, 0x00055CDD, 2) ==
             static_cast<std::uint32_t>(
                 profile.ScaleDurationFrames(8).value()),
-        "repeat next duration");
+        "XIO repeat next duration");
+    failures += Expect(
+        ReadInstructionImmediate(plan, 0x0005F843, 6) ==
+            static_cast<std::uint32_t>(
+                profile.ScaleDurationFrames(16).value()),
+        "native keyboard repeat initial duration");
+    failures += Expect(
+        ReadInstructionImmediate(plan, 0x0005F84D, 6) ==
+            static_cast<std::uint32_t>(
+                profile.ScaleDurationFrames(8).value()),
+        "native keyboard repeat next duration");
     failures += Expect(
         ReadInstructionImmediate(plan, 0x002645EE, 6) ==
             profile.two_second_frames(),
@@ -167,6 +177,8 @@ failures += Expect(
 failures += Expect(
     ReadInstructionImmediate(plan120, 0x00055CCC, 2) == 32 &&
         ReadInstructionImmediate(plan120, 0x00055CDD, 2) == 16 &&
+        ReadInstructionImmediate(plan120, 0x0005F843, 6) == 32 &&
+        ReadInstructionImmediate(plan120, 0x0005F84D, 6) == 16 &&
         ReadInstructionImmediate(plan120, 0x002645EE, 6) == 240 &&
         ReadInstructionImmediate(plan120, 0x00249A5E, 1) == 240 &&
         ReadInstructionImmediate(plan120, 0x00249A73, 1) == 240,
@@ -177,16 +189,27 @@ for (const auto rva : {0x0022BACFU, 0x0022BAD5U, 0x00262CB6U}) {
         "120 exact x87 target operand");
 }
 
+const auto plan240 = BuildFramerateDirectPatchPlan(
+    kFakeBase,
+    FramerateProfile::Create(240).value(),
+    kFakeTargetOperand).value();
+failures += Expect(
+    ReadInstructionImmediate(plan240, 0x00055CCC, 2) == 64 &&
+        ReadInstructionImmediate(plan240, 0x00055CDD, 2) == 32 &&
+        ReadInstructionImmediate(plan240, 0x0005F843, 6) == 64 &&
+        ReadInstructionImmediate(plan240, 0x0005F84D, 6) == 32,
+    "240 exact XIO and native keyboard repeat durations");
+
 const auto plan61 = BuildFramerateDirectPatchPlan(
     kFakeBase,
     FramerateProfile::Create(61).value(),
     kFakeTargetOperand).value();
 failures += Expect(
-    plan61.count == 13 &&
+    plan61.count == 15 &&
         ReadInstructionImmediate(plan61, 0x002645EE, 6) == 122,
     "61 boundary uses transformed plan");
 
-const std::array<std::pair<std::uintptr_t, BytePattern>, 13>
+const std::array<std::pair<std::uintptr_t, BytePattern>, 15>
     expected_writes{{
         {0x002FC0A0, Pattern({0x55, 0x55, 0x85, 0x41})},
         {0x002F4604, Pattern({0x55, 0x55, 0x85, 0x41})},
@@ -195,6 +218,10 @@ const std::array<std::pair<std::uintptr_t, BytePattern>, 13>
         {0x002E8F04, Pattern({0x00, 0x00, 0xA0, 0x40})},
         {0x00055CCC, Pattern({0xC7, 0x00, 0x10, 0x00, 0x00, 0x00})},
         {0x00055CDD, Pattern({0xC7, 0x00, 0x08, 0x00, 0x00, 0x00})},
+        {0x0005F843, Pattern({0xC7, 0x86, 0xD4, 0x02, 0x00,
+            0x00, 0x10, 0x00, 0x00, 0x00})},
+        {0x0005F84D, Pattern({0xC7, 0x86, 0xD8, 0x02, 0x00,
+            0x00, 0x08, 0x00, 0x00, 0x00})},
         {0x002645EE, Pattern({0xC7, 0x80, 0x14, 0x1D, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00})},
         {0x00249A5E, Pattern({0xB8, 0x78, 0x00, 0x00, 0x00})},
         {0x00249A73, Pattern({0xBA, 0x78, 0x00, 0x00, 0x00})},
