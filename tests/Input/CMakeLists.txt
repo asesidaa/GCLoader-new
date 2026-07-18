@@ -2,6 +2,10 @@ add_executable(InputTypesTests Types/InputTypesTests.cpp)
 target_link_libraries(InputTypesTests PRIVATE gc_input_types)
 add_test(NAME InputTypesTests COMMAND InputTypesTests)
 
+add_executable(PhysicalKeyWin32Tests Win32/PhysicalKeyWin32Tests.cpp)
+target_link_libraries(PhysicalKeyWin32Tests PRIVATE gc_input_win32)
+add_test(NAME PhysicalKeyWin32Tests COMMAND PhysicalKeyWin32Tests)
+
 add_executable(InputSnapshotStateTests Polling/InputSnapshotStateTests.cpp)
 target_link_libraries(InputSnapshotStateTests PRIVATE gc_input)
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
