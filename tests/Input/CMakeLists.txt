@@ -1,3 +1,7 @@
+add_executable(InputTypesTests Types/InputTypesTests.cpp)
+target_link_libraries(InputTypesTests PRIVATE gc_input_types)
+add_test(NAME InputTypesTests COMMAND InputTypesTests)
+
 add_executable(InputSnapshotStateTests Polling/InputSnapshotStateTests.cpp)
 target_link_libraries(InputSnapshotStateTests PRIVATE gc_input)
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
