@@ -572,18 +572,14 @@ int main(int argc, char *argv[]) {
 
         ImGui::SeparatorText("Experimental");
         auto& target_fps = g_config.experimental().target_fps();
-        constexpr gc::config::TargetFpsConfigValue minimum_target =
-            gc::config::kMinimumTargetFps;
-        constexpr gc::config::TargetFpsConfigValue maximum_target =
-            gc::config::kMaximumTargetFps;
-        if (ImGui::SliderScalar(
+        if (ImGui::InputScalar(
                 "Target FPS",
                 ImGuiDataType_U32,
                 &target_fps,
-                &minimum_target,
-                &maximum_target,
+                nullptr,
+                nullptr,
                 "%u",
-                ImGuiSliderFlags_AlwaysClamp)) {
+                ImGuiInputTextFlags_CharsDecimal)) {
             g_config_dirty = true;
         }
         ImGui::SameLine();
@@ -594,7 +590,13 @@ int main(int argc, char *argv[]) {
                 "GCLoader does not apply a frame cap. Configure the same cap in your driver or RTSS.\n"
                 "Restart the game after changing this value.");
         }
-        if (!gc::config::IsGameplayValidatedTargetFps(
+        const bool target_fps_valid = gc::config::IsTargetFpsInRange(
+            static_cast<std::uint32_t>(target_fps));
+        DrawInlineValidationError(
+            target_fps_valid,
+            "Enter an integer from 60 through 500.");
+        if (target_fps_valid &&
+            !gc::config::IsGameplayValidatedTargetFps(
                 static_cast<std::uint32_t>(target_fps))) {
             ImGui::TextColored(
                 ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
