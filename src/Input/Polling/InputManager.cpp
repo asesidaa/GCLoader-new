@@ -3,6 +3,8 @@
 #include "Platform/Win32/KeyMapping.h"
 #include "plog/Log.h"
 
+#include <iomanip>
+
 namespace {
 
 const char* input_mode_name(InputMode mode)
@@ -76,7 +78,10 @@ void InputManager::LoadConfig()
     PLOG_INFO << "Input configuration loaded: mode="
               << input_mode_name(m_inputMode)
               << ", gamepad_index=" << m_targetGamepadIndex
-              << ", axis_threshold=" << m_axisThreshold;
+              << ", axis_threshold=" << m_axisThreshold
+              << ", test_key=" << SDL_GetKeyName(keyTest)
+              << ", test_vk=0x" << std::hex
+              << SdlKeycodeToVirtualKey(keyTest) << std::dec;
 }
 
 void InputManager::OpenGamepad(SDL_JoystickID instance_id)
@@ -346,9 +351,15 @@ void InputManager::HandleKeyboardVirtualKey(
     {
         m_snapshotState.Set(P2Start, source, pressed);
     }
-    if (matches(keyTest))
+    const bool is_test_key = matches(keyTest);
+    if (is_test_key)
     {
         m_snapshotState.Set(Test, source, pressed);
+        PLOG_INFO << "Input test key transition: raw_vk=0x"
+                  << std::hex << virtual_key
+                  << " fastio=0x" << GetInput()
+                  << std::dec
+                  << " pressed=" << pressed;
     }
     if (matches(keyP2Service))
     {

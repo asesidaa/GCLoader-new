@@ -12,6 +12,7 @@
 
 #include <exception>
 #include <filesystem>
+#include <iomanip>
 #include <memory>
 #include <string>
 #include <utility>
@@ -178,16 +179,26 @@ void drain_events_and_publish(
         input_manager.HandleEvent(event);
     }
 
+    std::uint32_t published_input = 0;
     if (GetForegroundWindow() != game_window)
     {
         input_manager.ClearKeyboardInput();
-        SDL_SetAtomicInt(&g_published_input, 0);
-        return;
+    }
+    else
+    {
+        published_input = input_manager.GetInput();
     }
 
-    SDL_SetAtomicInt(
-        &g_published_input,
-        static_cast<int>(input_manager.GetInput()));
+    const auto previous_input = static_cast<std::uint32_t>(
+        SDL_GetAtomicInt(&g_published_input));
+    SDL_SetAtomicInt(&g_published_input, static_cast<int>(published_input));
+    if (((previous_input ^ published_input) & FastIoBits::TEST_MODE) != 0)
+    {
+        PLOG_INFO << "Input test snapshot published: fastio=0x"
+                  << std::hex << published_input << std::dec
+                  << " pressed="
+                  << ((published_input & FastIoBits::TEST_MODE) != 0);
+    }
 }
 
 int SDLCALL input_worker(void* context)

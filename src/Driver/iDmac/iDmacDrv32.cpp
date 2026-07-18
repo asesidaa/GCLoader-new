@@ -1,10 +1,13 @@
 ﻿#include <windows.h>
 #include "Input/Polling/InputPollingRuntime.h"
+#include "Input/Polling/InputSnapshotState.h"
 #include "Driver/iDmac/RegisterOpTypes.h"
 #include "plog/Log.h"
 #include "plog/Initializers/RollingFileInitializer.h"
-#include <format>
+#include <atomic>
 #include <cstdint>
+#include <format>
+#include <iomanip>
 #include <string>
 
 extern "C" __declspec(dllexport) DWORD __cdecl iDmacDrvOpen(
@@ -64,6 +67,21 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, 
         break;
     case RegisterReadType::FIO_NODE_0_INPUT:
         result = gc::input::ReadPublishedInput();
+        {
+            static std::atomic<std::uint32_t> last_test_bit{};
+            const auto test_bit =
+                result & gc::input::FastIoBits::TEST_MODE;
+            const auto previous_test_bit = last_test_bit.exchange(
+                test_bit,
+                std::memory_order_relaxed);
+            if (test_bit != previous_test_bit)
+            {
+                PLOG_INFO
+                    << "iDmac test input read: command=0x4120 fastio=0x"
+                    << std::hex << result << std::dec
+                    << " pressed=" << (test_bit != 0);
+            }
+        }
         break;
     case RegisterReadType::FIO_NODE0_ANALOG1:
         result = 0;
