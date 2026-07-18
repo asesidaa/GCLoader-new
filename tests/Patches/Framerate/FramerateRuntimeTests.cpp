@@ -1,5 +1,7 @@
 #include "Patches/Framerate/FrameratePatch.h"
+#include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
+#include "Patches/Framerate/FrameratePatchTransaction.h"
 #include "Patches/Framerate/FramerateProfile.h"
 
 #include <concepts>
@@ -41,6 +43,36 @@ failures += Expect(
     profile144.ScaleDurationFrames(0).value() == 0 &&
         profile144.ScaleDurationFrames(-1).value() == -1,
     "runtime counter sentinels survive");
+
+const auto profile240 = FramerateProfile::Create(240).value();
+for (const auto frame : {0U, 4U, 8U}) {
+    failures += Expect(
+        IsAuthored60FrameBoundary(profile240, frame).value(),
+        "effect advance accepts authored boundary");
+}
+for (const auto frame : {1U, 2U, 3U, 5U, 6U, 7U}) {
+    failures += Expect(
+        !IsAuthored60FrameBoundary(profile240, frame).value(),
+        "effect advance rejects duplicate target frame");
+}
+failures += Expect(
+    ShouldRunAuthored60Cadence(profile240, 24, 0, 6).value() &&
+        !ShouldRunAuthored60Cadence(profile240, 20, 0, 6).value() &&
+        !ShouldRunAuthored60Cadence(profile240, 25, 0, 6).value(),
+    "period-six effect cadence uses authored boundaries");
+failures += Expect(
+    ReconstructUnsignedModuloDividend(15, 0, 4).value() == 60,
+    "remote modulo reconstructs target frame");
+failures += Expect(
+    MapPositiveTargetFrameToAuthored60(profile240, 8).value() == 2,
+    "blink maps target frames to authored frames");
+
+static_assert(kMaximumFramerateHooks >= 25);
+for (const auto& contract : FramerateHookContracts(true)) {
+    failures += Expect(
+        FramerateHookHasRuntimeBinding(contract.id),
+        "every transformed contract has a runtime binding");
+}
 
 for (const std::uint32_t cap : {120U, 144U, 165U, 240U, 360U, 500U}) {
     const auto below = ApplyCmp32Flags(0x202, cap - 1, cap);

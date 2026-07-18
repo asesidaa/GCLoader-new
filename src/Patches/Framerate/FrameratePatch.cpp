@@ -2,6 +2,7 @@
 
 #include "Config/config.h"
 #include "Patches/Countdown/CountdownTimerFreeze.h"
+#include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateDiagnostics.h"
 #include "Patches/Framerate/FramerateMonitor.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
@@ -46,6 +47,17 @@ struct FramerateHookStorage {
     safetyhook::MidHook audio_skip_margin{};
     safetyhook::MidHook audio_skip_interval{};
     safetyhook::MidHook audio_resync_diagnostic{};
+    safetyhook::MidHook gameplay_effect_advance{};
+    safetyhook::MidHook effect_cadence_6{};
+    safetyhook::MidHook effect_cadence_5{};
+    safetyhook::MidHook effect_cadence_4{};
+    safetyhook::MidHook effect_cadence_16_a{};
+    safetyhook::MidHook effect_cadence_16_b{};
+    safetyhook::MidHook effect_cadence_8{};
+    safetyhook::MidHook remote_cadence_a{};
+    safetyhook::MidHook remote_cadence_b{};
+    safetyhook::MidHook gameplay_blink{};
+    safetyhook::MidHook player_position_countdown{};
     safetyhook::MidHook outer_frame{};
 };
 
@@ -72,6 +84,15 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t audio_resync_interval_seeks{0};
     std::atomic_uint64_t audio_skip_margin_clamps{0};
     std::atomic_uint64_t audio_skip_interval_conversions{0};
+    std::atomic_uint64_t gameplay_effect_advances{0};
+    std::atomic_uint64_t gameplay_effect_skips{0};
+    std::atomic_uint64_t effect_cadence_runs{0};
+    std::atomic_uint64_t effect_cadence_rejects{0};
+    std::atomic_uint64_t remote_cadence_runs{0};
+    std::atomic_uint64_t remote_cadence_rejects{0};
+    std::atomic_uint64_t gameplay_blink_mappings{0};
+    std::atomic_uint64_t player_position_decrements{0};
+    std::atomic_uint64_t player_position_skips{0};
 };
 
 struct FramerateRuntimeState {
@@ -103,7 +124,7 @@ struct FramerateRuntimeState {
 };
 
 struct FramerateHookOperationPlan {
-    std::array<HookOperation, 14> operations{};
+    std::array<HookOperation, kMaximumFramerateHooks> operations{};
     std::size_t count{};
 
     [[nodiscard]] std::span<const HookOperation> view() const noexcept {
@@ -127,6 +148,17 @@ void HookTuneCountdownCompare(safetyhook::Context&);
 void HookAudioSkipMargin(safetyhook::Context&);
 void HookAudioSkipInterval(safetyhook::Context&);
 void HookAudioResyncDiagnostic(safetyhook::Context&);
+void HookGameplayEffectAdvance(safetyhook::Context&);
+void HookEffectCadence6(safetyhook::Context&);
+void HookEffectCadence5(safetyhook::Context&);
+void HookEffectCadence4(safetyhook::Context&);
+void HookEffectCadence16A(safetyhook::Context&);
+void HookEffectCadence16B(safetyhook::Context&);
+void HookEffectCadence8(safetyhook::Context&);
+void HookRemoteCadenceA(safetyhook::Context&);
+void HookRemoteCadenceB(safetyhook::Context&);
+void HookGameplayBlink(safetyhook::Context&);
+void HookPlayerPositionCountdown(safetyhook::Context&);
 void HookOuterFrame(safetyhook::Context&);
 
 [[nodiscard]] std::uintptr_t ExecutableBase() noexcept {
@@ -157,15 +189,27 @@ void HookOuterFrame(safetyhook::Context&);
     }
 }
 
+[[nodiscard]] bool ReadI32StackSafe(
+    const safetyhook::Context& context,
+    std::intptr_t offset,
+    std::int32_t& value) noexcept {
+    std::uint32_t raw{};
+    if (!ReadU32Safe(context.ebp + offset, raw)) {
+        return false;
+    }
+    value = static_cast<std::int32_t>(raw);
+    return true;
+}
+
 [[nodiscard]] std::int32_t ReadI32Stack(
     const safetyhook::Context& context,
     std::intptr_t offset,
     std::int32_t fallback = 0) noexcept {
-    std::uint32_t raw{};
-    if (!ReadU32Safe(context.ebp + offset, raw)) {
+    std::int32_t value{};
+    if (!ReadI32StackSafe(context, offset, value)) {
         return fallback;
     }
-    return static_cast<std::int32_t>(raw);
+    return value;
 }
 
 void SetZeroFlag(safetyhook::Context& context, bool is_zero) noexcept {
@@ -323,6 +367,94 @@ void AssignHookCallbacks(
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::audio_resync_diagnostic>;
         break;
+    case FramerateHookId::GameplayEffectAdvance:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::gameplay_effect_advance,
+            HookGameplayEffectAdvance,
+            0x00264E2D>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::gameplay_effect_advance>;
+        break;
+    case FramerateHookId::EffectCadence6:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_cadence_6,
+            HookEffectCadence6,
+            0x0024063B>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_cadence_6>;
+        break;
+    case FramerateHookId::EffectCadence5:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_cadence_5,
+            HookEffectCadence5,
+            0x002408D7>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_cadence_5>;
+        break;
+    case FramerateHookId::EffectCadence4:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_cadence_4,
+            HookEffectCadence4,
+            0x00240C9C>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_cadence_4>;
+        break;
+    case FramerateHookId::EffectCadence16A:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_cadence_16_a,
+            HookEffectCadence16A,
+            0x00241213>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_cadence_16_a>;
+        break;
+    case FramerateHookId::EffectCadence16B:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_cadence_16_b,
+            HookEffectCadence16B,
+            0x0024123C>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_cadence_16_b>;
+        break;
+    case FramerateHookId::EffectCadence8:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_cadence_8,
+            HookEffectCadence8,
+            0x00241268>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_cadence_8>;
+        break;
+    case FramerateHookId::RemoteCadenceA:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::remote_cadence_a,
+            HookRemoteCadenceA,
+            0x002632DB>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::remote_cadence_a>;
+        break;
+    case FramerateHookId::RemoteCadenceB:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::remote_cadence_b,
+            HookRemoteCadenceB,
+            0x00263646>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::remote_cadence_b>;
+        break;
+    case FramerateHookId::GameplayBlink:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::gameplay_blink,
+            HookGameplayBlink,
+            0x0024A1B9>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::gameplay_blink>;
+        break;
+    case FramerateHookId::PlayerPositionCountdown:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_countdown,
+            HookPlayerPositionCountdown,
+            0x0024F0C6>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_countdown>;
+        break;
     case FramerateHookId::OuterFrame:
         operation.install = &InstallMidHook<
             &FramerateHookStorage::outer_frame,
@@ -351,6 +483,84 @@ void AssignHookCallbacks(
 
 [[nodiscard]] bool IsAuthored60HzTick() noexcept {
     return g_runtime->authored_60hz_tick.load(std::memory_order_acquire);
+}
+
+[[nodiscard]] bool ReadTuneFrame(
+    const safetyhook::Context& context,
+    std::intptr_t tune_stack_offset,
+    std::uint32_t& frame) noexcept {
+    std::uint32_t tune{};
+    return ReadU32Safe(context.ebp + tune_stack_offset, tune) &&
+        tune != 0 && ReadU32Safe(tune + 0x10, frame);
+}
+
+[[nodiscard]] bool ResolveCadenceTestValue(
+    std::uint32_t frame,
+    std::int32_t phase,
+    std::uint32_t period,
+    std::uint32_t& test_value) noexcept {
+    const auto run = ShouldRunAuthored60Cadence(
+        g_runtime->profile, frame, phase, period);
+    if (!run) {
+        FatalRuntimeConversion("authored gameplay cadence");
+        return false;
+    }
+    test_value = run.value() ? 0U : 1U;
+    return true;
+}
+
+void ApplyEffectCadence(
+    safetyhook::Context& context,
+    std::uint32_t& test_register,
+    std::uint32_t period,
+    bool has_phase) noexcept {
+    std::uint32_t frame{};
+    if (!ReadTuneFrame(context, -0x32C, frame)) {
+        FatalRuntimeConversion("effect cadence tune-frame read");
+        return;
+    }
+
+    std::int32_t phase{};
+    if (has_phase && !ReadI32StackSafe(context, -0x1FC, phase)) {
+        FatalRuntimeConversion("effect cadence phase read");
+        return;
+    }
+
+    std::uint32_t test_value{};
+    if (!ResolveCadenceTestValue(frame, phase, period, test_value)) {
+        return;
+    }
+    test_register = test_value;
+    if (test_value == 0) {
+        g_runtime->counters.effect_cadence_runs.fetch_add(
+            1, std::memory_order_relaxed);
+    } else {
+        g_runtime->counters.effect_cadence_rejects.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+}
+
+void ApplyRemoteCadence(safetyhook::Context& context) noexcept {
+    const auto frame = ReconstructUnsignedModuloDividend(
+        context.eax, context.edx, 4);
+    if (!frame) {
+        FatalRuntimeConversion("remote cadence frame reconstruction");
+        return;
+    }
+
+    std::uint32_t test_value{};
+    if (!ResolveCadenceTestValue(
+            frame.value(), 0, 4, test_value)) {
+        return;
+    }
+    context.edx = test_value;
+    if (test_value == 0) {
+        g_runtime->counters.remote_cadence_runs.fetch_add(
+            1, std::memory_order_relaxed);
+    } else {
+        g_runtime->counters.remote_cadence_rejects.fetch_add(
+            1, std::memory_order_relaxed);
+    }
 }
 
 char __fastcall HookMovieClipGoto(
@@ -595,6 +805,85 @@ void HookAudioResyncDiagnostic(safetyhook::Context& context) {
     }
 }
 
+void HookGameplayEffectAdvance(safetyhook::Context& context) {
+    std::uint32_t frame{};
+    if (!ReadTuneFrame(context, -0x2B4, frame)) {
+        FatalRuntimeConversion("gameplay effect tune-frame read");
+        return;
+    }
+
+    const auto boundary =
+        IsAuthored60FrameBoundary(g_runtime->profile, frame);
+    if (!boundary) {
+        FatalRuntimeConversion("gameplay effect authored-frame mapping");
+        return;
+    }
+    if (boundary.value()) {
+        g_runtime->counters.gameplay_effect_advances.fetch_add(
+            1, std::memory_order_relaxed);
+        return;
+    }
+
+    g_runtime->counters.gameplay_effect_skips.fetch_add(
+        1, std::memory_order_relaxed);
+    context.eip += 5;
+}
+
+void HookEffectCadence6(safetyhook::Context& context) {
+    ApplyEffectCadence(context, context.edx, 6, false);
+}
+
+void HookEffectCadence5(safetyhook::Context& context) {
+    ApplyEffectCadence(context, context.edx, 5, false);
+}
+
+void HookEffectCadence4(safetyhook::Context& context) {
+    ApplyEffectCadence(context, context.edx, 4, false);
+}
+
+void HookEffectCadence16A(safetyhook::Context& context) {
+    ApplyEffectCadence(context, context.edx, 16, true);
+}
+
+void HookEffectCadence16B(safetyhook::Context& context) {
+    ApplyEffectCadence(context, context.ecx, 16, true);
+}
+
+void HookEffectCadence8(safetyhook::Context& context) {
+    ApplyEffectCadence(context, context.eax, 8, true);
+}
+
+void HookRemoteCadenceA(safetyhook::Context& context) {
+    ApplyRemoteCadence(context);
+}
+
+void HookRemoteCadenceB(safetyhook::Context& context) {
+    ApplyRemoteCadence(context);
+}
+
+void HookGameplayBlink(safetyhook::Context& context) {
+    const auto mapped = MapPositiveTargetFrameToAuthored60(
+        g_runtime->profile, context.eax);
+    if (!mapped) {
+        FatalRuntimeConversion("gameplay blink authored-frame mapping");
+        return;
+    }
+    context.eax = mapped.value();
+    g_runtime->counters.gameplay_blink_mappings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookPlayerPositionCountdown(safetyhook::Context& context) {
+    if (IsAuthored60HzTick()) {
+        g_runtime->counters.player_position_decrements.fetch_add(
+            1, std::memory_order_relaxed);
+        return;
+    }
+    g_runtime->counters.player_position_skips.fetch_add(
+        1, std::memory_order_relaxed);
+    context.eip += 3;
+}
+
 void LogCadenceValidated(
     const FramerateObservation& observation) noexcept {
     try {
@@ -699,6 +988,29 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << "/interval_conversions="
               << counters.audio_skip_interval_conversions.load(
+                     std::memory_order_relaxed)
+              << " gameplay_effect="
+              << counters.gameplay_effect_advances.load(
+                     std::memory_order_relaxed)
+              << "/skip=" << counters.gameplay_effect_skips.load(
+                     std::memory_order_relaxed)
+              << " effect_cadence="
+              << counters.effect_cadence_runs.load(
+                     std::memory_order_relaxed)
+              << "/reject=" << counters.effect_cadence_rejects.load(
+                     std::memory_order_relaxed)
+              << " remote_cadence="
+              << counters.remote_cadence_runs.load(
+                     std::memory_order_relaxed)
+              << "/reject=" << counters.remote_cadence_rejects.load(
+                     std::memory_order_relaxed)
+              << " gameplay_blink="
+              << counters.gameplay_blink_mappings.load(
+                     std::memory_order_relaxed)
+              << " player_position="
+              << counters.player_position_decrements.load(
+                     std::memory_order_relaxed)
+              << "/skip=" << counters.player_position_skips.load(
                      std::memory_order_relaxed)
               << " accumulator=" << g_runtime->authored_accumulator;
 }
@@ -812,6 +1124,12 @@ void FatalTransactionFailure(
 }
 
 } // namespace
+
+bool FramerateHookHasRuntimeBinding(FramerateHookId id) noexcept {
+    HookOperation operation{};
+    AssignHookCallbacks(id, operation);
+    return operation.install != nullptr && operation.reset != nullptr;
+}
 
 bool FrameratePatchInit() {
     static std::atomic_bool initialized{false};
