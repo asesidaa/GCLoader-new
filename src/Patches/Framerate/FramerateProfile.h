@@ -9,6 +9,7 @@ enum class FramerateProfileError {
     TargetOutOfRange,
     ArithmeticOverflow,
     DestinationOverflow,
+    InvalidPeriod,
 };
 
 class FramerateProfile {
