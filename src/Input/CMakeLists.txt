@@ -5,6 +5,8 @@ add_library(gc_input_win32 STATIC
         Win32/RawInputPacket.cpp
         Win32/RawHidController.cpp
         Win32/Win32InputWindow.cpp
+        Win32/XInputApi.cpp
+        Win32/XInputController.cpp
 )
 target_include_directories(gc_input_win32 PUBLIC
         ${PROJECT_SOURCE_DIR}/src
