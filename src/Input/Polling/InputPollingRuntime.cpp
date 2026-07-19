@@ -8,6 +8,7 @@
 #include "Input/Win32/ControllerBindingEvaluator.h"
 #include "Input/Win32/ControllerCatalog.h"
 #include "Input/Win32/PhysicalKeyWin32.h"
+#include "Input/Win32/RawInputRegistrationGuard.h"
 #include "Input/Win32/RawHidController.h"
 #include "Input/Win32/RawInputPacket.h"
 #include "Input/Win32/Win32InputWindow.h"
@@ -225,6 +226,12 @@ public:
                   << ControllerBackendName(controller_identity_.backend)
                   << " identity=" << controller_identity_.device_id
                   << " binding_count=" << controller_bindings_.size();
+
+        const auto guard_result = InstallRawInputRegistrationGuard();
+        if (!guard_result)
+        {
+            return std::unexpected(guard_result.error());
+        }
 
         window_ = std::make_unique<Win32InputWindow>(*this);
         const auto window_result = window_->Create(GetModuleHandleW(nullptr));

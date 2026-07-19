@@ -10,6 +10,12 @@ add_executable(Win32InputWindowTests Win32/Win32InputWindowTests.cpp)
 target_link_libraries(Win32InputWindowTests PRIVATE gc_input_win32)
 add_test(NAME Win32InputWindowTests COMMAND Win32InputWindowTests)
 
+add_executable(RawInputRegistrationGuardTests
+        Win32/RawInputRegistrationGuardTests.cpp)
+target_link_libraries(RawInputRegistrationGuardTests PRIVATE gc_input_win32)
+add_test(NAME RawInputRegistrationGuardTests
+        COMMAND RawInputRegistrationGuardTests)
+
 add_executable(RawInputPacketTests Win32/RawInputPacketTests.cpp)
 target_link_libraries(RawInputPacketTests PRIVATE gc_input_win32)
 add_test(NAME RawInputPacketTests COMMAND RawInputPacketTests)
