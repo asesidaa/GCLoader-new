@@ -32,11 +32,11 @@ void* rva_pointer(std::uintptr_t base, std::uintptr_t rva) noexcept {
     return reinterpret_cast<void*>(base + rva);
 }
 
-const char* requested_style_name(GameplayInputStyle style) noexcept {
+const char* requested_style_name(gc::input::GameplayInputStyle style) noexcept {
     switch (style) {
-    case GameplayInputStyle::Arcade:
+    case gc::input::GameplayInputStyle::Arcade:
         return "Arcade";
-    case GameplayInputStyle::Switch:
+    case gc::input::GameplayInputStyle::Switch:
         return "Switch";
     }
     return "Unknown";
@@ -58,7 +58,8 @@ void log_install_failure(
     }
 }
 
-void log_requested_and_active(GameplayInputStyle requested) noexcept {
+void log_requested_and_active(
+    gc::input::GameplayInputStyle requested) noexcept {
     try {
         PLOG_INFO << "SwitchInputPatch: requested_style="
                   << requested_style_name(requested)
@@ -408,7 +409,7 @@ void SwitchInputPatchInit() {
         ConfigManager::instance().GetGameplayInputStyle();
     g_active_state.store(SwitchPatchState::Arcade, std::memory_order_release);
 
-    if (requested == GameplayInputStyle::Arcade) {
+    if (requested == gc::input::GameplayInputStyle::Arcade) {
         log_requested_and_active(requested);
         return;
     }

@@ -2,7 +2,6 @@
 #include <windows.h>
 #include <filesystem>
 #include <string>
-#include "Input/Polling/InputManager.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"

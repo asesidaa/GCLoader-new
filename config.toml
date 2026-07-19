@@ -1,44 +1,49 @@
-axis_threshold = 16384
-gamepad_index = 0
+input_schema_version = 2
 input_poll_hz = 1000
 input_mode = 'Keyboard'
 gameplay_input_style = 'Arcade'
-
-[gamepad]
-p1_axis_horizontal = 'leftx'
-p1_axis_vertical = 'lefty'
-p1_button1 = 'south'
-p1_dpad_down = 'dpad_left'
-p1_dpad_left = 'invalid'
-p1_dpad_right = 'invalid'
-p1_dpad_up = 'dpad_up'
-p2_axis_horizontal = 'rightx'
-p2_axis_vertical = 'righty'
-p2_button1 = 'east'
-p2_button_down = 'dpad_right'
-p2_button_left = 'invalid'
-p2_button_right = 'invalid'
-p2_button_up = 'dpad_down'
+axis_press_threshold_percent = 50
+axis_release_threshold_percent = 40
 
 [keyboard]
-p1_button1 = 'space'
-p1_down = 'a'
-p1_left = 'up'
-p1_right = 'left'
-p1_start = '1'
-p1_up = 'w'
-p2_button1 = 'k'
-p2_down = 'd'
-p2_left = 'down'
-p2_right = 'right'
-p2_service = 'f2'
-p2_start = '2'
-p2_up = 's'
-service1 = 'f1'
-service2 = 'i'
-service3 = 'p'
-test = 't'
-card_read = 'f4'
+left_booster_up = 'sc:0011'
+left_booster_down = 'sc:001f'
+left_booster_left = 'sc:001e'
+left_booster_right = 'sc:0020'
+left_booster_button = 'sc:0039'
+right_booster_up = 'e0:0048'
+right_booster_down = 'e0:0050'
+right_booster_left = 'e0:004b'
+right_booster_right = 'e0:004d'
+right_booster_button = 'sc:0025'
+test = 'sc:0014'
+service1 = 'sc:003b'
+service2 = 'sc:0017'
+service3 = 'sc:0019'
+p1_start = 'sc:0002'
+p2_start = 'sc:0003'
+p2_service = 'sc:003c'
+card_read = 'sc:003e'
+
+[controller]
+backend = 'XInput'
+device_id = '0'
+bindings = [
+  { action = 'LeftBoosterUp', type = 'XInputButton', control = 'DPadUp' },
+  { action = 'LeftBoosterUp', type = 'XInputAxis', control = 'LeftY', direction = 'Negative' },
+  { action = 'LeftBoosterDown', type = 'XInputButton', control = 'DPadDown' },
+  { action = 'LeftBoosterDown', type = 'XInputAxis', control = 'LeftY', direction = 'Positive' },
+  { action = 'LeftBoosterLeft', type = 'XInputButton', control = 'DPadLeft' },
+  { action = 'LeftBoosterLeft', type = 'XInputAxis', control = 'LeftX', direction = 'Negative' },
+  { action = 'LeftBoosterRight', type = 'XInputButton', control = 'DPadRight' },
+  { action = 'LeftBoosterRight', type = 'XInputAxis', control = 'LeftX', direction = 'Positive' },
+  { action = 'LeftBoosterButton', type = 'XInputButton', control = 'A' },
+  { action = 'RightBoosterUp', type = 'XInputAxis', control = 'RightY', direction = 'Negative' },
+  { action = 'RightBoosterDown', type = 'XInputAxis', control = 'RightY', direction = 'Positive' },
+  { action = 'RightBoosterLeft', type = 'XInputAxis', control = 'RightX', direction = 'Negative' },
+  { action = 'RightBoosterRight', type = 'XInputAxis', control = 'RightX', direction = 'Positive' },
+  { action = 'RightBoosterButton', type = 'XInputButton', control = 'B' },
+]
 
 [nesys]
 server_ip = '127.0.0.1'

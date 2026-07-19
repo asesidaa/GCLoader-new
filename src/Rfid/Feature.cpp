@@ -3,13 +3,16 @@
 #include "Rfid/Runtime.h"
 #include "TestModeStorage/Hooks.h"
 #include "Win32Hooks/Kernel32Hooks.h"
-#include "Platform/Win32/KeyMapping.h"
 #include "Config/config.h"
+#include "Input/Types/PhysicalKey.h"
+#include "Input/Win32/PhysicalKeyWin32.h"
 #include "plog/Log.h"
 
 #include <iomanip>
 #include <memory>
 #include <new>
+#include <string>
+#include <string_view>
 
 namespace gc::rfid {
 namespace {
@@ -30,6 +33,38 @@ struct FeatureState {
 
 FeatureState* g_feature_state{};
 
+std::string WideToUtf8(std::wstring_view value)
+{
+    if (value.empty()) {
+        return {};
+    }
+    const int count = WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        value.data(),
+        static_cast<int>(value.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (count <= 0) {
+        return {};
+    }
+    std::string result(static_cast<std::size_t>(count), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            value.data(),
+            static_cast<int>(value.size()),
+            result.data(),
+            count,
+            nullptr,
+            nullptr) != count) {
+        return {};
+    }
+    return result;
+}
+
 } // namespace
 
 std::expected<void, FeatureError> InitializeFeature() noexcept
@@ -43,21 +78,26 @@ std::expected<void, FeatureError> InitializeFeature() noexcept
     try {
         const auto card_read_key =
             ConfigManager::instance().GetCardReadKey();
-        card_virtual_key = SdlKeycodeToVirtualKey(card_read_key);
+        card_virtual_key = static_cast<int>(
+            gc::input::PhysicalKeyToVirtualKey(card_read_key));
         storage_enabled = ConfigManager::instance()
                               .GetEnableTestModeStorageRedirect();
+
+        const auto token = gc::input::FormatPhysicalKey(card_read_key);
+        const auto label = WideToUtf8(
+            gc::input::PhysicalKeyLabel(card_read_key));
 
         PLOG_INFO << "Test-mode storage redirect: "
                   << (storage_enabled ? "enabled" : "disabled");
         if (card_virtual_key == 0) {
             PLOG_WARNING
-                << "RFID: configured card_read key '"
-                << KeycodeToString(card_read_key)
-                << "' cannot be mapped to a Win32 virtual key; "
+                << "RFID: configured card_read physical key token="
+                << token << " label=" << label
+                << " cannot be mapped to a Win32 virtual key; "
                    "card scan disabled";
         } else {
-            PLOG_INFO << "RFID: card_read key="
-                      << KeycodeToString(card_read_key)
+            PLOG_INFO << "RFID: card_read token=" << token
+                      << " label=" << label
                       << " vk=0x" << std::hex << card_virtual_key
                       << std::dec;
         }

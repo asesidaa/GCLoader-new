@@ -1,7 +1,8 @@
 #include "Config/config.h"
 #include "Config/TargetFps.h"
+#include "Input/Types/PhysicalKey.h"
+#include "Input/Win32/PhysicalKeyWin32.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
-#include "Platform/Win32/KeyMapping.h"
 
 #include <Windows.h>
 #include <array>
@@ -19,46 +20,52 @@ static_assert(
     sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));
 
 constexpr const char* kRequiredConfigPrefix = R"toml(
-axis_threshold = 16384
-gamepad_index = 0
+input_schema_version = 2
 input_poll_hz = 1000
 input_mode = 'Keyboard'
 gameplay_input_style = 'Arcade'
-
-[gamepad]
-p1_axis_horizontal = 'leftx'
-p1_axis_vertical = 'lefty'
-p1_button1 = 'south'
-p1_dpad_down = 'dpad_left'
-p1_dpad_left = 'invalid'
-p1_dpad_right = 'invalid'
-p1_dpad_up = 'dpad_up'
-p2_axis_horizontal = 'rightx'
-p2_axis_vertical = 'righty'
-p2_button1 = 'east'
-p2_button_down = 'dpad_right'
-p2_button_left = 'invalid'
-p2_button_right = 'invalid'
-p2_button_up = 'dpad_down'
+axis_press_threshold_percent = 50
+axis_release_threshold_percent = 40
 
 [keyboard]
-p1_button1 = 'space'
-p1_down = 'a'
-p1_left = 'up'
-p1_right = 'left'
-p1_start = '1'
-p1_up = 'w'
-p2_button1 = 'k'
-p2_down = 'd'
-p2_left = 'down'
-p2_right = 'right'
-p2_service = 'f2'
-p2_start = '2'
-p2_up = 's'
-service1 = 'f1'
-service2 = 'i'
-service3 = 'p'
-test = 't'
+left_booster_up = 'sc:0011'
+left_booster_down = 'sc:001f'
+left_booster_left = 'sc:001e'
+left_booster_right = 'sc:0020'
+left_booster_button = 'sc:0039'
+right_booster_up = 'e0:0048'
+right_booster_down = 'e0:0050'
+right_booster_left = 'e0:004b'
+right_booster_right = 'e0:004d'
+right_booster_button = 'sc:0025'
+test = 'sc:0014'
+service1 = 'sc:003b'
+service2 = 'sc:0017'
+service3 = 'sc:0019'
+p1_start = 'sc:0002'
+p2_start = 'sc:0003'
+p2_service = 'sc:003c'
+card_read = 'sc:003e'
+
+[controller]
+backend = 'XInput'
+device_id = '0'
+bindings = [
+  { action = 'LeftBoosterUp', type = 'XInputButton', control = 'DPadUp' },
+  { action = 'LeftBoosterUp', type = 'XInputAxis', control = 'LeftY', direction = 'Negative' },
+  { action = 'LeftBoosterDown', type = 'XInputButton', control = 'DPadDown' },
+  { action = 'LeftBoosterDown', type = 'XInputAxis', control = 'LeftY', direction = 'Positive' },
+  { action = 'LeftBoosterLeft', type = 'XInputButton', control = 'DPadLeft' },
+  { action = 'LeftBoosterLeft', type = 'XInputAxis', control = 'LeftX', direction = 'Negative' },
+  { action = 'LeftBoosterRight', type = 'XInputButton', control = 'DPadRight' },
+  { action = 'LeftBoosterRight', type = 'XInputAxis', control = 'LeftX', direction = 'Positive' },
+  { action = 'LeftBoosterButton', type = 'XInputButton', control = 'A' },
+  { action = 'RightBoosterUp', type = 'XInputAxis', control = 'RightY', direction = 'Negative' },
+  { action = 'RightBoosterDown', type = 'XInputAxis', control = 'RightY', direction = 'Positive' },
+  { action = 'RightBoosterLeft', type = 'XInputAxis', control = 'RightX', direction = 'Negative' },
+  { action = 'RightBoosterRight', type = 'XInputAxis', control = 'RightX', direction = 'Positive' },
+  { action = 'RightBoosterButton', type = 'XInputButton', control = 'B' },
+]
 )toml";
 
 constexpr std::string_view kDefaultRegistryConfig = R"toml(
@@ -80,8 +87,6 @@ log_path = 'D:\system\CmdFile\log'
 )toml";
 
 constexpr const char* kDefaultExperimentalConfig = R"toml(
-card_read = 'f4'
-
 [nesys]
 server_ip = '127.0.0.1'
 
@@ -110,8 +115,6 @@ wasapi_exclusive_buffer_ms = 10
 )toml";
 
 constexpr const char* kDefaultCardReadConfig = R"toml(
-card_read = 'f4'
-
 [nesys]
 server_ip = '127.0.0.1'
 
@@ -160,8 +163,6 @@ wasapi_exclusive_buffer_ms = 10
 )toml";
 
 constexpr const char* kEnabledExperimentalConfig = R"toml(
-card_read = 'f8'
-
 [nesys]
 server_ip = '127.0.0.1'
 
@@ -206,6 +207,20 @@ int expect_parse_failure(const std::string& toml, const char* name) {
     return 1;
 }
 
+int expect_parse_failure_contains(
+    const std::string& text,
+    std::string_view expected,
+    const char* name) {
+    const auto result = gc::config::ParseAndValidateInputConfig(text);
+    if (!result && result.error().find(expected) != std::string::npos) {
+        return 0;
+    }
+    std::cerr << "Expected parse failure for " << name << " containing '"
+              << expected << "', got '"
+              << (result ? "success" : result.error()) << "'\n";
+    return 1;
+}
+
 int expect_bool(bool actual, bool expected, const char* name) {
     if (actual == expected) {
         return 0;
@@ -216,46 +231,22 @@ int expect_bool(bool actual, bool expected, const char* name) {
     return 1;
 }
 
-int expect_key(SDL_Keycode actual, SDL_Keycode expected, const char* name) {
-    if (actual == expected) {
-        return 0;
-    }
-
-    std::cerr << "Expected " << name << " keycode 0x" << std::hex << expected
-              << ", got 0x" << actual << std::dec << "\n";
-    return 1;
-}
-
-int expect_gamepad_button(
-    SDL_GamepadButton actual,
-    SDL_GamepadButton expected,
+int expect_key(
+    gc::input::PhysicalKey actual,
+    gc::input::PhysicalKey expected,
     const char* name) {
     if (actual == expected) {
         return 0;
     }
 
-    std::cerr << "Expected " << name << " button "
-              << static_cast<int>(expected) << ", got "
-              << static_cast<int>(actual) << "\n";
-    return 1;
-}
-
-int expect_gamepad_axis(
-    SDL_GamepadAxis actual,
-    SDL_GamepadAxis expected,
-    const char* name) {
-    if (actual == expected) {
-        return 0;
-    }
-
-    std::cerr << "Expected " << name << " axis "
-              << static_cast<int>(expected) << ", got "
-              << static_cast<int>(actual) << "\n";
+    std::cerr << "Expected " << name << " physical key "
+              << gc::input::FormatPhysicalKey(expected) << ", got "
+              << gc::input::FormatPhysicalKey(actual) << "\n";
     return 1;
 }
 
 int expect_poll_rate_validation(
-    InputPollHertzConfigValue value,
+    std::uint32_t value,
     bool expected_valid,
     const char* name) {
     try {
@@ -306,8 +297,8 @@ int expect_ipv4_valid(std::string_view value, bool expected, const char* name) {
 }
 
 int expect_style(
-    GameplayInputStyle actual,
-    GameplayInputStyle expected,
+    gc::input::GameplayInputStyle actual,
+    gc::input::GameplayInputStyle expected,
     const char* name) {
     if (actual == expected) {
         return 0;
@@ -415,7 +406,7 @@ int main() {
         true,
         "generated TOML input_poll_hz");
 
-    for (const auto rate : std::array<InputPollHertzConfigValue, 4>{
+    for (const auto rate : std::array<std::uint32_t, 4>{
              125, 250, 500, 1000}) {
         failures += expect_poll_rate_validation(
             rate,
@@ -457,103 +448,62 @@ int main() {
         250,
         "input_poll_hz TOML round trip");
 
+    using gc::input::PhysicalKey;
+    using gc::input::ScanCodePrefix;
     failures += expect_key(
-        generated_defaults.keyboard().p1_up(),
-        SDLK_W,
+        generated_defaults.keyboard().left_booster_up(),
+        PhysicalKey{0x11, ScanCodePrefix::None},
         "default left booster up");
     failures += expect_key(
-        generated_defaults.keyboard().p2_up(),
-        SDLK_S,
+        generated_defaults.keyboard().left_booster_down(),
+        PhysicalKey{0x1f, ScanCodePrefix::None},
         "default left booster down");
     failures += expect_key(
-        generated_defaults.keyboard().p1_down(),
-        SDLK_A,
+        generated_defaults.keyboard().left_booster_left(),
+        PhysicalKey{0x1e, ScanCodePrefix::None},
         "default left booster left");
     failures += expect_key(
-        generated_defaults.keyboard().p2_down(),
-        SDLK_D,
+        generated_defaults.keyboard().left_booster_right(),
+        PhysicalKey{0x20, ScanCodePrefix::None},
         "default left booster right");
     failures += expect_key(
-        generated_defaults.keyboard().p1_left(),
-        SDLK_UP,
+        generated_defaults.keyboard().left_booster_button(),
+        PhysicalKey{0x39, ScanCodePrefix::None},
+        "default left booster center button");
+    failures += expect_key(
+        generated_defaults.keyboard().right_booster_up(),
+        PhysicalKey{0x48, ScanCodePrefix::E0},
         "default right booster up");
     failures += expect_key(
-        generated_defaults.keyboard().p2_left(),
-        SDLK_DOWN,
+        generated_defaults.keyboard().right_booster_down(),
+        PhysicalKey{0x50, ScanCodePrefix::E0},
         "default right booster down");
     failures += expect_key(
-        generated_defaults.keyboard().p1_right(),
-        SDLK_LEFT,
+        generated_defaults.keyboard().right_booster_left(),
+        PhysicalKey{0x4b, ScanCodePrefix::E0},
         "default right booster left");
     failures += expect_key(
-        generated_defaults.keyboard().p2_right(),
-        SDLK_RIGHT,
+        generated_defaults.keyboard().right_booster_right(),
+        PhysicalKey{0x4d, ScanCodePrefix::E0},
         "default right booster right");
     failures += expect_key(
-        generated_defaults.keyboard().p1_button1(),
-        SDLK_SPACE,
-        "default left booster center button");
-    failures += expect_key(
-        generated_defaults.keyboard().p2_button1(),
-        SDLK_K,
+        generated_defaults.keyboard().right_booster_button(),
+        PhysicalKey{0x25, ScanCodePrefix::None},
         "default right booster center button");
-
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p1_dpad_up(),
-        SDL_GAMEPAD_BUTTON_DPAD_UP,
-        "default left booster dpad up");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p2_button_up(),
-        SDL_GAMEPAD_BUTTON_DPAD_DOWN,
-        "default left booster dpad down");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p1_dpad_down(),
-        SDL_GAMEPAD_BUTTON_DPAD_LEFT,
-        "default left booster dpad left");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p2_button_down(),
-        SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
-        "default left booster dpad right");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p1_dpad_left(),
-        SDL_GAMEPAD_BUTTON_INVALID,
-        "default right booster up button disabled");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p2_button_left(),
-        SDL_GAMEPAD_BUTTON_INVALID,
-        "default right booster down button disabled");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p1_dpad_right(),
-        SDL_GAMEPAD_BUTTON_INVALID,
-        "default right booster left button disabled");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p2_button_right(),
-        SDL_GAMEPAD_BUTTON_INVALID,
-        "default right booster right button disabled");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p1_button1(),
-        SDL_GAMEPAD_BUTTON_SOUTH,
-        "default left booster center button");
-    failures += expect_gamepad_button(
-        generated_defaults.gamepad().p2_button1(),
-        SDL_GAMEPAD_BUTTON_EAST,
-        "default right booster center button");
-    failures += expect_gamepad_axis(
-        generated_defaults.gamepad().p1_axis_horizontal(),
-        SDL_GAMEPAD_AXIS_LEFTX,
-        "default left booster horizontal axis");
-    failures += expect_gamepad_axis(
-        generated_defaults.gamepad().p1_axis_vertical(),
-        SDL_GAMEPAD_AXIS_LEFTY,
-        "default left booster vertical axis");
-    failures += expect_gamepad_axis(
-        generated_defaults.gamepad().p2_axis_horizontal(),
-        SDL_GAMEPAD_AXIS_RIGHTX,
-        "default right booster horizontal axis");
-    failures += expect_gamepad_axis(
-        generated_defaults.gamepad().p2_axis_vertical(),
-        SDL_GAMEPAD_AXIS_RIGHTY,
-        "default right booster vertical axis");
+    failures += expect_bool(
+        generated_defaults.controller().backend() ==
+            gc::input::ControllerBackend::XInput,
+        true,
+        "default controller backend");
+    failures += expect_string(
+        generated_defaults.controller().device_id(),
+        "0",
+        "default controller identity");
+    failures += expect_u32(
+        static_cast<std::uint32_t>(
+            generated_defaults.controller().bindings().size()),
+        0,
+        "constructed controller binding count");
 
     failures += expect_bool(
         generated_toml.find("[nesys]") != std::string::npos,
@@ -847,20 +797,26 @@ int main() {
             std::string::npos,
         true,
         "ConfigGUI default WASAPI buffer serialization");
-    failures += expect_key(upgraded_defaults.keyboard().card_read(), SDLK_F4, "upgraded default card_read");
+    failures += expect_key(
+        upgraded_defaults.keyboard().card_read(),
+        PhysicalKey{0x3e, ScanCodePrefix::None},
+        "upgraded default card_read");
     failures += expect_style(
         upgraded_defaults.gameplay_input_style(),
-        GameplayInputStyle::Arcade,
+        gc::input::GameplayInputStyle::Arcade,
         "upgraded default gameplay_input_style");
 
     const auto switch_prefix = replace_once(
-        kRequiredConfigPrefix,
-        "gameplay_input_style = 'Arcade'",
-        "gameplay_input_style = 'Switch'");
+        replace_once(
+            kRequiredConfigPrefix,
+            "gameplay_input_style = 'Arcade'",
+            "gameplay_input_style = 'Switch'"),
+        "card_read = 'sc:003e'",
+        "card_read = 'sc:0042'");
     const auto custom = parse_config(switch_prefix + kEnabledExperimentalConfig);
     failures += expect_style(
         custom.gameplay_input_style(),
-        GameplayInputStyle::Switch,
+        gc::input::GameplayInputStyle::Switch,
         "custom gameplay_input_style");
     failures += expect_u32(
         custom.experimental().target_fps(),
@@ -915,6 +871,19 @@ int main() {
 
     const auto native_config =
         std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig;
+    for (const std::string_view obsolete : {
+             "gamepad_index = 0\n",
+             "axis_threshold = 16384\n",
+             "[gamepad]\n"}) {
+        failures += expect_parse_failure_contains(
+            std::string(obsolete),
+            "obsolete SDL input schema",
+            "isolated obsolete SDL input field");
+        failures += expect_parse_failure_contains(
+            std::string(obsolete) + native_config,
+            "obsolete SDL input schema",
+            "mixed obsolete SDL input field");
+    }
     failures += expect_parse_failure(
         "[experimental]\ntarget_fps = [",
         "malformed TOML syntax");
@@ -980,11 +949,17 @@ int main() {
         invalid_zero_buffer.experimental().wasapi_exclusive_buffer_ms(),
         0,
         "zero WASAPI buffer remains representable for endpoint validation");
-    failures += expect_key(custom.keyboard().card_read(), SDLK_F8, "custom card_read");
+    failures += expect_key(
+        custom.keyboard().card_read(),
+        PhysicalKey{0x42, ScanCodePrefix::None},
+        "custom card_read");
 
-    failures += expect_parse_failure(kRequiredConfigPrefix, "missing card_read and experimental table");
+    failures += expect_parse_failure(kRequiredConfigPrefix, "missing unrelated tables and experimental table");
     failures += expect_parse_failure(
-        std::string(kRequiredConfigPrefix) + kDefaultExperimentalTable,
+        replace_once(
+            kRequiredConfigPrefix,
+            "card_read = 'sc:003e'\n",
+            "") + kDefaultExperimentalTable,
         "missing card_read");
     failures += expect_parse_failure(
         std::string(kRequiredConfigPrefix) + kDefaultCardReadConfig,
@@ -1069,19 +1044,84 @@ enable_wasapi_exclusive_audio = false
     const auto reparsed_switch = parse_config(serialized_switch);
     failures += expect_style(
         reparsed_switch.gameplay_input_style(),
-        GameplayInputStyle::Switch,
+        gc::input::GameplayInputStyle::Switch,
         "serialized gameplay_input_style");
 
-    failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F4), VK_F4, "F4");
-    failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_F8), VK_F8, "F8");
-    failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_A), 'A', "A");
-    failures += expect_vk(SdlKeycodeToVirtualKey(SDLK_UNKNOWN), 0, "unknown");
-    failures += expect_vk(SdlKeycodeToVirtualKey(custom.keyboard().card_read()), VK_F8, "custom card_read");
+    auto exact_round_trip = upgraded_defaults;
+    exact_round_trip.axis_press_threshold_percent = 65;
+    exact_round_trip.axis_release_threshold_percent = 35;
+    exact_round_trip.keyboard().right_booster_up =
+        PhysicalKey{0x1d, ScanCodePrefix::E1};
+    exact_round_trip.controller().backend =
+        gc::input::ControllerBackend::RawHid;
+    exact_round_trip.controller().device_id =
+        R"(\\?\HID#VID_1234&PID_5678#7&exact-path)";
+    exact_round_trip.controller().bindings = {
+        gc::input::DigitalControlBinding{
+            .action = gc::input::LogicalAction::LeftBoosterButton,
+            .type = gc::input::DigitalControlType::RawHidButton,
+            .usage_page = 9,
+            .usage = 1,
+            .link_collection = 0,
+            .report_id = 1,
+        },
+        gc::input::DigitalControlBinding{
+            .action = gc::input::LogicalAction::LeftBoosterButton,
+            .type = gc::input::DigitalControlType::RawHidButton,
+            .usage_page = 9,
+            .usage = 2,
+            .link_collection = 0,
+            .report_id = 1,
+        },
+    };
+    const auto exact_serialized = rfl::toml::write(exact_round_trip);
+    const auto exact_reparsed = parse_config(exact_serialized);
+    failures += expect_u32(
+        exact_reparsed.axis_press_threshold_percent(),
+        65,
+        "axis press threshold round trip");
+    failures += expect_u32(
+        exact_reparsed.axis_release_threshold_percent(),
+        35,
+        "axis release threshold round trip");
+    failures += expect_key(
+        exact_reparsed.keyboard().right_booster_up(),
+        PhysicalKey{0x1d, ScanCodePrefix::E1},
+        "E1 scan code round trip");
+    failures += expect_string(
+        exact_reparsed.controller().device_id(),
+        exact_round_trip.controller().device_id(),
+        "exact Raw HID path round trip");
+    failures += expect_bool(
+        exact_reparsed.controller().bindings() ==
+            exact_round_trip.controller().bindings(),
+        true,
+        "multiple bindings for one action round trip");
+
+    failures += expect_vk(
+        gc::input::PhysicalKeyToVirtualKey(
+            PhysicalKey{0x3e, ScanCodePrefix::None}),
+        VK_F4,
+        "F4 scan code");
+    failures += expect_vk(
+        gc::input::PhysicalKeyToVirtualKey(
+            PhysicalKey{0x14, ScanCodePrefix::None}),
+        'T',
+        "T scan code");
+    failures += expect_vk(
+        gc::input::PhysicalKeyToVirtualKey(PhysicalKey{}),
+        0,
+        "invalid physical key");
+    failures += expect_vk(
+        gc::input::PhysicalKeyToVirtualKey(custom.keyboard().card_read()),
+        VK_F8,
+        "custom card_read");
 
     const auto punctuation = parse_config(
-        std::string(kRequiredConfigPrefix) + R"toml(
-card_read = ';'
-
+        replace_once(
+            kRequiredConfigPrefix,
+            "card_read = 'sc:003e'",
+            "card_read = 'sc:0027'") + R"toml(
 [nesys]
 server_ip = '127.0.0.1'
 
@@ -1108,12 +1148,15 @@ enable_nesys_service_adapter_patch = true
 enable_wasapi_exclusive_audio = false
 wasapi_exclusive_buffer_ms = 10
 )toml");
-    failures += expect_key(punctuation.keyboard().card_read(), SDLK_SEMICOLON, "semicolon card_read");
-    failures += expect_string(KeycodeToString(SDLK_SEMICOLON), ";", "semicolon display name");
-    failures += expect_vk(
-        SdlKeycodeToVirtualKey(punctuation.keyboard().card_read()),
-        VK_OEM_1,
-        "semicolon Win32 input");
+    failures += expect_key(
+        punctuation.keyboard().card_read(),
+        PhysicalKey{0x27, ScanCodePrefix::None},
+        "punctuation-position card_read");
+    failures += expect_bool(
+        !gc::input::PhysicalKeyLabel(
+            punctuation.keyboard().card_read()).empty(),
+        true,
+        "punctuation logical label is presentation-only");
 
     return failures == 0 ? 0 : 1;
 }

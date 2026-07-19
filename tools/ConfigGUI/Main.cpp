@@ -1,838 +1,1470 @@
-#include <Windows.h>
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h> // Necessary for some platforms
+#include "InputEditorModel.h"
+#include "Win32D3D11Host.h"
+
+#include "Config/RegistryConfig.h"
+#include "Config/TargetFps.h"
+#include "Config/config.h"
+#include "Input/Types/PhysicalKey.h"
+#include "Input/Win32/ControllerCatalog.h"
+#include "Input/Win32/InputCapture.h"
+#include "Input/Win32/PhysicalKeyWin32.h"
+#include "Input/Win32/RawHidController.h"
+#include "Input/Win32/RawInputPacket.h"
+#include "Input/Win32/XInputApi.h"
+#include "Input/Win32/XInputController.h"
+#include "Nesys/Network/NesysNetworkConfig.h"
 
 #include "imgui.h"
-#include "backends/imgui_impl_sdl3.h"
-#include "backends/imgui_impl_sdlrenderer3.h"
 #include "misc/cpp/imgui_stdlib.h"
-#include "Nesys/Network/NesysNetworkConfig.h"
-#include "Config/RegistryConfig.h"
-
 #include <rfl/toml.hpp>
-#include <algorithm>
+
+#include <Windows.h>
+
 #include <array>
-#include <iostream>
+#include <cstddef>
+#include <cstdint>
+#include <expected>
 #include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <iterator>
-#include <string>
-#include <vector>
 #include <optional>
-#include <map>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
-#include "Config/config.h"
+#include <vector>
 
+namespace {
 
-// --- Global State (for simplicity in example) ---
-SDL_Window *g_window = nullptr;
-SDL_Renderer *g_renderer = nullptr;
-SDL_Gamepad *g_gamepad = nullptr;
-InputConfig g_config;
-std::string g_config_path = "config.toml";
-bool g_config_dirty = false; // Flag to indicate if changes need saving
-bool g_saved = false;
-bool g_open_bind_popup_requested = false;
+constexpr std::array<USHORT, 4> kRawInputUsages{0x06, 0x05, 0x04, 0x08};
 
-// Rebinding state
-enum class RebindType { None, Keyboard, GamepadButton, GamepadAxis };
+std::string Win32Failure(const char* operation)
+{
+    return std::string(operation) + " failed with Win32 error " +
+        std::to_string(GetLastError());
+}
 
-struct RebindTarget {
-    std::string label;
-    RebindType type = RebindType::None;
-    // Use std::variant to hold a pointer to the actual config member
-    std::variant<SDL_Keycode *, SDL_GamepadButton *, SDL_GamepadAxis *> target_ptr;
+std::string WideToUtf8(std::wstring_view value)
+{
+    if (value.empty())
+    {
+        return {};
+    }
+    const int count = WideCharToMultiByte(
+        CP_UTF8,
+        WC_ERR_INVALID_CHARS,
+        value.data(),
+        static_cast<int>(value.size()),
+        nullptr,
+        0,
+        nullptr,
+        nullptr);
+    if (count <= 0)
+    {
+        return {};
+    }
+    std::string result(static_cast<std::size_t>(count), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8,
+            WC_ERR_INVALID_CHARS,
+            value.data(),
+            static_cast<int>(value.size()),
+            result.data(),
+            count,
+            nullptr,
+            nullptr) != count)
+    {
+        return {};
+    }
+    return result;
+}
+
+std::expected<void, std::string> RegisterGuiRawInput(HWND window)
+{
+    std::array<RAWINPUTDEVICE, kRawInputUsages.size()> registrations{};
+    for (std::size_t index = 0; index < registrations.size(); ++index)
+    {
+        registrations[index] = RAWINPUTDEVICE{
+            .usUsagePage = 0x01,
+            .usUsage = kRawInputUsages[index],
+            .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+            .hwndTarget = window,
+        };
+    }
+    if (!RegisterRawInputDevices(
+            registrations.data(),
+            static_cast<UINT>(registrations.size()),
+            sizeof(RAWINPUTDEVICE)))
+    {
+        return std::unexpected(Win32Failure("RegisterRawInputDevices"));
+    }
+    return {};
+}
+
+void UnregisterGuiRawInput() noexcept
+{
+    std::array<RAWINPUTDEVICE, kRawInputUsages.size()> registrations{};
+    for (std::size_t index = 0; index < registrations.size(); ++index)
+    {
+        registrations[index] = RAWINPUTDEVICE{
+            .usUsagePage = 0x01,
+            .usUsage = kRawInputUsages[index],
+            .dwFlags = RIDEV_REMOVE,
+            .hwndTarget = nullptr,
+        };
+    }
+    RegisterRawInputDevices(
+        registrations.data(),
+        static_cast<UINT>(registrations.size()),
+        sizeof(RAWINPUTDEVICE));
+}
+
+const char* ActionName(gc::input::LogicalAction action) noexcept
+{
+    using enum gc::input::LogicalAction;
+    switch (action)
+    {
+    case LeftBoosterUp: return "Left Booster Up";
+    case LeftBoosterDown: return "Left Booster Down";
+    case LeftBoosterLeft: return "Left Booster Left";
+    case LeftBoosterRight: return "Left Booster Right";
+    case LeftBoosterButton: return "Left Booster Button";
+    case RightBoosterUp: return "Right Booster Up";
+    case RightBoosterDown: return "Right Booster Down";
+    case RightBoosterLeft: return "Right Booster Left";
+    case RightBoosterRight: return "Right Booster Right";
+    case RightBoosterButton: return "Right Booster Button";
+    case Service1: return "Service 1";
+    case Service2: return "Service 2";
+    case Service3: return "Service 3";
+    case P1Start: return "P1 Start";
+    case P2Start: return "P2 Start";
+    case P2Service: return "P2 Service";
+    case Test: return "Test";
+    case Count: break;
+    }
+    return "Unknown";
+}
+
+const char* XInputControlName(gc::input::XInputControl control) noexcept
+{
+    using enum gc::input::XInputControl;
+    switch (control)
+    {
+    case A: return "A";
+    case B: return "B";
+    case X: return "X";
+    case Y: return "Y";
+    case DPadUp: return "D-pad Up";
+    case DPadDown: return "D-pad Down";
+    case DPadLeft: return "D-pad Left";
+    case DPadRight: return "D-pad Right";
+    case Start: return "Start";
+    case Back: return "Back";
+    case LeftShoulder: return "Left Shoulder";
+    case RightShoulder: return "Right Shoulder";
+    case LeftThumb: return "Left Thumb";
+    case RightThumb: return "Right Thumb";
+    case LeftX: return "Left X";
+    case LeftY: return "Left Y";
+    case RightX: return "Right X";
+    case RightY: return "Right Y";
+    case LeftTrigger: return "Left Trigger";
+    case RightTrigger: return "Right Trigger";
+    }
+    return "Unknown";
+}
+
+const char* DirectionName(gc::input::ControlDirection direction) noexcept
+{
+    using enum gc::input::ControlDirection;
+    switch (direction)
+    {
+    case Positive: return "+";
+    case Negative: return "-";
+    case Up: return "Up";
+    case Down: return "Down";
+    case Left: return "Left";
+    case Right: return "Right";
+    }
+    return "?";
+}
+
+std::string BindingLabel(const gc::input::DigitalControlBinding& binding)
+{
+    using enum gc::input::DigitalControlType;
+    if (binding.type == XInputButton || binding.type == XInputAxis ||
+        binding.type == XInputTrigger)
+    {
+        std::string label = "XInput ";
+        label += binding.control
+            ? XInputControlName(*binding.control)
+            : "Unknown";
+        if (binding.direction)
+        {
+            label += " ";
+            label += DirectionName(*binding.direction);
+        }
+        return label;
+    }
+
+    std::ostringstream label;
+    if (binding.type == RawHidButton)
+    {
+        label << "Button ";
+    }
+    else if (binding.type == RawHidHat)
+    {
+        label << "Hat ";
+    }
+    else
+    {
+        label << "Value ";
+    }
+    label << "page 0x" << std::hex << binding.usage_page.value_or(0)
+          << " usage 0x" << binding.usage.value_or(0) << std::dec;
+    if (binding.direction)
+    {
+        label << " " << DirectionName(*binding.direction);
+    }
+    label << " (report " << binding.report_id.value_or(0)
+          << ", link " << binding.link_collection.value_or(0) << ")";
+    return label.str();
+}
+
+void DrawInlineValidationError(bool valid, const char* message)
+{
+    if (!valid)
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.35F, 0.35F, 1.0F), "%s", message);
+    }
+}
+
+class GuiInputContext {
+public:
+    GuiInputContext(InputConfig& config, InputEditorModel& editor)
+        : config_(config), editor_(editor)
+    {
+    }
+
+    static LRESULT MessageHandler(
+        void* context,
+        HWND window,
+        UINT message,
+        WPARAM wparam,
+        LPARAM lparam) noexcept
+    {
+        auto* self = static_cast<GuiInputContext*>(context);
+        if (self == nullptr)
+        {
+            return 0;
+        }
+        try
+        {
+            if (message == WM_INPUT)
+            {
+                self->OnRawInput(
+                    window, reinterpret_cast<HRAWINPUT>(lparam));
+            }
+            else if (message == WM_INPUT_DEVICE_CHANGE)
+            {
+                self->device_refresh_requested_ = true;
+            }
+        }
+        catch (...)
+        {
+            self->CancelCapture();
+            OutputDebugStringA("ConfigGUI native input handler failed\n");
+        }
+        return 0;
+    }
+
+    void SetWindow(HWND window) noexcept
+    {
+        window_ = window;
+    }
+
+    void InitializeControllers()
+    {
+        for (std::uint32_t slot = 0; slot < xinput_.size(); ++slot)
+        {
+            auto api = gc::input::LoadSystemXInput();
+            if (!api)
+            {
+                controller_error_ = api.error();
+                break;
+            }
+            auto controller = gc::input::XInputController::Create(
+                slot, std::move(*api));
+            if (!controller)
+            {
+                controller_error_ = controller.error();
+                continue;
+            }
+            xinput_[slot].emplace(std::move(*controller));
+        }
+        RefreshDevices();
+    }
+
+    void RefreshDevices()
+    {
+        device_refresh_requested_ = false;
+        for (auto& controller : xinput_)
+        {
+            if (!controller)
+            {
+                continue;
+            }
+            controller->RequestReconnectProbe();
+            if (const auto poll = controller->Poll(); !poll)
+            {
+                controller_error_ = poll.error();
+            }
+        }
+
+        if (auto devices = gc::input::EnumerateRawHidDevices(); devices)
+        {
+            raw_devices_ = std::move(*devices);
+        }
+        else
+        {
+            raw_devices_.clear();
+            controller_error_ = devices.error();
+        }
+        ReopenSelectedRawController();
+        UpdateAvailableIdentities();
+    }
+
+    void PollSelectedController()
+    {
+        if (device_refresh_requested_)
+        {
+            RefreshDevices();
+        }
+
+        const auto selected = editor_.SelectedIdentity();
+        if (selected.backend != gc::input::ControllerBackend::XInput)
+        {
+            return;
+        }
+        const auto slot = SelectedXInputSlot();
+        if (!slot || !xinput_[*slot])
+        {
+            return;
+        }
+
+        const bool was_connected = xinput_[*slot]->connected();
+        const auto poll = xinput_[*slot]->Poll();
+        if (!poll)
+        {
+            controller_error_ = poll.error();
+            return;
+        }
+        if (was_connected != xinput_[*slot]->connected())
+        {
+            UpdateAvailableIdentities();
+        }
+        if (capture_mode_ == CaptureMode::Controller && capture_ &&
+            xinput_[*slot]->connected())
+        {
+            if (const auto sample =
+                    capture_->SampleController(*xinput_[*slot]);
+                !sample)
+            {
+                capture_error_ = sample.error();
+                CancelCapture();
+                return;
+            }
+            HarvestCaptureResult();
+        }
+    }
+
+    void SelectIdentity(gc::input::ControllerIdentity identity)
+    {
+        editor_.SelectIdentity(std::move(identity));
+        config_.controller = editor_.config();
+        ReopenSelectedRawController();
+        UpdateAvailableIdentities();
+    }
+
+    [[nodiscard]] bool BeginKeyboardCapture(
+        gc::input::PhysicalKey& target,
+        std::string label)
+    {
+        auto capture = gc::input::InputCapture::Create(
+            config_.axis_press_threshold_percent(),
+            config_.axis_release_threshold_percent());
+        if (!capture)
+        {
+            capture_error_ = capture.error();
+            return false;
+        }
+        capture_.emplace(std::move(*capture));
+        capture_->BeginKeyboard();
+        capture_mode_ = CaptureMode::Keyboard;
+        keyboard_target_ = &target;
+        replacement_index_.reset();
+        capture_label_ = std::move(label);
+        capture_error_.clear();
+        popup_requested_ = true;
+        return true;
+    }
+
+    [[nodiscard]] bool BeginControllerCapture(
+        gc::input::LogicalAction action,
+        std::optional<std::size_t> replacement_index)
+    {
+        auto* view = SelectedControllerView();
+        if (view == nullptr || !editor_.selected_identity_available())
+        {
+            capture_error_ = "The selected controller is unavailable";
+            return false;
+        }
+
+        auto capture = gc::input::InputCapture::Create(
+            config_.axis_press_threshold_percent(),
+            config_.axis_release_threshold_percent());
+        if (!capture)
+        {
+            capture_error_ = capture.error();
+            return false;
+        }
+        if (const auto begin = capture->BeginController(
+                action, editor_.SelectedIdentity(), *view);
+            !begin)
+        {
+            capture_error_ = begin.error();
+            return false;
+        }
+
+        capture_.emplace(std::move(*capture));
+        capture_mode_ = CaptureMode::Controller;
+        keyboard_target_ = nullptr;
+        replacement_index_ = replacement_index;
+        capture_label_ = ActionName(action);
+        capture_error_.clear();
+        popup_requested_ = true;
+        return true;
+    }
+
+    void CancelCapture() noexcept
+    {
+        if (capture_)
+        {
+            capture_->Cancel();
+        }
+        capture_.reset();
+        completed_capture_.reset();
+        capture_mode_ = CaptureMode::None;
+        keyboard_target_ = nullptr;
+        replacement_index_.reset();
+        close_popup_requested_ = true;
+    }
+
+    [[nodiscard]] bool ApplyCompletedCapture()
+    {
+        if (!completed_capture_)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        if (capture_mode_ == CaptureMode::Keyboard)
+        {
+            const auto* key = std::get_if<gc::input::PhysicalKey>(
+                &completed_capture_->value);
+            if (key != nullptr && keyboard_target_ != nullptr)
+            {
+                *keyboard_target_ = *key;
+                changed = true;
+            }
+            else
+            {
+                capture_error_ = "Keyboard capture returned an invalid value";
+            }
+        }
+        else if (capture_mode_ == CaptureMode::Controller)
+        {
+            const auto accepted = editor_.AcceptCapture(
+                *completed_capture_, replacement_index_);
+            if (accepted)
+            {
+                config_.controller = editor_.config();
+                changed = true;
+            }
+            else
+            {
+                capture_error_ = accepted.error();
+            }
+        }
+
+        completed_capture_.reset();
+        capture_.reset();
+        capture_mode_ = CaptureMode::None;
+        keyboard_target_ = nullptr;
+        replacement_index_.reset();
+        close_popup_requested_ = true;
+        return changed;
+    }
+
+    [[nodiscard]] bool TakePopupRequested() noexcept
+    {
+        return std::exchange(popup_requested_, false);
+    }
+
+    [[nodiscard]] bool TakeClosePopupRequested() noexcept
+    {
+        return std::exchange(close_popup_requested_, false);
+    }
+
+    [[nodiscard]] bool capture_active() const noexcept
+    {
+        return capture_mode_ != CaptureMode::None;
+    }
+
+    [[nodiscard]] const std::string& capture_label() const noexcept
+    {
+        return capture_label_;
+    }
+
+    [[nodiscard]] const std::string& capture_error() const noexcept
+    {
+        return capture_error_;
+    }
+
+    void ClearCaptureError()
+    {
+        capture_error_.clear();
+    }
+
+    [[nodiscard]] bool xinput_connected(std::size_t slot) const noexcept
+    {
+        return slot < xinput_.size() && xinput_[slot] &&
+            xinput_[slot]->connected();
+    }
+
+    [[nodiscard]] const std::vector<gc::input::RawHidDeviceInfo>&
+    raw_devices() const noexcept
+    {
+        return raw_devices_;
+    }
+
+    [[nodiscard]] const std::string& controller_error() const noexcept
+    {
+        return controller_error_;
+    }
+
+private:
+    enum class CaptureMode : std::uint8_t {
+        None,
+        Keyboard,
+        Controller,
+    };
+
+    void OnRawInput(HWND window, HRAWINPUT handle)
+    {
+        if (window_ == nullptr || window != window_ ||
+            GetForegroundWindow() != window_)
+        {
+            return;
+        }
+        const auto packet = packets_.Read(handle);
+        if (!packet)
+        {
+            capture_error_ = packet.error();
+            return;
+        }
+
+        const RAWINPUT& input = **packet;
+        if (input.header.dwType == RIM_TYPEKEYBOARD && capture_ &&
+            capture_mode_ == CaptureMode::Keyboard)
+        {
+            const auto transition =
+                gc::input::DecodeRawKeyboard(input.data.keyboard);
+            if (!transition)
+            {
+                return;
+            }
+            if (transition->pressed &&
+                transition->key == gc::input::PhysicalKey{
+                    0x01, gc::input::ScanCodePrefix::None})
+            {
+                CancelCapture();
+                return;
+            }
+            capture_->OnKeyboardTransition(
+                transition->key, transition->pressed);
+            HarvestCaptureResult();
+            return;
+        }
+
+        if (input.header.dwType == RIM_TYPEHID && raw_controller_)
+        {
+            const auto applied = raw_controller_->Apply(
+                input.header.hDevice, input.data.hid);
+            if (!applied)
+            {
+                capture_error_ = applied.error();
+                return;
+            }
+            if (*applied && capture_ &&
+                capture_mode_ == CaptureMode::Controller)
+            {
+                if (const auto sample =
+                        capture_->SampleController(*raw_controller_);
+                    !sample)
+                {
+                    capture_error_ = sample.error();
+                    CancelCapture();
+                    return;
+                }
+                HarvestCaptureResult();
+            }
+        }
+    }
+
+    void HarvestCaptureResult()
+    {
+        if (!capture_)
+        {
+            return;
+        }
+        if (auto result = capture_->TakeResult(); result)
+        {
+            completed_capture_ = std::move(*result);
+        }
+    }
+
+    std::optional<std::size_t> SelectedXInputSlot() const noexcept
+    {
+        const auto identity = editor_.SelectedIdentity();
+        if (identity.backend != gc::input::ControllerBackend::XInput ||
+            identity.device_id.size() != 1 ||
+            identity.device_id[0] < '0' || identity.device_id[0] > '3')
+        {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(identity.device_id[0] - '0');
+    }
+
+    gc::input::ControllerStateView* SelectedControllerView() noexcept
+    {
+        const auto identity = editor_.SelectedIdentity();
+        if (identity.backend == gc::input::ControllerBackend::XInput)
+        {
+            const auto slot = SelectedXInputSlot();
+            if (!slot || !xinput_[*slot] || !xinput_[*slot]->connected())
+            {
+                return nullptr;
+            }
+            return &*xinput_[*slot];
+        }
+        return raw_controller_ ? &*raw_controller_ : nullptr;
+    }
+
+    void ReopenSelectedRawController()
+    {
+        raw_controller_.reset();
+        const auto selected = editor_.SelectedIdentity();
+        if (selected.backend != gc::input::ControllerBackend::RawHid)
+        {
+            return;
+        }
+        const auto* device = gc::input::FindExactRawHidDevice(
+            raw_devices_, selected.device_id);
+        if (device == nullptr)
+        {
+            return;
+        }
+        auto opened = gc::input::RawHidController::Open(*device);
+        if (!opened)
+        {
+            controller_error_ = opened.error();
+            return;
+        }
+        raw_controller_.emplace(std::move(*opened));
+    }
+
+    void UpdateAvailableIdentities()
+    {
+        std::vector<gc::input::ControllerIdentity> available;
+        for (std::size_t slot = 0; slot < xinput_.size(); ++slot)
+        {
+            if (xinput_[slot] && xinput_[slot]->connected())
+            {
+                available.push_back(xinput_[slot]->identity());
+            }
+        }
+        for (const auto& device : raw_devices_)
+        {
+            available.push_back(gc::input::ControllerIdentity{
+                .backend = gc::input::ControllerBackend::RawHid,
+                .device_id = device.device_path,
+            });
+        }
+
+        const auto selected = editor_.SelectedIdentity();
+        if (selected.backend == gc::input::ControllerBackend::RawHid &&
+            gc::input::FindExactRawHidDevice(
+                raw_devices_, selected.device_id) != nullptr)
+        {
+            available.push_back(selected);
+        }
+        editor_.SetAvailableIdentities(std::move(available));
+    }
+
+    InputConfig& config_;
+    InputEditorModel& editor_;
+    HWND window_{};
+    gc::input::RawInputPacketBuffer packets_;
+    std::array<std::optional<gc::input::XInputController>, 4> xinput_;
+    std::vector<gc::input::RawHidDeviceInfo> raw_devices_;
+    std::optional<gc::input::RawHidController> raw_controller_;
+    std::optional<gc::input::InputCapture> capture_;
+    std::optional<gc::input::CaptureResult> completed_capture_;
+    CaptureMode capture_mode_{CaptureMode::None};
+    gc::input::PhysicalKey* keyboard_target_{};
+    std::optional<std::size_t> replacement_index_;
+    std::string capture_label_;
+    std::string capture_error_;
+    std::string controller_error_;
+    bool device_refresh_requested_{};
+    bool popup_requested_{};
+    bool close_popup_requested_{};
 };
 
-std::optional<RebindTarget> g_rebinding_target;
-
-// --- UI Drawing Functions ---
-
-// Helper to create a row for key binding
-void DrawKeybindingRow(const char *label, SDL_Keycode &keycode_ref) {
+void DrawKeyboardBinding(
+    const char* label,
+    gc::input::PhysicalKey& key,
+    GuiInputContext& input)
+{
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", label);
+    ImGui::TextUnformatted(label);
     ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%s", KeycodeToString(keycode_ref).c_str());
+    const auto logical_label = WideToUtf8(gc::input::PhysicalKeyLabel(key));
+    const auto token = gc::input::FormatPhysicalKey(key);
+    ImGui::Text("%s [%s]", logical_label.c_str(), token.c_str());
     ImGui::TableSetColumnIndex(2);
-    ImGui::PushID(label); // Ensure unique ID for button
-    if (ImGui::Button("Bind")) {
-        g_rebinding_target = RebindTarget{label, RebindType::Keyboard, &keycode_ref};
-        // ImGui::OpenPopup("Bind Input");
-        g_open_bind_popup_requested = true;
+    ImGui::PushID(&key);
+    if (ImGui::Button("Bind"))
+    {
+        (void) input.BeginKeyboardCapture(key, label);
     }
     ImGui::PopID();
 }
 
-// Helper to create a row for gamepad button binding
-void DrawGamepadButtonBindingRow(const char *label, SDL_GamepadButton &button_ref) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", label);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%s", GamepadButtonToString(button_ref).c_str());
-    ImGui::TableSetColumnIndex(2);
-    ImGui::PushID(label);
-    if (ImGui::Button("Bind")) {
-        g_rebinding_target = RebindTarget{label, RebindType::GamepadButton, &button_ref};
-        // ImGui::OpenPopup("Bind Input");
-        g_open_bind_popup_requested = true;
+void DrawKeyboardBindings(
+    InputConfig& config,
+    GuiInputContext& input,
+    bool gameplay)
+{
+    if (!ImGui::BeginTable(
+            gameplay ? "GameplayKeyboardBindings" : "SystemKeyboardBindings",
+            3,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable))
+    {
+        return;
     }
-    ImGui::PopID();
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 180.0F);
+    ImGui::TableSetupColumn("Physical key", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Rebind", ImGuiTableColumnFlags_WidthFixed, 75.0F);
+    ImGui::TableHeadersRow();
+
+    auto& keyboard = config.keyboard();
+    if (gameplay)
+    {
+        DrawKeyboardBinding("Left Booster Up", keyboard.left_booster_up(), input);
+        DrawKeyboardBinding("Left Booster Down", keyboard.left_booster_down(), input);
+        DrawKeyboardBinding("Left Booster Left", keyboard.left_booster_left(), input);
+        DrawKeyboardBinding("Left Booster Right", keyboard.left_booster_right(), input);
+        DrawKeyboardBinding("Left Booster Button", keyboard.left_booster_button(), input);
+        DrawKeyboardBinding("Right Booster Up", keyboard.right_booster_up(), input);
+        DrawKeyboardBinding("Right Booster Down", keyboard.right_booster_down(), input);
+        DrawKeyboardBinding("Right Booster Left", keyboard.right_booster_left(), input);
+        DrawKeyboardBinding("Right Booster Right", keyboard.right_booster_right(), input);
+        DrawKeyboardBinding("Right Booster Button", keyboard.right_booster_button(), input);
+    }
+    else
+    {
+        DrawKeyboardBinding("Test", keyboard.test(), input);
+        DrawKeyboardBinding("Service 1", keyboard.service1(), input);
+        DrawKeyboardBinding("Service 2", keyboard.service2(), input);
+        DrawKeyboardBinding("Service 3", keyboard.service3(), input);
+        DrawKeyboardBinding("P1 Start", keyboard.p1_start(), input);
+        DrawKeyboardBinding("P2 Start", keyboard.p2_start(), input);
+        DrawKeyboardBinding("P2 Service", keyboard.p2_service(), input);
+        DrawKeyboardBinding("Card Read", keyboard.card_read(), input);
+    }
+    ImGui::EndTable();
 }
 
-// Helper to create a row for gamepad axis binding
-void DrawGamepadAxisBindingRow(const char *label, SDL_GamepadAxis &axis_ref) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", label);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%s", GamepadAxisToString(axis_ref).c_str());
-    ImGui::TableSetColumnIndex(2);
-    ImGui::PushID(label);
-    if (ImGui::Button("Bind")) {
-        g_rebinding_target = RebindTarget{label, RebindType::GamepadAxis, &axis_ref};
-        // ImGui::OpenPopup("Bind Input");
-        g_open_bind_popup_requested = true;
+void DrawControllerDevices(
+    InputConfig& config,
+    InputEditorModel& editor,
+    GuiInputContext& input,
+    bool& dirty)
+{
+    ImGui::SeparatorText("Controller device");
+    if (ImGui::Button("Refresh devices"))
+    {
+        input.RefreshDevices();
     }
-    ImGui::PopID();
-}
 
-void DrawInlineValidationError(bool valid, const char* message) {
-    if (!valid) {
+    const auto selected = editor.SelectedIdentity();
+    ImGui::Text("Configured identity: %s / %s",
+        selected.backend == gc::input::ControllerBackend::XInput
+            ? "XInput"
+            : "Raw HID",
+        selected.device_id.c_str());
+    if (!editor.selected_identity_available())
+    {
         ImGui::TextColored(
             ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+            "Configured device is unavailable; no fallback will be selected.");
+    }
+
+    if (ImGui::TreeNodeEx("XInput", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        for (std::size_t slot = 0; slot < 4; ++slot)
+        {
+            ImGui::PushID(static_cast<int>(slot));
+            const bool connected = input.xinput_connected(slot);
+            ImGui::Text("Slot %zu: %s", slot, connected ? "connected" : "not connected");
+            ImGui::SameLine();
+            if (ImGui::Button("Select"))
+            {
+                input.SelectIdentity(gc::input::ControllerIdentity{
+                    .backend = gc::input::ControllerBackend::XInput,
+                    .device_id = std::to_string(slot),
+                });
+                dirty = true;
+            }
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
+
+    if (ImGui::TreeNodeEx("Generic Raw HID", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (input.raw_devices().empty())
+        {
+            ImGui::TextDisabled("No generic Raw HID controllers found.");
+        }
+        for (const auto& device : input.raw_devices())
+        {
+            ImGui::PushID(device.device_path.c_str());
+            const auto name = WideToUtf8(device.product_name);
+            ImGui::Text("%s", name.empty() ? "Generic HID controller" : name.c_str());
+            ImGui::Text(
+                "VID %04X PID %04X, usage %04X:%04X",
+                device.vendor_id,
+                device.product_id,
+                device.usage_page,
+                device.usage);
+            ImGui::TextWrapped("%s", device.device_path.c_str());
+            if (ImGui::Button("Select this Raw HID device"))
+            {
+                input.SelectIdentity(gc::input::ControllerIdentity{
+                    .backend = gc::input::ControllerBackend::RawHid,
+                    .device_id = device.device_path,
+                });
+                dirty = true;
+            }
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
+
+    if (!input.controller_error().empty())
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.55F, 0.2F, 1.0F),
             "%s",
-            message);
+            input.controller_error().c_str());
+    }
+    config.controller = editor.config();
+}
+
+void DrawControllerBindings(
+    InputConfig& config,
+    InputEditorModel& editor,
+    GuiInputContext& input,
+    bool& dirty)
+{
+    constexpr std::array actions{
+        gc::input::LogicalAction::LeftBoosterUp,
+        gc::input::LogicalAction::LeftBoosterDown,
+        gc::input::LogicalAction::LeftBoosterLeft,
+        gc::input::LogicalAction::LeftBoosterRight,
+        gc::input::LogicalAction::LeftBoosterButton,
+        gc::input::LogicalAction::RightBoosterUp,
+        gc::input::LogicalAction::RightBoosterDown,
+        gc::input::LogicalAction::RightBoosterLeft,
+        gc::input::LogicalAction::RightBoosterRight,
+        gc::input::LogicalAction::RightBoosterButton,
+    };
+
+    std::optional<std::size_t> remove_index;
+    if (ImGui::BeginTable(
+            "ControllerBindings",
+            3,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_Resizable))
+    {
+        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 180.0F);
+        ImGui::TableSetupColumn("Bindings", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, 150.0F);
+        ImGui::TableHeadersRow();
+
+        for (const auto action : actions)
+        {
+            bool found = false;
+            const auto& bindings = editor.config().bindings();
+            for (std::size_t index = 0; index < bindings.size(); ++index)
+            {
+                if (bindings[index].action != action)
+                {
+                    continue;
+                }
+                found = true;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(ActionName(action));
+                ImGui::TableSetColumnIndex(1);
+                const auto label = BindingLabel(bindings[index]);
+                ImGui::TextWrapped("%s", label.c_str());
+                ImGui::TableSetColumnIndex(2);
+                ImGui::PushID(static_cast<int>(index));
+                if (ImGui::Button("Replace"))
+                {
+                    (void) input.BeginControllerCapture(action, index);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Remove"))
+                {
+                    remove_index = index;
+                }
+                ImGui::PopID();
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (!found)
+            {
+                ImGui::TextUnformatted(ActionName(action));
+            }
+            ImGui::TableSetColumnIndex(1);
+            if (!found)
+            {
+                ImGui::TextDisabled("No binding");
+            }
+            ImGui::TableSetColumnIndex(2);
+            ImGui::PushID(static_cast<int>(action));
+            if (ImGui::Button("Add"))
+            {
+                (void) input.BeginControllerCapture(action, std::nullopt);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    if (remove_index)
+    {
+        if (const auto removed = editor.RemoveBinding(*remove_index); removed)
+        {
+            config.controller = editor.config();
+            dirty = true;
+        }
     }
 }
 
-// --- Main Function ---
-int main(int argc, char *argv[]) {
-    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4, "1");
-    SDL_SetHint(SDL_HINT_JOYSTICK_ENHANCED_REPORTS, "1");
-    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
-    // 1. Initialize SDL
-    if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD | SDL_INIT_EVENTS | SDL_INIT_VIDEO) != true) {
-        SDL_Log("Error initializing SDL: %s", SDL_GetError());
-        return -1;
+void DrawRegistry(InputConfig& config, bool& dirty)
+{
+    ImGui::SeparatorText("Registry");
+    auto& registry = config.registry();
+    bool enabled = registry.enabled();
+    if (ImGui::Checkbox("Registry configuration overrides", &enabled))
+    {
+        registry.enabled = enabled;
+        dirty = true;
     }
 
-    // 2. Create Window and Renderer
-    Uint32 window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    g_window = SDL_CreateWindow("Input Configurator", 800, 600, window_flags);
-    if (!g_window) {
-        SDL_Log("Error creating window: %s", SDL_GetError());
-        SDL_Quit();
-        return -1;
-    }
-    g_renderer = SDL_CreateRenderer(g_window, nullptr);
-    if (!g_renderer) {
-        SDL_Log("Error creating renderer: %s", SDL_GetError());
-        SDL_DestroyWindow(g_window);
-        SDL_Quit();
-        return -1;
+    constexpr const char* countries[]{
+        "GrooveCoasterJpn - GROOVE COASTER, Japanese branding",
+        "Rhythmvaders - RHYTHMVADERS, English branding",
+        "GrooveCoasterEng - GROOVE COASTER, English branding",
+    };
+    int country = static_cast<int>(registry.game().country());
+    if (ImGui::Combo("Game country", &country, countries, IM_ARRAYSIZE(countries)))
+    {
+        registry.game().country = static_cast<GameCountry>(country);
+        dirty = true;
     }
 
-    // 3. Initialize ImGui
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    (void) io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; // Enable Gamepad Controls
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable; // Enable Multi-Viewport / Platform Windows (optional)
+    auto& nesys = registry.nesys();
+    auto& game_kind = nesys.game_kind();
+    if (ImGui::InputScalar("Registry GameKind", ImGuiDataType_S64, &game_kind))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryDword(game_kind),
+        "Enter an integer from 0 through 4294967295.");
 
-    ImGui::StyleColorsDark(); // or ImGui::StyleColorsLight();
+    auto& event_next_time = nesys.event_next_time();
+    if (ImGui::InputScalar("Registry EventNextTime", ImGuiDataType_S64, &event_next_time))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryDword(event_next_time),
+        "Enter an integer from 0 through 4294967295.");
 
-    // Setup Platform/Renderer backends
-    ImGui_ImplSDL3_InitForSDLRenderer(g_window, g_renderer);
-    ImGui_ImplSDLRenderer3_Init(g_renderer);
+    auto& condition_time = nesys.condition_time();
+    if (ImGui::InputScalar("Registry ConditionTime", ImGuiDataType_S64, &condition_time))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryDword(condition_time),
+        "Enter an integer from 0 through 4294967295.");
 
-    // 4. Load Initial Configuration
-    std::ifstream ifs(g_config_path);
-    if (ifs.is_open()) {
-        std::string toml_content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-        ifs.close();
-        auto load_result = gc::config::ParseAndValidateInputConfig(toml_content);
-        if (load_result) {
-            g_config = *load_result;
-            SDL_Log("Loaded configuration from %s", g_config_path.c_str());
-        } else {
-            SDL_Log("Error parsing %s: %s", g_config_path.c_str(), load_result.error().c_str());
-            SDL_DestroyRenderer(g_renderer);
-            SDL_DestroyWindow(g_window);
-            SDL_Quit();
-            return 1;
+    auto& log_level = nesys.log_level();
+    if (ImGui::InputScalar("Registry LogLevel", ImGuiDataType_S64, &log_level))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryLogLevel(log_level),
+        "Enter an integer from 0 through 3.");
+
+    auto& news_path = nesys.news_path();
+    if (ImGui::InputText("Registry NewsPath", &news_path))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryPath(news_path),
+        "Path must contain 1-259 encoded bytes before the terminating NUL.");
+
+    auto& event_path = nesys.event_path();
+    if (ImGui::InputText("Registry EventPath", &event_path))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryPath(event_path),
+        "Path must contain 1-259 encoded bytes before the terminating NUL.");
+
+    auto& log_path = nesys.log_path();
+    if (ImGui::InputText("Registry LogPath", &log_path))
+    {
+        dirty = true;
+    }
+    DrawInlineValidationError(
+        gc::registry_config::IsRegistryPath(log_path),
+        "Path must contain 1-259 encoded bytes before the terminating NUL.");
+}
+
+void DrawExperimental(InputConfig& config, bool& dirty)
+{
+    ImGui::SeparatorText("Experimental");
+    auto& experimental = config.experimental();
+    auto& target_fps = experimental.target_fps();
+    if (ImGui::InputScalar(
+            "Target FPS",
+            ImGuiDataType_U32,
+            &target_fps,
+            nullptr,
+            nullptr,
+            "%u",
+            ImGuiInputTextFlags_CharsDecimal))
+    {
+        dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Fixed framerate expected for this launch (60-500).\n"
+            "Configure the same cap in the driver or RTSS.\n"
+            "Restart the game after changing it.");
+    }
+    const bool target_valid = gc::config::IsTargetFpsInRange(
+        static_cast<std::uint32_t>(target_fps));
+    DrawInlineValidationError(
+        target_valid, "Enter an integer from 60 through 500.");
+    if (target_valid && !gc::config::IsGameplayValidatedTargetFps(
+            static_cast<std::uint32_t>(target_fps)))
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
+            "This value is formula-driven but not individually gameplay-validated.");
+    }
+
+    bool timer_freeze = experimental.enable_timer_freeze_patches();
+    if (ImGui::Checkbox("Timer freeze patches", &timer_freeze))
+    {
+        experimental.enable_timer_freeze_patches = timer_freeze;
+        dirty = true;
+    }
+    bool storage_redirect = experimental.enable_testmode_storage_redirect();
+    if (ImGui::Checkbox("Test-mode storage redirect", &storage_redirect))
+    {
+        experimental.enable_testmode_storage_redirect = storage_redirect;
+        dirty = true;
+    }
+    bool nesys_adapter = experimental.enable_nesys_service_adapter_patch();
+    if (ImGui::Checkbox("NESYS service adapter patch", &nesys_adapter))
+    {
+        experimental.enable_nesys_service_adapter_patch = nesys_adapter;
+        dirty = true;
+    }
+    bool exclusive_audio = experimental.enable_wasapi_exclusive_audio();
+    if (ImGui::Checkbox("WASAPI exclusive low-latency audio", &exclusive_audio))
+    {
+        experimental.enable_wasapi_exclusive_audio = exclusive_audio;
+        dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Uses the default console endpoint in exclusive stereo PCM16 mode.\n"
+            "Prefers exact 44.1 kHz and falls back to exact 48 kHz.");
+    }
+    auto& buffer_ms = experimental.wasapi_exclusive_buffer_ms();
+    if (ImGui::InputScalar(
+            "WASAPI exclusive buffer (ms)", ImGuiDataType_U32, &buffer_ms))
+    {
+        dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("%s", kWasapiExclusiveBufferTooltip);
+    }
+}
+
+std::expected<InputConfig, std::string> LoadConfig(
+    const std::string& path)
+{
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        return std::unexpected("Could not open " + path + " for reading");
+    }
+    const std::string text{
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}};
+    return gc::config::ParseAndValidateInputConfig(text);
+}
+
+std::expected<void, std::string> SaveConfig(
+    const std::string& path,
+    const InputConfig& config)
+{
+    const auto validation = gc::config::ValidateInputConfig(config);
+    if (!validation)
+    {
+        return std::unexpected(validation.error());
+    }
+    try
+    {
+        std::ofstream output(path, std::ios::trunc);
+        if (!output.is_open())
+        {
+            return std::unexpected("Could not open " + path + " for writing");
         }
-    } else {
-        SDL_Log("Could not open %s for reading.", g_config_path.c_str());
-        SDL_DestroyRenderer(g_renderer);
-        SDL_DestroyWindow(g_window);
-        SDL_Quit();
+        output << rfl::toml::write(config);
+        if (!output)
+        {
+            return std::unexpected("Failed while writing " + path);
+        }
+        return {};
+    }
+    catch (const std::exception& error)
+    {
+        return std::unexpected(
+            "Could not serialize configuration: " +
+            std::string(error.what()));
+    }
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    const std::string config_path = argc > 1 ? argv[1] : "config.toml";
+    auto loaded = LoadConfig(config_path);
+    if (!loaded)
+    {
+        std::cerr << loaded.error() << '\n';
+        MessageBoxA(
+            nullptr, loaded.error().c_str(), "ConfigGUI", MB_OK | MB_ICONERROR);
         return 1;
     }
 
-
-    // 5. Initialize Gamepad
-    SDL_AddGamepadMappingsFromFile("gamecontrollerdb.txt");
-    int num_joysticks;
-    auto joystick_id = SDL_GetJoysticks(&num_joysticks);
-    SDL_Log("Found %d joystick(s).", num_joysticks);
-    if (g_config.gamepad_index() >= 0) {
-        if (SDL_IsGamepad(g_config.gamepad_index())) {
-            g_gamepad = SDL_OpenGamepad(g_config.gamepad_index());
-            if (g_gamepad) {
-                SDL_Log("Opened gamepad %d: %s", g_config.gamepad_index(), SDL_GetGamepadName(g_gamepad));
-            } else {
-                SDL_Log("Could not open gamepad %d: %s", g_config.gamepad_index(), SDL_GetError());
-            }
-        } else {
-            SDL_Log("Device %d is not a recognized gamepad.", g_config.gamepad_index());
-        }
-    } else if (num_joysticks > 0) {
-        SDL_Log("Configured gamepad_index %d is out of range. No gamepad opened.", g_config.gamepad_index());
+    InputConfig config = std::move(*loaded);
+    InputEditorModel editor(config.controller());
+    GuiInputContext input(config, editor);
+    Win32D3D11Host host;
+    const auto opened = host.Open(
+        GetModuleHandleW(nullptr), &GuiInputContext::MessageHandler, &input);
+    if (!opened)
+    {
+        std::cerr << opened.error() << '\n';
+        MessageBoxA(
+            nullptr, opened.error().c_str(), "ConfigGUI", MB_OK | MB_ICONERROR);
+        return 1;
     }
-    SDL_free(joystick_id);
+    input.SetWindow(host.window());
 
-    // 6. Main Loop
-    bool done = false;
-    while (!done) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            ImGui_ImplSDL3_ProcessEvent(&event); // Forward events to ImGui
+    const auto raw_input = RegisterGuiRawInput(host.window());
+    if (!raw_input)
+    {
+        std::cerr << raw_input.error() << '\n';
+        MessageBoxA(
+            host.window(),
+            raw_input.error().c_str(),
+            "ConfigGUI",
+            MB_OK | MB_ICONERROR);
+        host.Close();
+        return 1;
+    }
+    input.InitializeControllers();
 
-            // Handle our own events *after* ImGui
-            if (event.type == SDL_EVENT_QUIT) {
-                done = true;
-            }
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(g_window)) {
-                done = true;
-            }
+    bool dirty = false;
+    std::string save_status;
+    constexpr ImVec4 clear_color(0.45F, 0.56F, 0.60F, 1.0F);
 
-            // --- Rebinding Logic ---
-            if (g_rebinding_target) {
-                bool bound = false;
-                switch (g_rebinding_target->type) {
-                    case RebindType::Keyboard:
-                        if (event.type == SDL_EVENT_KEY_DOWN) {
-                            // Ignore modifier keys for binding? Maybe add config later.
-                            // if (event.key.keysym.sym != SDLK_LCTRL && ...)
-                            SDL_Keycode *target = std::get<SDL_Keycode *>(g_rebinding_target->target_ptr);
-                            if (target) {
-                                *target = event.key.key;
-                                bound = true;
-                                g_config_dirty = true;
-                                SDL_Log("Bound %s to key: %s", g_rebinding_target->label.c_str(),
-                                        SDL_GetKeyName(event.key.key));
-                            }
-                        }
-                        break;
-                    case RebindType::GamepadButton:
-                        if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-                            // Check if the event is from the correct gamepad (if multiple)
-                            // SDL3 uses SDL_JoystickID, need to get it from the opened gamepad
-
-                            SDL_JoystickID target_instance_id = SDL_GetGamepadID(g_gamepad);
-                            if (g_gamepad && event.gbutton.which == target_instance_id) {
-                                SDL_GamepadButton *target = std::get<SDL_GamepadButton *>(
-                                    g_rebinding_target->target_ptr);
-                                if (target) {
-                                    *target = (SDL_GamepadButton) event.gbutton.button;
-                                    bound = true;
-                                    g_config_dirty = true;
-                                    SDL_Log("Bound %s to button: %s", g_rebinding_target->label.c_str(),
-                                            GamepadButtonToString(*target).c_str());
-                                }
-                            }
-                        }
-                        break;
-                    case RebindType::GamepadAxis:
-                        if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
-                            SDL_JoystickID target_instance_id = SDL_GetGamepadID(g_gamepad);
-                            if (g_gamepad && event.gaxis.which == target_instance_id) {
-                                // Bind only if axis moves significantly from center
-                                const Sint16 BIND_THRESHOLD = 10000; // Adjust as needed
-                                if (SDL_abs(event.gaxis.value) > BIND_THRESHOLD) {
-                                    SDL_GamepadAxis *target = std::get<SDL_GamepadAxis *>(
-                                        g_rebinding_target->target_ptr);
-                                    if (target) {
-                                        *target = (SDL_GamepadAxis) event.gaxis.axis;
-                                        bound = true;
-                                        g_config_dirty = true;
-                                        SDL_Log("Bound %s to axis: %s", g_rebinding_target->label.c_str(),
-                                                GamepadAxisToString(*target).c_str());
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    case RebindType::None: break; // Should not happen
-                }
-
-                // Close popup on successful bind or Esc key
-                if (bound || (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)) {
-                    SDL_Log("Bound or esc pressed");
-                    ImGui::CloseCurrentPopup();
-                    g_rebinding_target.reset();
-                }
-            } // end if g_rebinding_target
-
-            // --- Gamepad connection handling ---
-            if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
-                SDL_Log("Gamepad Added: Device %d", event.gdevice.which);
-                // num_joysticks = SDL_GetNumJoysticks(); // Update count
-                // If no gamepad is open OR the preferred one just connected, try opening it
-                if (!g_gamepad || event.gdevice.which == g_config.gamepad_index()) {
-                    if (SDL_IsGamepad(event.gdevice.which)) {
-                        if (g_gamepad) SDL_CloseGamepad(g_gamepad); // Close previous if any
-                        g_gamepad = SDL_OpenGamepad(event.gdevice.which);
-                        if (g_gamepad) {
-                            SDL_Log("Opened newly added gamepad %d: %s", event.gdevice.which,
-                                    SDL_GetGamepadName(g_gamepad));
-                            g_config.gamepad_index = event.gdevice.which; // Update config if we auto-opened it
-                            g_config_dirty = true;
-                        } else {
-                            SDL_Log("Could not open newly added gamepad %d: %s", event.gdevice.which, SDL_GetError());
-                        }
-                    }
-                }
-            } else if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
-                SDL_Log("Gamepad Removed: Device %d", event.gdevice.which);
-                // num_joysticks = SDL_GetNumJoysticks(); // Update count
-                if (g_gamepad && event.gdevice.which == SDL_GetGamepadID(g_gamepad)) {
-                    SDL_Log("Closing currently used gamepad %d.", event.gdevice.which);
-                    SDL_CloseGamepad(g_gamepad);
-                    g_gamepad = nullptr;
-                    // Maybe try to open gamepad 0 if available? Or leave it null.
-                }
-            }
-        } // End event loop
-
-        // 7. Start ImGui Frame
-        ImGui_ImplSDLRenderer3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        // --- ADDED: Configure main window to fill SDL window ---
-        const ImGuiViewport *main_viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(main_viewport->WorkPos);
-        ImGui::SetNextWindowSize(main_viewport->WorkSize);
-        ImGuiWindowFlags window_flags =
-                ImGuiWindowFlags_NoDecoration | // No title bar, borders, etc.
-                ImGuiWindowFlags_NoMove | // Cannot be moved
-                ImGuiWindowFlags_NoResize | // Cannot be resized
-                ImGuiWindowFlags_NoSavedSettings | // Don't save position/size
-                ImGuiWindowFlags_NoBringToFrontOnFocus | // Important for fixed windows
-                ImGuiWindowFlags_NoNavFocus; // Avoid nav focus taking over the whole window initially (optional)
-        // Add ImGuiWindowFlags_MenuBar if you intend to have a menu bar
-
-        // 8. Build ImGui UI
-        ImGui::Begin("Input Configuration", nullptr, window_flags); // Main Window
-
-        // --- General Settings ---
-        ImGui::SeparatorText("General");
-
-        // Input Mode Selection
-        const char *modes[] = {"Keyboard", "Gamepad"};
-        int current_mode_idx = static_cast<int>(g_config.input_mode());
-        if (ImGui::Combo("Input Mode", &current_mode_idx, modes, IM_ARRAYSIZE(modes))) {
-            g_config.input_mode = static_cast<InputMode>(current_mode_idx);
-            g_config_dirty = true;
+    while (host.PumpMessages())
+    {
+        input.PollSelectedController();
+        if (input.ApplyCompletedCapture())
+        {
+            dirty = true;
         }
 
-        const char* gameplay_input_styles[] = {"Arcade", "Switch"};
-        int current_gameplay_input_style =
-            static_cast<int>(g_config.gameplay_input_style());
+        host.BeginFrame();
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(viewport->WorkSize);
+        constexpr ImGuiWindowFlags window_flags =
+            ImGuiWindowFlags_NoDecoration |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoNavFocus;
+        ImGui::Begin("GCLoader Configuration", nullptr, window_flags);
+
+        ImGui::SeparatorText("Input");
+        int input_mode = config.input_mode() == gc::input::InputMode::Keyboard
+            ? 0
+            : 1;
+        constexpr const char* input_modes[]{"Keyboard", "Controller"};
+        if (ImGui::Combo(
+                "Input Mode", &input_mode, input_modes, IM_ARRAYSIZE(input_modes)))
+        {
+            config.input_mode = input_mode == 0
+                ? gc::input::InputMode::Keyboard
+                : gc::input::InputMode::Controller;
+            dirty = true;
+        }
+
+        int gameplay_style =
+            config.gameplay_input_style() ==
+                    gc::input::GameplayInputStyle::Arcade
+                ? 0
+                : 1;
+        constexpr const char* gameplay_styles[]{"Arcade", "Switch"};
         if (ImGui::Combo(
                 "Gameplay Input Style",
-                &current_gameplay_input_style,
-                gameplay_input_styles,
-                IM_ARRAYSIZE(gameplay_input_styles))) {
-            g_config.gameplay_input_style =
-                static_cast<GameplayInputStyle>(current_gameplay_input_style);
-            g_config_dirty = true;
+                &gameplay_style,
+                gameplay_styles,
+                IM_ARRAYSIZE(gameplay_styles)))
+        {
+            config.gameplay_input_style = gameplay_style == 0
+                ? gc::input::GameplayInputStyle::Arcade
+                : gc::input::GameplayInputStyle::Switch;
+            dirty = true;
         }
 
-        constexpr std::array<InputPollHertzConfigValue, 4> input_poll_rates{
-            125, 250, 500, 1000};
-        constexpr const char* input_poll_rate_labels[]{
-            "125 Hz", "250 Hz", "500 Hz", "1000 Hz"};
-        auto& input_poll_hz = g_config.input_poll_hz();
-        const auto rate_it = std::find(
-            input_poll_rates.begin(),
-            input_poll_rates.end(),
-            input_poll_hz);
-        int current_rate = rate_it == input_poll_rates.end()
-            ? 3
-            : static_cast<int>(
-                std::distance(input_poll_rates.begin(), rate_it));
+        constexpr std::array<std::uint32_t, 4> poll_rates{125, 250, 500, 1000};
+        int poll_index = 0;
+        for (std::size_t index = 0; index < poll_rates.size(); ++index)
+        {
+            if (poll_rates[index] == config.input_poll_hz())
+            {
+                poll_index = static_cast<int>(index);
+                break;
+            }
+        }
+        constexpr const char* poll_labels[]{"125 Hz", "250 Hz", "500 Hz", "1000 Hz"};
         if (ImGui::Combo(
-                "Input Polling Rate",
-                &current_rate,
-                input_poll_rate_labels,
-                IM_ARRAYSIZE(input_poll_rate_labels))) {
-            input_poll_hz =
-                input_poll_rates[static_cast<std::size_t>(current_rate)];
-            g_config_dirty = true;
+                "Input polling rate",
+                &poll_index,
+                poll_labels,
+                IM_ARRAYSIZE(poll_labels)))
+        {
+            config.input_poll_hz = poll_rates[static_cast<std::size_t>(poll_index)];
+            dirty = true;
         }
 
-        // Gamepad Index (Only relevant if gamepads exist)
-        if (num_joysticks > 0) {
-            // Create a list of available gamepad names + indices
-            std::vector<std::string> gamepad_names;
-            std::vector<int> gamepad_indices;
-            int current_gamepad_selection = -1; // Index in our list, not SDL index
-
-            gamepad_names.push_back("None (-1)"); // Option to select none
-            gamepad_indices.push_back(-1);
-            if (g_config.gamepad_index() == -1) current_gamepad_selection = 0;
-
-            auto sticks = SDL_GetJoysticks(&num_joysticks);
-            for (int i = 0; i < num_joysticks; ++i) {
-                if (auto id = sticks[i]; SDL_IsGamepad(id)) {
-                    const char *name = SDL_GetJoystickNameForID(id); // Use Joystick name before opening
-                    gamepad_names.push_back(
-                        std::string(name ? name : "Unknown Gamepad") + " (" + std::to_string(id) + ")");
-                    gamepad_indices.push_back(id);
-                    if (id == g_config.gamepad_index()) {
-                        current_gamepad_selection = gamepad_names.size() - 1;
-                    }
-                }
-            }
-            SDL_free(sticks);
-
-            // Convert vector<string> to vector<const char*> for ImGui::Combo
-            std::vector<const char *> gamepad_names_cstr;
-            for (const auto &name: gamepad_names) {
-                gamepad_names_cstr.push_back(name.c_str());
-            }
-
-
-            if (ImGui::Combo("Gamepad Device", &current_gamepad_selection, gamepad_names_cstr.data(),
-                             gamepad_names_cstr.size())) {
-                int selected_sdl_index = gamepad_indices[current_gamepad_selection];
-                if (selected_sdl_index != g_config.gamepad_index()) {
-                    g_config.gamepad_index = selected_sdl_index;
-                    g_config_dirty = true;
-                    // Close current gamepad if open
-                    if (g_gamepad) {
-                        SDL_CloseGamepad(g_gamepad);
-                        g_gamepad = nullptr;
-                        SDL_Log("Closed previous gamepad.");
-                    }
-                    // Open the new one if selected index is valid
-                    if (g_config.gamepad_index() >= 0) {
-                        if (SDL_IsGamepad(g_config.gamepad_index())) {
-                            g_gamepad = SDL_OpenGamepad(g_config.gamepad_index());
-                            if (g_gamepad) {
-                                SDL_Log("Opened newly selected gamepad %d: %s", g_config.gamepad_index(),
-                                        SDL_GetGamepadName(g_gamepad));
-                            } else {
-                                SDL_Log("Could not open selected gamepad %d: %s", g_config.gamepad_index(),
-                                        SDL_GetError());
-                            }
-                        } else {
-                            SDL_Log("Selected device %d is not a gamepad.", g_config.gamepad_index());
-                            g_config.gamepad_index = -1; // Reset selection if invalid
-                        }
-                    } else {
-                        SDL_Log("Selected 'None' for gamepad.");
-                    }
-                }
-            }
-        } else {
-            ImGui::Text("Gamepad Device: No gamepads detected.");
-        }
-
-
-        // Axis Threshold
-        int threshold_int = g_config.axis_threshold();
-        if (ImGui::SliderInt("Axis Threshold", &threshold_int, 0, 32767, "%d", ImGuiSliderFlags_AlwaysClamp)) {
-            g_config.axis_threshold = static_cast<Sint16>(threshold_int);
-            g_config_dirty = true;
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "Deadzone for analog sticks (0-32767).\nHigher values require more stick movement to register.");
-        }
-
-        ImGui::SeparatorText("NESYS");
-        auto& nesys_server_ip = g_config.nesys().server_ip();
-        if (ImGui::InputText("NESYS Server IPv4", &nesys_server_ip)) {
-            g_config_dirty = true;
-        }
-        const bool nesys_server_ip_valid =
-            gc::nesys_service::IsDottedDecimalIpv4(nesys_server_ip);
-        if (!nesys_server_ip_valid) {
-            ImGui::TextColored(
-                ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
-                "Enter a dotted-decimal IPv4 address without a port.");
-        }
-
-        ImGui::SeparatorText("Registry");
-        auto& registry = g_config.registry();
-
-        bool registry_enabled = registry.enabled();
-        if (ImGui::Checkbox(
-                "Registry configuration overrides",
-                &registry_enabled)) {
-            registry.enabled = registry_enabled;
-            g_config_dirty = true;
-        }
-
-        constexpr const char* country_items[] = {
-            "GrooveCoasterJpn - GROOVE COASTER, Japanese branding",
-            "Rhythmvaders - RHYTHMVADERS, English branding",
-            "GrooveCoasterEng - GROOVE COASTER, English branding",
-        };
-        int country_index = static_cast<int>(registry.game().country());
-        if (ImGui::Combo(
-                "Game country",
-                &country_index,
-                country_items,
-                IM_ARRAYSIZE(country_items))) {
-            registry.game().country = static_cast<GameCountry>(country_index);
-            g_config_dirty = true;
-        }
-
-        auto& registry_nesys = registry.nesys();
-        auto& game_kind = registry_nesys.game_kind();
+        auto& press_threshold = config.axis_press_threshold_percent();
         if (ImGui::InputScalar(
-                "Registry GameKind",
-                ImGuiDataType_S64,
-                &game_kind)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryDword(game_kind),
-            "Enter an integer from 0 through 4294967295.");
-
-        auto& event_next_time = registry_nesys.event_next_time();
-        if (ImGui::InputScalar(
-                "Registry EventNextTime",
-                ImGuiDataType_S64,
-                &event_next_time)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryDword(event_next_time),
-            "Enter an integer from 0 through 4294967295.");
-
-        auto& condition_time = registry_nesys.condition_time();
-        if (ImGui::InputScalar(
-                "Registry ConditionTime",
-                ImGuiDataType_S64,
-                &condition_time)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryDword(condition_time),
-            "Enter an integer from 0 through 4294967295.");
-
-        auto& log_level = registry_nesys.log_level();
-        if (ImGui::InputScalar(
-                "Registry LogLevel",
-                ImGuiDataType_S64,
-                &log_level)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryLogLevel(log_level),
-            "Enter an integer from 0 through 3.");
-
-        auto& news_path = registry_nesys.news_path();
-        if (ImGui::InputText("Registry NewsPath", &news_path)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryPath(news_path),
-            "Path must contain 1-259 encoded bytes before the terminating NUL.");
-
-        auto& event_path = registry_nesys.event_path();
-        if (ImGui::InputText("Registry EventPath", &event_path)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryPath(event_path),
-            "Path must contain 1-259 encoded bytes before the terminating NUL.");
-
-        auto& log_path = registry_nesys.log_path();
-        if (ImGui::InputText("Registry LogPath", &log_path)) {
-            g_config_dirty = true;
-        }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryPath(log_path),
-            "Path must contain 1-259 encoded bytes before the terminating NUL.");
-
-        const auto registry_validation =
-            gc::registry_config::ValidateRegistryConfig(registry);
-
-        ImGui::SeparatorText("Experimental");
-        auto& target_fps = g_config.experimental().target_fps();
-        if (ImGui::InputScalar(
-                "Target FPS",
+                "Axis press threshold (%)",
                 ImGuiDataType_U32,
-                &target_fps,
+                &press_threshold,
                 nullptr,
                 nullptr,
                 "%u",
-                ImGuiInputTextFlags_CharsDecimal)) {
-            g_config_dirty = true;
+                ImGuiInputTextFlags_CharsDecimal))
+        {
+            dirty = true;
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "Fixed framerate expected for this game launch (60-500).\n"
-                "GCLoader does not apply a frame cap. Configure the same cap in your driver or RTSS.\n"
-                "Restart the game after changing this value.");
-        }
-        const bool target_fps_valid = gc::config::IsTargetFpsInRange(
-            static_cast<std::uint32_t>(target_fps));
-        DrawInlineValidationError(
-            target_fps_valid,
-            "Enter an integer from 60 through 500.");
-        if (target_fps_valid &&
-            !gc::config::IsGameplayValidatedTargetFps(
-                static_cast<std::uint32_t>(target_fps))) {
-            ImGui::TextColored(
-                ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
-                "This in-range value is formula-driven but not individually gameplay-validated.");
-        }
-        bool enable_timer_freeze_patches = g_config.experimental().enable_timer_freeze_patches();
-        if (ImGui::Checkbox("Timer freeze patches", &enable_timer_freeze_patches)) {
-            g_config.experimental().enable_timer_freeze_patches = enable_timer_freeze_patches;
-            g_config_dirty = true;
-        }
-        bool enable_testmode_storage_redirect = g_config.experimental().enable_testmode_storage_redirect();
-        if (ImGui::Checkbox("Test-mode storage redirect", &enable_testmode_storage_redirect)) {
-            g_config.experimental().enable_testmode_storage_redirect = enable_testmode_storage_redirect;
-            g_config_dirty = true;
-        }
-        bool enable_nesys_service_adapter_patch = g_config.experimental().enable_nesys_service_adapter_patch();
-        if (ImGui::Checkbox("NESYS service adapter patch", &enable_nesys_service_adapter_patch)) {
-            g_config.experimental().enable_nesys_service_adapter_patch = enable_nesys_service_adapter_patch;
-            g_config_dirty = true;
-        }
-        bool enable_wasapi_exclusive_audio =
-            g_config.experimental().enable_wasapi_exclusive_audio();
-        if (ImGui::Checkbox(
-                "WASAPI exclusive low-latency audio",
-                &enable_wasapi_exclusive_audio)) {
-            g_config.experimental().enable_wasapi_exclusive_audio =
-                enable_wasapi_exclusive_audio;
-            g_config_dirty = true;
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "Uses the default console endpoint in exclusive stereo PCM16 mode.\n"
-                "Prefers exact 44.1 kHz and automatically falls back to exact 48 kHz.\n"
-                "Disable this option if exclusive endpoint initialization fails.");
-        }
-        auto& wasapi_exclusive_buffer_ms =
-            g_config.experimental().wasapi_exclusive_buffer_ms();
+        auto& release_threshold = config.axis_release_threshold_percent();
         if (ImGui::InputScalar(
-                "WASAPI exclusive buffer (ms)",
+                "Axis release threshold (%)",
                 ImGuiDataType_U32,
-                &wasapi_exclusive_buffer_ms)) {
-            g_config_dirty = true;
+                &release_threshold,
+                nullptr,
+                nullptr,
+                "%u",
+                ImGuiInputTextFlags_CharsDecimal))
+        {
+            dirty = true;
         }
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", kWasapiExclusiveBufferTooltip);
+        DrawInlineValidationError(
+            press_threshold <= 100 && release_threshold <= 100 &&
+                release_threshold < press_threshold,
+            "Thresholds must be 0-100 and release must be lower than press.");
+
+        if (config.input_mode() == gc::input::InputMode::Controller)
+        {
+            DrawControllerDevices(config, editor, input, dirty);
+            ImGui::SeparatorText("Controller gameplay bindings");
+            DrawControllerBindings(config, editor, input, dirty);
         }
-
-        // --- Mode Specific Settings ---
-        if (ImGui::BeginTable("Bindings", 3,
-                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-            ImGui::TableSetupColumn("Current Binding", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Rebind", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableHeadersRow();
-
-            if (g_config.input_mode() == InputMode::Keyboard) {
-                ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextDisabled("Keyboard");
-                ImGui::TableNextColumn();
-                ImGui::TableNextColumn();
-                DrawKeybindingRow("L Booster Up", g_config.keyboard().p1_up());
-                DrawKeybindingRow("L Booster Left", g_config.keyboard().p1_down());
-                DrawKeybindingRow("L Booster Down", g_config.keyboard().p2_up());
-                DrawKeybindingRow("L Booster Right", g_config.keyboard().p2_down());
-                DrawKeybindingRow("L Booster Button", g_config.keyboard().p1_button1());
-
-                DrawKeybindingRow("R Booster Up", g_config.keyboard().p1_left());
-                DrawKeybindingRow("R Booster Left", g_config.keyboard().p1_right());
-                DrawKeybindingRow("R Booster Down", g_config.keyboard().p2_left());
-                DrawKeybindingRow("R Booster Right", g_config.keyboard().p2_right());
-                DrawKeybindingRow("R Booster Button", g_config.keyboard().p2_button1());
-
-                ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextDisabled("Keyboard - System");
-                ImGui::TableNextColumn();
-                ImGui::TableNextColumn();
-                DrawKeybindingRow("Test", g_config.keyboard().test());
-                DrawKeybindingRow("Service 1", g_config.keyboard().service1());
-                DrawKeybindingRow("Service 2", g_config.keyboard().service2());
-                DrawKeybindingRow("Service 3", g_config.keyboard().service3());
-                DrawKeybindingRow("P1 Start", g_config.keyboard().p1_start());
-                DrawKeybindingRow("P2 Start", g_config.keyboard().p2_start());
-                DrawKeybindingRow("P2 Service", g_config.keyboard().p2_service());
-                DrawKeybindingRow("Card Read", g_config.keyboard().card_read());
-            } else {
-                // Gamepad Mode
-                ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextDisabled("Gamepad");
-                ImGui::TableNextColumn();
-                ImGui::TableNextColumn();
-                DrawGamepadButtonBindingRow("L Booster Up", g_config.gamepad().p1_dpad_up());
-                DrawGamepadButtonBindingRow("L Booster Left", g_config.gamepad().p1_dpad_down());
-                DrawGamepadButtonBindingRow("L Booster Down", g_config.gamepad().p2_button_up());
-                DrawGamepadButtonBindingRow("L Booster Right", g_config.gamepad().p2_button_down());
-                DrawGamepadButtonBindingRow("R Booster Up", g_config.gamepad().p1_dpad_left());
-                DrawGamepadButtonBindingRow("R Booster Left", g_config.gamepad().p1_dpad_right());
-                DrawGamepadButtonBindingRow("R Booster Down", g_config.gamepad().p2_button_left());
-                DrawGamepadButtonBindingRow("R Booster Right", g_config.gamepad().p2_button_right());
-                //DrawGamepadAxisBindingRow("L Booster Axis", g_config.gamepad().p1_axis_horizontal());
-                //DrawGamepadAxisBindingRow("P1 Stick Y Axis", g_config.gamepad().p1_axis_vertical());
-                DrawGamepadButtonBindingRow("L Booster Button", g_config.gamepad().p1_button1());
-
-                //DrawGamepadAxisBindingRow("R Booster Axis", g_config.gamepad().p2_axis_horizontal());
-                // DrawGamepadAxisBindingRow("P2 Stick Y Axis", g_config.gamepad().p2_axis_vertical());
-                DrawGamepadButtonBindingRow("R Booster Button", g_config.gamepad().p2_button1());
-
-                // P2 Start & Service are Keyboard only
-
-                // --- Always show these Keyboard binds (even in Gamepad mode) ---
-                ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextDisabled("System Keys (Keyboard)");
-                ImGui::TableNextColumn();
-                ImGui::TableNextColumn();
-                DrawKeybindingRow("Test", g_config.keyboard().test());
-                DrawKeybindingRow("Service 1", g_config.keyboard().service1());
-                DrawKeybindingRow("Service 2", g_config.keyboard().service2());
-                DrawKeybindingRow("Service 3", g_config.keyboard().service3());
-                DrawKeybindingRow("P1 Start", g_config.keyboard().p1_start());
-                DrawKeybindingRow("P2 Start", g_config.keyboard().p2_start());
-                DrawKeybindingRow("P2 Service", g_config.keyboard().p2_service());
-                DrawKeybindingRow("Card Read", g_config.keyboard().card_read());
-            }
-
-            ImGui::EndTable();
+        else
+        {
+            ImGui::SeparatorText("Keyboard gameplay bindings");
+            DrawKeyboardBindings(config, input, true);
         }
+        ImGui::SeparatorText("Keyboard system bindings");
+        DrawKeyboardBindings(config, input, false);
 
-        if (g_open_bind_popup_requested) {
+        if (input.TakePopupRequested())
+        {
             ImGui::OpenPopup("Bind Input");
-            g_open_bind_popup_requested = false; // Reset flag
         }
-
         bool popup_open = true;
-        // --- Rebinding Popup ---
-        if (ImGui::BeginPopupModal("Bind Input", &popup_open,
-                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-            if (g_rebinding_target) {
-                ImGui::Text("Press the desired input for:");
-                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "%s", g_rebinding_target->label.c_str());
-                ImGui::Separator();
-                switch (g_rebinding_target->type) {
-                    case RebindType::Keyboard: ImGui::Text("Waiting for KEY press...");
-                        break;
-                    case RebindType::GamepadButton: ImGui::Text("Waiting for GAMEPAD BUTTON press...");
-                        break;
-                    case RebindType::GamepadAxis: ImGui::Text("Waiting for GAMEPAD AXIS movement...");
-                        break;
-                    case RebindType::None: break; // Should not show popup
-                }
-                ImGui::Separator();
-                ImGui::Text("Press ESC to cancel.");
-                // No explicit cancel button needed as ESC key works, handled in event loop.
-                // We could add one: if (ImGui::Button("Cancel")) { g_rebinding_target.reset(); ImGui::CloseCurrentPopup(); }
-            } else {
-                // Should not happen if popup is open, but just in case:
+        if (ImGui::BeginPopupModal(
+                "Bind Input",
+                &popup_open,
+                ImGuiWindowFlags_AlwaysAutoResize |
+                    ImGuiWindowFlags_NoMove))
+        {
+            ImGui::Text("Waiting for input for:");
+            ImGui::TextColored(
+                ImVec4(1.0F, 1.0F, 0.0F, 1.0F),
+                "%s",
+                input.capture_label().c_str());
+            ImGui::Text("Release active controls, then press the desired input.");
+            if (ImGui::Button("Cancel") ||
+                ImGui::IsKeyPressed(ImGuiKey_Escape))
+            {
+                input.CancelCapture();
+            }
+            if (!popup_open)
+            {
+                input.CancelCapture();
+            }
+            if (input.TakeClosePopupRequested())
+            {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
-
-        // --- Save Button ---
-        ImGui::Separator();
-        if (g_config_dirty) {
-            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4) ImColor::HSV(0.3f, 0.6f, 0.6f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4) ImColor::HSV(0.3f, 0.7f, 0.7f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4) ImColor::HSV(0.3f, 0.8f, 0.8f));
+        if (!input.capture_error().empty())
+        {
+            ImGui::TextColored(
+                ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+                "%s",
+                input.capture_error().c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Dismiss capture error"))
+            {
+                input.ClearCaptureError();
+            }
         }
-        const bool configuration_valid =
-            nesys_server_ip_valid && registry_validation.valid() &&
-            gc::config::ValidateInputConfig(g_config).has_value();
-        ImGui::BeginDisabled(!configuration_valid);
-        if (ImGui::Button("Save Configuration") && g_config_dirty) {
-            try {
-                std::string toml_output = rfl::toml::write(g_config);
-                std::ofstream ofs(g_config_path);
-                if (ofs.is_open()) {
-                    ofs << toml_output;
-                    ofs.close();
-                    SDL_Log(
-                        "Configuration saved successfully to %s",
-                        g_config_path.c_str());
-                    g_config_dirty = false;
-                    g_saved = true;
-                } else {
-                    SDL_Log(
-                        "Error: Could not open %s for writing.",
-                        g_config_path.c_str());
-                }
-            } catch (const std::exception& error) {
-                SDL_Log(
-                    "Error serializing configuration to TOML: %s",
-                    error.what());
+
+        ImGui::SeparatorText("NESYS");
+        auto& server_ip = config.nesys().server_ip();
+        if (ImGui::InputText("NESYS Server IPv4", &server_ip))
+        {
+            dirty = true;
+        }
+        DrawInlineValidationError(
+            gc::nesys_service::IsDottedDecimalIpv4(server_ip),
+            "Enter a dotted-decimal IPv4 address without a port.");
+
+        DrawRegistry(config, dirty);
+        DrawExperimental(config, dirty);
+
+        config.controller = editor.config();
+        const auto validation = gc::config::ValidateInputConfig(config);
+        if (!validation)
+        {
+            ImGui::TextColored(
+                ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+                "%s",
+                validation.error().c_str());
+        }
+
+        ImGui::Separator();
+        ImGui::BeginDisabled(!validation.has_value() || !dirty);
+        if (ImGui::Button("Save Configuration"))
+        {
+            const auto saved = SaveConfig(config_path, config);
+            if (saved)
+            {
+                dirty = false;
+                save_status = "Configuration saved.";
+            }
+            else
+            {
+                save_status = saved.error();
             }
         }
         ImGui::EndDisabled();
-        if (g_config_dirty) {
-            ImGui::PopStyleColor(3);
+        if (dirty)
+        {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Unsaved changes!");
+            ImGui::TextColored(
+                ImVec4(1.0F, 1.0F, 0.0F, 1.0F), "Unsaved changes");
         }
-        if (g_saved) {
-            ImGui::PopStyleColor(3);
-            g_saved = false;
+        if (!save_status.empty())
+        {
+            ImGui::TextWrapped("%s", save_status.c_str());
         }
 
-
-        ImGui::End(); // End Main Window
-
-        // 9. Rendering
-        ImGui::Render(); // Generate ImGui draw data
-
-        SDL_SetRenderDrawColor(g_renderer, 114, 144, 154, 255); // Clear color
-        SDL_RenderClear(g_renderer);
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), g_renderer); // Render ImGui draw data
-        SDL_RenderPresent(g_renderer); // Present frame
+        ImGui::End();
+        host.Render(clear_color);
     }
 
-    // 10. Cleanup
-    SDL_Log("Shutting down...");
-    if (g_gamepad) {
-        SDL_CloseGamepad(g_gamepad);
-    }
-    ImGui_ImplSDLRenderer3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-
-    SDL_DestroyRenderer(g_renderer);
-    SDL_DestroyWindow(g_window);
-    SDL_Quit();
-
+    UnregisterGuiRawInput();
+    host.Close();
     return 0;
 }

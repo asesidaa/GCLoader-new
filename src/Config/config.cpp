@@ -17,6 +17,10 @@ namespace {
 constexpr std::string_view kObsoleteFramerateBoolean =
     "enable_120fps_" "timer_patches";
 
+constexpr std::string_view kObsoleteInputSchemaError =
+    "obsolete SDL input schema is not supported; remove gamepad_index, "
+    "axis_threshold, and [gamepad]";
+
 std::expected<toml::table, std::string> ParseTomlSyntax(
     std::string_view text) {
 #if TOML_EXCEPTIONS
@@ -49,10 +53,15 @@ std::expected<void, std::string> ValidateInputConfig(
             "Invalid [experimental].target_fps; expected an integer from 60 through 500");
     }
 
-    try {
-        ValidateInputPollHertz(value.input_poll_hz());
-    } catch (const std::exception& error) {
-        return std::unexpected(error.what());
+    if (const auto input_validation = ValidateNativeInputFields(
+            value.input_schema_version(),
+            value.input_poll_hz(),
+            value.axis_press_threshold_percent(),
+            value.axis_release_threshold_percent(),
+            value.keyboard(),
+            value.controller());
+        !input_validation) {
+        return std::unexpected(input_validation.error());
     }
 
     if (!gc::nesys_service::IsDottedDecimalIpv4(
@@ -79,6 +88,23 @@ std::expected<InputConfig, std::string> ParseAndValidateInputConfig(
     }
 
     const auto& syntax = syntax_result.value();
+    if (syntax.contains("gamepad_index") ||
+        syntax.contains("axis_threshold") ||
+        syntax.contains("gamepad")) {
+        return std::unexpected(std::string{kObsoleteInputSchemaError});
+    }
+
+    const auto* schema_version =
+        syntax["input_schema_version"].as_integer();
+    if (schema_version == nullptr) {
+        return std::unexpected(
+            "Missing or non-integer input_schema_version; expected 2");
+    }
+    if (schema_version->get() != kInputSchemaVersion) {
+        return std::unexpected(
+            "Unsupported input_schema_version; expected 2");
+    }
+
     if (const auto* experimental = syntax["experimental"].as_table();
         experimental != nullptr &&
         experimental->contains(kObsoleteFramerateBoolean)) {

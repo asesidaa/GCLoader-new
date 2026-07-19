@@ -48,6 +48,11 @@ set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
+add_executable(ForegroundPolicyTests
+        Polling/ForegroundPolicyTests.cpp)
+target_link_libraries(ForegroundPolicyTests PRIVATE gc_input)
+add_test(NAME ForegroundPolicyTests COMMAND ForegroundPolicyTests)
+
 add_executable(SwitchInputPolicyTests Switch/SwitchInputPolicyTests.cpp)
 target_link_libraries(SwitchInputPolicyTests PRIVATE gc_input)
 add_test(NAME SwitchInputPolicyTests COMMAND SwitchInputPolicyTests)

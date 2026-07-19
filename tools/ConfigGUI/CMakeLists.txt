@@ -11,6 +11,17 @@ target_link_libraries(gc_config_gui_host PUBLIC
         user32
 )
 
+add_library(gc_config_gui_model STATIC
+        InputEditorModel.cpp
+)
+target_include_directories(gc_config_gui_model PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(gc_config_gui_model PUBLIC
+        gc_config
+        gc_input_win32
+)
+
 add_executable(ConfigGUI Main.cpp)
 set_target_properties(ConfigGUI PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${GC_DIST_DIR}"
@@ -34,4 +45,5 @@ target_link_libraries(ConfigGUI PRIVATE
         reflectcpp
         imgui
         gc_config_gui_host
+        gc_config_gui_model
 )
