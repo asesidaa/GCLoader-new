@@ -6,6 +6,18 @@ add_executable(PhysicalKeyWin32Tests Win32/PhysicalKeyWin32Tests.cpp)
 target_link_libraries(PhysicalKeyWin32Tests PRIVATE gc_input_win32)
 add_test(NAME PhysicalKeyWin32Tests COMMAND PhysicalKeyWin32Tests)
 
+add_executable(Win32InputWindowTests Win32/Win32InputWindowTests.cpp)
+target_link_libraries(Win32InputWindowTests PRIVATE gc_input_win32)
+add_test(NAME Win32InputWindowTests COMMAND Win32InputWindowTests)
+
+add_executable(RawInputPacketTests Win32/RawInputPacketTests.cpp)
+target_link_libraries(RawInputPacketTests PRIVATE gc_input_win32)
+add_test(NAME RawInputPacketTests COMMAND RawInputPacketTests)
+
+add_executable(ControllerCatalogTests Win32/ControllerCatalogTests.cpp)
+target_link_libraries(ControllerCatalogTests PRIVATE gc_input_win32)
+add_test(NAME ControllerCatalogTests COMMAND ControllerCatalogTests)
+
 add_executable(InputSnapshotStateTests Polling/InputSnapshotStateTests.cpp)
 target_link_libraries(InputSnapshotStateTests PRIVATE gc_input)
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
