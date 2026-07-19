@@ -62,17 +62,73 @@ int failures = 0;
 
 DiagnosticState validated_startup;
 g_state = &validated_startup;
+const FramerateStartupPatchSummary transformed_summary{
+    .direct_write_count = 17,
+    .hook_count = 41,
+    .menu_repeat_initial = 38,
+    .menu_repeat_interval = 7,
+    .authored_frame_milliseconds = 1000.0F / 60.0F,
+};
 ReportFramerateStartup(
-    FramerateProfile::Create(144).value(), Actions());
+    FramerateProfile::Create(144).value(),
+    transformed_summary,
+    Actions());
 failures += Expect(
     validated_startup.infos.size() == 1 &&
         validated_startup.warnings.empty(),
     "validated target logs no support warning");
+failures += Expect(
+    Contains(validated_startup.infos[0], "mode=transformed") &&
+        Contains(
+            validated_startup.infos[0],
+            "authored_clock=deterministic_phase") &&
+        Contains(validated_startup.infos[0], "direct_writes=17") &&
+        Contains(validated_startup.infos[0], "hooks=41") &&
+        Contains(validated_startup.infos[0], "menu_repeat=38/7") &&
+        Contains(
+            validated_startup.infos[0],
+            "news_notice_updates=native") &&
+        Contains(validated_startup.infos[0], "ifbl_loops=original") &&
+        Contains(validated_startup.infos[0], "player_decrement=native") &&
+        Contains(
+            validated_startup.infos[0],
+            "countdown_asset=authored60") &&
+        Contains(
+            validated_startup.infos[0],
+            "player_duration=dynamic_scaled"),
+    "transformed startup logs complete timing ownership");
+
+DiagnosticState native_startup;
+g_state = &native_startup;
+ReportFramerateStartup(
+    FramerateProfile::Create(60).value(),
+    FramerateStartupPatchSummary{
+        .direct_write_count = 0,
+        .hook_count = 1,
+        .menu_repeat_initial = 16,
+        .menu_repeat_interval = 3,
+        .authored_frame_milliseconds = 1000.0F / 60.0F,
+    },
+    Actions());
+failures += Expect(
+    Contains(native_startup.infos[0], "mode=native") &&
+        Contains(native_startup.infos[0], "authored_clock=native_bypass") &&
+        Contains(native_startup.infos[0], "direct_writes=0") &&
+        Contains(native_startup.infos[0], "hooks=1"),
+    "native startup reports bypass and one cap hook");
 
 DiagnosticState formula_startup;
 g_state = &formula_startup;
 ReportFramerateStartup(
-    FramerateProfile::Create(200).value(), Actions());
+    FramerateProfile::Create(200).value(),
+    FramerateStartupPatchSummary{
+        .direct_write_count = 17,
+        .hook_count = 41,
+        .menu_repeat_initial = 53,
+        .menu_repeat_interval = 10,
+        .authored_frame_milliseconds = 1000.0F / 60.0F,
+    },
+    Actions());
 failures += Expect(
     formula_startup.infos.size() == 1 &&
         formula_startup.warnings.size() == 1 &&
@@ -173,6 +229,17 @@ failures += Expect(
             std::vector<DWORD>{ERROR_INVALID_DATA} &&
         runtime.fail_fast_calls == 1,
     "runtime conversion failure is fatal and one-shot");
+
+ReportFramerateRuntimeFailure(
+    "second injected transform failure",
+    runtime_latch,
+    Actions());
+failures += Expect(
+    runtime.errors.size() == 1 &&
+        runtime.messages.size() == 1 &&
+        runtime.termination_codes.size() == 1 &&
+        runtime.fail_fast_calls == 1,
+    "runtime transform failure publication is one-shot");
 
 return failures == 0 ? 0 : 1;
 }

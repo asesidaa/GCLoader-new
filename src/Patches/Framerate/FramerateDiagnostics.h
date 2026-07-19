@@ -5,6 +5,7 @@
 
 #include <Windows.h>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -19,11 +20,20 @@ struct FrameratePlatformActions {
     void (*fail_fast)();
 };
 
+struct FramerateStartupPatchSummary {
+    std::size_t direct_write_count{};
+    std::size_t hook_count{};
+    std::int32_t menu_repeat_initial{};
+    std::int32_t menu_repeat_interval{};
+    float authored_frame_milliseconds{};
+};
+
 [[nodiscard]] FrameratePlatformActions ProductionFrameratePlatformActions()
     noexcept;
 
 void ReportFramerateStartup(
     const FramerateProfile& profile,
+    const FramerateStartupPatchSummary& summary,
     FrameratePlatformActions actions) noexcept;
 
 [[nodiscard]] bool ShouldSuggestIntervalModeOne(

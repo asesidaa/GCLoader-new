@@ -1138,6 +1138,21 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << " gameplay_blink="
               << counters.gameplay_blink_mappings.load(
+                     std::memory_order_relaxed)
+              << " authored_operands="
+              << counters.authored_operand_redirects.load(
+                     std::memory_order_relaxed)
+              << " countdown_asset="
+              << counters.countdown_asset_mappings.load(
+                     std::memory_order_relaxed)
+              << " player_position="
+              << counters.player_position_initializations.load(
+                     std::memory_order_relaxed)
+              << "/asset="
+              << counters.player_position_asset_mappings.load(
+                     std::memory_order_relaxed)
+              << "/denominator="
+              << counters.player_position_denominator_redirects.load(
                      std::memory_order_relaxed);
 }
 
@@ -1297,7 +1312,6 @@ bool FrameratePatchInit() {
         frequency.QuadPart,
         actions);
 
-    ReportFramerateStartup(g_runtime->profile, actions);
     const auto direct_plan = BuildFramerateDirectPatchPlan(
         ExecutableBase(),
         g_runtime->profile,
@@ -1308,15 +1322,33 @@ bool FrameratePatchInit() {
         return false;
     }
 
+    const auto hook_contracts = FramerateHookContracts(
+        !g_runtime->profile.native_timing());
     const auto hook_operations = BuildHookOperations(
-        FramerateHookContracts(!g_runtime->profile.native_timing()),
-        *g_runtime);
+        hook_contracts, *g_runtime);
+
+    ReportFramerateStartup(
+        g_runtime->profile,
+        FramerateStartupPatchSummary{
+            .direct_write_count = direct_plan->view().size(),
+            .hook_count = hook_operations.view().size(),
+            .menu_repeat_initial = direct_plan->menu_repeat_initial,
+            .menu_repeat_interval = direct_plan->menu_repeat_interval,
+            .authored_frame_milliseconds =
+                g_runtime->authored_frame_operand.frame_milliseconds,
+        },
+        actions);
+
     const auto installed = g_runtime->transaction.Install(
         direct_plan->view(), hook_operations.view());
     if (!installed) {
         FatalTransactionFailure(installed.error());
         return false;
     }
+
+    PLOG_INFO << "FrameratePatch: transaction committed"
+              << " direct_writes=" << direct_plan->view().size()
+              << " hooks=" << hook_operations.view().size();
 
     gc::timer_freeze::SetCountdownTimerFreezeEnabled(
         ConfigManager::instance().GetEnableTimerFreezePatches());

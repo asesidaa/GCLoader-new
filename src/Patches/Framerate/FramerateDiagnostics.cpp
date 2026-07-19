@@ -97,6 +97,7 @@ FrameratePlatformActions ProductionFrameratePlatformActions() noexcept {
 
 void ReportFramerateStartup(
     const FramerateProfile& profile,
+    const FramerateStartupPatchSummary& summary,
     FrameratePlatformActions actions) noexcept {
     InvokeNoexcept([&] {
         std::ostringstream stream;
@@ -106,6 +107,21 @@ void ReportFramerateStartup(
                << " frame_seconds=" << profile.frame_seconds()
                << " mode="
                << (profile.native_timing() ? "native" : "transformed")
+               << " authored_clock="
+               << (profile.native_timing()
+                       ? "native_bypass"
+                       : "deterministic_phase")
+               << " direct_writes=" << summary.direct_write_count
+               << " hooks=" << summary.hook_count
+               << " menu_repeat=" << summary.menu_repeat_initial
+               << "/" << summary.menu_repeat_interval
+               << " authored_frame_ms="
+               << summary.authored_frame_milliseconds
+               << " news_notice_updates=native"
+               << " ifbl_loops=original"
+               << " player_decrement=native"
+               << " countdown_asset=authored60"
+               << " player_duration=dynamic_scaled"
                << " two_second_frames=" << profile.two_second_frames()
                << " palette_frame_cap=" << profile.palette_frame_cap()
                << " render_smoothing_step="
