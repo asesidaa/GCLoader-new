@@ -94,9 +94,12 @@ add_library(imgui
         ${imgui_external_SOURCE_DIR}/imgui_widgets.cpp
         ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
         ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
+        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
         ${imgui_external_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
 )
 target_include_directories(imgui PUBLIC
         ${imgui_external_SOURCE_DIR}
+        ${imgui_external_SOURCE_DIR}/backends
         ${SDL3_SOURCE_DIR}/include
 )

@@ -11,3 +11,9 @@ add_test(
         COMMAND ${CMAKE_COMMAND}
                 -DCONFIG_GUI_SOURCE=${PROJECT_SOURCE_DIR}/tools/ConfigGUI/Main.cpp
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/ConfigGuiWidgetTests.cmake)
+
+add_test(
+        NAME ConfigGuiHostContractTests
+        COMMAND ${CMAKE_COMMAND}
+                -DCONFIG_GUI_HOST_SOURCE=${PROJECT_SOURCE_DIR}/tools/ConfigGUI/Win32D3D11Host.cpp
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/ConfigGuiHostContractTests.cmake)
