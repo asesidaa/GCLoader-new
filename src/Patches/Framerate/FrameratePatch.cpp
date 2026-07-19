@@ -66,6 +66,13 @@ struct FramerateHookStorage {
     safetyhook::MidHook chart_effect_frame_d_operand{};
     safetyhook::MidHook fixed_visual_frame_operand{};
     safetyhook::MidHook gameplay_countdown_asset_frame{};
+    safetyhook::MidHook player_position_init_a{};
+    safetyhook::MidHook player_position_init_b{};
+    safetyhook::MidHook player_position_init_c{};
+    safetyhook::MidHook player_position_init_d{};
+    safetyhook::MidHook player_position_asset_frame{};
+    safetyhook::MidHook player_position_denominator_a{};
+    safetyhook::MidHook player_position_denominator_b{};
     safetyhook::MidHook outer_frame{};
 };
 
@@ -96,6 +103,9 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t gameplay_blink_mappings{0};
     std::atomic_uint64_t authored_operand_redirects{0};
     std::atomic_uint64_t countdown_asset_mappings{0};
+    std::atomic_uint64_t player_position_initializations{0};
+    std::atomic_uint64_t player_position_asset_mappings{0};
+    std::atomic_uint64_t player_position_denominator_redirects{0};
 };
 
 struct FramerateRuntimeState {
@@ -120,6 +130,7 @@ struct FramerateRuntimeState {
     FrameratePatchTransaction transaction;
     FramerateHookStorage hooks;
     AuthoredFrameOperand authored_frame_operand{};
+    PlayerPositionDurationOperand player_position_duration_operand{};
     FramerateRuntimeCounters counters;
     std::atomic_bool fatal_published{false};
     std::atomic_bool authored_60hz_tick{true};
@@ -162,6 +173,9 @@ void HookAuthoredOperandEax(safetyhook::Context&);
 void HookAuthoredOperandEcx(safetyhook::Context&);
 void HookAuthoredOperandEdx(safetyhook::Context&);
 void HookGameplayCountdownAssetFrame(safetyhook::Context&);
+void HookPlayerPositionInitialization(safetyhook::Context&);
+void HookPlayerPositionAssetFrame(safetyhook::Context&);
+void HookPlayerPositionDenominator(safetyhook::Context&);
 void HookOuterFrame(safetyhook::Context&);
 
 [[nodiscard]] std::uintptr_t ExecutableBase() noexcept {
@@ -529,6 +543,62 @@ void AssignHookCallbacks(
             0x00249A9C>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::gameplay_countdown_asset_frame>;
+        break;
+    case FramerateHookId::PlayerPositionInitA:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_init_a,
+            HookPlayerPositionInitialization,
+            0x00263240>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_init_a>;
+        break;
+    case FramerateHookId::PlayerPositionInitB:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_init_b,
+            HookPlayerPositionInitialization,
+            0x002632B2>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_init_b>;
+        break;
+    case FramerateHookId::PlayerPositionInitC:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_init_c,
+            HookPlayerPositionInitialization,
+            0x0026359B>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_init_c>;
+        break;
+    case FramerateHookId::PlayerPositionInitD:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_init_d,
+            HookPlayerPositionInitialization,
+            0x00263615>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_init_d>;
+        break;
+    case FramerateHookId::PlayerPositionAssetFrame:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_asset_frame,
+            HookPlayerPositionAssetFrame,
+            0x0024EF43>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_asset_frame>;
+        break;
+    case FramerateHookId::PlayerPositionDenominatorA:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_denominator_a,
+            HookPlayerPositionDenominator,
+            0x0024F76D>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_denominator_a>;
+        break;
+    case FramerateHookId::PlayerPositionDenominatorB:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::player_position_denominator_b,
+            HookPlayerPositionDenominator,
+            0x0024FD40>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::player_position_denominator_b>;
         break;
     case FramerateHookId::OuterFrame:
         operation.install = &InstallMidHook<
@@ -936,6 +1006,41 @@ void HookGameplayCountdownAssetFrame(safetyhook::Context& context) {
         return;
     }
     g_runtime->counters.countdown_asset_mappings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookPlayerPositionInitialization(safetyhook::Context& context) {
+    if (!ScalePlayerPositionDurationEax(context, g_runtime->profile)) {
+        FatalRuntimeConversion(
+            "player-position duration initialization");
+        return;
+    }
+    g_runtime->counters.player_position_initializations.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookPlayerPositionAssetFrame(safetyhook::Context& context) {
+    if (!MapPlayerPositionAssetFrame(
+            context, g_runtime->profile, &ReadU32Safe)) {
+        FatalRuntimeConversion(
+            "player-position asset-frame mapping");
+        return;
+    }
+    g_runtime->counters.player_position_asset_mappings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookPlayerPositionDenominator(safetyhook::Context& context) {
+    if (!PreparePlayerPositionDenominator(
+            context,
+            g_runtime->profile,
+            g_runtime->player_position_duration_operand,
+            &ReadU32Safe)) {
+        FatalRuntimeConversion(
+            "player-position denominator scaling");
+        return;
+    }
+    g_runtime->counters.player_position_denominator_redirects.fetch_add(
         1, std::memory_order_relaxed);
 }
 

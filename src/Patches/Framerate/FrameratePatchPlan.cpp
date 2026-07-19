@@ -66,7 +66,7 @@ bool AddWrite(
     return true;
 }
 
-constexpr std::array<FramerateHookContract, 34> kHookContracts{{
+constexpr std::array<FramerateHookContract, 41> kHookContracts{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern(0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00),
         "MovieClip goto-frame depth guard"},
@@ -167,6 +167,27 @@ constexpr std::array<FramerateHookContract, 34> kHookContracts{{
     {FramerateHookId::GameplayCountdownAssetFrame, 0x00249A9C,
         Pattern(0x89, 0x48, 0x08),
         "gameplay countdown authored asset-frame mapping"},
+    {FramerateHookId::PlayerPositionInitA, 0x00263240,
+        Pattern(0x89, 0x84, 0x91, 0x54, 0x1D, 0x00, 0x00),
+        "player-position duration initialization A"},
+    {FramerateHookId::PlayerPositionInitB, 0x002632B2,
+        Pattern(0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
+        "player-position duration initialization B"},
+    {FramerateHookId::PlayerPositionInitC, 0x0026359B,
+        Pattern(0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
+        "player-position duration initialization C"},
+    {FramerateHookId::PlayerPositionInitD, 0x00263615,
+        Pattern(0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
+        "player-position duration initialization D"},
+    {FramerateHookId::PlayerPositionAssetFrame, 0x0024EF43,
+        Pattern(0x2B, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
+        "player-position authored asset-frame mapping"},
+    {FramerateHookId::PlayerPositionDenominatorA, 0x0024F76D,
+        Pattern(0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00),
+        "player-position scaled denominator A"},
+    {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
+        Pattern(0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00),
+        "player-position scaled denominator B"},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern(0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24),
         "outer-frame cap validation and deterministic authored phase"},

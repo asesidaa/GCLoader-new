@@ -292,8 +292,8 @@ failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
 failures += Expect(
-    transformed_hooks.size() == 34,
-    "authored effect intermediate mode has 34 hooks");
+    transformed_hooks.size() == 41,
+    "complete transformed mode has 41 hooks");
 for (const auto removed_rva :
      {0x00218A50U, 0x002544D0U, 0x00230AB6U, 0x0024F0C6U}) {
     const bool present = std::any_of(
@@ -304,14 +304,16 @@ for (const auto removed_rva :
     failures += Expect(!present, "invalid timing contract is absent");
 }
 failures += Expect(
-    transformed_hooks.back().id == FramerateHookId::OuterFrame,
-    "outer frame remains last");
+    transformed_hooks.size() > 40 &&
+        transformed_hooks.back().id == FramerateHookId::OuterFrame &&
+        transformed_hooks[40].id == FramerateHookId::OuterFrame,
+    "outer frame is final hook at index 40");
 failures += Expect(
     FindHook(transformed_hooks, FramerateHookId::PaletteCompare).expected ==
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 34> expected_hooks{{
+const std::array<FramerateHookContract, 41> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -378,6 +380,20 @@ const std::array<FramerateHookContract, 34> expected_hooks{{
         Pattern({0xD8, 0x71, 0x18}), ""},
     {FramerateHookId::GameplayCountdownAssetFrame, 0x00249A9C,
         Pattern({0x89, 0x48, 0x08}), ""},
+    {FramerateHookId::PlayerPositionInitA, 0x00263240,
+        Pattern({0x89, 0x84, 0x91, 0x54, 0x1D, 0x00, 0x00}), ""},
+    {FramerateHookId::PlayerPositionInitB, 0x002632B2,
+        Pattern({0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
+    {FramerateHookId::PlayerPositionInitC, 0x0026359B,
+        Pattern({0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
+    {FramerateHookId::PlayerPositionInitD, 0x00263615,
+        Pattern({0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
+    {FramerateHookId::PlayerPositionAssetFrame, 0x0024EF43,
+        Pattern({0x2B, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
+    {FramerateHookId::PlayerPositionDenominatorA, 0x0024F76D,
+        Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
+    {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
+        Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24}), ""},
 }};

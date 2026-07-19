@@ -62,6 +62,13 @@ enum class FramerateHookId {
     ChartEffectFrameDOperand,
     FixedVisualFrameOperand,
     GameplayCountdownAssetFrame,
+    PlayerPositionInitA,
+    PlayerPositionInitB,
+    PlayerPositionInitC,
+    PlayerPositionInitD,
+    PlayerPositionAssetFrame,
+    PlayerPositionDenominatorA,
+    PlayerPositionDenominatorB,
     OuterFrame,
 };
 
