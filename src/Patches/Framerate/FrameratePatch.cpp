@@ -411,7 +411,7 @@ void AssignHookCallbacks(
         operation.install = &InstallMidHook<
             &FramerateHookStorage::effect_cadence_16_b,
             HookEffectCadence16B,
-            0x0024123C>;
+            0x0024122F>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::effect_cadence_16_b>;
         break;
