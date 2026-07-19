@@ -251,7 +251,7 @@ failures += Expect(
     MapPositiveTargetFrameToAuthored60(profile240, 8).value() == 2,
     "blink maps target frames to authored frames");
 
-static_assert(kMaximumFramerateHooks >= 25);
+static_assert(kMaximumFramerateHooks == 41);
 for (const auto& contract : FramerateHookContracts(true)) {
     failures += Expect(
         FramerateHookHasRuntimeBinding(contract.id),

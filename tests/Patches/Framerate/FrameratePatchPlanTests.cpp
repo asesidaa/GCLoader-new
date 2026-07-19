@@ -291,33 +291,37 @@ failures += Expect(native_hooks.size() == 1, "60 uses cadence hook only");
 failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
-failures += Expect(transformed_hooks.size() == 25,
-    "transformed mode has all 25 hooks");
+failures += Expect(
+    transformed_hooks.size() == 21,
+    "intermediate transformed mode has 21 retained hooks");
+for (const auto removed_rva :
+     {0x00218A50U, 0x002544D0U, 0x00230AB6U, 0x0024F0C6U}) {
+    const bool present = std::any_of(
+        transformed_hooks.begin(), transformed_hooks.end(),
+        [removed_rva](const auto& hook) {
+            return hook.rva == removed_rva;
+        });
+    failures += Expect(!present, "invalid timing contract is absent");
+}
 failures += Expect(
     transformed_hooks.back().id == FramerateHookId::OuterFrame,
-    "outer-frame hook installs last");
+    "outer frame remains last");
 failures += Expect(
     FindHook(transformed_hooks, FramerateHookId::PaletteCompare).expected ==
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 25> expected_hooks{{
+const std::array<FramerateHookContract, 21> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
         Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x90, 0x4C, 0x01, 0x00, 0x00}), ""},
-    {FramerateHookId::NewsUpdate, 0x00218A50,
-        Pattern({0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0xED, 0xA1, 0x67, 0x00}), ""},
-    {FramerateHookId::NoticeUpdate, 0x002544D0,
-        Pattern({0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x7F, 0x96, 0x67, 0x00}), ""},
     {FramerateHookId::PaletteCompare, 0x0022BA60,
         Pattern({0x83, 0x78, 0x0C, 0x3C}), ""},
     {FramerateHookId::StageClipFrame, 0x00244054,
         Pattern({0x89, 0x4D, 0xF8}), ""},
     {FramerateHookId::IfblWait, 0x002309D4,
         Pattern({0x89, 0x4A, 0x3C}), ""},
-    {FramerateHookId::IfblLoop, 0x00230AB6,
-        Pattern({0x89, 0x4C, 0x90, 0x1C}), ""},
     {FramerateHookId::StageBgmPreload, 0x0021001A,
         Pattern({0x83, 0xC0, 0x01}), ""},
     {FramerateHookId::TuneCountdownCompare, 0x002648F7,
@@ -348,8 +352,6 @@ const std::array<FramerateHookContract, 25> expected_hooks{{
         Pattern({0x85, 0xD2}), ""},
     {FramerateHookId::GameplayBlink, 0x0024A1B9,
         Pattern({0xD1, 0xF8}), ""},
-    {FramerateHookId::PlayerPositionCountdown, 0x0024F0C6,
-        Pattern({0x83, 0xE9, 0x01}), ""},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24}), ""},
 }};

@@ -66,7 +66,7 @@ bool AddWrite(
     return true;
 }
 
-constexpr std::array<FramerateHookContract, 25> kHookContracts{{
+constexpr std::array<FramerateHookContract, 21> kHookContracts{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern(0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00),
         "MovieClip goto-frame depth guard"},
@@ -74,14 +74,6 @@ constexpr std::array<FramerateHookContract, 25> kHookContracts{{
         Pattern(0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x90, 0x4C,
             0x01, 0x00, 0x00),
         "MovieClip authored-60Hz advance"},
-    {FramerateHookId::NewsUpdate, 0x00218A50,
-        Pattern(0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0xED, 0xA1,
-            0x67, 0x00),
-        "news authored-60Hz update"},
-    {FramerateHookId::NoticeUpdate, 0x002544D0,
-        Pattern(0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x7F, 0x96,
-            0x67, 0x00),
-        "notice authored-60Hz update"},
     {FramerateHookId::PaletteCompare, 0x0022BA60,
         Pattern(0x83, 0x78, 0x0C, 0x3C),
         "palette target-rate compare"},
@@ -91,9 +83,6 @@ constexpr std::array<FramerateHookContract, 25> kHookContracts{{
     {FramerateHookId::IfblWait, 0x002309D4,
         Pattern(0x89, 0x4A, 0x3C),
         "IFBL wait duration"},
-    {FramerateHookId::IfblLoop, 0x00230AB6,
-        Pattern(0x89, 0x4C, 0x90, 0x1C),
-        "IFBL loop duration"},
     {FramerateHookId::StageBgmPreload, 0x0021001A,
         Pattern(0x83, 0xC0, 0x01),
         "stage BGM authored-60Hz preload"},
@@ -139,12 +128,9 @@ constexpr std::array<FramerateHookContract, 25> kHookContracts{{
     {FramerateHookId::GameplayBlink, 0x0024A1B9,
         Pattern(0xD1, 0xF8),
         "gameplay authored-frame blink"},
-    {FramerateHookId::PlayerPositionCountdown, 0x0024F0C6,
-        Pattern(0x83, 0xE9, 0x01),
-        "player-position authored-60Hz countdown"},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern(0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24),
-        "outer-frame cadence and authored clock"},
+        "outer-frame cap validation and deterministic authored phase"},
 }};
 
 } // namespace

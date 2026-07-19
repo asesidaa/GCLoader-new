@@ -29,19 +29,14 @@ namespace gc::framerate {
 
 namespace {
 
-constexpr double kAuthoredUiStepSeconds = 1.0 / 60.0;
-constexpr double kMaximumAccumulatedSeconds = 1.0 / 30.0;
 constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
 
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
     safetyhook::InlineHook movieclip_advance{};
-    safetyhook::InlineHook news_update{};
-    safetyhook::InlineHook notice_update{};
     safetyhook::MidHook palette_compare{};
     safetyhook::MidHook stage_clip_frame{};
     safetyhook::MidHook ifbl_wait{};
-    safetyhook::MidHook ifbl_loop{};
     safetyhook::MidHook stage_bgm_preload{};
     safetyhook::MidHook tune_countdown_compare{};
     safetyhook::MidHook audio_skip_margin{};
@@ -57,7 +52,6 @@ struct FramerateHookStorage {
     safetyhook::MidHook remote_cadence_a{};
     safetyhook::MidHook remote_cadence_b{};
     safetyhook::MidHook gameplay_blink{};
-    safetyhook::MidHook player_position_countdown{};
     safetyhook::MidHook outer_frame{};
 };
 
@@ -68,14 +62,9 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t movieclip_calls{0};
     std::atomic_uint64_t movieclip_skips{0};
     std::atomic_uint64_t movieclip_goto_calls{0};
-    std::atomic_uint64_t news_calls{0};
-    std::atomic_uint64_t news_skips{0};
-    std::atomic_uint64_t notice_calls{0};
-    std::atomic_uint64_t notice_skips{0};
     std::atomic_uint64_t stage_clip_indices{0};
     std::atomic_uint64_t stage_clip_mappings{0};
     std::atomic_uint64_t ifbl_wait_stores{0};
-    std::atomic_uint64_t ifbl_loop_stores{0};
     std::atomic_uint64_t bgm_preload_calls{0};
     std::atomic_uint64_t bgm_preload_skips{0};
     std::atomic_uint64_t countdown_compare_hits{0};
@@ -91,8 +80,6 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t remote_cadence_runs{0};
     std::atomic_uint64_t remote_cadence_rejects{0};
     std::atomic_uint64_t gameplay_blink_mappings{0};
-    std::atomic_uint64_t player_position_decrements{0};
-    std::atomic_uint64_t player_position_skips{0};
 };
 
 struct FramerateRuntimeState {
@@ -103,6 +90,7 @@ struct FramerateRuntimeState {
         FrameratePlatformActions platform_value) noexcept
         : profile{std::move(profile_value)},
           monitor{std::move(monitor_value)},
+          authored_clock{profile},
           qpc_frequency{frequency_value},
           platform{platform_value},
           transaction{ProductionFramerateMemoryApi()} {
@@ -110,6 +98,7 @@ struct FramerateRuntimeState {
 
     FramerateProfile profile;
     FramerateMonitor monitor;
+    Authored60PhaseClock authored_clock;
     std::int64_t qpc_frequency{};
     FrameratePlatformActions platform{};
     FrameratePatchTransaction transaction;
@@ -117,10 +106,7 @@ struct FramerateRuntimeState {
     FramerateRuntimeCounters counters;
     std::atomic_bool fatal_published{false};
     std::atomic_bool authored_60hz_tick{true};
-    std::int64_t previous_qpc{};
     std::int64_t previous_stats_qpc{};
-    double authored_accumulator{};
-    bool authored_clock_started{};
 };
 
 struct FramerateHookOperationPlan {
@@ -137,12 +123,9 @@ thread_local int g_movieclip_goto_depth = 0;
 
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
-int __fastcall HookNewsUpdate(void*, void*);
-int __fastcall HookNoticeUpdate(void*, void*);
 void HookPaletteCompare(safetyhook::Context&);
 void HookStageClipFrame(safetyhook::Context&);
 void HookIfblWait(safetyhook::Context&);
-void HookIfblLoop(safetyhook::Context&);
 void HookStageBgmPreload(safetyhook::Context&);
 void HookTuneCountdownCompare(safetyhook::Context&);
 void HookAudioSkipMargin(safetyhook::Context&);
@@ -158,7 +141,6 @@ void HookEffectCadence8(safetyhook::Context&);
 void HookRemoteCadenceA(safetyhook::Context&);
 void HookRemoteCadenceB(safetyhook::Context&);
 void HookGameplayBlink(safetyhook::Context&);
-void HookPlayerPositionCountdown(safetyhook::Context&);
 void HookOuterFrame(safetyhook::Context&);
 
 [[nodiscard]] std::uintptr_t ExecutableBase() noexcept {
@@ -279,22 +261,6 @@ void AssignHookCallbacks(
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::movieclip_advance>;
         break;
-    case FramerateHookId::NewsUpdate:
-        operation.install = &InstallInlineHook<
-            &FramerateHookStorage::news_update,
-            HookNewsUpdate,
-            0x00218A50>;
-        operation.reset = &ResetOwnedHook<
-            &FramerateHookStorage::news_update>;
-        break;
-    case FramerateHookId::NoticeUpdate:
-        operation.install = &InstallInlineHook<
-            &FramerateHookStorage::notice_update,
-            HookNoticeUpdate,
-            0x002544D0>;
-        operation.reset = &ResetOwnedHook<
-            &FramerateHookStorage::notice_update>;
-        break;
     case FramerateHookId::PaletteCompare:
         operation.install = &InstallMidHook<
             &FramerateHookStorage::palette_compare,
@@ -318,14 +284,6 @@ void AssignHookCallbacks(
             0x002309D4>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::ifbl_wait>;
-        break;
-    case FramerateHookId::IfblLoop:
-        operation.install = &InstallMidHook<
-            &FramerateHookStorage::ifbl_loop,
-            HookIfblLoop,
-            0x00230AB6>;
-        operation.reset = &ResetOwnedHook<
-            &FramerateHookStorage::ifbl_loop>;
         break;
     case FramerateHookId::StageBgmPreload:
         operation.install = &InstallMidHook<
@@ -446,14 +404,6 @@ void AssignHookCallbacks(
             0x0024A1B9>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::gameplay_blink>;
-        break;
-    case FramerateHookId::PlayerPositionCountdown:
-        operation.install = &InstallMidHook<
-            &FramerateHookStorage::player_position_countdown,
-            HookPlayerPositionCountdown,
-            0x0024F0C6>;
-        operation.reset = &ResetOwnedHook<
-            &FramerateHookStorage::player_position_countdown>;
         break;
     case FramerateHookId::OuterFrame:
         operation.install = &InstallMidHook<
@@ -598,28 +548,6 @@ char __fastcall HookMovieClipAdvance(
         self, forward, loop);
 }
 
-int __fastcall HookNewsUpdate(void* self, void*) {
-    if (!IsAuthored60HzTick()) {
-        g_runtime->counters.news_skips.fetch_add(
-            1, std::memory_order_relaxed);
-        return 1;
-    }
-    g_runtime->counters.news_calls.fetch_add(
-        1, std::memory_order_relaxed);
-    return g_runtime->hooks.news_update.unsafe_thiscall<int>(self);
-}
-
-int __fastcall HookNoticeUpdate(void* self, void*) {
-    if (!IsAuthored60HzTick()) {
-        g_runtime->counters.notice_skips.fetch_add(
-            1, std::memory_order_relaxed);
-        return 1;
-    }
-    g_runtime->counters.notice_calls.fetch_add(
-        1, std::memory_order_relaxed);
-    return g_runtime->hooks.notice_update.unsafe_thiscall<int>(self);
-}
-
 void HookPaletteCompare(safetyhook::Context& context) {
     std::uint32_t counter{};
     if (!ReadU32Safe(context.eax + 0x0C, counter)) {
@@ -662,24 +590,6 @@ void HookIfblWait(safetyhook::Context& context) {
         context.eip += 3;
     } else {
         FatalRuntimeConversion("IFBL wait store");
-    }
-}
-
-void HookIfblLoop(safetyhook::Context& context) {
-    const auto scaled = ScalePositiveDuration(
-        g_runtime->profile, context.ecx);
-    if (!scaled) {
-        FatalRuntimeConversion("IFBL loop scaling");
-        return;
-    }
-    if (WriteU32Safe(
-            context.eax + context.edx * 4 + 0x1C,
-            scaled.value())) {
-        g_runtime->counters.ifbl_loop_stores.fetch_add(
-            1, std::memory_order_relaxed);
-        context.eip += 4;
-    } else {
-        FatalRuntimeConversion("IFBL loop store");
     }
 }
 
@@ -873,17 +783,6 @@ void HookGameplayBlink(safetyhook::Context& context) {
         1, std::memory_order_relaxed);
 }
 
-void HookPlayerPositionCountdown(safetyhook::Context& context) {
-    if (IsAuthored60HzTick()) {
-        g_runtime->counters.player_position_decrements.fetch_add(
-            1, std::memory_order_relaxed);
-        return;
-    }
-    g_runtime->counters.player_position_skips.fetch_add(
-        1, std::memory_order_relaxed);
-    context.eip += 3;
-}
-
 void LogCadenceValidated(
     const FramerateObservation& observation) noexcept {
     try {
@@ -901,38 +800,20 @@ void LogCadenceValidated(
     }
 }
 
-void UpdateAuthored60HzTick(std::int64_t now) noexcept {
-    if (!g_runtime->authored_clock_started) {
-        g_runtime->authored_clock_started = true;
-        g_runtime->previous_qpc = now;
-        g_runtime->previous_stats_qpc = now;
-        g_runtime->authored_60hz_tick.store(
-            true, std::memory_order_release);
-        g_runtime->counters.authored_ticks.fetch_add(
-            1, std::memory_order_relaxed);
-        return;
-    }
-
-    double delta = static_cast<double>(now - g_runtime->previous_qpc) /
-        static_cast<double>(g_runtime->qpc_frequency);
-    g_runtime->previous_qpc = now;
-    delta = std::clamp(delta, 0.0, kMaximumAccumulatedSeconds);
-    g_runtime->authored_accumulator += delta;
-
-    bool tick = false;
-    if (g_runtime->authored_accumulator >= kAuthoredUiStepSeconds) {
-        g_runtime->authored_accumulator -= kAuthoredUiStepSeconds;
-        tick = true;
-        g_runtime->counters.authored_ticks.fetch_add(
-            1, std::memory_order_relaxed);
-    } else {
-        g_runtime->counters.authored_non_ticks.fetch_add(
-            1, std::memory_order_relaxed);
-    }
+void UpdateAuthored60HzTick() noexcept {
+    const bool tick = g_runtime->authored_clock.Advance();
     g_runtime->authored_60hz_tick.store(tick, std::memory_order_release);
+    auto& counter = tick
+        ? g_runtime->counters.authored_ticks
+        : g_runtime->counters.authored_non_ticks;
+    counter.fetch_add(1, std::memory_order_relaxed);
 }
 
 void MaybeLogRuntimeStats(std::int64_t now) {
+    if (g_runtime->previous_stats_qpc == 0) {
+        g_runtime->previous_stats_qpc = now;
+        return;
+    }
     if (now - g_runtime->previous_stats_qpc <
         g_runtime->qpc_frequency * 5) {
         return;
@@ -953,21 +834,11 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << "/goto=" << counters.movieclip_goto_calls.load(
                      std::memory_order_relaxed)
-              << " news=" << counters.news_calls.load(
-                     std::memory_order_relaxed)
-              << "/skip=" << counters.news_skips.load(
-                     std::memory_order_relaxed)
-              << " notice=" << counters.notice_calls.load(
-                     std::memory_order_relaxed)
-              << "/skip=" << counters.notice_skips.load(
-                     std::memory_order_relaxed)
               << " stage_clip=" << counters.stage_clip_indices.load(
                      std::memory_order_relaxed)
               << "/mapped=" << counters.stage_clip_mappings.load(
                      std::memory_order_relaxed)
               << " ifbl_waits=" << counters.ifbl_wait_stores.load(
-                     std::memory_order_relaxed)
-              << "/loops=" << counters.ifbl_loop_stores.load(
                      std::memory_order_relaxed)
               << " bgm_preload=" << counters.bgm_preload_calls.load(
                      std::memory_order_relaxed)
@@ -1006,13 +877,7 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << " gameplay_blink="
               << counters.gameplay_blink_mappings.load(
-                     std::memory_order_relaxed)
-              << " player_position="
-              << counters.player_position_decrements.load(
-                     std::memory_order_relaxed)
-              << "/skip=" << counters.player_position_skips.load(
-                     std::memory_order_relaxed)
-              << " accumulator=" << g_runtime->authored_accumulator;
+                     std::memory_order_relaxed);
 }
 
 void HookOuterFrame(safetyhook::Context&) {
@@ -1053,7 +918,7 @@ void HookOuterFrame(safetyhook::Context&) {
     if (g_runtime->profile.native_timing()) {
         return;
     }
-    UpdateAuthored60HzTick(now.QuadPart);
+    UpdateAuthored60HzTick();
     MaybeLogRuntimeStats(now.QuadPart);
 }
 

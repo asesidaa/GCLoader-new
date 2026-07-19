@@ -31,12 +31,9 @@ struct FramerateDirectPatchPlan {
 enum class FramerateHookId {
     MovieClipGoto,
     MovieClipAdvance,
-    NewsUpdate,
-    NoticeUpdate,
     PaletteCompare,
     StageClipFrame,
     IfblWait,
-    IfblLoop,
     StageBgmPreload,
     TuneCountdownCompare,
     AudioSkipMargin,
@@ -52,7 +49,6 @@ enum class FramerateHookId {
     RemoteCadenceA,
     RemoteCadenceB,
     GameplayBlink,
-    PlayerPositionCountdown,
     OuterFrame,
 };
 
