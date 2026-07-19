@@ -650,7 +650,7 @@ void HookStageClipFrame(safetyhook::Context& context) {
 }
 
 void HookIfblWait(safetyhook::Context& context) {
-    const auto scaled = ScalePositiveFrameCount(
+    const auto scaled = ScalePositiveDuration(
         g_runtime->profile, context.ecx);
     if (!scaled) {
         FatalRuntimeConversion("IFBL wait scaling");
@@ -666,7 +666,7 @@ void HookIfblWait(safetyhook::Context& context) {
 }
 
 void HookIfblLoop(safetyhook::Context& context) {
-    const auto scaled = ScalePositiveFrameCount(
+    const auto scaled = ScalePositiveDuration(
         g_runtime->profile, context.ecx);
     if (!scaled) {
         FatalRuntimeConversion("IFBL loop scaling");

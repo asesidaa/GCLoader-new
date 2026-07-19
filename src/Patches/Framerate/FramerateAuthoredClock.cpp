@@ -5,6 +5,21 @@
 
 namespace gc::framerate {
 
+Authored60PhaseClock::Authored60PhaseClock(
+    const FramerateProfile& profile) noexcept
+    : target_fps_{profile.target_fps()},
+      phase_{target_fps_ - 60U} {
+}
+
+bool Authored60PhaseClock::Advance() noexcept {
+    phase_ += 60U;
+    if (phase_ < target_fps_) {
+        return false;
+    }
+    phase_ -= target_fps_;
+    return true;
+}
+
 std::expected<bool, FramerateProfileError>
 IsAuthored60FrameBoundary(
     const FramerateProfile& profile,
@@ -82,6 +97,35 @@ MapPositiveTargetFrameToAuthored60(
         return raw_value;
     }
     return profile.MapToAuthored60(raw_value);
+}
+
+std::expected<std::uint32_t, FramerateProfileError>
+ScalePositiveDuration(
+    const FramerateProfile& profile,
+    std::uint32_t raw_value) noexcept {
+    const auto signed_value = static_cast<std::int32_t>(raw_value);
+    if (signed_value <= 0) {
+        return raw_value;
+    }
+    const auto scaled = profile.ScaleDurationFrames(signed_value);
+    if (!scaled) {
+        return std::unexpected(scaled.error());
+    }
+    return static_cast<std::uint32_t>(scaled.value());
+}
+
+std::expected<std::uint32_t, FramerateProfileError>
+MapPlayerPositionElapsedToAuthored60(
+    const FramerateProfile& profile,
+    std::uint32_t raw_total,
+    std::uint32_t scaled_remaining) noexcept {
+    const auto scaled_total = ScalePositiveDuration(profile, raw_total);
+    if (!scaled_total) {
+        return std::unexpected(scaled_total.error());
+    }
+    const std::uint32_t elapsed_target =
+        scaled_total.value() - scaled_remaining;
+    return MapPositiveTargetFrameToAuthored60(profile, elapsed_target);
 }
 
 } // namespace gc::framerate

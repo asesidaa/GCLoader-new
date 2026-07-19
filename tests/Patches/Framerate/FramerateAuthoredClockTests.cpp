@@ -22,6 +22,71 @@ int main() {
     using namespace gc::framerate;
     int failures = 0;
 
+    for (const std::uint32_t target :
+         {60U, 61U, 120U, 144U, 165U, 240U, 360U, 500U}) {
+        const auto profile = FramerateProfile::Create(target).value();
+        Authored60PhaseClock clock{profile};
+        std::uint32_t ticks = 0;
+        for (std::uint32_t call = 0; call < target; ++call) {
+            ticks += clock.Advance() ? 1U : 0U;
+        }
+        failures += Expect(
+            ticks == 60,
+            "phase clock emits 60 ticks per target second");
+
+        Authored60PhaseClock left{profile};
+        Authored60PhaseClock right{profile};
+        for (std::uint32_t call = 0; call < target * 2; ++call) {
+            failures += Expect(
+                left.Advance() == right.Advance(),
+                "phase clock reconstruction is deterministic");
+        }
+    }
+
+    {
+        const auto profile = FramerateProfile::Create(240).value();
+        Authored60PhaseClock clock{profile};
+        constexpr std::array expected{
+            true, false, false, false, true, false, false, false};
+        for (const bool value : expected) {
+            failures += Expect(
+                clock.Advance() == value,
+                "240 phase sequence");
+        }
+    }
+
+    {
+        const auto profile = FramerateProfile::Create(144).value();
+        failures += Expect(
+            ScalePositiveDuration(profile, 25).value() == 60,
+            "positive duration scales rationally");
+        failures += Expect(
+            ScalePositiveDuration(profile, 0).value() == 0 &&
+                ScalePositiveDuration(profile, UINT32_MAX).value() ==
+                    UINT32_MAX,
+            "signed nonpositive duration sentinels survive");
+    }
+
+    {
+        const auto profile = FramerateProfile::Create(240).value();
+        failures += Expect(
+            MapPlayerPositionElapsedToAuthored60(
+                profile, 120, 480).value() == 0,
+            "player position starts at authored frame zero");
+        failures += Expect(
+            MapPlayerPositionElapsedToAuthored60(
+                profile, 120, 476).value() == 1,
+            "player position maps target elapsed to authored frame");
+        failures += Expect(
+            MapPlayerPositionElapsedToAuthored60(
+                profile, 120, 0).value() == 120,
+            "player position completes at authored duration");
+        failures += Expect(
+            MapPlayerPositionElapsedToAuthored60(
+                profile, 120, 481).value() == UINT32_MAX,
+            "player position preserves negative elapsed sentinel");
+    }
+
     constexpr std::array periods{4U, 5U, 6U, 8U, 16U};
     for (const std::uint32_t target :
          {60U, 120U, 144U, 165U, 240U, 360U, 500U}) {

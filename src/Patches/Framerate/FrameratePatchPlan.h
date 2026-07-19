@@ -77,9 +77,4 @@ FramerateHookContracts(bool transformed_timing) noexcept;
     std::uint32_t left,
     std::uint32_t right) noexcept;
 
-[[nodiscard]] std::expected<std::uint32_t, FramerateProfileError>
-ScalePositiveFrameCount(
-    const FramerateProfile& profile,
-    std::uint32_t raw_value) noexcept;
-
 } // namespace gc::framerate

@@ -1,4 +1,5 @@
 #include "Patches/Framerate/FrameratePatchPlan.h"
+#include "Patches/Framerate/FramerateAuthoredClock.h"
 
 #include <algorithm>
 #include <array>
@@ -344,11 +345,11 @@ for (const std::uint32_t cap : {120U, 144U, 165U, 240U, 360U, 500U}) {
 
 const auto profile144 = FramerateProfile::Create(144).value();
 failures += Expect(
-    ScalePositiveFrameCount(profile144, 25).value() == 60,
+    ScalePositiveDuration(profile144, 25).value() == 60,
     "positive runtime count scales rationally");
 failures += Expect(
-    ScalePositiveFrameCount(profile144, 0).value() == 0 &&
-        ScalePositiveFrameCount(profile144, UINT32_MAX).value() == UINT32_MAX,
+    ScalePositiveDuration(profile144, 0).value() == 0 &&
+        ScalePositiveDuration(profile144, UINT32_MAX).value() == UINT32_MAX,
     "runtime count sentinels remain unchanged");
 for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U}) {
     const auto profile = FramerateProfile::Create(target).value();

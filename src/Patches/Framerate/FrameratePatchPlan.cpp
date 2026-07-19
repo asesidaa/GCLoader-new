@@ -317,19 +317,4 @@ std::uint32_t ApplyCmp32Flags(
     return flags;
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
-ScalePositiveFrameCount(
-    const FramerateProfile& profile,
-    std::uint32_t raw_value) noexcept {
-    const auto signed_value = static_cast<std::int32_t>(raw_value);
-    if (signed_value <= 0) {
-        return raw_value;
-    }
-    const auto scaled = profile.ScaleDurationFrames(signed_value);
-    if (!scaled) {
-        return std::unexpected(scaled.error());
-    }
-    return static_cast<std::uint32_t>(scaled.value());
-}
-
 } // namespace gc::framerate
