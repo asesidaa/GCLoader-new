@@ -66,6 +66,9 @@ bindings = [
   { action = 'RightBoosterRight', type = 'XInputAxis', control = 'RightX', direction = 'Positive' },
   { action = 'RightBoosterButton', type = 'XInputButton', control = 'B' },
 ]
+
+[logging]
+level = 'Info'
 )toml";
 
 constexpr std::string_view kDefaultRegistryConfig = R"toml(
@@ -323,6 +326,19 @@ int expect_country(
     return 1;
 }
 
+int expect_log_level(
+    gc::config::LoaderLogLevel actual,
+    gc::config::LoaderLogLevel expected,
+    const char* name) {
+    if (actual == expected) {
+        return 0;
+    }
+    std::cerr << "Expected " << name << " log level "
+              << static_cast<int>(expected) << ", got "
+              << static_cast<int>(actual) << "\n";
+    return 1;
+}
+
 int expect_u32(
     std::uint32_t actual,
     std::uint32_t expected,
@@ -392,7 +408,42 @@ int main() {
         generated_defaults.nesys().server_ip(),
         "127.0.0.1",
         "constructed ConfigGUI NESYS server IPv4");
+    failures += expect_log_level(
+        upgraded_defaults.logging().level(),
+        gc::config::LoaderLogLevel::Info,
+        "parsed default loader");
+    failures += expect_log_level(
+        generated_defaults.logging().level(),
+        gc::config::LoaderLogLevel::Info,
+        "constructed default loader");
     const auto generated_toml = rfl::toml::write(generated_defaults);
+    failures += expect_bool(
+        generated_toml.find("level = 'Info'") != std::string::npos,
+        true,
+        "generated TOML loader log level");
+
+    for (const auto [name, expected] : std::array{
+             std::pair{"Info", gc::config::LoaderLogLevel::Info},
+             std::pair{"Debug", gc::config::LoaderLogLevel::Debug},
+             std::pair{"Verbose", gc::config::LoaderLogLevel::Verbose},
+         }) {
+        const auto custom_level = parse_config(replace_once(
+            std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig,
+            "level = 'Info'",
+            std::string{"level = '"} + name + "'"));
+        failures += expect_log_level(
+            custom_level.logging().level(), expected, name);
+        const auto round_trip = parse_config(rfl::toml::write(custom_level));
+        failures += expect_log_level(
+            round_trip.logging().level(), expected, "loader level round trip");
+    }
+    failures += expect_parse_failure(
+        replace_once(
+            std::string(kRequiredConfigPrefix) + kDefaultExperimentalConfig,
+            "level = 'Info'",
+            "level = 'Trace'"),
+        "unsupported loader log level");
+
     failures += expect_u32(
         upgraded_defaults.input_poll_hz(),
         1000,

@@ -19,6 +19,28 @@ struct NesysConfig
     rfl::Rename<"server_ip", std::string> server_ip = "127.0.0.1";
 };
 
+namespace gc::config {
+
+enum class LoaderLogLevel : std::uint8_t {
+    Info,
+    Debug,
+    Verbose,
+};
+
+struct LoggingConfig {
+    rfl::Rename<"level", LoaderLogLevel> level{LoaderLogLevel::Info};
+};
+
+inline constexpr bool IsSupportedLoaderLogLevel(
+    LoaderLogLevel level) noexcept
+{
+    return level == LoaderLogLevel::Info ||
+        level == LoaderLogLevel::Debug ||
+        level == LoaderLogLevel::Verbose;
+}
+
+} // namespace gc::config
+
 // Windows unsigned long is a distinct 32-bit numeric type.
 using WasapiBufferMillisecondsConfigValue = unsigned long;
 static_assert(
@@ -80,6 +102,7 @@ struct InputConfig
     rfl::Rename<"controller", gc::config::ControllerConfig> controller;
     rfl::Rename<"nesys", NesysConfig> nesys;
     rfl::Rename<"registry", RegistryConfig> registry;
+    rfl::Rename<"logging", gc::config::LoggingConfig> logging;
     rfl::Rename<"experimental", ExperimentalConfig> experimental;
 };
 
@@ -188,6 +211,10 @@ public:
     [[nodiscard]] const RegistryConfig& GetRegistryConfig() const
     {
         return config.registry();
+    }
+    [[nodiscard]] gc::config::LoaderLogLevel GetLoaderLogLevel() const
+    {
+        return config.logging().level();
     }
 
     ConfigManager(const ConfigManager&) = delete;

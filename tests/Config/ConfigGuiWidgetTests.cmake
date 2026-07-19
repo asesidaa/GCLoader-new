@@ -20,6 +20,14 @@ if(NOT target_fps_slider STREQUAL "")
     message(FATAL_ERROR "Target FPS must not use a slider")
 endif()
 
+string(REGEX MATCH
+        "ImGui::Combo\\([\t\r\n ]*\"Loader log level\""
+        loader_log_level_combo
+        "${config_gui_source}")
+if(loader_log_level_combo STREQUAL "")
+    message(FATAL_ERROR "Loader log level must use a fixed Combo")
+endif()
+
 foreach(threshold_label IN ITEMS
         "Axis press threshold (%)"
         "Axis release threshold (%)")

@@ -1156,6 +1156,21 @@ void DrawExperimental(InputConfig& config, bool& dirty)
     }
 }
 
+void DrawLogging(InputConfig& config, bool& dirty)
+{
+    ImGui::SeparatorText("Logging");
+    int level = static_cast<int>(config.logging().level());
+    constexpr const char* levels[]{"Info", "Debug", "Verbose"};
+    if (ImGui::Combo(
+            "Loader log level", &level, levels, IM_ARRAYSIZE(levels)))
+    {
+        config.logging().level =
+            static_cast<gc::config::LoaderLogLevel>(level);
+        dirty = true;
+    }
+    ImGui::TextDisabled("Takes effect after restarting the game.");
+}
+
 std::expected<InputConfig, std::string> LoadConfig(
     const std::string& path)
 {
@@ -1421,6 +1436,7 @@ int main(int argc, char** argv)
             "Enter a dotted-decimal IPv4 address without a port.");
 
         DrawRegistry(config, dirty);
+        DrawLogging(config, dirty);
         DrawExperimental(config, dirty);
 
         config.controller = editor.config();

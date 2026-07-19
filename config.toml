@@ -63,6 +63,9 @@ news_path = 'D:\system\DUA\news'
 event_path = 'D:\system\DUA\event'
 log_path = 'D:\system\CmdFile\log'
 
+[logging]
+level = 'Info'
+
 [experimental]
 target_fps = 60
 enable_testmode_storage_redirect = false

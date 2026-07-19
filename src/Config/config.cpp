@@ -46,6 +46,11 @@ std::expected<toml::table, std::string> ParseTomlSyntax(
 
 std::expected<void, std::string> ValidateInputConfig(
     const InputConfig& value) {
+    if (!IsSupportedLoaderLogLevel(value.logging().level())) {
+        return std::unexpected(
+            "Invalid [logging].level; expected Info, Debug, or Verbose");
+    }
+
     const auto target = static_cast<std::uint32_t>(
         value.experimental().target_fps());
     if (!IsTargetFpsInRange(target)) {

@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <filesystem>
 #include <string>
+#include "Config/config.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
@@ -24,6 +25,32 @@ void InitProcessLog(gc::nesys_service::ProcessRole role) {
     plog::init(plog::info, &loader_log_appender);
 }
 
+const char* LoaderLogLevelName(gc::config::LoaderLogLevel level) {
+    using enum gc::config::LoaderLogLevel;
+    switch (level) {
+    case Info: return "Info";
+    case Debug: return "Debug";
+    case Verbose: return "Verbose";
+    }
+    return "Info";
+}
+
+plog::Severity ToPlogSeverity(gc::config::LoaderLogLevel level) {
+    using enum gc::config::LoaderLogLevel;
+    switch (level) {
+    case Debug: return plog::debug;
+    case Verbose: return plog::verbose;
+    case Info: return plog::info;
+    }
+    return plog::info;
+}
+
+void ApplyConfiguredLogLevel() {
+    const auto level = ConfigManager::instance().GetLoaderLogLevel();
+    plog::get()->setMaxSeverity(ToPlogSeverity(level));
+    PLOG_INFO << "Loader log level=" << LoaderLogLevelName(level);
+}
+
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -34,6 +61,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             const auto role =
                 gc::nesys_service::DetectCurrentProcessRole();
             InitProcessLog(role);
+            ApplyConfiguredLogLevel();
 
             PLOG_DEBUG << "DLL attach!" << std::endl;
             PLOG_INFO
