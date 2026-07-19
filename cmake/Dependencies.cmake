@@ -1,16 +1,6 @@
 include(FetchContent)
 
 FetchContent_Declare(
-        SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG f87239e71e42da91ca317a12eefb82cfbf3393eb
-)
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
-set(SDL_TEST OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(SDL3)
-
-FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
         GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537
@@ -92,8 +82,6 @@ add_library(imgui
         ${imgui_external_SOURCE_DIR}/imgui_draw.cpp
         ${imgui_external_SOURCE_DIR}/imgui_tables.cpp
         ${imgui_external_SOURCE_DIR}/imgui_widgets.cpp
-        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-        ${imgui_external_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
         ${imgui_external_SOURCE_DIR}/backends/imgui_impl_win32.cpp
         ${imgui_external_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
         ${imgui_external_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
@@ -101,5 +89,4 @@ add_library(imgui
 target_include_directories(imgui PUBLIC
         ${imgui_external_SOURCE_DIR}
         ${imgui_external_SOURCE_DIR}/backends
-        ${SDL3_SOURCE_DIR}/include
 )

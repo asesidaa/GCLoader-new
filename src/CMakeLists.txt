@@ -37,7 +37,6 @@ set_target_properties(iDmacDrv32 PROPERTIES
 )
 target_include_directories(iDmacDrv32 PRIVATE
         ${PROJECT_SOURCE_DIR}/src
-        ${SDL3_SOURCE_DIR}/include
         ${minhook_SOURCE_DIR}/include
         ${reflectcpp_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
@@ -50,7 +49,6 @@ target_link_libraries(iDmacDrv32 PRIVATE
         gc_nesys
         gc_rfid_feature
         gc_runtime_patches
-        SDL3-static
         dsound
         dxguid
         ntdll

@@ -5,7 +5,6 @@
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
-#include "SDL3/SDL.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Nesys/NesysServicePatch.h"
 #include "Nesys/NesysServiceProcess.h"

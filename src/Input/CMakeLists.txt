@@ -29,13 +29,11 @@ add_library(gc_input STATIC
 )
 target_include_directories(gc_input PUBLIC
         ${PROJECT_SOURCE_DIR}/src
-        ${SDL3_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_input PUBLIC
         gc_config
         gc_input_win32
-        SDL3-static
         ntdll
         safetyhook::safetyhook
 )
