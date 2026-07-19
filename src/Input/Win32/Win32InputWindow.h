@@ -30,6 +30,8 @@ public:
 
     [[nodiscard]] HWND hwnd() const noexcept;
     [[nodiscard]] DWORD owner_thread_id() const noexcept;
+    [[nodiscard]] std::expected<void, std::string>
+    VerifyRegistrations() const;
 
 private:
     static LRESULT CALLBACK WindowProc(
@@ -38,8 +40,6 @@ private:
         WPARAM wparam,
         LPARAM lparam) noexcept;
 
-    [[nodiscard]] std::expected<void, std::string>
-    VerifyRegistrations() const;
     void RemoveRegistrations() noexcept;
 
     RawInputMessageSink& sink_;
