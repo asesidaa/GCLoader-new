@@ -292,8 +292,8 @@ failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
 failures += Expect(
-    transformed_hooks.size() == 21,
-    "intermediate transformed mode has 21 retained hooks");
+    transformed_hooks.size() == 34,
+    "authored effect intermediate mode has 34 hooks");
 for (const auto removed_rva :
      {0x00218A50U, 0x002544D0U, 0x00230AB6U, 0x0024F0C6U}) {
     const bool present = std::any_of(
@@ -311,7 +311,7 @@ failures += Expect(
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 21> expected_hooks{{
+const std::array<FramerateHookContract, 34> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -352,6 +352,32 @@ const std::array<FramerateHookContract, 21> expected_hooks{{
         Pattern({0x85, 0xD2}), ""},
     {FramerateHookId::GameplayBlink, 0x0024A1B9,
         Pattern({0xD1, 0xF8}), ""},
+    {FramerateHookId::GreatGoodLifetimeOperand, 0x002464A8,
+        Pattern({0xD8, 0x48, 0x18}), ""},
+    {FramerateHookId::GreatGoodFrameOperand, 0x00246528,
+        Pattern({0xD8, 0x71, 0x18}), ""},
+    {FramerateHookId::EffectLifetimeAOperand, 0x00248F00,
+        Pattern({0xD8, 0x49, 0x18}), ""},
+    {FramerateHookId::EffectFrameAOperand, 0x00248F8C,
+        Pattern({0xD8, 0x72, 0x18}), ""},
+    {FramerateHookId::EffectLifetimeBOperand, 0x0024912B,
+        Pattern({0xD8, 0x49, 0x18}), ""},
+    {FramerateHookId::EffectFrameBOperand, 0x002491E0,
+        Pattern({0xD8, 0x72, 0x18}), ""},
+    {FramerateHookId::DirectEffectFrameOperand, 0x00249C14,
+        Pattern({0xD8, 0x72, 0x18}), ""},
+    {FramerateHookId::ChartEffectFrameAOperand, 0x0024BC8B,
+        Pattern({0xD8, 0x71, 0x18}), ""},
+    {FramerateHookId::ChartEffectFrameBOperand, 0x0024CC8A,
+        Pattern({0xD8, 0x71, 0x18}), ""},
+    {FramerateHookId::ChartEffectFrameCOperand, 0x0024CCBE,
+        Pattern({0xD8, 0x72, 0x18}), ""},
+    {FramerateHookId::ChartEffectFrameDOperand, 0x0024D836,
+        Pattern({0xD8, 0x70, 0x18}), ""},
+    {FramerateHookId::FixedVisualFrameOperand, 0x00250AD5,
+        Pattern({0xD8, 0x71, 0x18}), ""},
+    {FramerateHookId::GameplayCountdownAssetFrame, 0x00249A9C,
+        Pattern({0x89, 0x48, 0x08}), ""},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24}), ""},
 }};

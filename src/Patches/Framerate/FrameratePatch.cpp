@@ -4,6 +4,7 @@
 #include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateDiagnostics.h"
+#include "Patches/Framerate/FramerateHookTransforms.h"
 #include "Patches/Framerate/FramerateMonitor.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
 #include "Patches/Framerate/FrameratePatchTransaction.h"
@@ -52,6 +53,19 @@ struct FramerateHookStorage {
     safetyhook::MidHook remote_cadence_a{};
     safetyhook::MidHook remote_cadence_b{};
     safetyhook::MidHook gameplay_blink{};
+    safetyhook::MidHook great_good_lifetime_operand{};
+    safetyhook::MidHook great_good_frame_operand{};
+    safetyhook::MidHook effect_lifetime_a_operand{};
+    safetyhook::MidHook effect_frame_a_operand{};
+    safetyhook::MidHook effect_lifetime_b_operand{};
+    safetyhook::MidHook effect_frame_b_operand{};
+    safetyhook::MidHook direct_effect_frame_operand{};
+    safetyhook::MidHook chart_effect_frame_a_operand{};
+    safetyhook::MidHook chart_effect_frame_b_operand{};
+    safetyhook::MidHook chart_effect_frame_c_operand{};
+    safetyhook::MidHook chart_effect_frame_d_operand{};
+    safetyhook::MidHook fixed_visual_frame_operand{};
+    safetyhook::MidHook gameplay_countdown_asset_frame{};
     safetyhook::MidHook outer_frame{};
 };
 
@@ -80,6 +94,8 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t remote_cadence_runs{0};
     std::atomic_uint64_t remote_cadence_rejects{0};
     std::atomic_uint64_t gameplay_blink_mappings{0};
+    std::atomic_uint64_t authored_operand_redirects{0};
+    std::atomic_uint64_t countdown_asset_mappings{0};
 };
 
 struct FramerateRuntimeState {
@@ -103,6 +119,7 @@ struct FramerateRuntimeState {
     FrameratePlatformActions platform{};
     FrameratePatchTransaction transaction;
     FramerateHookStorage hooks;
+    AuthoredFrameOperand authored_frame_operand{};
     FramerateRuntimeCounters counters;
     std::atomic_bool fatal_published{false};
     std::atomic_bool authored_60hz_tick{true};
@@ -141,6 +158,10 @@ void HookEffectCadence8(safetyhook::Context&);
 void HookRemoteCadenceA(safetyhook::Context&);
 void HookRemoteCadenceB(safetyhook::Context&);
 void HookGameplayBlink(safetyhook::Context&);
+void HookAuthoredOperandEax(safetyhook::Context&);
+void HookAuthoredOperandEcx(safetyhook::Context&);
+void HookAuthoredOperandEdx(safetyhook::Context&);
+void HookGameplayCountdownAssetFrame(safetyhook::Context&);
 void HookOuterFrame(safetyhook::Context&);
 
 [[nodiscard]] std::uintptr_t ExecutableBase() noexcept {
@@ -404,6 +425,110 @@ void AssignHookCallbacks(
             0x0024A1B9>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::gameplay_blink>;
+        break;
+    case FramerateHookId::GreatGoodLifetimeOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::great_good_lifetime_operand,
+            HookAuthoredOperandEax,
+            0x002464A8>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::great_good_lifetime_operand>;
+        break;
+    case FramerateHookId::GreatGoodFrameOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::great_good_frame_operand,
+            HookAuthoredOperandEcx,
+            0x00246528>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::great_good_frame_operand>;
+        break;
+    case FramerateHookId::EffectLifetimeAOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_lifetime_a_operand,
+            HookAuthoredOperandEcx,
+            0x00248F00>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_lifetime_a_operand>;
+        break;
+    case FramerateHookId::EffectFrameAOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_frame_a_operand,
+            HookAuthoredOperandEdx,
+            0x00248F8C>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_frame_a_operand>;
+        break;
+    case FramerateHookId::EffectLifetimeBOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_lifetime_b_operand,
+            HookAuthoredOperandEcx,
+            0x0024912B>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_lifetime_b_operand>;
+        break;
+    case FramerateHookId::EffectFrameBOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_frame_b_operand,
+            HookAuthoredOperandEdx,
+            0x002491E0>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_frame_b_operand>;
+        break;
+    case FramerateHookId::DirectEffectFrameOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::direct_effect_frame_operand,
+            HookAuthoredOperandEdx,
+            0x00249C14>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::direct_effect_frame_operand>;
+        break;
+    case FramerateHookId::ChartEffectFrameAOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::chart_effect_frame_a_operand,
+            HookAuthoredOperandEcx,
+            0x0024BC8B>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::chart_effect_frame_a_operand>;
+        break;
+    case FramerateHookId::ChartEffectFrameBOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::chart_effect_frame_b_operand,
+            HookAuthoredOperandEcx,
+            0x0024CC8A>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::chart_effect_frame_b_operand>;
+        break;
+    case FramerateHookId::ChartEffectFrameCOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::chart_effect_frame_c_operand,
+            HookAuthoredOperandEdx,
+            0x0024CCBE>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::chart_effect_frame_c_operand>;
+        break;
+    case FramerateHookId::ChartEffectFrameDOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::chart_effect_frame_d_operand,
+            HookAuthoredOperandEax,
+            0x0024D836>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::chart_effect_frame_d_operand>;
+        break;
+    case FramerateHookId::FixedVisualFrameOperand:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::fixed_visual_frame_operand,
+            HookAuthoredOperandEcx,
+            0x00250AD5>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::fixed_visual_frame_operand>;
+        break;
+    case FramerateHookId::GameplayCountdownAssetFrame:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::gameplay_countdown_asset_frame,
+            HookGameplayCountdownAssetFrame,
+            0x00249A9C>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::gameplay_countdown_asset_frame>;
         break;
     case FramerateHookId::OuterFrame:
         operation.install = &InstallMidHook<
@@ -780,6 +905,37 @@ void HookGameplayBlink(safetyhook::Context& context) {
     }
     context.eax = mapped.value();
     g_runtime->counters.gameplay_blink_mappings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookAuthoredOperandEax(safetyhook::Context& context) {
+    RedirectEaxToAuthoredOperand(
+        context, g_runtime->authored_frame_operand);
+    g_runtime->counters.authored_operand_redirects.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookAuthoredOperandEcx(safetyhook::Context& context) {
+    RedirectEcxToAuthoredOperand(
+        context, g_runtime->authored_frame_operand);
+    g_runtime->counters.authored_operand_redirects.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookAuthoredOperandEdx(safetyhook::Context& context) {
+    RedirectEdxToAuthoredOperand(
+        context, g_runtime->authored_frame_operand);
+    g_runtime->counters.authored_operand_redirects.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookGameplayCountdownAssetFrame(safetyhook::Context& context) {
+    if (!MapCountdownAssetFrame(context, g_runtime->profile)) {
+        FatalRuntimeConversion(
+            "gameplay countdown asset-frame mapping");
+        return;
+    }
+    g_runtime->counters.countdown_asset_mappings.fetch_add(
         1, std::memory_order_relaxed);
 }
 
