@@ -18,7 +18,12 @@ public:
 
 class Win32InputWindow {
 public:
-    explicit Win32InputWindow(RawInputMessageSink& sink) noexcept;
+    using RegistrationFunction = decltype(&RegisterRawInputDevices);
+
+    explicit Win32InputWindow(
+        RawInputMessageSink& sink,
+        RegistrationFunction register_raw_input_devices =
+            ::RegisterRawInputDevices) noexcept;
     ~Win32InputWindow();
 
     Win32InputWindow(const Win32InputWindow&) = delete;
@@ -30,8 +35,6 @@ public:
 
     [[nodiscard]] HWND hwnd() const noexcept;
     [[nodiscard]] DWORD owner_thread_id() const noexcept;
-    [[nodiscard]] std::expected<void, std::string>
-    VerifyRegistrations() const;
 
 private:
     static LRESULT CALLBACK WindowProc(
@@ -40,9 +43,12 @@ private:
         WPARAM wparam,
         LPARAM lparam) noexcept;
 
+    [[nodiscard]] std::expected<void, std::string>
+    VerifyRegistrations() const;
     void RemoveRegistrations() noexcept;
 
     RawInputMessageSink& sink_;
+    RegistrationFunction register_raw_input_devices_;
     HWND hwnd_{};
     HINSTANCE instance_{};
     DWORD owner_thread_id_{};

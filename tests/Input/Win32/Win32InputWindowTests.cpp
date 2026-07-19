@@ -9,6 +9,17 @@
 
 namespace {
 
+int registration_call_count = 0;
+
+BOOL WINAPI counting_register_raw_input_devices(
+    PCRAWINPUTDEVICE devices,
+    UINT device_count,
+    UINT device_size)
+{
+    ++registration_call_count;
+    return RegisterRawInputDevices(devices, device_count, device_size);
+}
+
 class RecordingSink final : public gc::input::RawInputMessageSink {
 public:
     void OnRawInput(HRAWINPUT raw_input) noexcept override
@@ -82,7 +93,7 @@ int main()
 
     int failures = 0;
     RecordingSink sink;
-    Win32InputWindow window(sink);
+    Win32InputWindow window(sink, counting_register_raw_input_devices);
     const auto created = window.Create(GetModuleHandleW(nullptr));
     failures += expect_true(created.has_value(), "window creation");
     if (!created)
@@ -90,6 +101,9 @@ int main()
         std::cerr << created.error() << '\n';
         return 1;
     }
+    failures += expect_true(
+        registration_call_count == 1,
+        "injected registration function used for creation");
 
     const HWND hwnd = window.hwnd();
     failures += expect_true(hwnd != nullptr, "non-null HWND");
@@ -154,6 +168,9 @@ int main()
         "device change forwarded");
 
     window.Destroy();
+    failures += expect_true(
+        registration_call_count == 2,
+        "injected registration function used for teardown");
     failures += expect_true(window.hwnd() == nullptr, "HWND cleared");
     failures += expect_true(IsWindow(hwnd) == FALSE, "window destroyed");
 

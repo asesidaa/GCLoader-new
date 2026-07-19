@@ -4,7 +4,6 @@ add_library(gc_input_win32 STATIC
         Win32/HidApi.cpp
         Win32/InputCapture.cpp
         Win32/PhysicalKeyWin32.cpp
-        Win32/RawInputRegistrationGuard.cpp
         Win32/RawInputPacket.cpp
         Win32/RawHidController.cpp
         Win32/Win32InputWindow.cpp
@@ -13,12 +12,10 @@ add_library(gc_input_win32 STATIC
 )
 target_include_directories(gc_input_win32 PUBLIC
         ${PROJECT_SOURCE_DIR}/src
-        ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_input_win32 PUBLIC
         gc_input_types
         hid
-        safetyhook::safetyhook
         user32
 )
 
@@ -30,6 +27,7 @@ add_library(gc_input STATIC
         Polling/InputWorkerWait.cpp
         Switch/SwitchInputPatch.cpp
         Switch/SwitchInputPolicy.cpp
+        Win32/RawInputRegistrationGuard.cpp
 )
 target_include_directories(gc_input PUBLIC
         ${PROJECT_SOURCE_DIR}/src

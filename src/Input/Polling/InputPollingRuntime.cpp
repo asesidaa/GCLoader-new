@@ -233,7 +233,8 @@ public:
             return std::unexpected(guard_result.error());
         }
 
-        window_ = std::make_unique<Win32InputWindow>(*this);
+        window_ = std::make_unique<Win32InputWindow>(
+            *this, RegisterOwnedRawInputDevices);
         const auto window_result = window_->Create(GetModuleHandleW(nullptr));
         if (!window_result)
         {
@@ -294,32 +295,24 @@ public:
 
             const RAWINPUT& input = **packet;
             const bool foreground = CheckForeground();
+            if (!foreground)
+            {
+                return;
+            }
 
             if (input.header.dwType == RIM_TYPEKEYBOARD)
             {
                 const auto transition = DecodeRawKeyboard(input.data.keyboard);
                 if (!transition)
                 {
-                    PLOG_DEBUG << "Input raw keyboard packet ignored"
-                               << " foreground=" << foreground;
                     return;
                 }
                 PLOG_DEBUG << "Input raw keyboard token="
                            << FormatPhysicalKey(transition->key)
-                           << " pressed=" << transition->pressed
-                           << " foreground=" << foreground;
-                if (!foreground)
-                {
-                    return;
-                }
+                           << " pressed=" << transition->pressed;
                 mapper_->ApplyKeyboardTransition(
                     transition->key, transition->pressed);
                 Publish();
-                return;
-            }
-
-            if (!foreground)
-            {
                 return;
             }
 
@@ -565,7 +558,6 @@ private:
 
     void OnTimer()
     {
-        CheckRawInputRegistrations();
         if (!CheckForeground())
         {
             return;
@@ -590,32 +582,6 @@ private:
         if (*changed)
         {
             ApplyControllerState(*xinput_);
-        }
-    }
-
-    void CheckRawInputRegistrations()
-    {
-        if (++registration_check_ticks_ < poll_hz_)
-        {
-            return;
-        }
-        registration_check_ticks_ = 0;
-
-        const auto verified = window_->VerifyRegistrations();
-        const bool valid = verified.has_value();
-        if (valid == raw_registrations_valid_)
-        {
-            return;
-        }
-        raw_registrations_valid_ = valid;
-        if (valid)
-        {
-            PLOG_INFO << "Input Raw Input registrations restored";
-        }
-        else
-        {
-            PLOG_ERROR << "Input Raw Input registrations replaced: "
-                       << verified.error();
         }
     }
 
@@ -658,8 +624,8 @@ private:
             g_published_input.exchange(next, std::memory_order_acq_rel);
         if (previous != next)
         {
-            PLOG_INFO << "Input snapshot fastio=0x" << std::hex << next
-                      << std::dec;
+            PLOG_DEBUG << "Input snapshot fastio=0x" << std::hex << next
+                       << std::dec;
         }
     }
 
@@ -702,13 +668,11 @@ private:
     HANDLE raw_device_handle_{};
     std::optional<Clock::time_point> last_packet_error_;
     std::uint32_t suppressed_packet_errors_{};
-    std::uint32_t registration_check_ticks_{};
     std::uint32_t poll_hz_{1000};
     std::uint32_t press_percent_{50};
     std::uint32_t release_percent_{40};
     InputMode input_mode_{InputMode::Keyboard};
     bool raw_match_state_logged_{};
-    bool raw_registrations_valid_{true};
     bool shut_down_{};
 };
 

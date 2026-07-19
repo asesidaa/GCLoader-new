@@ -1,7 +1,5 @@
 #include "Input/Win32/Win32InputWindow.h"
 
-#include "Input/Win32/RawInputRegistrationGuard.h"
-
 #include <array>
 #include <cstdint>
 #include <sstream>
@@ -39,8 +37,11 @@ std::string Win32Failure(const char* operation)
 
 } // namespace
 
-Win32InputWindow::Win32InputWindow(RawInputMessageSink& sink) noexcept
-    : sink_(sink)
+Win32InputWindow::Win32InputWindow(
+    RawInputMessageSink& sink,
+    RegistrationFunction register_raw_input_devices) noexcept
+    : sink_(sink),
+      register_raw_input_devices_(register_raw_input_devices)
 {
 }
 
@@ -102,7 +103,7 @@ std::expected<void, std::string> Win32InputWindow::Create(HINSTANCE instance)
     }
 
     auto registrations = Registrations(hwnd_, kRegistrationFlags);
-    if (!RegisterOwnedRawInputDevices(
+    if (!register_raw_input_devices_(
             registrations.data(),
             static_cast<UINT>(registrations.size()),
             sizeof(RAWINPUTDEVICE)))
@@ -251,7 +252,7 @@ Win32InputWindow::VerifyRegistrations() const
 void Win32InputWindow::RemoveRegistrations() noexcept
 {
     auto registrations = Registrations(nullptr, RIDEV_REMOVE);
-    RegisterOwnedRawInputDevices(
+    register_raw_input_devices_(
         registrations.data(),
         static_cast<UINT>(registrations.size()),
         sizeof(RAWINPUTDEVICE));

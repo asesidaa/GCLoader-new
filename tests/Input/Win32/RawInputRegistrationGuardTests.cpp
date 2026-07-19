@@ -167,7 +167,42 @@ int main()
                 external);
         }
     }
-    const auto* mouse = FindUsage(observed, 0x02);
+
+    std::array<RAWINPUTDEVICE, kProtectedUsages.size()> external_removals{};
+    for (std::size_t index = 0; index < external_removals.size(); ++index)
+    {
+        external_removals[index] = RAWINPUTDEVICE{
+            .usUsagePage = 0x01,
+            .usUsage = kProtectedUsages[index],
+            .dwFlags = RIDEV_REMOVE,
+            .hwndTarget = nullptr,
+        };
+    }
+    if (!RegisterRawInputDevices(
+            external_removals.data(),
+            static_cast<UINT>(external_removals.size()),
+            sizeof(RAWINPUTDEVICE)))
+    {
+        return Fail(
+            "Filtered external removal did not report success",
+            owned,
+            external);
+    }
+
+    const auto after_external_removal = Registrations();
+    for (const USHORT usage : kProtectedUsages)
+    {
+        const auto* registration = FindUsage(after_external_removal, usage);
+        if (registration == nullptr || registration->hwndTarget != owned)
+        {
+            return Fail(
+                "An external caller removed a protected registration",
+                owned,
+                external);
+        }
+    }
+
+    const auto* mouse = FindUsage(after_external_removal, 0x02);
     if (mouse == nullptr || mouse->hwndTarget != external)
     {
         return Fail(

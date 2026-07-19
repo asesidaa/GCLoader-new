@@ -167,7 +167,7 @@ std::expected<void, std::string> InstallRawInputRegistrationGuard()
     return {};
 }
 
-BOOL RegisterOwnedRawInputDevices(
+BOOL WINAPI RegisterOwnedRawInputDevices(
     PCRAWINPUTDEVICE devices,
     UINT device_count,
     UINT device_size) noexcept

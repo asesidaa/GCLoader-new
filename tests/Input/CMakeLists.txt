@@ -12,7 +12,7 @@ add_test(NAME Win32InputWindowTests COMMAND Win32InputWindowTests)
 
 add_executable(RawInputRegistrationGuardTests
         Win32/RawInputRegistrationGuardTests.cpp)
-target_link_libraries(RawInputRegistrationGuardTests PRIVATE gc_input_win32)
+target_link_libraries(RawInputRegistrationGuardTests PRIVATE gc_input)
 add_test(NAME RawInputRegistrationGuardTests
         COMMAND RawInputRegistrationGuardTests)
 
@@ -53,6 +53,12 @@ set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
         TIMEOUT 5
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
+
+add_test(
+        NAME InputRegisterReadContractTests
+        COMMAND ${CMAKE_COMMAND}
+                -DIDMAC_DRIVER_SOURCE=${PROJECT_SOURCE_DIR}/src/Driver/iDmac/iDmacDrv32.cpp
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/InputRegisterReadContractTests.cmake)
 
 add_executable(InputWorkerWaitTests
         Polling/InputWorkerWaitTests.cpp)

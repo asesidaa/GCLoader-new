@@ -20,7 +20,7 @@
 - Use exactly one latency-sensitive gameplay input worker. RFID/card-read keeps its existing separate 100 ms `GetAsyncKeyState` worker.
 - Create one hidden, unshown top-level Win32 `WS_POPUP` window with `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE` on the gameplay worker. It must not be a message-only window and must not be the GameWare window.
 - Register Generic Desktop keyboard `0x01/0x06`, gamepad `0x01/0x05`, joystick `0x01/0x04`, and multi-axis `0x01/0x08` with `RIDEV_INPUTSINK | RIDEV_DEVNOTIFY`.
-- Never use `RIDEV_NOLEGACY`, `RIDEV_NOHOTKEYS`, subclassing, input-buffer clearing, or keyboard API hooks. The game's native input path remains untouched in this phase.
+- Never use `RIDEV_NOLEGACY`, `RIDEV_NOHOTKEYS`, subclassing, input-buffer clearing, or keyboard-state API hooks. Because Raw Input ownership is process-global, the gameplay runtime may guard `RegisterRawInputDevices` for its four owned usages; owned calls bypass through the trampoline, unprotected usages pass through, and ConfigGUI does not install the guard.
 - Persist keyboard identity as Raw Input make code plus `None`, `E0`, or `E1`; labels are layout-aware presentation only.
 - Accept a matching `PhysicalKey` from any attached keyboard; do not persist or filter by keyboard device handle.
 - Persist one exact controller identity. XInput identity is backend plus slot `0..3`; Raw HID identity is backend plus exact `RIDI_DEVICENAME`. Never fall back to another slot, index, or path.
@@ -52,6 +52,7 @@
 | `src/Config/config.h/.cpp`, `config.toml` | Final schema-v2 root contract, `ConfigManager`, strict old-schema rejection, and shipped template. |
 | `src/Input/Win32/PhysicalKeyWin32.h/.cpp` | `RAWKEYBOARD` decoding, layout-aware labels, and RFID virtual-key conversion. |
 | `src/Input/Win32/Win32InputWindow.h/.cpp` | Worker-owned hidden top-level window, four Raw Input registrations, verification, and teardown. |
+| `src/Input/Win32/RawInputRegistrationGuard.h/.cpp` | Runtime-only ownership guard for the four process-global Raw Input usages; compiled into `gc_input`, not the shared ConfigGUI backend. |
 | `src/Input/Win32/RawInputPacket.h/.cpp` | Reusable `GetRawInputData` buffer, header/size/type checks, and safe `RAWHID::dwCount` iteration. |
 | `src/Input/Win32/ControllerCatalog.h/.cpp` | Exact Raw HID discovery, metadata, `IG_` exclusion, and exact path matching. |
 | `src/Input/Win32/HidApi.h/.cpp` | Narrow production/fake function table around `HidP_*` and `HidD_*`. |

@@ -120,6 +120,9 @@ The native input runtime is divided into focused components:
   synchronization, the worker, the stop event, and the published atomic word.
 - `Win32InputWindow` registers a private window class, creates the hidden
   top-level window, registers Raw Input, and dispatches window messages.
+- `RawInputRegistrationGuard` preserves the worker's four process-global Raw
+  Input usage registrations when another in-process component tries to replace
+  or remove them.
 - `RawKeyboardSource` decodes `RAWKEYBOARD` make/break transitions into
   `PhysicalKey` state.
 - `RawHidSource` enumerates the selected HID controller, caches its
@@ -152,6 +155,16 @@ Registration uses `RIDEV_INPUTSINK | RIDEV_DEVNOTIFY`. It must not use
 visible to the game. Startup logs the requested and effective registrations
 using `GetRegisteredRawInputDevices` so a missing or overwritten registration
 is diagnosable.
+
+Raw Input permits only one target window per usage in a process. Runtime
+testing showed that the game replaces these four registrations after the
+worker starts. The gameplay runtime therefore installs a process-lifetime
+`RegisterRawInputDevices` guard before creating the hidden window. Calls made
+by `Win32InputWindow` use the hook trampoline; external replacement/removal
+requests for the four owned usages report success without changing ownership.
+Unprotected usages, including the mouse, pass through unchanged. ConfigGUI is
+a separate process and does not install this guard. This is deliberately not a
+hook of `GetAsyncKeyState`, DirectInput, or another keyboard-state API.
 
 The normal, unbuffered `WM_INPUT` path calls `GetRawInputData` for each message.
 This avoids the documented/example x86-on-x64 alignment complexity of
@@ -478,6 +491,7 @@ One-time and transition diagnostics include:
 - Worker thread ID and priority result.
 - Hidden window handle and owner thread.
 - Requested/effective Raw Input registrations and flags.
+- Registration-guard activation and blocked external ownership attempts.
 - Configured input mode, poll rate, thresholds, and Test scan-code label.
 - Selected backend and exact identity.
 - Raw HID path, product name, VID/PID, top-level usage, report sizes, and
@@ -496,8 +510,10 @@ Remove SDL from `cmake/Dependencies.cmake` and from every target include/link
 list. In particular:
 
 - `gc_config` uses native input configuration types and no SDL parser/header.
-- `gc_input` links the required Windows Raw Input/HID/XInput libraries or
-  loads XInput dynamically.
+- `gc_input_win32` contains the shared HID/USER32 backend and does not depend
+  on logging or hook infrastructure.
+- `gc_input` owns the runtime-only registration guard and links SafetyHook;
+  XInput remains dynamically loaded from the system directory.
 - `ConfigGUI` links Win32, D3D11, DXGI, and the ImGui Win32/DX11 backends.
 - `iDmacDrv32` no longer links SDL directly.
 - `gc_audio` loses only its unused SDL include/link entries; audio source code
@@ -545,6 +561,9 @@ graph, DLL, and ConfigGUI must contain no SDL dependency after the migration.
 - Extend the startup test to create/find the GameWare test window, start one
   gameplay worker, verify its private window/registrations, and close cleanly.
 - Verify repeated opens reuse the worker and final close joins it.
+- Install the real USER32 guard, prove external calls cannot replace or remove
+  the four protected usage registrations, and prove an unprotected mouse
+  registration still passes through.
 - Verify foreground mismatch publishes zero.
 - Verify ConfigGUI device selection and binding capture operate on the shared
   model and save/reload the same identity/control descriptors.
