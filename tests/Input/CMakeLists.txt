@@ -18,6 +18,10 @@ add_executable(ControllerCatalogTests Win32/ControllerCatalogTests.cpp)
 target_link_libraries(ControllerCatalogTests PRIVATE gc_input_win32)
 add_test(NAME ControllerCatalogTests COMMAND ControllerCatalogTests)
 
+add_executable(RawHidControllerTests Win32/RawHidControllerTests.cpp)
+target_link_libraries(RawHidControllerTests PRIVATE gc_input_win32)
+add_test(NAME RawHidControllerTests COMMAND RawHidControllerTests)
+
 add_executable(InputSnapshotStateTests Polling/InputSnapshotStateTests.cpp)
 target_link_libraries(InputSnapshotStateTests PRIVATE gc_input)
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)
