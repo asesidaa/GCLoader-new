@@ -2,6 +2,14 @@
 
 Date: 2026-07-18
 
+> Timing-domain correction notice (2026-07-19): the complete-task
+> News/Notice gates, IFBL loop scaling, player-position decrement gate,
+> authored gameplay-effect handling, and shared authored-clock choice in this
+> document are superseded by
+> `2026-07-19-complete-high-fps-timing-fix-design.md`. Configuration,
+> external-cap validation, transactionality, and explicitly retained paths
+> remain authoritative.
+
 ## Context
 
 GCLoader currently contains an opt-in runtime patch specialized for 120 FPS.
