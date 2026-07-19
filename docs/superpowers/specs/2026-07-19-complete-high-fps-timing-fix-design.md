@@ -113,7 +113,8 @@ It fixes each proven regression with the smallest binary surface.
 |---|---|---|
 | Absolute elapsed time | `CAppTimer` delta, IFBL float waits, integer ms timestamps | Run every native update; never scale seconds or milliseconds |
 | Target simulation frame | `Tune+0x10`, chart-derived frames, native render counters | Advance every target update and use `1000 / target_fps` or `1 / target_fps` |
-| Native-tick duration | IFBL integer waits, menu repeat thresholds, countdowns | Scale initialization/limit with `ScaleDurationFrames`, then update every native frame |
+| Native-tick duration | IFBL integer waits greater than 1, menu repeat thresholds, countdowns | Scale initialization/limit with `ScaleDurationFrames`, then update every native frame |
+| Cooperative poll yield | IFBL integer wait 0 or 1 before a polling-loop back-edge | Preserve exactly so timer, input, and status callbacks remain native-rate |
 | Authored asset frame | MovieClip, effect `+0x08`, `*_clip.dat` index | Advance at authored cadence or map the final target count with `MapToAuthored60` |
 | Authored cadence | period-4/5/6/8/16 effect predicates | Evaluate only on mapped authored-frame boundaries |
 | Control-flow cardinality | IFBL loop push/decrement | Preserve the descriptor count exactly |
@@ -237,10 +238,13 @@ path that can reinstall them.
 - `CNoticeTask` and `CNewsTask` execute on every native update.
 - IFBL type `0x10` float waits continue subtracting the current global delta on
   every task update.
-- IFBL type `0x11` integer waits retain the hook at `0x006309D4` and scale only
-  positive descriptor values.
+- IFBL type `0x11` integer waits retain the hook at `0x006309D4`. Values 0 and
+  1 remain unchanged; only values greater than 1 are duration-scaled.
 - IFBL type `0x17`/`0x18` loop counts and decrements remain original.
-- One-update callback retry/yield values remain one native update.
+- One-update callback retry/yield values remain one native update. The complete
+  static audit in E-033 proves all 22 value-1 descriptors are polling-loop
+  yields, while the only two positive values above 1 are authored 15-frame
+  pauses.
 - MovieClip ordinary advance at `0x004DF940` retains the authored tick and the
   goto-depth bypass.
 - Stage-BGM pre-state increment at `0x0061001A` retains the authored tick; the

@@ -21,7 +21,7 @@
 - Keep `Tune+0x10`, chart frames, native counters, input sampling, and sequence tasks at the configured target cadence.
 - Scale only positive native-tick durations with checked round-half-up `value * target_fps / 60`; preserve zero and negative signed sentinels bit-for-bit.
 - Preserve MovieClip, gameplay-effect, countdown, player-position, stage-clip, and other authored asset indices at 60 frames per second.
-- Preserve IFBL type `0x17`/`0x18` loop cardinality exactly; only type `0x11` integer waits are duration-scaled.
+- Preserve IFBL type `0x17`/`0x18` loop cardinality exactly. For type `0x11`, preserve polling yields 0/1 and duration-scale only values greater than 1.
 - Never reinstall complete-task `NewsUpdate` or `NoticeUpdate` gates, `IfblLoop` scaling, or `PlayerPositionCountdown` gating.
 - Replace the QPC-authored accumulator with deterministic rational phase. QPC remains required for the external-cap monitor and five-second statistics cadence.
 - Do not patch the shared `60.0F` object or globally revert `Tune+0x18`, `0x006F4604`, or `0x006FC280`.
@@ -1014,7 +1014,7 @@ Use this retained-site checklist during the edit; none of these instructions/dat
 | Absolute EA | RVA | Retained policy |
 |---:|---:|---|
 | `0x004DF940` | `0x000DF940` | Gate ordinary MovieClip advance with deterministic authored phase; preserve goto-depth bypass. |
-| `0x006309D4` | `0x002309D4` | Scale only positive IFBL type-`0x11` integer wait stores. |
+| `0x006309D4` | `0x002309D4` | Preserve IFBL type-`0x11` polling yields 0/1; scale only values greater than 1. |
 | `0x0061001A` | `0x0021001A` | Gate only the pre-`0x12` stage-BGM increment. |
 | `0x00644054` | `0x00244054` | Map only the final stage clip-mask frame index to authored 60. |
 | `0x0064BC69` | `0x0024BC69` | Preserve target-frame-to-current-ms multiplication. |

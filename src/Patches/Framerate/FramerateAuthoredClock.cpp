@@ -115,6 +115,16 @@ ScalePositiveDuration(
 }
 
 std::expected<std::uint32_t, FramerateProfileError>
+ScaleIfblIntegerWait(
+    const FramerateProfile& profile,
+    std::uint32_t raw_value) noexcept {
+    if (raw_value <= 1U) {
+        return raw_value;
+    }
+    return ScalePositiveDuration(profile, raw_value);
+}
+
+std::expected<std::uint32_t, FramerateProfileError>
 MapPlayerPositionElapsedToAuthored60(
     const FramerateProfile& profile,
     std::uint32_t raw_total,

@@ -70,6 +70,11 @@ int main() {
     {
         const auto profile = FramerateProfile::Create(240).value();
         failures += Expect(
+            ScaleIfblIntegerWait(profile, 0).value() == 0 &&
+                ScaleIfblIntegerWait(profile, 1).value() == 1 &&
+                ScaleIfblIntegerWait(profile, 15).value() == 60,
+            "IFBL polling yields remain native and authored waits scale");
+        failures += Expect(
             MapPlayerPositionElapsedToAuthored60(
                 profile, 120, 480).value() == 0,
             "player position starts at authored frame zero");
