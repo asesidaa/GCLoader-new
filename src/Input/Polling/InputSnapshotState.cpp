@@ -61,10 +61,9 @@ void InputSnapshotState::ClearKeyboard() noexcept
     sources_[index(InputSource::Keyboard)].fill(false);
 }
 
-void InputSnapshotState::ClearGamepad() noexcept
+void InputSnapshotState::ClearController() noexcept
 {
-    sources_[index(InputSource::GamepadButton)].fill(false);
-    sources_[index(InputSource::GamepadAxis)].fill(false);
+    sources_[index(InputSource::Controller)].fill(false);
 }
 
 std::uint32_t InputSnapshotState::Compose(GameplaySource source) const noexcept
@@ -84,8 +83,7 @@ std::uint32_t InputSnapshotState::Compose(GameplaySource source) const noexcept
         else
         {
             pressed =
-                sources_[index(InputSource::GamepadButton)][logical_index] ||
-                sources_[index(InputSource::GamepadAxis)][logical_index];
+                sources_[index(InputSource::Controller)][logical_index];
         }
 
         if (pressed)

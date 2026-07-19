@@ -65,7 +65,7 @@ int main()
         InputSnapshotState state;
         state.Set(logical, InputSource::Keyboard, true);
         failures += expect_word(
-            state.Compose(GameplaySource::Gamepad),
+            state.Compose(GameplaySource::Controller),
             fast_io,
             "system input to FastIO");
     }
@@ -89,49 +89,41 @@ int main()
     InputSnapshotState combined;
     combined.Set(
         LogicalInput::LeftBoosterLeft,
-        InputSource::GamepadButton,
+        InputSource::Controller,
         true);
-    combined.Set(
-        LogicalInput::LeftBoosterLeft,
-        InputSource::GamepadAxis,
-        true);
-    combined.Set(
-        LogicalInput::LeftBoosterLeft,
-        InputSource::GamepadButton,
-        false);
     failures += expect_word(
-        combined.Compose(GameplaySource::Gamepad),
+        combined.Compose(GameplaySource::Controller),
         FastIoBits::P1_DOWN,
-        "axis survives button release");
+        "controller gameplay source composes");
     combined.Set(
         LogicalInput::LeftBoosterLeft,
-        InputSource::GamepadAxis,
+        InputSource::Controller,
         false);
     failures += expect_word(
-        combined.Compose(GameplaySource::Gamepad),
+        combined.Compose(GameplaySource::Controller),
         0,
-        "direction clears after both gamepad sources release");
+        "controller direction clears");
 
     combined.Set(
         LogicalInput::RightBoosterButton,
-        InputSource::GamepadButton,
+        InputSource::Controller,
         true);
-    combined.ClearGamepad();
+    combined.ClearController();
     failures += expect_word(
-        combined.Compose(GameplaySource::Gamepad),
+        combined.Compose(GameplaySource::Controller),
         0,
-        "gamepad disconnect clears gamepad sources");
+        "controller disconnect clears controller source");
 
     InputSnapshotState system_keys;
     system_keys.Set(LogicalInput::Test, InputSource::Keyboard, true);
     system_keys.Set(LogicalInput::P2Start, InputSource::Keyboard, true);
     failures += expect_word(
-        system_keys.Compose(GameplaySource::Gamepad),
+        system_keys.Compose(GameplaySource::Controller),
         FastIoBits::TEST_MODE | FastIoBits::P2_START,
         "system keyboard works in gamepad mode");
     system_keys.ClearKeyboard();
     failures += expect_word(
-        system_keys.Compose(GameplaySource::Gamepad),
+        system_keys.Compose(GameplaySource::Controller),
         0,
         "focus loss clears keyboard sources");
 

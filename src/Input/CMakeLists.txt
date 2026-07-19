@@ -1,6 +1,8 @@
 add_library(gc_input_win32 STATIC
+        Win32/ControllerBindingEvaluator.cpp
         Win32/ControllerCatalog.cpp
         Win32/HidApi.cpp
+        Win32/InputCapture.cpp
         Win32/PhysicalKeyWin32.cpp
         Win32/RawInputPacket.cpp
         Win32/RawHidController.cpp
@@ -19,6 +21,7 @@ target_link_libraries(gc_input_win32 PUBLIC
 
 add_library(gc_input STATIC
         Polling/InputManager.cpp
+        Polling/InputMapper.cpp
         Polling/InputPollingRuntime.cpp
         Polling/InputSnapshotState.cpp
         Switch/SwitchInputPatch.cpp
@@ -31,6 +34,7 @@ target_include_directories(gc_input PUBLIC
 )
 target_link_libraries(gc_input PUBLIC
         gc_config
+        gc_input_win32
         SDL3-static
         ntdll
         safetyhook::safetyhook

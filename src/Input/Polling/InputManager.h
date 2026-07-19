@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <cstdint>
 
 #include "Input/Polling/InputSnapshotState.h"
@@ -21,12 +22,20 @@ public:
     void ReinitializeGamepad();
 
 private:
+    static constexpr std::size_t kGameplayInputCount =
+        static_cast<std::size_t>(
+            gc::input::LogicalInput::RightBoosterButton) + 1;
+
     void LoadConfig();
     void OpenGamepad(SDL_JoystickID instance_id);
     void CloseGamepad();
     void UpdateAxisState(SDL_GamepadAxis axis, Sint16 value);
     void UpdateButtonState(SDL_GamepadButton button, bool pressed);
     void UpdateKeyState(SDL_Keycode key, bool pressed);
+    void UpdateControllerState(
+        gc::input::LogicalInput input,
+        bool button_source,
+        bool pressed) noexcept;
 
     SDL_Keycode keyP1Up = SDLK_UNKNOWN;
     SDL_Keycode keyP1Down = SDLK_UNKNOWN;
@@ -68,4 +77,6 @@ private:
     SDL_Gamepad* m_gamepad = nullptr;
     SDL_JoystickID m_gamepadInstanceId = 0;
     gc::input::InputSnapshotState m_snapshotState;
+    std::array<bool, kGameplayInputCount> m_gamepadButtonStates{};
+    std::array<bool, kGameplayInputCount> m_gamepadAxisStates{};
 };

@@ -26,6 +26,14 @@ add_executable(XInputControllerTests Win32/XInputControllerTests.cpp)
 target_link_libraries(XInputControllerTests PRIVATE gc_input_win32)
 add_test(NAME XInputControllerTests COMMAND XInputControllerTests)
 
+add_executable(InputMapperTests Polling/InputMapperTests.cpp)
+target_link_libraries(InputMapperTests PRIVATE gc_input gc_input_win32)
+add_test(NAME InputMapperTests COMMAND InputMapperTests)
+
+add_executable(InputCaptureTests Win32/InputCaptureTests.cpp)
+target_link_libraries(InputCaptureTests PRIVATE gc_input_win32)
+add_test(NAME InputCaptureTests COMMAND InputCaptureTests)
+
 add_executable(InputSnapshotStateTests Polling/InputSnapshotStateTests.cpp)
 target_link_libraries(InputSnapshotStateTests PRIVATE gc_input)
 add_test(NAME InputSnapshotStateTests COMMAND InputSnapshotStateTests)

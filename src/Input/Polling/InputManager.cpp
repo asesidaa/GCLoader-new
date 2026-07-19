@@ -103,7 +103,9 @@ void InputManager::OpenGamepad(SDL_JoystickID instance_id)
     const char* name = SDL_GetGamepadName(m_gamepad);
     PLOG_INFO << "Opened gamepad: " << (name != nullptr ? name : "Unknown")
               << " (instance ID " << instance_id << ")";
-    m_snapshotState.ClearGamepad();
+    m_gamepadButtonStates.fill(false);
+    m_gamepadAxisStates.fill(false);
+    m_snapshotState.ClearController();
 }
 
 void InputManager::CloseGamepad()
@@ -119,7 +121,9 @@ void InputManager::CloseGamepad()
         m_gamepadInstanceId = 0;
     }
 
-    m_snapshotState.ClearGamepad();
+    m_gamepadButtonStates.fill(false);
+    m_gamepadAxisStates.fill(false);
+    m_snapshotState.ClearController();
 }
 
 void InputManager::ReinitializeGamepad()
@@ -361,47 +365,45 @@ void InputManager::UpdateButtonState(
     }
 
     using enum gc::input::LogicalInput;
-    constexpr auto source = gc::input::InputSource::GamepadButton;
-
     if (button == gpButtonP1Up)
     {
-        m_snapshotState.Set(LeftBoosterUp, source, pressed);
+        UpdateControllerState(LeftBoosterUp, true, pressed);
     }
-    else if (button == gpButtonP2Up)
+    if (button == gpButtonP2Up)
     {
-        m_snapshotState.Set(LeftBoosterDown, source, pressed);
+        UpdateControllerState(LeftBoosterDown, true, pressed);
     }
-    else if (button == gpButtonP1Down)
+    if (button == gpButtonP1Down)
     {
-        m_snapshotState.Set(LeftBoosterLeft, source, pressed);
+        UpdateControllerState(LeftBoosterLeft, true, pressed);
     }
-    else if (button == gpButtonP2Down)
+    if (button == gpButtonP2Down)
     {
-        m_snapshotState.Set(LeftBoosterRight, source, pressed);
+        UpdateControllerState(LeftBoosterRight, true, pressed);
     }
-    else if (button == gpButtonP1Button1)
+    if (button == gpButtonP1Button1)
     {
-        m_snapshotState.Set(LeftBoosterButton, source, pressed);
+        UpdateControllerState(LeftBoosterButton, true, pressed);
     }
-    else if (button == gpButtonP1Left)
+    if (button == gpButtonP1Left)
     {
-        m_snapshotState.Set(RightBoosterUp, source, pressed);
+        UpdateControllerState(RightBoosterUp, true, pressed);
     }
-    else if (button == gpButtonP2Left)
+    if (button == gpButtonP2Left)
     {
-        m_snapshotState.Set(RightBoosterDown, source, pressed);
+        UpdateControllerState(RightBoosterDown, true, pressed);
     }
-    else if (button == gpButtonP1Right)
+    if (button == gpButtonP1Right)
     {
-        m_snapshotState.Set(RightBoosterLeft, source, pressed);
+        UpdateControllerState(RightBoosterLeft, true, pressed);
     }
-    else if (button == gpButtonP2Right)
+    if (button == gpButtonP2Right)
     {
-        m_snapshotState.Set(RightBoosterRight, source, pressed);
+        UpdateControllerState(RightBoosterRight, true, pressed);
     }
-    else if (button == gpButtonP2Button1)
+    if (button == gpButtonP2Button1)
     {
-        m_snapshotState.Set(RightBoosterButton, source, pressed);
+        UpdateControllerState(RightBoosterButton, true, pressed);
     }
 }
 
@@ -413,36 +415,55 @@ void InputManager::UpdateAxisState(SDL_GamepadAxis axis, Sint16 value)
     }
 
     using enum gc::input::LogicalInput;
-    constexpr auto source = gc::input::InputSource::GamepadAxis;
     const bool negative = value < -m_axisThreshold;
     const bool positive = value > m_axisThreshold;
 
     if (axis == gpAxisP1Vertical)
     {
-        m_snapshotState.Set(LeftBoosterUp, source, negative);
-        m_snapshotState.Set(LeftBoosterDown, source, positive);
+        UpdateControllerState(LeftBoosterUp, false, negative);
+        UpdateControllerState(LeftBoosterDown, false, positive);
     }
     else if (axis == gpAxisP1Horizontal)
     {
-        m_snapshotState.Set(LeftBoosterLeft, source, negative);
-        m_snapshotState.Set(LeftBoosterRight, source, positive);
+        UpdateControllerState(LeftBoosterLeft, false, negative);
+        UpdateControllerState(LeftBoosterRight, false, positive);
     }
     else if (axis == gpAxisP2Vertical)
     {
-        m_snapshotState.Set(RightBoosterUp, source, negative);
-        m_snapshotState.Set(RightBoosterDown, source, positive);
+        UpdateControllerState(RightBoosterUp, false, negative);
+        UpdateControllerState(RightBoosterDown, false, positive);
     }
     else if (axis == gpAxisP2Horizontal)
     {
-        m_snapshotState.Set(RightBoosterLeft, source, negative);
-        m_snapshotState.Set(RightBoosterRight, source, positive);
+        UpdateControllerState(RightBoosterLeft, false, negative);
+        UpdateControllerState(RightBoosterRight, false, positive);
     }
+}
+
+void InputManager::UpdateControllerState(
+    gc::input::LogicalInput input,
+    bool button_source,
+    bool pressed) noexcept
+{
+    const auto index = static_cast<std::size_t>(input);
+    if (index >= m_gamepadButtonStates.size())
+    {
+        return;
+    }
+    auto& source = button_source
+        ? m_gamepadButtonStates
+        : m_gamepadAxisStates;
+    source[index] = pressed;
+    m_snapshotState.Set(
+        input,
+        gc::input::InputSource::Controller,
+        m_gamepadButtonStates[index] || m_gamepadAxisStates[index]);
 }
 
 std::uint32_t InputManager::GetInput() const noexcept
 {
     const auto gameplay_source = m_inputMode == InputMode::Keyboard
         ? gc::input::GameplaySource::Keyboard
-        : gc::input::GameplaySource::Gamepad;
+        : gc::input::GameplaySource::Controller;
     return m_snapshotState.Compose(gameplay_source);
 }

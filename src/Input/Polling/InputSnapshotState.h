@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Input/Types/InputTypes.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -26,44 +28,24 @@ inline constexpr std::uint32_t P2_BUTTON_1 = 1u << 17;
 inline constexpr std::uint32_t P2_SERVICE = 1u << 2;
 }
 
-enum class LogicalInput : std::uint8_t {
-    LeftBoosterUp,
-    LeftBoosterDown,
-    LeftBoosterLeft,
-    LeftBoosterRight,
-    LeftBoosterButton,
-    RightBoosterUp,
-    RightBoosterDown,
-    RightBoosterLeft,
-    RightBoosterRight,
-    RightBoosterButton,
-    Service1,
-    Service2,
-    Service3,
-    P1Start,
-    P2Start,
-    P2Service,
-    Test,
-    Count
-};
+using LogicalInput = LogicalAction;
 
 enum class InputSource : std::uint8_t {
     Keyboard,
-    GamepadButton,
-    GamepadAxis,
+    Controller,
     Count
 };
 
 enum class GameplaySource : std::uint8_t {
     Keyboard,
-    Gamepad
+    Controller
 };
 
 class InputSnapshotState {
 public:
     void Set(LogicalInput input, InputSource source, bool pressed) noexcept;
     void ClearKeyboard() noexcept;
-    void ClearGamepad() noexcept;
+    void ClearController() noexcept;
     std::uint32_t Compose(GameplaySource source) const noexcept;
 
 private:
