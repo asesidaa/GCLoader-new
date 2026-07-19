@@ -98,12 +98,16 @@ const auto native_profile = FramerateProfile::Create(60).value();
 const auto native_plan = BuildFramerateDirectPatchPlan(
     kFakeBase, native_profile, kFakeTargetOperand).value();
 failures += Expect(native_plan.count == 0, "60 has no timing writes");
+failures += Expect(
+    native_plan.menu_repeat_initial == 16 &&
+        native_plan.menu_repeat_interval == 3,
+    "native plan exposes original menu values without writes");
 
 for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U, 500U}) {
     const auto profile = FramerateProfile::Create(target).value();
     const auto plan = BuildFramerateDirectPatchPlan(
         kFakeBase, profile, kFakeTargetOperand).value();
-    failures += Expect(plan.count == 15, "high target has 15 direct writes");
+    failures += Expect(plan.count == 17, "high target has 17 direct writes");
     failures += Expect(
         ReadFloatReplacement(plan, 0x002FC0A0) ==
             profile.frame_milliseconds(),
@@ -144,6 +148,22 @@ for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U, 500U}) {
             static_cast<std::uint32_t>(
                 profile.ScaleDurationFrames(8).value()),
         "native keyboard repeat next duration");
+    failures += Expect(
+        ReadInstructionImmediate(plan, 0x00382CE8, 0) ==
+            static_cast<std::uint32_t>(
+                profile.ScaleDurationFrames(16).value()),
+        "non-song initial repeat duration");
+    failures += Expect(
+        ReadInstructionImmediate(plan, 0x00382CEC, 0) ==
+            static_cast<std::uint32_t>(
+                profile.ScaleDurationFrames(3).value()),
+        "non-song repeat interval");
+    failures += Expect(
+        plan.menu_repeat_initial ==
+                profile.ScaleDurationFrames(16).value() &&
+            plan.menu_repeat_interval ==
+                profile.ScaleDurationFrames(3).value(),
+        "plan exposes menu values for startup diagnostics");
     failures += Expect(
         ReadInstructionImmediate(plan, 0x002645EE, 6) ==
             profile.two_second_frames(),
@@ -206,11 +226,11 @@ const auto plan61 = BuildFramerateDirectPatchPlan(
     FramerateProfile::Create(61).value(),
     kFakeTargetOperand).value();
 failures += Expect(
-    plan61.count == 15 &&
+    plan61.count == 17 &&
         ReadInstructionImmediate(plan61, 0x002645EE, 6) == 122,
     "61 boundary uses transformed plan");
 
-const std::array<std::pair<std::uintptr_t, BytePattern>, 15>
+const std::array<std::pair<std::uintptr_t, BytePattern>, 17>
     expected_writes{{
         {0x002FC0A0, Pattern({0x55, 0x55, 0x85, 0x41})},
         {0x002F4604, Pattern({0x55, 0x55, 0x85, 0x41})},
@@ -229,6 +249,8 @@ const std::array<std::pair<std::uintptr_t, BytePattern>, 15>
         {0x0022BACF, Pattern({0xD8, 0x2D, 0xAC, 0xBB, 0x6F, 0x00})},
         {0x0022BAD5, Pattern({0xD8, 0x35, 0xAC, 0xBB, 0x6F, 0x00})},
         {0x00262CB6, Pattern({0xD8, 0x0D, 0xAC, 0xBB, 0x6F, 0x00})},
+        {0x00382CE8, Pattern({0x10, 0x00, 0x00, 0x00})},
+        {0x00382CEC, Pattern({0x03, 0x00, 0x00, 0x00})},
     }};
 for (const auto& [rva, expected] : expected_writes) {
     const auto* write = FindWrite(plan120, rva);
@@ -236,6 +258,31 @@ for (const auto& [rva, expected] : expected_writes) {
         write != nullptr && write->expected == expected &&
             write->expected.size == write->replacement.size,
         "exact direct-write source contract");
+}
+
+struct MenuCase {
+    std::uint32_t target;
+    std::uint32_t initial;
+    std::uint32_t interval;
+};
+constexpr std::array menu_cases{
+    MenuCase{61, 16, 3},
+    MenuCase{120, 32, 6},
+    MenuCase{144, 38, 7},
+    MenuCase{165, 44, 8},
+    MenuCase{240, 64, 12},
+    MenuCase{360, 96, 18},
+    MenuCase{500, 133, 25},
+};
+for (const auto& item : menu_cases) {
+    const auto plan = BuildFramerateDirectPatchPlan(
+        kFakeBase,
+        FramerateProfile::Create(item.target).value(),
+        kFakeTargetOperand).value();
+    failures += Expect(
+        ReadInstructionImmediate(plan, 0x00382CE8, 0) == item.initial &&
+            ReadInstructionImmediate(plan, 0x00382CEC, 0) == item.interval,
+        "exact non-song repeat replacements");
 }
 
 const auto native_hooks = FramerateHookContracts(false);

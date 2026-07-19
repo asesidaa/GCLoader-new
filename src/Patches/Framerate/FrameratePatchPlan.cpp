@@ -171,10 +171,13 @@ BuildFramerateDirectPatchPlan(
 
     const auto repeat_initial = profile.ScaleDurationFrames(16);
     const auto repeat_next = profile.ScaleDurationFrames(8);
-    if (!repeat_initial || !repeat_next) {
+    const auto menu_repeat_interval = profile.ScaleDurationFrames(3);
+    if (!repeat_initial || !repeat_next || !menu_repeat_interval) {
         return std::unexpected(
             FrameratePatchPlanError::ProfileConversion);
     }
+    plan.menu_repeat_initial = repeat_initial.value();
+    plan.menu_repeat_interval = menu_repeat_interval.value();
 
     const auto frame_ms = ValuePattern(
         std::bit_cast<std::uint32_t>(profile.frame_milliseconds()));
@@ -275,7 +278,19 @@ BuildFramerateDirectPatchPlan(
             plan, executable_base, 0x00262CB6,
             Pattern(0xD8, 0x0D, 0xAC, 0xBB, 0x6F, 0x00),
             InstructionPattern({0xD8, 0x0D}, target_operand),
-            "chart seconds-to-frames operand");
+            "chart seconds-to-frames operand") &&
+        AddWrite(
+            plan, executable_base, 0x00382CE8,
+            ValuePattern(16U),
+            ValuePattern(static_cast<std::uint32_t>(
+                plan.menu_repeat_initial)),
+            "non-song menu repeat initial duration") &&
+        AddWrite(
+            plan, executable_base, 0x00382CEC,
+            ValuePattern(3U),
+            ValuePattern(static_cast<std::uint32_t>(
+                plan.menu_repeat_interval)),
+            "non-song menu repeat interval");
 
     if (!complete || plan.count != plan.writes.size()) {
         return std::unexpected(FrameratePatchPlanError::Capacity);

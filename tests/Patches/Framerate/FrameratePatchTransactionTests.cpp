@@ -29,7 +29,7 @@ BytePattern Pattern(std::initializer_list<std::uint8_t> values) {
 }
 
 struct FakeMemory {
-    std::array<std::byte, 128> bytes{};
+    std::array<std::byte, 1024> bytes{};
     bool fail_read{};
     int fail_write_call{-1};
     int write_calls{};
@@ -92,30 +92,40 @@ void ResetFakeHook(void* opaque) noexcept {
 
 struct Fixture {
     FakeMemory memory{};
-    std::array<std::byte, 128> original_bytes{};
+    std::array<std::byte, 1024> original_bytes{};
     FakeHook hook_state{};
-    std::array<FakeHookContext, 4> hook_contexts{};
-    std::array<CheckedWrite, 3> writes{};
-    std::array<HookOperation, 4> hooks{};
+    std::array<FakeHookContext, kMaximumFramerateHooks> hook_contexts{};
+    std::array<CheckedWrite, kMaximumFramerateWrites> writes{};
+    std::array<HookOperation, kMaximumFramerateHooks> hooks{};
 
     Fixture() {
-        writes = {
-            CheckedWrite{8, Pattern({0x01, 0x02}), Pattern({0xA1, 0xA2}), "write0"},
-            CheckedWrite{16, Pattern({0x03, 0x04}), Pattern({0xA3, 0xA4}), "write1"},
-            CheckedWrite{24, Pattern({0x05, 0x06}), Pattern({0xA5, 0xA6}), "write2"},
-        };
-        for (const auto& write : writes) {
-            std::copy(
-                write.expected.view().begin(),
-                write.expected.view().end(),
-                memory.bytes.begin() + write.address);
+        for (std::size_t index = 0; index < writes.size(); ++index) {
+            const auto address =
+                static_cast<std::uintptr_t>(16 + index * 4);
+            const auto expected = Pattern({
+                static_cast<std::uint8_t>(0x10 + index)});
+            const auto replacement = Pattern({
+                static_cast<std::uint8_t>(0x80 + index)});
+            const char* name = "fake write";
+            if (index == 15) {
+                name = "non-song menu repeat initial duration";
+            } else if (index == 16) {
+                name = "non-song menu repeat interval";
+            }
+            writes[index] = {
+                .address = address,
+                .expected = expected,
+                .replacement = replacement,
+                .name = name,
+            };
+            memory.bytes[address] = expected.bytes[0];
         }
 
         for (std::size_t index = 0; index < hooks.size(); ++index) {
-            const auto address = 40 + index * 8;
-            BytePattern expected{};
-            expected.size = 1;
-            expected.bytes[0] = static_cast<std::byte>(0x70 + index);
+            const auto address =
+                static_cast<std::uintptr_t>(256 + index * 4);
+            const auto expected = Pattern({
+                static_cast<std::uint8_t>(0x70 + index)});
             memory.bytes[address] = expected.bytes[0];
             hook_contexts[index] = {&hook_state, index};
             hooks[index] = {
@@ -144,34 +154,54 @@ std::vector<std::size_t> ReverseIndices(std::size_t count) {
     return result;
 }
 
+std::vector<std::size_t> ForwardIndices(std::size_t count) {
+    std::vector<std::size_t> result;
+    result.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        result.push_back(index);
+    }
+    return result;
+}
+
 int main() {
 int failures = 0;
 
-for (int failed_write = 0; failed_write < 3; ++failed_write) {
+static_assert(kMaximumFramerateWrites == 17);
+static_assert(kMaximumFramerateHooks == 41);
+
+for (int failed_write = 0;
+     failed_write < static_cast<int>(kMaximumFramerateWrites);
+     ++failed_write) {
     auto fixture = MakeFixture();
     fixture.memory.fail_write_call = failed_write;
     g_memory = &fixture.memory;
     FrameratePatchTransaction transaction({FakeRead, FakeWrite});
     const auto result = transaction.Install(fixture.writes, fixture.hooks);
-    failures += Expect(!result, "write failure rejected");
+    failures += Expect(!result, "every write failure is rejected");
     failures += Expect(
         fixture.memory.bytes == fixture.original_bytes,
-        "write failure restores complete image");
+        "every write failure restores all 17 writes");
     failures += Expect(
         result.error().rollback_complete,
         "write failure rollback verified");
 }
 
-for (int failed_hook = 0; failed_hook < 4; ++failed_hook) {
+for (int failed_hook = 0;
+     failed_hook < static_cast<int>(kMaximumFramerateHooks);
+     ++failed_hook) {
     auto fixture = MakeFixture();
     fixture.hook_state.fail_on_call = failed_hook;
     g_memory = &fixture.memory;
     FrameratePatchTransaction transaction({FakeRead, FakeWrite});
     const auto result = transaction.Install(fixture.writes, fixture.hooks);
-    failures += Expect(!result, "hook failure rejected");
+    failures += Expect(!result, "every hook failure is rejected");
     failures += Expect(
-        fixture.memory.bytes == fixture.original_bytes,
-        "hook failure restores every direct patch");
+        fixture.memory.bytes == fixture.original_bytes &&
+            fixture.memory.bytes[16 + 15 * 4] ==
+                fixture.original_bytes[16 + 15 * 4] &&
+            fixture.memory.bytes[16 + 16 * 4] ==
+                fixture.original_bytes[16 + 16 * 4],
+        "every hook failure restores writes including menu globals");
     const std::vector<std::size_t> expected_reset =
         ReverseIndices(static_cast<std::size_t>(failed_hook + 1));
     failures += Expect(
@@ -184,7 +214,7 @@ for (int failed_hook = 0; failed_hook < 4; ++failed_hook) {
 
 {
     auto fixture = MakeFixture();
-    fixture.memory.bytes[8] = std::byte{0xFF};
+    fixture.memory.bytes[16] = std::byte{0xFF};
     g_memory = &fixture.memory;
     FrameratePatchTransaction transaction({FakeRead, FakeWrite});
     const auto result = transaction.Install(fixture.writes, fixture.hooks);
@@ -195,6 +225,18 @@ for (int failed_hook = 0; failed_hook < 4; ++failed_hook) {
             fixture.memory.write_calls == 0 &&
             fixture.hook_state.installed.empty(),
         "preflight mismatch mutates nothing");
+}
+
+{
+    auto fixture = MakeFixture();
+    g_memory = &fixture.memory;
+    std::array<HookOperation, kMaximumFramerateHooks + 1> too_many{};
+    FrameratePatchTransaction transaction({FakeRead, FakeWrite});
+    const auto result = transaction.Install(
+        std::span<const CheckedWrite>{}, too_many);
+    failures += Expect(
+        !result && result.error().stage == FramerateInstallStage::Capacity,
+        "over-capacity hook plan rejected before descriptor access");
 }
 
 {
@@ -229,15 +271,16 @@ for (int failed_hook = 0; failed_hook < 4; ++failed_hook) {
     failures += Expect(
         result.has_value() && transaction.committed() &&
             fixture.hook_state.installed ==
-                std::vector<std::size_t>{0, 1, 2, 3} &&
+                ForwardIndices(kMaximumFramerateHooks) &&
             fixture.memory.bytes != fixture.original_bytes,
-        "successful transaction retains every write and hook");
+        "successful transaction retains all 17 writes and 41 hooks");
 }
 
 {
     auto fixture = MakeFixture();
     fixture.hook_state.fail_on_call = 0;
-    fixture.memory.fail_write_call = 3;
+    fixture.memory.fail_write_call =
+        static_cast<int>(kMaximumFramerateWrites);
     g_memory = &fixture.memory;
     FrameratePatchTransaction transaction({FakeRead, FakeWrite});
     const auto result = transaction.Install(fixture.writes, fixture.hooks);
