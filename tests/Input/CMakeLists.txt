@@ -48,6 +48,11 @@ set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
+add_executable(InputWorkerWaitTests
+        Polling/InputWorkerWaitTests.cpp)
+target_link_libraries(InputWorkerWaitTests PRIVATE gc_input)
+add_test(NAME InputWorkerWaitTests COMMAND InputWorkerWaitTests)
+
 add_executable(ForegroundPolicyTests
         Polling/ForegroundPolicyTests.cpp)
 target_link_libraries(ForegroundPolicyTests PRIVATE gc_input)

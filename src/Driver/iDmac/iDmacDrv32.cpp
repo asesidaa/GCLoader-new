@@ -3,6 +3,7 @@
 #include "Driver/iDmac/RegisterOpTypes.h"
 #include "plog/Log.h"
 #include "plog/Initializers/RollingFileInitializer.h"
+#include <atomic>
 #include <format>
 #include <string>
 
@@ -61,9 +62,17 @@ extern "C" __declspec(dllexport) int __cdecl iDmacDrvRegisterRead(int DeviceId, 
     case RegisterReadType::FIO_NODE_1_STATUS:
         result = 0x00FF0000;
         break;
-    case RegisterReadType::FIO_NODE_0_INPUT:
+    case RegisterReadType::FIO_NODE_0_INPUT: {
         result = gc::input::ReadPublishedInput();
+        static std::atomic<DWORD> last_logged_input{0xFFFFFFFF};
+        const DWORD previous = last_logged_input.exchange(
+            result, std::memory_order_relaxed);
+        if (previous != result) {
+            PLOG_INFO << std::format(
+                "iDmac input read fastio={:#010x}", result);
+        }
         break;
+    }
     case RegisterReadType::FIO_NODE0_ANALOG1:
         result = 0;
         break;

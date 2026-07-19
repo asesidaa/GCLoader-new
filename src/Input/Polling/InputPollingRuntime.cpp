@@ -3,6 +3,7 @@
 #include "Config/config.h"
 #include "Input/Polling/ForegroundPolicy.h"
 #include "Input/Polling/InputMapper.h"
+#include "Input/Polling/InputWorkerWait.h"
 #include "Input/Types/PhysicalKey.h"
 #include "Input/Win32/ControllerBindingEvaluator.h"
 #include "Input/Win32/ControllerCatalog.h"
@@ -251,45 +252,25 @@ public:
 
     std::expected<void, std::string> Run()
     {
-        const std::array<HANDLE, 2> handles{stop_event_, timer_};
         for (;;)
         {
-            const DWORD wait = MsgWaitForMultipleObjectsEx(
-                static_cast<DWORD>(handles.size()),
-                handles.data(),
-                INFINITE,
-                QS_ALLINPUT,
-                MWMO_INPUTAVAILABLE);
-            if (wait == WAIT_OBJECT_0)
+            const auto wake = WaitForInputWorkerWake(stop_event_, timer_);
+            if (!wake)
+            {
+                return std::unexpected(wake.error());
+            }
+
+            if (*wake == InputWorkerWake::Stop)
             {
                 return {};
             }
-            if (wait == WAIT_OBJECT_0 + 1)
-            {
-                OnTimer();
-                continue;
-            }
-            if (wait == WAIT_OBJECT_0 + handles.size())
-            {
-                MSG message{};
-                while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
-                {
-                    if (message.message == WM_QUIT)
-                    {
-                        return std::unexpected(
-                            "Input worker received unexpected WM_QUIT");
-                    }
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                }
-                continue;
-            }
-            if (wait == WAIT_FAILED)
+            if (*wake == InputWorkerWake::Quit)
             {
                 return std::unexpected(
-                    Win32Failure("MsgWaitForMultipleObjectsEx"));
+                    "Input worker received unexpected WM_QUIT");
             }
-            return std::unexpected("Input worker wait returned an invalid result");
+
+            OnTimer();
         }
     }
 
@@ -632,8 +613,8 @@ private:
             g_published_input.exchange(next, std::memory_order_acq_rel);
         if (previous != next)
         {
-            PLOG_DEBUG << "Input snapshot fastio=0x" << std::hex << next
-                       << std::dec;
+            PLOG_INFO << "Input snapshot fastio=0x" << std::hex << next
+                      << std::dec;
         }
     }
 

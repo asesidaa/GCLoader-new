@@ -24,6 +24,7 @@ add_library(gc_input STATIC
         Polling/InputMapper.cpp
         Polling/InputPollingRuntime.cpp
         Polling/InputSnapshotState.cpp
+        Polling/InputWorkerWait.cpp
         Switch/SwitchInputPatch.cpp
         Switch/SwitchInputPolicy.cpp
 )
