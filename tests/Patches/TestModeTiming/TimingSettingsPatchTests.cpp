@@ -1,4 +1,5 @@
 #include "Patches/TestModeTiming/TimingSettingsGameAbi.h"
+#include "Patches/TestModeTiming/TimingSettingsPatch.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -247,6 +249,153 @@ bool SetJudgTime(void* opaque, void* manager, int value) noexcept {
     return manager == state.manager && value == state.judg_offset;
 }
 
+struct CellEvent {
+    void* grid{};
+    int row{};
+    int column{};
+    std::string text;
+
+    friend bool operator==(const CellEvent&, const CellEvent&) = default;
+};
+
+struct RenderState {
+    int title_calls{};
+    std::string title;
+    int title_x{};
+    int title_y{};
+    std::vector<CellEvent> cells;
+    std::string help;
+};
+
+bool RecordTitle(void* opaque, const char* text) noexcept {
+    auto& state = *static_cast<RenderState*>(opaque);
+    ++state.title_calls;
+    state.title = text;
+    return true;
+}
+
+bool RecordTitlePosition(void* opaque, int x, int y) noexcept {
+    auto& state = *static_cast<RenderState*>(opaque);
+    state.title_x = x;
+    state.title_y = y;
+    return true;
+}
+
+bool RecordCell(
+    void* opaque,
+    void* grid,
+    int row,
+    int column,
+    const char* text) noexcept {
+    auto& state = *static_cast<RenderState*>(opaque);
+    state.cells.push_back({grid, row, column, text});
+    return true;
+}
+
+bool RecordHelp(void* opaque, const char* text) noexcept {
+    auto& state = *static_cast<RenderState*>(opaque);
+    state.help = text;
+    return true;
+}
+
+TimingRenderActions RenderActions(RenderState& state) {
+    return {
+        .context = &state,
+        .draw_title = RecordTitle,
+        .set_title_position = RecordTitlePosition,
+        .set_cell = RecordCell,
+        .draw_help = RecordHelp,
+    };
+}
+
+enum class CarrierFailPoint {
+    None,
+    Allocate,
+    Construct,
+    Prepare,
+    Register,
+};
+
+struct CarrierLifeState {
+    CarrierFailPoint failure{};
+    std::array<std::byte, kSoundFormSize> storage{};
+    int allocate_calls{};
+    int construct_calls{};
+    int prepare_calls{};
+    int register_calls{};
+    int deallocate_calls{};
+    int destroy_calls{};
+    unsigned char destroy_flag{};
+};
+
+void* LifeAllocate(void* opaque, std::size_t size) noexcept {
+    auto& state = *static_cast<CarrierLifeState*>(opaque);
+    ++state.allocate_calls;
+    if (state.failure == CarrierFailPoint::Allocate ||
+        size != kSoundFormSize) {
+        return nullptr;
+    }
+    return state.storage.data();
+}
+
+void* LifeConstruct(void* opaque, void* raw, void* parent) noexcept {
+    auto& state = *static_cast<CarrierLifeState*>(opaque);
+    ++state.construct_calls;
+    if (state.failure == CarrierFailPoint::Construct) {
+        return nullptr;
+    }
+    return parent == reinterpret_cast<void*>(0xCAFEBABE) ? raw : nullptr;
+}
+
+bool LifePrepare(void* opaque, void* carrier) noexcept {
+    auto& state = *static_cast<CarrierLifeState*>(opaque);
+    ++state.prepare_calls;
+    return state.failure != CarrierFailPoint::Prepare &&
+        carrier == state.storage.data();
+}
+
+bool LifeRegister(
+    void* opaque,
+    void* owner,
+    int index,
+    void* carrier) noexcept {
+    auto& state = *static_cast<CarrierLifeState*>(opaque);
+    ++state.register_calls;
+    return state.failure != CarrierFailPoint::Register &&
+        owner == reinterpret_cast<void*>(0xDEADC0DE) && index == 10 &&
+        carrier == state.storage.data();
+}
+
+void LifeDeallocate(void* opaque, void* raw) noexcept {
+    auto& state = *static_cast<CarrierLifeState*>(opaque);
+    if (raw == state.storage.data()) {
+        ++state.deallocate_calls;
+    }
+}
+
+void LifeDestroy(
+    void* opaque,
+    void* carrier,
+    unsigned char flag) noexcept {
+    auto& state = *static_cast<CarrierLifeState*>(opaque);
+    if (carrier == state.storage.data()) {
+        ++state.destroy_calls;
+        state.destroy_flag = flag;
+    }
+}
+
+CarrierLifecycleActions LifeActions(CarrierLifeState& state) {
+    return {
+        .context = &state,
+        .allocate = LifeAllocate,
+        .construct = LifeConstruct,
+        .prepare = LifePrepare,
+        .register_child = LifeRegister,
+        .deallocate = LifeDeallocate,
+        .destroy = LifeDestroy,
+    };
+}
+
 } // namespace
 
 int main() {
@@ -464,6 +613,173 @@ int main() {
                     "get timing manager", "set GameTime", "set JudgTime",
                 },
             "live timing uses startup application order");
+    }
+
+    for (int index = 0; index != 10; ++index) {
+        const auto route = RouteMainSelection(index);
+        failures += Expect(
+            route.native_selection == index && !route.draw_timing_help,
+            "native main entries remain identity mapped");
+    }
+    failures += Expect(
+        RouteMainSelection(10) == MainRenderRoute{10, true},
+        "timing uses native Exit case then custom help");
+    failures += Expect(
+        RouteMainSelection(11) == MainRenderRoute{10, false},
+        "moved Exit uses original Exit help case");
+
+    {
+        const auto native = ExpectedSoundVtable(kFakeBase);
+        const CarrierCallbacks callbacks{
+            .activate = 0x11111111,
+            .render = 0x22222222,
+            .confirm = 0x33333333,
+            .back = 0x44444444,
+            .increment = 0x55555555,
+            .decrement = 0x66666666,
+        };
+        const auto carrier =
+            BuildCarrierVtable(native, callbacks, kFakeBase);
+        failures += Expect(
+            carrier[2] == callbacks.activate &&
+                carrier[5] == kFakeBase + 0x0C2E40 &&
+                carrier[6] == callbacks.render &&
+                carrier[7] == callbacks.confirm &&
+                carrier[8] == callbacks.back &&
+                carrier[9] == callbacks.increment &&
+                carrier[10] == callbacks.decrement,
+            "only approved behavioral slots change");
+        for (const auto slot : {0U, 1U, 3U, 4U, 11U, 12U}) {
+            failures += Expect(
+                carrier[slot] == native[slot],
+                "native lifecycle and unknown slots are preserved");
+        }
+    }
+
+    {
+        TimingSettingsModel model;
+        model.Activate({.game_ms = 0, .judge_ms = -16});
+        void* const grid = reinterpret_cast<void*>(0x12340000);
+        RenderState state;
+        auto actions = RenderActions(state);
+        failures += Expect(
+            RenderTimingSettings(model, grid, actions) &&
+                state.title_calls == 1 &&
+                state.title == "TIMING SETTINGS" &&
+                state.title_x == 4 && state.title_y == 2 &&
+                state.cells == std::vector<CellEvent>{
+                    {grid, 0, 0, "MUSIC OFFSET"},
+                    {grid, 0, 1, "+0 ms"},
+                    {grid, 1, 0, "JUDGE OFFSET"},
+                    {grid, 1, 1, "-16 ms"},
+                    {grid, 2, 0, "SAVE AND BACK"},
+                    {grid, 2, 1, ""},
+                    {grid, 3, 0, "CANCEL"},
+                    {grid, 3, 1, ""},
+                } &&
+                state.help == "LEFT/RIGHT: MUSIC OFFSET",
+            "renderer writes the exact title and four-by-two grid");
+
+        constexpr std::array row_help{
+            "LEFT/RIGHT: MUSIC OFFSET",
+            "LEFT/RIGHT: JUDGE OFFSET",
+            "SAVE VALUES AND RETURN",
+            "DISCARD CHANGES AND RETURN",
+        };
+        for (std::size_t row = 0; row < row_help.size(); ++row) {
+            model.SetRow(static_cast<TimingRow>(row));
+            state = {};
+            failures += Expect(
+                RenderTimingSettings(model, grid, actions) &&
+                    state.help == row_help[row],
+                "renderer selects help for each timing row");
+        }
+
+        model.MarkSaveFailed();
+        for (std::size_t row = 0; row < row_help.size(); ++row) {
+            model.SetRow(static_cast<TimingRow>(row));
+            state = {};
+            failures += Expect(
+                RenderTimingSettings(model, grid, actions) &&
+                    state.help == "SAVE FAILED - CHECK loader-log.txt",
+                "save failure overrides help on every row");
+        }
+    }
+
+    {
+        std::array<std::byte, kSoundFormSize> carrier{};
+        std::array<std::byte, 80> grid{};
+        carrier.fill(std::byte{0x5A});
+        grid.fill(std::byte{0x6B});
+        void* grid_pointer = grid.data();
+        std::memcpy(
+            carrier.data() + kFormGridOffset,
+            &grid_pointer,
+            sizeof(grid_pointer));
+        auto expected_carrier = carrier;
+        auto expected_grid = grid;
+        const int rows = 4;
+        const int no_child = -1;
+        const int selection = 0;
+        std::memcpy(
+            expected_carrier.data() + kFormRowCountOffset,
+            &rows,
+            sizeof(rows));
+        std::memcpy(
+            expected_carrier.data() + kFormActiveChildOffset,
+            &no_child,
+            sizeof(no_child));
+        std::memcpy(
+            expected_grid.data() + kGridRowCountOffset,
+            &rows,
+            sizeof(rows));
+        std::memcpy(
+            expected_grid.data() + kGridSelectionOffset,
+            &selection,
+            sizeof(selection));
+        failures += Expect(
+            PrepareCarrierLayout(carrier.data()) &&
+                carrier == expected_carrier && grid == expected_grid,
+            "carrier layout changes only four characterized fields");
+    }
+
+    for (const auto failure : {
+             CarrierFailPoint::Construct,
+             CarrierFailPoint::Prepare,
+             CarrierFailPoint::Register,
+         }) {
+        CarrierLifeState state{.failure = failure};
+        void* carrier = reinterpret_cast<void*>(0x1);
+        const bool created = CreateTimingCarrier(
+            reinterpret_cast<void*>(0xCAFEBABE),
+            reinterpret_cast<void*>(0xDEADC0DE),
+            LifeActions(state),
+            &carrier);
+        const bool failed_before_construction =
+            failure == CarrierFailPoint::Construct;
+        failures += Expect(
+            !created && carrier == nullptr &&
+                state.deallocate_calls ==
+                    (failed_before_construction ? 1 : 0) &&
+                state.destroy_calls ==
+                    (failed_before_construction ? 0 : 1) &&
+                (failed_before_construction || state.destroy_flag == 1),
+            "every pre-registration failure releases ownership exactly once");
+    }
+
+    {
+        CarrierLifeState state;
+        void* carrier = nullptr;
+        failures += Expect(
+            CreateTimingCarrier(
+                reinterpret_cast<void*>(0xCAFEBABE),
+                reinterpret_cast<void*>(0xDEADC0DE),
+                LifeActions(state),
+                &carrier) &&
+                carrier == state.storage.data() &&
+                state.register_calls == 1 &&
+                state.deallocate_calls == 0 && state.destroy_calls == 0,
+            "successful carrier registration transfers ownership to parent");
     }
 
     return failures == 0 ? 0 : 1;
