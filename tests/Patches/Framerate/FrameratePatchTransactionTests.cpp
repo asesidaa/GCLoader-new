@@ -167,7 +167,7 @@ int main() {
 int failures = 0;
 
 static_assert(kMaximumFramerateWrites == 17);
-static_assert(kMaximumFramerateHooks == 41);
+static_assert(kMaximumFramerateHooks == 42);
 
 for (int failed_write = 0;
      failed_write < static_cast<int>(kMaximumFramerateWrites);
@@ -273,7 +273,7 @@ for (int failed_hook = 0;
             fixture.hook_state.installed ==
                 ForwardIndices(kMaximumFramerateHooks) &&
             fixture.memory.bytes != fixture.original_bytes,
-        "successful transaction retains all 17 writes and 41 hooks");
+        "successful transaction retains all 17 writes and 42 hooks");
 }
 
 {

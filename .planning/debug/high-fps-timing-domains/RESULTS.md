@@ -198,3 +198,25 @@ focused test, removal of both probes, and deployment. The active DLL SHA256 is
 E-035 records the operator's 240 FPS runtime acceptance and request to commit
 and merge. The correction is accepted for integration; a quantitative
 60/120/144/240 matrix was not captured and is not inferred from that report.
+
+## Open shared-navigator defect
+
+After integration, the operator identified one remaining defect: the
+bottom-right navigator character animates about 4x fast at 240 FPS. It is
+visible in song selection, mode selection, and other menus. E-037 establishes
+that this is not a MovieClip defect. The character is a manual
+`base.dds`/`face.dds` renderer whose state routine `0x005B6310` advances once
+per draw callback, making every fixed count expire four times faster at 240
+FPS. E-038 proves that ten task classes, including `CSelectGameTask` and
+`CSelectMusicTask`, register this same global callback.
+
+E-039 implements the complete narrow design: the callback and draw routine
+remain native-rate, while only `0x005B6310` executes on the existing
+authored-60-Hz clock. This globally covers every mapped navigator-bearing scene
+and avoids touching the shared MovieClip path, individual task methods, or the
+renderer's interdependent 2/5/10/11/17/30/180..307 counts.
+
+The production DLL was built through the checked-in `msvc32-release` preset,
+passed all three focused framerate tests, and is deployed with SHA256
+`3001A110B4A69AF0E675EC03ACCCBE3F7B918E72ABB3AAAC818EEFA14C78B3F8`.
+Runtime acceptance at high FPS remains pending.

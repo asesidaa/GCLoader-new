@@ -69,6 +69,7 @@ enum class FramerateHookId {
     PlayerPositionAssetFrame,
     PlayerPositionDenominatorA,
     PlayerPositionDenominatorB,
+    NavigatorAdvance,
     OuterFrame,
 };
 

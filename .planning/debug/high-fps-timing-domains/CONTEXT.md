@@ -120,3 +120,22 @@ remaining step for this correction.
 E-035 records the operator's 240 FPS runtime acceptance of that exact deployed
 DLL and the request to commit and merge. This closes the blocking correction
 for integration; it does not claim an independently measured four-rate matrix.
+
+## Shared navigator follow-up
+
+The final reported 240 FPS defect is the bottom-right navigator character,
+first observed in song selection and also present in mode selection and other
+menus. E-036 records two rejected timeline candidates. E-037 proves the actual
+target: global renderer `dword_7F2524` draws per-navigator
+`base.dds`/`face.dds` layers, and its manual state routine `sub_5B6310` runs
+once per render callback. E-038 maps `CSelectGameTask`, `CSelectMusicTask`, and
+eight additional tasks to that same callback. Do not modify the shared
+MovieClip gate or patch individual scenes. The narrow design is to keep
+drawing at native cadence and execute only the shared `sub_5B6310` state
+advance on authored-60-Hz ticks.
+
+E-039 records implementation of that exact design through the normal
+`msvc32-release` preset and deployment to `H:\gc\iDmacDrv32.dll`. Static,
+build, and focused-test verification are complete. High-FPS operator
+acceptance of navigator timing across mode selection, song selection, and the
+other mapped scenes is the remaining step.

@@ -292,8 +292,8 @@ failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
 failures += Expect(
-    transformed_hooks.size() == 41,
-    "complete transformed mode has 41 hooks");
+    transformed_hooks.size() == 42,
+    "complete transformed mode has 42 hooks");
 for (const auto removed_rva :
      {0x00218A50U, 0x002544D0U, 0x00230AB6U, 0x0024F0C6U}) {
     const bool present = std::any_of(
@@ -304,16 +304,26 @@ for (const auto removed_rva :
     failures += Expect(!present, "invalid timing contract is absent");
 }
 failures += Expect(
-    transformed_hooks.size() > 40 &&
+    transformed_hooks.size() > 41 &&
         transformed_hooks.back().id == FramerateHookId::OuterFrame &&
-        transformed_hooks[40].id == FramerateHookId::OuterFrame,
-    "outer frame is final hook at index 40");
+        transformed_hooks[41].id == FramerateHookId::OuterFrame,
+    "outer frame is final hook at index 41");
+const auto navigator_hook = std::find_if(
+    transformed_hooks.begin(), transformed_hooks.end(),
+    [](const auto& hook) { return hook.rva == 0x001B6310; });
+failures += Expect(
+    navigator_hook != transformed_hooks.end() &&
+        navigator_hook->expected == Pattern({
+            0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
+            0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
+            0x8B, 0x48, 0x60}),
+    "shared navigator advance exact entry contract");
 failures += Expect(
     FindHook(transformed_hooks, FramerateHookId::PaletteCompare).expected ==
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 41> expected_hooks{{
+const std::array<FramerateHookContract, 42> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -394,6 +404,10 @@ const std::array<FramerateHookContract, 41> expected_hooks{{
         Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
     {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
         Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
+    {FramerateHookId::NavigatorAdvance, 0x001B6310,
+        Pattern({0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
+            0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
+            0x8B, 0x48, 0x60}), ""},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24}), ""},
 }};

@@ -66,7 +66,7 @@ bool AddWrite(
     return true;
 }
 
-constexpr std::array<FramerateHookContract, 41> kHookContracts{{
+constexpr std::array<FramerateHookContract, 42> kHookContracts{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern(0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00),
         "MovieClip goto-frame depth guard"},
@@ -188,6 +188,11 @@ constexpr std::array<FramerateHookContract, 41> kHookContracts{{
     {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
         Pattern(0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00),
         "player-position scaled denominator B"},
+    {FramerateHookId::NavigatorAdvance, 0x001B6310,
+        Pattern(0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
+            0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
+            0x8B, 0x48, 0x60),
+        "shared navigator authored-60Hz advance"},
     {FramerateHookId::OuterFrame, 0x00058B70,
         Pattern(0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24),
         "outer-frame cap validation and deterministic authored phase"},

@@ -35,6 +35,7 @@ constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
     safetyhook::InlineHook movieclip_advance{};
+    safetyhook::InlineHook navigator_advance{};
     safetyhook::MidHook palette_compare{};
     safetyhook::MidHook stage_clip_frame{};
     safetyhook::MidHook ifbl_wait{};
@@ -83,6 +84,8 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t movieclip_calls{0};
     std::atomic_uint64_t movieclip_skips{0};
     std::atomic_uint64_t movieclip_goto_calls{0};
+    std::atomic_uint64_t navigator_advances{0};
+    std::atomic_uint64_t navigator_skips{0};
     std::atomic_uint64_t stage_clip_indices{0};
     std::atomic_uint64_t stage_clip_mappings{0};
     std::atomic_uint64_t ifbl_wait_stores{0};
@@ -151,6 +154,7 @@ thread_local int g_movieclip_goto_depth = 0;
 
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
+void* __fastcall HookNavigatorAdvance(void*, void*);
 void HookPaletteCompare(safetyhook::Context&);
 void HookStageClipFrame(safetyhook::Context&);
 void HookIfblWait(safetyhook::Context&);
@@ -600,6 +604,14 @@ void AssignHookCallbacks(
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::player_position_denominator_b>;
         break;
+    case FramerateHookId::NavigatorAdvance:
+        operation.install = &InstallInlineHook<
+            &FramerateHookStorage::navigator_advance,
+            HookNavigatorAdvance,
+            0x001B6310>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::navigator_advance>;
+        break;
     case FramerateHookId::OuterFrame:
         operation.install = &InstallMidHook<
             &FramerateHookStorage::outer_frame,
@@ -741,6 +753,17 @@ char __fastcall HookMovieClipAdvance(
         1, std::memory_order_relaxed);
     return g_runtime->hooks.movieclip_advance.unsafe_thiscall<char>(
         self, forward, loop);
+}
+
+void* __fastcall HookNavigatorAdvance(void* self, void*) {
+    if (!IsAuthored60HzTick()) {
+        g_runtime->counters.navigator_skips.fetch_add(
+            1, std::memory_order_relaxed);
+        return self;
+    }
+    g_runtime->counters.navigator_advances.fetch_add(
+        1, std::memory_order_relaxed);
+    return g_runtime->hooks.navigator_advance.unsafe_thiscall<void*>(self);
 }
 
 void HookPaletteCompare(safetyhook::Context& context) {
@@ -1094,6 +1117,10 @@ void MaybeLogRuntimeStats(std::int64_t now) {
               << "/skip=" << counters.movieclip_skips.load(
                      std::memory_order_relaxed)
               << "/goto=" << counters.movieclip_goto_calls.load(
+                     std::memory_order_relaxed)
+              << " navigator=" << counters.navigator_advances.load(
+                     std::memory_order_relaxed)
+              << "/skip=" << counters.navigator_skips.load(
                      std::memory_order_relaxed)
               << " stage_clip=" << counters.stage_clip_indices.load(
                      std::memory_order_relaxed)

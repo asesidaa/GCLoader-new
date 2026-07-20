@@ -10,7 +10,7 @@ namespace gc::framerate {
 
 inline constexpr std::size_t kMaximumPatternBytes = 16;
 inline constexpr std::size_t kMaximumFramerateWrites = 17;
-inline constexpr std::size_t kMaximumFramerateHooks = 41;
+inline constexpr std::size_t kMaximumFramerateHooks = 42;
 
 struct BytePattern {
     std::array<std::byte, kMaximumPatternBytes> bytes{};
