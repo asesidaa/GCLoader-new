@@ -5,6 +5,8 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -292,6 +294,158 @@ std::expected<AssignmentToken, ConfigEditError> FindAssignmentToken(
     return *found;
 }
 
+std::unexpected<SystemConfigError> FileError(
+    SystemConfigStage stage,
+    DWORD error,
+    DWORD cleanup_error = ERROR_SUCCESS) {
+    return std::unexpected(SystemConfigError{
+        .stage = stage,
+        .win32_error = error,
+        .cleanup_error = cleanup_error,
+    });
+}
+
+std::expected<std::vector<std::uint8_t>, SystemConfigError> ReadAllBytes(
+    const std::filesystem::path& path,
+    const Win32FileApi& api) {
+    const HANDLE handle = api.create_file(
+        path.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return FileError(SystemConfigStage::TargetOpen, api.get_last_error());
+    }
+
+    const auto fail_and_close = [&](SystemConfigStage stage, DWORD error)
+        -> std::expected<std::vector<std::uint8_t>, SystemConfigError> {
+        DWORD cleanup_error = ERROR_SUCCESS;
+        if (!api.close_handle(handle)) {
+            cleanup_error = api.get_last_error();
+        }
+        return FileError(stage, error, cleanup_error);
+    };
+
+    LARGE_INTEGER size{};
+    if (!api.get_file_size(handle, &size)) {
+        const DWORD error = api.get_last_error();
+        return fail_and_close(SystemConfigStage::TargetSize, error);
+    }
+    if (size.QuadPart < 0 ||
+        static_cast<unsigned long long>(size.QuadPart) >
+            std::numeric_limits<DWORD>::max()) {
+        return fail_and_close(
+            SystemConfigStage::TargetSize, ERROR_FILE_TOO_LARGE);
+    }
+
+    std::vector<std::uint8_t> bytes(
+        static_cast<std::size_t>(size.QuadPart));
+    DWORD bytes_read = 0;
+    if (!bytes.empty() &&
+        !api.read_file(
+            handle,
+            bytes.data(),
+            static_cast<DWORD>(bytes.size()),
+            &bytes_read,
+            nullptr)) {
+        const DWORD error = api.get_last_error();
+        return fail_and_close(SystemConfigStage::TargetRead, error);
+    }
+    if (bytes_read != bytes.size()) {
+        return fail_and_close(
+            SystemConfigStage::TargetRead, ERROR_HANDLE_EOF);
+    }
+    if (!api.close_handle(handle)) {
+        return FileError(
+            SystemConfigStage::TargetClose, api.get_last_error());
+    }
+    return bytes;
+}
+
+std::expected<void, SystemConfigError> WriteFlushClose(
+    HANDLE handle,
+    std::span<const std::uint8_t> bytes,
+    const Win32FileApi& api) {
+    std::optional<SystemConfigError> primary;
+    std::size_t offset = 0;
+    while (!primary && offset < bytes.size()) {
+        const auto remaining = bytes.size() - offset;
+        const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(
+            remaining,
+            std::numeric_limits<DWORD>::max()));
+        DWORD written = 0;
+        if (!api.write_file(
+                handle,
+                bytes.data() + offset,
+                requested,
+                &written,
+                nullptr)) {
+            primary = SystemConfigError{
+                .stage = SystemConfigStage::TempWrite,
+                .win32_error = api.get_last_error(),
+            };
+            break;
+        }
+        if (written == 0 || written > requested) {
+            primary = SystemConfigError{
+                .stage = SystemConfigStage::TempWrite,
+                .win32_error = ERROR_WRITE_FAULT,
+            };
+            break;
+        }
+        offset += written;
+    }
+
+    if (!primary && !api.flush_file(handle)) {
+        primary = SystemConfigError{
+            .stage = SystemConfigStage::TempFlush,
+            .win32_error = api.get_last_error(),
+        };
+    }
+
+    if (!api.close_handle(handle)) {
+        const DWORD close_error = api.get_last_error();
+        if (primary) {
+            primary->cleanup_error = close_error;
+        } else {
+            primary = SystemConfigError{
+                .stage = SystemConfigStage::TempClose,
+                .win32_error = close_error,
+            };
+        }
+    }
+
+    if (primary) {
+        return std::unexpected(*primary);
+    }
+    return {};
+}
+
+std::filesystem::path BuildTemporaryPath(
+    const std::filesystem::path& target,
+    DWORD process_id,
+    unsigned attempt) {
+    auto filename = target.filename().wstring();
+    filename += L".gcloader.";
+    filename += std::to_wstring(process_id);
+    filename += L".";
+    filename += std::to_wstring(attempt);
+    filename += L".tmp";
+    return target.parent_path() / filename;
+}
+
+DWORD DeleteTemporaryFile(
+    const std::filesystem::path& path,
+    const Win32FileApi& api) noexcept {
+    if (api.delete_file(path.c_str())) {
+        return ERROR_SUCCESS;
+    }
+    return api.get_last_error();
+}
+
 } // namespace
 
 std::expected<RewrittenConfig, ConfigEditError> RewriteTimingAssignments(
@@ -337,6 +491,90 @@ std::expected<RewrittenConfig, ConfigEditError> RewriteTimingAssignments(
         result.changed = true;
     }
     return result;
+}
+
+Win32FileApi ProductionWin32FileApi() noexcept {
+    return {};
+}
+
+SystemConfigTimingStore::SystemConfigTimingStore(
+    std::filesystem::path path,
+    Win32FileApi api)
+    : path_(std::move(path)),
+      api_(api) {}
+
+std::expected<SaveOutcome, SystemConfigError>
+SystemConfigTimingStore::Save(TimingOffsets offsets) noexcept {
+    try {
+        auto input = ReadAllBytes(path_, api_);
+        if (!input) {
+            return std::unexpected(input.error());
+        }
+
+        auto rewritten = RewriteTimingAssignments(*input, offsets);
+        if (!rewritten) {
+            return std::unexpected(SystemConfigError{
+                .stage = SystemConfigStage::Assignment,
+                .edit_error = rewritten.error(),
+            });
+        }
+        if (!rewritten->changed) {
+            return SaveOutcome::Unchanged;
+        }
+
+        for (unsigned attempt = 0; attempt != 16; ++attempt) {
+            const auto temp = BuildTemporaryPath(
+                path_, api_.get_process_id(), attempt);
+            const HANDLE handle = api_.create_file(
+                temp.c_str(),
+                GENERIC_WRITE,
+                0,
+                nullptr,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+                nullptr);
+            if (handle == INVALID_HANDLE_VALUE) {
+                const DWORD error = api_.get_last_error();
+                if (error == ERROR_FILE_EXISTS) {
+                    continue;
+                }
+                return FileError(SystemConfigStage::TempCreate, error);
+            }
+
+            auto staged = WriteFlushClose(
+                handle, rewritten->bytes, api_);
+            if (!staged) {
+                auto error = staged.error();
+                const DWORD delete_error = DeleteTemporaryFile(temp, api_);
+                if (delete_error != ERROR_SUCCESS) {
+                    error.cleanup_error = delete_error;
+                }
+                return std::unexpected(error);
+            }
+
+            if (!api_.replace_file(
+                    path_.c_str(),
+                    temp.c_str(),
+                    nullptr,
+                    REPLACEFILE_WRITE_THROUGH,
+                    nullptr,
+                    nullptr)) {
+                const DWORD primary = api_.get_last_error();
+                const DWORD cleanup = DeleteTemporaryFile(temp, api_);
+                return FileError(
+                    SystemConfigStage::Replace, primary, cleanup);
+            }
+            return SaveOutcome::Changed;
+        }
+        return FileError(
+            SystemConfigStage::TempCreate, ERROR_FILE_EXISTS);
+    } catch (const std::bad_alloc&) {
+        return FileError(
+            SystemConfigStage::Internal, ERROR_OUTOFMEMORY);
+    } catch (...) {
+        return FileError(
+            SystemConfigStage::Internal, ERROR_GEN_FAILURE);
+    }
 }
 
 } // namespace gc::test_mode_timing
