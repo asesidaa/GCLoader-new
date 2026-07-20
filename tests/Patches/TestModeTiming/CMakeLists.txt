@@ -5,3 +5,7 @@ add_test(NAME TimingSettingsModelTests COMMAND TimingSettingsModelTests)
 add_executable(SystemConfigTimingStoreTests SystemConfigTimingStoreTests.cpp)
 target_link_libraries(SystemConfigTimingStoreTests PRIVATE gc_test_mode_timing)
 add_test(NAME SystemConfigTimingStoreTests COMMAND SystemConfigTimingStoreTests)
+
+add_executable(TimingSettingsPatchTests TimingSettingsPatchTests.cpp)
+target_link_libraries(TimingSettingsPatchTests PRIVATE gc_test_mode_timing)
+add_test(NAME TimingSettingsPatchTests COMMAND TimingSettingsPatchTests)
