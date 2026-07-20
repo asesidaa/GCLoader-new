@@ -1,0 +1,3 @@
+add_executable(TimingSettingsModelTests TimingSettingsModelTests.cpp)
+target_link_libraries(TimingSettingsModelTests PRIVATE gc_test_mode_timing)
+add_test(NAME TimingSettingsModelTests COMMAND TimingSettingsModelTests)

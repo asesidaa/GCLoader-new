@@ -17,3 +17,5 @@ target_link_libraries(gc_runtime_patches PUBLIC
         gc_config
         safetyhook::safetyhook
 )
+
+add_subdirectory(TestModeTiming)

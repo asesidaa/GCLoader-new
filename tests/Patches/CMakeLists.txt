@@ -37,3 +37,5 @@ add_executable(FramerateAuthoredClockTests
         Framerate/FramerateAuthoredClockTests.cpp)
 target_link_libraries(FramerateAuthoredClockTests PRIVATE gc_runtime_patches)
 add_test(NAME FramerateAuthoredClockTests COMMAND FramerateAuthoredClockTests)
+
+add_subdirectory(TestModeTiming)
