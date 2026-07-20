@@ -201,12 +201,7 @@ struct Fixture {
     [[nodiscard]] std::expected<void, TimingInstallError> Install(
         TimingPatchTransaction& transaction) {
         g_memory = &memory;
-        return transaction.Install(
-            contracts,
-            kFakeBase + kSoundVtableRva,
-            vtable,
-            writes,
-            hooks);
+        return InstallTimingPatch(transaction, kFakeBase, hooks);
     }
 };
 
@@ -393,6 +388,81 @@ CarrierLifecycleActions LifeActions(CarrierLifeState& state) {
         .register_child = LifeRegister,
         .deallocate = LifeDeallocate,
         .destroy = LifeDestroy,
+    };
+}
+
+struct CommitState {
+    std::vector<std::string> events;
+    SaveOutcome save_outcome{SaveOutcome::Changed};
+    bool save_succeeds{true};
+    bool apply_succeeds{true};
+    TimingOffsets saved{};
+    TimingOffsets applied{};
+};
+
+bool CommitSave(
+    void* opaque,
+    TimingOffsets offsets,
+    SaveOutcome* outcome) noexcept {
+    auto& state = *static_cast<CommitState*>(opaque);
+    state.events.emplace_back("save");
+    state.saved = offsets;
+    if (!state.save_succeeds) {
+        return false;
+    }
+    *outcome = state.save_outcome;
+    return true;
+}
+
+bool CommitApply(void* opaque, TimingOffsets offsets) noexcept {
+    auto& state = *static_cast<CommitState*>(opaque);
+    state.applied = offsets;
+    if (!state.apply_succeeds) {
+        state.events.emplace_back("apply failure");
+        return false;
+    }
+    state.events.emplace_back("write GameTimeOffset");
+    state.events.emplace_back("write JudgTimeOffset");
+    state.events.emplace_back("get timing manager");
+    state.events.emplace_back("set GameTime");
+    state.events.emplace_back("set JudgTime");
+    return true;
+}
+
+void CommitStatus(void* opaque, SaveStatus status) noexcept {
+    auto& state = *static_cast<CommitState*>(opaque);
+    state.events.emplace_back(
+        status == SaveStatus::Succeeded
+            ? "mark succeeded"
+            : "mark failed");
+}
+
+void CommitSaveFailure(void* opaque) noexcept {
+    auto& state = *static_cast<CommitState*>(opaque);
+    state.events.emplace_back("log save failure");
+}
+
+void CommitApplyFailure(void* opaque) noexcept {
+    auto& state = *static_cast<CommitState*>(opaque);
+    state.events.emplace_back("log fatal");
+}
+
+void CommitSuccess(
+    void*,
+    TimingOffsets,
+    TimingOffsets,
+    SaveOutcome) noexcept {
+}
+
+TimingCommitActions CommitActions(CommitState& state) {
+    return {
+        .context = &state,
+        .save = CommitSave,
+        .apply_live = CommitApply,
+        .status_changed = CommitStatus,
+        .save_failed = CommitSaveFailure,
+        .apply_failed = CommitApplyFailure,
+        .save_succeeded = CommitSuccess,
     };
 }
 
@@ -780,6 +850,90 @@ int main() {
                 state.register_calls == 1 &&
                 state.deallocate_calls == 0 && state.destroy_calls == 0,
             "successful carrier registration transfers ownership to parent");
+    }
+
+    {
+        TimingSettingsModel model;
+        model.Activate({.game_ms = 0, .judge_ms = -16});
+        model.SetRow(TimingRow::SaveAndBack);
+        CommitState state;
+        failures += Expect(
+            CommitTimingSelection(model, CommitActions(state)) == 1 &&
+                state.events ==
+                    std::vector<std::string>{"mark succeeded"} &&
+                model.status() == SaveStatus::Succeeded,
+            "clean save marks success without store or live apply");
+    }
+
+    for (const auto outcome : {
+             SaveOutcome::Changed,
+             SaveOutcome::Unchanged,
+         }) {
+        TimingSettingsModel model;
+        model.Activate({.game_ms = 0, .judge_ms = -16});
+        model.AdjustSelected(1);
+        model.SetRow(TimingRow::SaveAndBack);
+        CommitState state{.save_outcome = outcome};
+        failures += Expect(
+            CommitTimingSelection(model, CommitActions(state)) == 1 &&
+                state.saved == TimingOffsets{1, -16} &&
+                state.applied == TimingOffsets{1, -16} &&
+                state.events == std::vector<std::string>{
+                    "save", "write GameTimeOffset",
+                    "write JudgTimeOffset", "get timing manager",
+                    "set GameTime", "set JudgTime", "mark succeeded",
+                } &&
+                model.status() == SaveStatus::Succeeded,
+            "dirty save always applies live timing after persistence");
+    }
+
+    {
+        TimingSettingsModel model;
+        model.Activate({.game_ms = 0, .judge_ms = -16});
+        model.AdjustSelected(1);
+        model.SetRow(TimingRow::SaveAndBack);
+        CommitState state{.save_succeeds = false};
+        failures += Expect(
+            CommitTimingSelection(model, CommitActions(state)) == 0 &&
+                state.events == std::vector<std::string>{
+                    "save", "mark failed", "log save failure",
+                } &&
+                model.status() == SaveStatus::Failed,
+            "save failure stays in the form and never applies live timing");
+    }
+
+    {
+        TimingSettingsModel model;
+        model.Activate({.game_ms = 0, .judge_ms = -16});
+        model.AdjustSelected(1);
+        model.SetRow(TimingRow::SaveAndBack);
+        CommitState state{.apply_succeeds = false};
+        failures += Expect(
+            CommitTimingSelection(model, CommitActions(state)) == 0 &&
+                state.events == std::vector<std::string>{
+                    "save", "apply failure", "mark failed", "log fatal",
+                } &&
+                model.status() == SaveStatus::Failed,
+            "live apply invariant failure is fatal and remains actionable");
+    }
+
+    {
+        TimingSettingsModel model;
+        model.Activate({.game_ms = 0, .judge_ms = -16});
+        model.AdjustSelected(1);
+        model.SetRow(TimingRow::Cancel);
+        CommitState state;
+        failures += Expect(
+            CommitTimingSelection(model, CommitActions(state)) == 1 &&
+                state.events.empty() &&
+                model.staged() == TimingOffsets{0, -16},
+            "cancel confirm discards without store or live apply");
+
+        model.AdjustSelected(1);
+        failures += Expect(
+            CancelTimingEdit(model) == 1 && state.events.empty() &&
+                model.staged() == TimingOffsets{0, -16},
+            "back discards without store or live apply");
     }
 
     return failures == 0 ? 0 : 1;

@@ -10,8 +10,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <utility>
 
 namespace gc::test_mode_timing {
 
@@ -29,14 +33,19 @@ const unsigned char* GameText(const char* text) noexcept {
 }
 
 struct TimingRuntimeState {
-    explicit TimingRuntimeState(std::uintptr_t image_base) noexcept
+    TimingRuntimeState(
+        std::uintptr_t image_base,
+        std::filesystem::path config_path)
         : abi{BuildTimingGameAbi(image_base)},
+          store{std::move(config_path)},
           transaction{ProductionTimingMemoryApi()} {
     }
 
     TimingGameAbi abi{};
+    SystemConfigTimingStore store;
     TimingSettingsModel model{};
     TimingPatchTransaction transaction;
+    std::optional<SystemConfigError> last_store_error{};
     void* carrier{};
     std::array<std::uintptr_t, kSoundVtableSlots> carrier_vtable{};
     safetyhook::InlineHook main_constructor_hook{};
@@ -307,6 +316,201 @@ CarrierLifecycleActions RuntimeLifecycleActions(
     };
 }
 
+bool RuntimeSave(
+    void* opaque,
+    TimingOffsets offsets,
+    SaveOutcome* outcome) noexcept {
+    auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+    auto saved = runtime.store.Save(offsets);
+    if (!saved) {
+        runtime.last_store_error = saved.error();
+        return false;
+    }
+    runtime.last_store_error.reset();
+    *outcome = *saved;
+    return true;
+}
+
+bool RuntimeApplyLive(void* opaque, TimingOffsets offsets) noexcept {
+    const auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+    return ApplyLiveTiming(runtime.abi.image_base, offsets);
+}
+
+void RuntimeStatusChanged(void*, SaveStatus) noexcept {
+}
+
+void RuntimeSaveFailed(void* opaque) noexcept {
+    try {
+        const auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+        if (!runtime.last_store_error) {
+            PLOG_ERROR << "TestModeTiming: system.cfg save failed"
+                       << " path=" << runtime.store.path().string()
+                       << " stage=unknown";
+            return;
+        }
+        const auto& error = *runtime.last_store_error;
+        PLOG_ERROR << "TestModeTiming: system.cfg save failed"
+                   << " path=" << runtime.store.path().string()
+                   << " stage=" << static_cast<int>(error.stage)
+                   << " win32=" << error.win32_error
+                   << " cleanup=" << error.cleanup_error;
+    } catch (...) {
+    }
+}
+
+void RuntimeApplyFailed(void*) noexcept {
+    try {
+        PLOG_FATAL
+            << "TestModeTiming: persisted values but live ABI apply failed";
+    } catch (...) {
+    }
+}
+
+void RuntimeSaveSucceeded(
+    void*,
+    TimingOffsets before,
+    TimingOffsets staged,
+    SaveOutcome outcome) noexcept {
+    try {
+        PLOG_INFO << "TestModeTiming: saved GameTimeOffset "
+                  << before.game_ms << " -> " << staged.game_ms
+                  << ", JudgTimeOffset " << before.judge_ms << " -> "
+                  << staged.judge_ms << ", config="
+                  << (outcome == SaveOutcome::Changed
+                          ? "replaced"
+                          : "already matched");
+    } catch (...) {
+    }
+}
+
+TimingCommitActions ProductionCommitActions(
+    TimingRuntimeState& runtime) noexcept {
+    return {
+        .context = &runtime,
+        .save = RuntimeSave,
+        .apply_live = RuntimeApplyLive,
+        .status_changed = RuntimeStatusChanged,
+        .save_failed = RuntimeSaveFailed,
+        .apply_failed = RuntimeApplyFailed,
+        .save_succeeded = RuntimeSaveSucceeded,
+    };
+}
+
+bool InstallMainConstructor(void* opaque) noexcept {
+    try {
+        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+        runtime.main_constructor_hook = safetyhook::create_inline(
+            reinterpret_cast<void*>(
+                runtime.abi.image_base + kMainConstructorRva),
+            reinterpret_cast<void*>(&MainConstructorHook));
+        return static_cast<bool>(runtime.main_constructor_hook);
+    } catch (...) {
+        return false;
+    }
+}
+
+bool InstallMainRender(void* opaque) noexcept {
+    try {
+        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+        runtime.main_render_hook = safetyhook::create_inline(
+            reinterpret_cast<void*>(
+                runtime.abi.image_base + kMainRenderRva),
+            reinterpret_cast<void*>(&MainRenderHook));
+        return static_cast<bool>(runtime.main_render_hook);
+    } catch (...) {
+        return false;
+    }
+}
+
+void ResetMainConstructor(void* opaque) noexcept {
+    try {
+        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+        runtime.main_constructor_hook.reset();
+    } catch (...) {
+    }
+}
+
+void ResetMainRender(void* opaque) noexcept {
+    try {
+        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+        runtime.main_render_hook.reset();
+    } catch (...) {
+    }
+}
+
+std::array<TimingHookOperation, kTimingHookCount> RuntimeHookOperations(
+    TimingRuntimeState& runtime) noexcept {
+    return {{
+        {
+            .rva = kMainConstructorRva,
+            .address = runtime.abi.image_base + kMainConstructorRva,
+            .name = "main constructor",
+            .context = &runtime,
+            .install = InstallMainConstructor,
+            .reset = ResetMainConstructor,
+        },
+        {
+            .rva = kMainRenderRva,
+            .address = runtime.abi.image_base + kMainRenderRva,
+            .name = "main render",
+            .context = &runtime,
+            .install = InstallMainRender,
+            .reset = ResetMainRender,
+        },
+    }};
+}
+
+std::expected<std::filesystem::path, DWORD> ResolveConfigPath() {
+    constexpr wchar_t relative[] = L"data\\system.cfg";
+    const DWORD required = GetFullPathNameW(relative, 0, nullptr, nullptr);
+    if (required == 0) {
+        return std::unexpected(GetLastError());
+    }
+
+    std::wstring buffer(required, L'\0');
+    const DWORD copied = GetFullPathNameW(
+        relative,
+        required,
+        buffer.data(),
+        nullptr);
+    if (copied == 0 || copied >= required) {
+        return std::unexpected(
+            copied == 0 ? GetLastError() : ERROR_INSUFFICIENT_BUFFER);
+    }
+    buffer.resize(copied);
+    return std::filesystem::path{std::move(buffer)};
+}
+
+const char* InstallStageName(TimingInstallStage stage) noexcept {
+    switch (stage) {
+    case TimingInstallStage::None: return "none";
+    case TimingInstallStage::InvalidDescriptor: return "invalid_descriptor";
+    case TimingInstallStage::PreflightRead: return "preflight_read";
+    case TimingInstallStage::PreflightMismatch:
+        return "preflight_mismatch";
+    case TimingInstallStage::DirectWrite: return "direct_write";
+    case TimingInstallStage::HookInstall: return "hook_install";
+    case TimingInstallStage::Rollback: return "rollback";
+    }
+    return "unknown";
+}
+
+void LogInstallFailure(const TimingInstallError& error) noexcept {
+    try {
+        PLOG_ERROR << "TestModeTiming: install failed stage="
+                   << InstallStageName(error.stage) << " name="
+                   << (error.operation_name != nullptr
+                           ? error.operation_name
+                           : "<unnamed>")
+                   << " index=" << error.operation_index
+                   << " rollback_attempted="
+                   << (error.rollback_attempted ? "true" : "false")
+                   << " rollback_complete="
+                   << (error.rollback_complete ? "true" : "false");
+    } catch (...) {
+    }
+}
+
 bool SetMainMenuCell(
     TimingRuntimeState& runtime,
     void* grid,
@@ -482,6 +686,86 @@ bool CreateTimingCarrier(
     return true;
 }
 
+int CommitTimingSelection(
+    TimingSettingsModel& model,
+    const TimingCommitActions& actions) noexcept {
+    const auto command = model.Confirm();
+    if (command == TimingCommand::None) {
+        return 0;
+    }
+    if (command == TimingCommand::Cancel) {
+        return CancelTimingEdit(model);
+    }
+
+    const auto before = model.original();
+    const auto staged = model.staged();
+    const auto notify_status = [&](SaveStatus status) noexcept {
+        if (actions.status_changed != nullptr) {
+            actions.status_changed(actions.context, status);
+        }
+    };
+
+    if (!model.dirty()) {
+        model.MarkSaveSucceeded();
+        notify_status(SaveStatus::Succeeded);
+        return 1;
+    }
+    if (actions.save == nullptr || actions.apply_live == nullptr) {
+        model.MarkSaveFailed();
+        notify_status(SaveStatus::Failed);
+        if (actions.save_failed != nullptr) {
+            actions.save_failed(actions.context);
+        }
+        return 0;
+    }
+
+    SaveOutcome outcome{};
+    if (!actions.save(actions.context, staged, &outcome)) {
+        model.MarkSaveFailed();
+        notify_status(SaveStatus::Failed);
+        if (actions.save_failed != nullptr) {
+            actions.save_failed(actions.context);
+        }
+        return 0;
+    }
+    if (!actions.apply_live(actions.context, staged)) {
+        model.MarkSaveFailed();
+        notify_status(SaveStatus::Failed);
+        if (actions.apply_failed != nullptr) {
+            actions.apply_failed(actions.context);
+        }
+        return 0;
+    }
+
+    model.MarkSaveSucceeded();
+    notify_status(SaveStatus::Succeeded);
+    if (actions.save_succeeded != nullptr) {
+        actions.save_succeeded(
+            actions.context, before, staged, outcome);
+    }
+    return 1;
+}
+
+int CancelTimingEdit(TimingSettingsModel& model) noexcept {
+    model.Activate(model.original());
+    return 1;
+}
+
+std::expected<void, TimingInstallError> InstallTimingPatch(
+    TimingPatchTransaction& transaction,
+    std::uintptr_t image_base,
+    std::span<const TimingHookOperation, kTimingHookCount> hooks) noexcept {
+    const auto contracts = BuildTimingAbiContracts(image_base);
+    const auto vtable = ExpectedSoundVtable(image_base);
+    const auto writes = BuildTimingCheckedWrites(image_base);
+    return transaction.Install(
+        contracts,
+        image_base + kSoundVtableRva,
+        vtable,
+        writes,
+        hooks);
+}
+
 void* __fastcall CarrierActivate(void* self, void*) noexcept {
     try {
         if (g_runtime == nullptr || self != g_runtime->carrier) {
@@ -546,12 +830,9 @@ int __fastcall CarrierConfirm(
             LogCallbackFailure("carrier_confirm_selection");
             return 0;
         }
-        const auto command = g_runtime->model.Confirm();
-        if (command == TimingCommand::Cancel) {
-            g_runtime->model.Activate(g_runtime->model.original());
-            return 1;
-        }
-        return 0;
+        return CommitTimingSelection(
+            g_runtime->model,
+            ProductionCommitActions(*g_runtime));
     } catch (...) {
         LogCallbackFailure("carrier_confirm_exception");
         return 0;
@@ -568,8 +849,7 @@ int __fastcall CarrierBack(
             LogCallbackFailure("carrier_back_self");
             return 0;
         }
-        g_runtime->model.Activate(g_runtime->model.original());
-        return 1;
+        return CancelTimingEdit(g_runtime->model);
     } catch (...) {
         LogCallbackFailure("carrier_back_exception");
         return 0;
@@ -696,6 +976,71 @@ void* __fastcall MainRenderHook(
     } catch (...) {
         LogCallbackFailure("main_render_exception");
         return nullptr;
+    }
+}
+
+bool TimingSettingsPatchInit() noexcept {
+    static std::atomic_bool attempted{false};
+    static std::atomic_bool stored_result{false};
+    bool expected = false;
+    if (!attempted.compare_exchange_strong(expected, true)) {
+        return stored_result.load(std::memory_order_acquire);
+    }
+
+    try {
+        const auto module = GetModuleHandleW(nullptr);
+        const auto image_base = reinterpret_cast<std::uintptr_t>(module);
+        if (module == nullptr || image_base != kPreferredImageBase) {
+            try {
+                PLOG_ERROR << "TestModeTiming: unsupported executable base="
+                           << reinterpret_cast<void*>(image_base)
+                           << " expected="
+                           << reinterpret_cast<void*>(kPreferredImageBase);
+            } catch (...) {
+            }
+            stored_result.store(false, std::memory_order_release);
+            return false;
+        }
+
+        auto config_path = ResolveConfigPath();
+        if (!config_path) {
+            try {
+                PLOG_ERROR << "TestModeTiming: path resolution failed"
+                           << " win32=" << config_path.error();
+            } catch (...) {
+            }
+            stored_result.store(false, std::memory_order_release);
+            return false;
+        }
+
+        auto candidate = std::make_unique<TimingRuntimeState>(
+            image_base, std::move(*config_path));
+        const auto hooks = RuntimeHookOperations(*candidate);
+        auto installed = InstallTimingPatch(
+            candidate->transaction, image_base, hooks);
+        if (!installed) {
+            LogInstallFailure(installed.error());
+            stored_result.store(false, std::memory_order_release);
+            return false;
+        }
+
+        g_runtime_owner = std::move(candidate);
+        g_runtime = g_runtime_owner.get();
+        stored_result.store(true, std::memory_order_release);
+        try {
+            PLOG_INFO
+                << "TestModeTiming: transaction committed carrier_slot=10";
+        } catch (...) {
+        }
+        return true;
+    } catch (...) {
+        try {
+            PLOG_ERROR
+                << "TestModeTiming: initialization exception before publish";
+        } catch (...) {
+        }
+        stored_result.store(false, std::memory_order_release);
+        return false;
     }
 }
 

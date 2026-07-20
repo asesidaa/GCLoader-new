@@ -7,6 +7,7 @@
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
 #include "Patches/Framerate/FrameratePatch.h"
+#include "Patches/TestModeTiming/TimingSettingsPatch.h"
 #include "Nesys/NesysServicePatch.h"
 #include "Nesys/NesysServiceProcess.h"
 #include "Logging/SessionLog.h"
@@ -77,6 +78,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
 
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
+                if (!gc::test_mode_timing::TimingSettingsPatchInit()) {
+                    PLOG_ERROR
+                        << "TestModeTiming: fail-closed DLL attach";
+                    return FALSE;
+                }
+                PLOG_DEBUG
+                    << "Test-mode timing settings initialization complete!";
+
                 if (!gc::audio::WasapiAudioPatchInit()) {
                     PLOG_ERROR
                         << "WasapiAudioPatch: fail-closed DLL attach";

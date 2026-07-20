@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Patches/TestModeTiming/SystemConfigTimingStore.h"
 #include "Patches/TestModeTiming/TimingSettingsGameAbi.h"
 
 #include <array>
@@ -79,6 +80,29 @@ struct CarrierLifecycleActions {
     void* owner,
     const CarrierLifecycleActions& actions,
     void** carrier_out) noexcept;
+
+struct TimingCommitActions {
+    void* context{};
+    bool (*save)(void*, TimingOffsets, SaveOutcome*) noexcept{};
+    bool (*apply_live)(void*, TimingOffsets) noexcept{};
+    void (*status_changed)(void*, SaveStatus) noexcept{};
+    void (*save_failed)(void*) noexcept{};
+    void (*apply_failed)(void*) noexcept{};
+    void (*save_succeeded)(
+        void*, TimingOffsets, TimingOffsets, SaveOutcome) noexcept{};
+};
+
+[[nodiscard]] int CommitTimingSelection(
+    TimingSettingsModel& model,
+    const TimingCommitActions& actions) noexcept;
+
+[[nodiscard]] int CancelTimingEdit(TimingSettingsModel& model) noexcept;
+
+[[nodiscard]] std::expected<void, TimingInstallError>
+InstallTimingPatch(
+    TimingPatchTransaction& transaction,
+    std::uintptr_t image_base,
+    std::span<const TimingHookOperation, kTimingHookCount> hooks) noexcept;
 
 void* __fastcall CarrierActivate(void* self, void*) noexcept;
 void* __fastcall CarrierRender(
