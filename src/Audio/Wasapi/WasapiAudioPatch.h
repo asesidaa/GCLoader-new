@@ -66,5 +66,6 @@ bool InstallWasapiAudioHook(
     AudioHookFailure* failure) noexcept;
 
 bool WasapiAudioPatchInit() noexcept;
+[[nodiscard]] bool IsWasapiAudioHookCommitted() noexcept;
 
 } // namespace gc::audio

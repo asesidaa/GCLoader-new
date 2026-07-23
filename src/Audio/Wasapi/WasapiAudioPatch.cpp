@@ -1011,4 +1011,8 @@ bool WasapiAudioPatchInit() noexcept {
     }
 }
 
+bool IsWasapiAudioHookCommitted() noexcept {
+    return g_committed_target != nullptr;
+}
+
 } // namespace gc::audio
