@@ -2,8 +2,8 @@
 
 Date: 2026-07-24
 
-Status: design approved in conversation; implementation remains pending written
-spec review.
+Status: design approved in conversation; implementation remains pending plan
+execution and runtime acceptance.
 
 ## Authority and relationship to the existing framerate design
 
@@ -294,12 +294,13 @@ The global runtime frame duration remains `1000 / target_fps`.
 Use `MapPositiveTargetFrameToAuthored60` at the earliest shared producer value
 that feeds all related authored consumers.
 
-The initial static pass confirms two missing sites in this family:
+The completed static pass confirms three missing sites in this family:
 
 | Site | Original bytes | Incoming value | Required action |
 |---|---|---|---|
 | VA `0x005F0310`, RVA `0x001F0310` | `89 42 08` | EAX is CTune flow-item duration divided by runtime frame milliseconds | Map EAX before the original `effect + 0x08` store |
 | VA `0x00649593`, RVA `0x00249593` | `89 95 74 FF FF FF` | EDX is tutorial/chart elapsed target frames | Map EDX before the shared local store |
+| VA `0x0065072E`, RVA `0x0025072E` | `F7 F9` | EAX is `Tune + 0x10` in target frames and ECX is the authored definition length | Map EAX before the original signed divide so the remainder written to `effect + 0x08` is authored-frame modulo authored-length |
 
 The flow-item site belongs to `sub_5F0220`. It calculates:
 
@@ -322,6 +323,15 @@ The tutorial site stores EDX in a shared local. The same local is:
 Mapping the shared value at `0x00649593` corrects both lifetime selection and
 both frame stores. Hooking only the two final stores would leave the authored
 length comparisons in the wrong domain.
+
+The player-position effect at `0x0065072E` loads the current target-frame
+counter from `Tune + 0x10`, then executes `cdq; idiv ecx` using the authored
+definition length returned by `sub_5F1990`. The original remainder is written
+to `effect + 0x08` at `0x00650736`. Mapping EAX before the divide preserves the
+authored animation loop; mapping the remainder after the divide would be
+incorrect because the accelerated wrap has already occurred. The existing
+`cdq` remains valid because positive values stay positive and signed
+nonpositive sentinels are preserved bit-for-bit.
 
 #### Authored durations to target-frame comparisons
 
@@ -352,10 +362,10 @@ The manifest records, but does not patch:
 
 These rows are essential regression protection against double mapping.
 
-The three confirmed additions above are not assumed to be the final hook
-count. Implementation cannot close until the complete manifest proves that
-all remaining rows fall into a final disposition and any additional domain
-crossing receives the matching semantic transform.
+The four confirmed additions above are the final additions for the analyzed
+`game471.exe` hash. Implementation cannot close until the checked-in manifest
+proves that every remaining row has one final disposition and that its four
+new hook rows match the installed hook-contract view.
 
 ### Source organization
 
@@ -444,9 +454,9 @@ add separate totals for:
 - authored-duration-to-target scaling;
 - each newly added producer-boundary site.
 
-At minimum, flow-item frame mapping, tutorial elapsed mapping, and chart
-pre-roll duration scaling have distinct counters. Logging is aggregated; no
-per-effect or per-frame line is emitted.
+At minimum, flow-item frame mapping, tutorial elapsed mapping, chart pre-roll
+duration scaling, and player-effect modulo-dividend mapping have distinct
+counters. Logging is aggregated; no per-effect or per-frame line is emitted.
 
 The site counters help correlate a gameplay scenario with the code path it
 actually exercised. An evidence-only row is never expected to produce a
@@ -468,6 +478,7 @@ Required cases include:
 - flow-item EAX mapping before the original store;
 - tutorial EDX mapping before the shared local store;
 - chart pre-roll EAX scaling before the comparison local store;
+- player-effect EAX mapping before the original authored-length `idiv`;
 - unchanged native-60 values.
 
 At 240 FPS, representative assertions include:
