@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -133,7 +132,6 @@ private:
     std::shared_ptr<IAudioEngineObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
     std::unique_ptr<MiniaudioMixer> mixer_;
-    std::mutex endpoint_service_mutex_;
     std::vector<float> float_mix_;
     std::vector<std::int16_t> pcm16_mix_;
     EndpointClockMapper clock_mapper_;
@@ -153,7 +151,8 @@ private:
     std::atomic_long failure_result_{S_OK};
     std::atomic_uint32_t endpoint_buffer_frames_{};
     std::atomic_uint32_t output_sample_rate_{};
-    std::atomic_uint64_t submitted_frames_{};
+    PresentedClockPublication presented_clock_;
+    std::uint64_t qpc_frequency_{};
     std::atomic_uint64_t render_callbacks_{};
     std::atomic_uint64_t late_event_wakes_{};
     std::atomic_uint64_t silence_fallbacks_{};

@@ -76,6 +76,42 @@ private:
     std::uint32_t output_sample_rate_{};
 };
 
+struct PresentedClockSnapshot {
+    std::uint64_t presented_output_frame{};
+    std::uint64_t sample_qpc_100ns{};
+    std::uint64_t submitted_output_frame_end{};
+};
+
+class PresentedClockPublication {
+public:
+    void Publish(
+        std::uint64_t presented_output_frame,
+        std::uint64_t sample_qpc_100ns,
+        std::uint64_t submitted_output_frame_end) noexcept;
+    void Invalidate() noexcept;
+
+    [[nodiscard]] std::optional<std::uint64_t> Project(
+        std::uint64_t now_qpc_ticks,
+        std::uint64_t qpc_frequency,
+        std::uint32_t output_sample_rate) noexcept;
+
+private:
+    [[nodiscard]] std::optional<PresentedClockSnapshot>
+        ReadStable() const noexcept;
+    [[nodiscard]] std::optional<std::uint64_t>
+        LastReturned() const noexcept;
+    std::uint64_t RememberMonotonic(std::uint64_t frame) noexcept;
+
+    std::atomic_uint64_t sequence_{};
+    std::atomic_bool valid_{};
+    std::atomic_uint64_t presented_output_frame_{};
+    std::atomic_uint64_t sample_qpc_100ns_{};
+    std::atomic_uint64_t submitted_output_frame_end_{};
+    std::uint64_t writer_generation_{};
+    std::atomic_uint64_t last_returned_{};
+    std::atomic_bool has_last_returned_{};
+};
+
 // DirectSound cursor byte offsets occupy the DWORD domain. Returns zero when
 // block_alignment is zero or the converted offset exceeds that domain.
 std::uint64_t SourceFrameToByte(

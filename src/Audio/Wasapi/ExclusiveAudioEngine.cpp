@@ -34,7 +34,14 @@ ExclusiveAudioEngine::ExclusiveAudioEngine(
       configured_duration_(configured_duration),
       observer_(std::move(observer)),
       mixer_allocations_(std::move(mixer_allocations)),
-      summary_interval_ms_(summary_interval_ms) {}
+      summary_interval_ms_(summary_interval_ms) {
+    LARGE_INTEGER frequency{};
+    if (QueryPerformanceFrequency(&frequency) &&
+        frequency.QuadPart > 0) {
+        qpc_frequency_ =
+            static_cast<std::uint64_t>(frequency.QuadPart);
+    }
+}
 
 ExclusiveAudioEngine::~ExclusiveAudioEngine() {
     if (shutdown_event_ != nullptr) {
@@ -271,9 +278,6 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             0,
             output_sample_rate);
         pacing_tracker_.emplace(frames, output_sample_rate);
-        submitted_frames_.store(
-            pacing_tracker_->submitted_tail(),
-            std::memory_order_release);
         current_submitted_lead_frames_.store(
             frames, std::memory_order_relaxed);
         minimum_submitted_lead_frames_.store(
@@ -394,9 +398,11 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
             });
             break;
         }
-        submitted_frames_.store(
-            pacing_tracker_->submitted_tail(),
-            std::memory_order_release);
+        const auto submitted_tail = pacing_tracker_->submitted_tail();
+        presented_clock_.Publish(
+            *presented,
+            clock.qpc_100ns,
+            submitted_tail);
         RecordPacingDecision(decision);
         render_callbacks_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -445,7 +451,7 @@ void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
 }
 
 void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept {
-    std::lock_guard lock(endpoint_service_mutex_);
+    presented_clock_.Invalidate();
     if (endpoint_ == nullptr) {
         return;
     }
@@ -594,24 +600,21 @@ std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
 
 std::optional<std::uint64_t>
 ExclusiveAudioEngine::CurrentOutputFrame() noexcept {
-    std::lock_guard lock(endpoint_service_mutex_);
-    if (endpoint_ == nullptr) {
-        return std::nullopt;
+    LARGE_INTEGER now{};
+    std::uint64_t now_qpc_ticks{};
+    std::uint64_t qpc_frequency{};
+    if (qpc_frequency_ != 0 &&
+        QueryPerformanceCounter(&now) &&
+        now.QuadPart >= 0) {
+        now_qpc_ticks =
+            static_cast<std::uint64_t>(now.QuadPart);
+        qpc_frequency = qpc_frequency_;
     }
-    EndpointClockPosition position{};
-    AudioFailure failure{};
-    if (FAILED(endpoint_->ReadClock(&position, &failure))) {
-        RecordRuntimeFailure(failure);
-        return std::nullopt;
-    }
-    const auto output_frame = clock_mapper_.ToOutputFrame(position.position);
-    if (!output_frame.has_value()) {
-        RecordRuntimeFailure({
-            AudioFailureStage::InvalidClockPosition,
-            E_FAIL,
-        });
-    }
-    return output_frame;
+
+    return presented_clock_.Project(
+        now_qpc_ticks,
+        qpc_frequency,
+        output_sample_rate_.load(std::memory_order_acquire));
 }
 
 std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept {

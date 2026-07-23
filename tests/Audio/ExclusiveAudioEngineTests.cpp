@@ -277,16 +277,11 @@ struct FakeWasapiState {
     std::array<std::byte, kSamples * sizeof(std::int16_t)> render_bytes{};
     std::mutex mutex;
     std::condition_variable condition;
-    std::mutex game_clock_mutex;
-    std::condition_variable game_clock_condition;
     std::atomic_bool block_initialize{};
     std::atomic_bool release_initialize{};
     std::atomic_bool started{};
     std::atomic_bool render_probe{};
     std::atomic_bool mixer_observed_before_start{};
-    std::atomic_bool block_game_clock{};
-    std::atomic_bool game_clock_entered{};
-    std::atomic_bool release_game_clock{};
     std::atomic_uint32_t shutdown_calls{};
     std::atomic_uint32_t destroy_calls{};
     std::atomic<DWORD> audio_thread_id{};
@@ -573,16 +568,6 @@ public:
                 action = state->clocks[
                     state->clock_read++ % state->clocks.size()];
             }
-        }
-        if (state->block_game_clock.load(std::memory_order_acquire) &&
-            GetCurrentThreadId() != state->audio_thread_id.load()) {
-            std::unique_lock lock(state->game_clock_mutex);
-            state->game_clock_entered.store(true, std::memory_order_release);
-            state->game_clock_condition.notify_all();
-            state->game_clock_condition.wait(lock, [&] {
-                return state->release_game_clock.load(
-                    std::memory_order_acquire);
-            });
         }
         *position = action.position;
         *qpc_100ns = action.qpc_100ns;
@@ -1043,59 +1028,6 @@ int TestStartupCallbackPrecedesImmediateRuntimeFailure() {
     return failures;
 }
 
-int TestEndpointServiceGateProtectsCallerClockRead() {
-    int failures = 0;
-    EngineFixture fixture;
-    auto engine = fixture.Start();
-    failures += Expect(engine != nullptr, "service-gate engine startup");
-    failures += Expect(
-        WaitUntil([&] {
-            return fixture.api->Count(ApiCall::WaitForRender) != 0;
-        }),
-        "audio thread enters render wait before caller clock read");
-
-    fixture.api->block_game_clock.store(true, std::memory_order_release);
-    fixture.api->PushClock(E_ACCESSDENIED);
-    std::optional<std::uint64_t> caller_frame;
-    std::thread caller([&] { caller_frame = engine->CurrentOutputFrame(); });
-    failures += Expect(
-        WaitUntil([&] {
-            return fixture.api->game_clock_entered.load(
-                std::memory_order_acquire);
-        }),
-        "caller clock read blocks inside endpoint service call");
-
-    fixture.api->PushWait(E_ABORT);
-    failures += Expect(
-        WaitForFatal(fixture),
-        "audio wait failure is reported while caller clock is blocked");
-    failures += Expect(
-        fixture.api->shutdown_calls.load(std::memory_order_acquire) == 0,
-        "endpoint cleanup waits for in-flight caller service access");
-
-    fixture.api->release_game_clock.store(true, std::memory_order_release);
-    fixture.api->game_clock_condition.notify_all();
-    caller.join();
-    failures += Expect(
-        !caller_frame.has_value(),
-        "blocked caller clock failure returns no output frame");
-    failures += Expect(
-        WaitUntil([&] {
-            return fixture.api->destroy_calls.load(std::memory_order_acquire) ==
-                1;
-        }),
-        "endpoint cleanup resumes after caller service access exits");
-    failures += Expect(
-        fixture.observer_state->fatal_failure.stage ==
-                AudioFailureStage::WaitRenderEvent &&
-            fixture.observer_state->fatal_failure.result == E_ABORT,
-        "simultaneous caller failure preserves the first audio-thread failure");
-    engine.reset();
-    failures += ExpectOwnerThreadCleanup(
-        fixture, "service-gate owner audio thread");
-    return failures;
-}
-
 int TestSilenceRuntimeFailureAndCleanup() {
     int failures = 0;
     EngineFixture fixture;
@@ -1351,16 +1283,9 @@ int TestVoiceClockSummaryAndRenderSafety() {
             [](std::int16_t sample) { return sample != 0; }),
         "voice produces nonzero PCM16");
 
-    constexpr auto kFirstRenderedBlockClockTicks =
-        (kFrames * kClockFrequency +
-         gc::audio::kGamePrimarySampleRate - 1) /
-        gc::audio::kGamePrimarySampleRate;
-    fixture.api->PushClock(
-        kInitialClock + kFirstRenderedBlockClockTicks,
-        late_qpc);
     const auto first_rendered_frame = engine->CurrentOutputFrame();
     failures += Expect(
-        first_rendered_frame == kFrames &&
+        first_rendered_frame == 2 * kFrames - 1 &&
             source.timeline->ResolveSourceFrame(
                 *first_rendered_frame,
                 1,
@@ -1368,8 +1293,8 @@ int TestVoiceClockSummaryAndRenderSafety() {
             source.timeline->ResolveSourceFrame(
                 *first_rendered_frame,
                 1,
-                kFrames).source_frame == 0,
-        "clock mapping resolves the first post-prefill frame to source zero");
+                kFrames).source_frame == kFrames - 1,
+        "published clock projects inside the first submitted source span");
 
     fixture.api->PushClock(
         kInitialClock + 2 * kPeriod,
@@ -1422,14 +1347,10 @@ int TestVoiceClockSummaryAndRenderSafety() {
                 .kind == AudioCursorResolutionKind::Resolved,
         "voice timeline starts after silent prefill and advances by periods");
 
-    fixture.api->PushClock(
-        kInitialClock + kClockFrequency,
-        late_qpc + 4 * kPeriod);
     const auto mapped = engine->CurrentOutputFrame();
     failures += Expect(
-        mapped.has_value() &&
-            *mapped == gc::audio::kGamePrimarySampleRate,
-        "CurrentOutputFrame maps IAudioClock through endpoint mapper");
+        mapped.has_value() && *mapped == 5 * kFrames - 1,
+        "published cursor stays inside the latest submitted 44.1 kHz span");
 
     engine->CountPendingCursorQuery();
     engine->CountUnmappedCursorFailure();
@@ -1534,14 +1455,10 @@ int TestSelected48kEngineRate() {
             [](std::int16_t sample) { return sample != 0; }),
         "selected 48 kHz engine resamples gameplay audio");
 
-    fixture.api->PushClock(
-        kInitialClock + kClockFrequency,
-        kInitialClock + kClockFrequency);
     const auto mapped = engine->CurrentOutputFrame();
     failures += Expect(
-        mapped.has_value() &&
-            *mapped == gc::audio::kFallbackEndpointSampleRate,
-        "engine clock mapper uses selected 48 kHz domain");
+        mapped.has_value() && *mapped == 3 * kFrames - 1,
+        "published cursor stays inside the latest submitted 48 kHz span");
 
     fixture.api->PushWait(E_ABORT);
     failures += Expect(
@@ -1630,7 +1547,6 @@ struct RuntimeFailureCase {
     std::uint32_t occurrence;
     AudioFailureStage stage;
     HRESULT result;
-    bool current_output_frame{};
 };
 
 int TestExactRuntimeFailureStages() {
@@ -1655,12 +1571,6 @@ int TestExactRuntimeFailureStages() {
             0,
             AudioFailureStage::GetClockPosition,
             AUDCLNT_E_DEVICE_INVALIDATED},
-        RuntimeFailureCase{
-            ApiCall::GetClockPosition,
-            0,
-            AudioFailureStage::GetClockPosition,
-            E_FAIL,
-            true},
     };
     int failures = 0;
     for (const auto& test : cases) {
@@ -1673,12 +1583,7 @@ int TestExactRuntimeFailureStages() {
         }
         auto engine = fixture.Start();
         failures += Expect(engine != nullptr, "runtime case starts engine");
-        if (test.current_output_frame) {
-            fixture.api->PushClock(test.result);
-            failures += Expect(
-                !engine->CurrentOutputFrame().has_value(),
-                "CurrentOutputFrame propagates endpoint failure");
-        } else if (test.call == ApiCall::WaitForRender) {
+        if (test.call == ApiCall::WaitForRender) {
             fixture.api->PushWait(test.result);
         } else {
             fixture.api->PushClock(
@@ -1753,7 +1658,6 @@ int main() {
     failures += TestAllocatorOwnerOutlivesEngineThroughVoiceDestruction();
     failures += TestStartupFailuresAndStartOrdering();
     failures += TestStartupCallbackPrecedesImmediateRuntimeFailure();
-    failures += TestEndpointServiceGateProtectsCallerClockRead();
     failures += TestSilenceRuntimeFailureAndCleanup();
     failures += TestPreStartClockOriginAndRecoverableGapPacing();
     failures += TestChronicAndInvalidClockPacingFailures();

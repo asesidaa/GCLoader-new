@@ -8,6 +8,7 @@ namespace gc::audio {
 namespace {
 
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+static_assert(std::atomic<bool>::is_always_lock_free);
 static_assert(std::atomic_ref<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic_ref<bool>::is_always_lock_free);
 
@@ -309,6 +310,130 @@ std::optional<std::uint64_t> EndpointClockMapper::ToOutputFrame(
         return std::nullopt;
     }
     return origin_output_frame_ + *elapsed_frames;
+}
+
+void PresentedClockPublication::Publish(
+    std::uint64_t presented_output_frame,
+    std::uint64_t sample_qpc_100ns,
+    std::uint64_t submitted_output_frame_end) noexcept {
+    if (submitted_output_frame_end == 0 ||
+        presented_output_frame >= submitted_output_frame_end) {
+        Invalidate();
+        return;
+    }
+
+    const auto generation = writer_generation_++;
+    const auto writing = generation * 2 + 1;
+    sequence_.store(writing, detail::kRenderSpanAtomicOrder);
+    presented_output_frame_.store(
+        presented_output_frame, detail::kRenderSpanAtomicOrder);
+    sample_qpc_100ns_.store(
+        sample_qpc_100ns, detail::kRenderSpanAtomicOrder);
+    submitted_output_frame_end_.store(
+        submitted_output_frame_end, detail::kRenderSpanAtomicOrder);
+    valid_.store(true, detail::kRenderSpanAtomicOrder);
+    sequence_.store(writing + 1, detail::kRenderSpanAtomicOrder);
+}
+
+void PresentedClockPublication::Invalidate() noexcept {
+    const auto generation = writer_generation_++;
+    const auto writing = generation * 2 + 1;
+    sequence_.store(writing, detail::kRenderSpanAtomicOrder);
+    valid_.store(false, detail::kRenderSpanAtomicOrder);
+    sequence_.store(writing + 1, detail::kRenderSpanAtomicOrder);
+}
+
+std::optional<PresentedClockSnapshot>
+PresentedClockPublication::ReadStable() const noexcept {
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto before =
+            sequence_.load(detail::kRenderSpanAtomicOrder);
+        if ((before & 1U) != 0) {
+            continue;
+        }
+
+        const auto is_valid =
+            valid_.load(detail::kRenderSpanAtomicOrder);
+        const PresentedClockSnapshot snapshot{
+            presented_output_frame_.load(
+                detail::kRenderSpanAtomicOrder),
+            sample_qpc_100ns_.load(
+                detail::kRenderSpanAtomicOrder),
+            submitted_output_frame_end_.load(
+                detail::kRenderSpanAtomicOrder),
+        };
+        const auto after =
+            sequence_.load(detail::kRenderSpanAtomicOrder);
+        if (before == after && (after & 1U) == 0) {
+            return is_valid
+                ? std::optional<PresentedClockSnapshot>{snapshot}
+                : std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t>
+PresentedClockPublication::LastReturned() const noexcept {
+    if (!has_last_returned_.load(std::memory_order_acquire)) {
+        return std::nullopt;
+    }
+    return last_returned_.load(std::memory_order_acquire);
+}
+
+std::uint64_t PresentedClockPublication::RememberMonotonic(
+    std::uint64_t frame) noexcept {
+    auto observed = last_returned_.load(std::memory_order_acquire);
+    while (observed < frame &&
+           !last_returned_.compare_exchange_weak(
+               observed,
+               frame,
+               std::memory_order_acq_rel,
+               std::memory_order_acquire)) {
+    }
+    has_last_returned_.store(true, std::memory_order_release);
+    return std::max(observed, frame);
+}
+
+std::optional<std::uint64_t>
+PresentedClockPublication::Project(
+    std::uint64_t now_qpc_ticks,
+    std::uint64_t qpc_frequency,
+    std::uint32_t output_sample_rate) noexcept {
+    constexpr std::uint64_t kReferenceTimePerSecond = 10'000'000;
+    const auto snapshot = ReadStable();
+    if (!snapshot.has_value() || qpc_frequency == 0 ||
+        output_sample_rate == 0) {
+        return LastReturned();
+    }
+
+    const auto now_qpc_100ns = ScaleFloor(
+        now_qpc_ticks,
+        kReferenceTimePerSecond,
+        qpc_frequency);
+    if (!now_qpc_100ns.has_value() ||
+        *now_qpc_100ns < snapshot->sample_qpc_100ns) {
+        return LastReturned();
+    }
+
+    const auto elapsed_frames = ScaleFloor(
+        *now_qpc_100ns - snapshot->sample_qpc_100ns,
+        output_sample_rate,
+        kReferenceTimePerSecond);
+    std::uint64_t projected{};
+    if (!elapsed_frames.has_value() ||
+        !CheckedAdd(
+            snapshot->presented_output_frame,
+            *elapsed_frames,
+            &projected) ||
+        snapshot->submitted_output_frame_end == 0) {
+        return LastReturned();
+    }
+
+    const auto bounded = std::min(
+        projected,
+        snapshot->submitted_output_frame_end - 1);
+    return RememberMonotonic(bounded);
 }
 
 std::uint64_t SourceFrameToByte(
