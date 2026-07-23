@@ -31,6 +31,7 @@ namespace gc::framerate {
 namespace {
 
 constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
+constexpr std::uintptr_t kAudioResyncEpilogueRva = 0x002401D4;
 
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
@@ -43,7 +44,7 @@ struct FramerateHookStorage {
     safetyhook::MidHook tune_countdown_compare{};
     safetyhook::MidHook audio_skip_margin{};
     safetyhook::MidHook audio_skip_interval{};
-    safetyhook::MidHook audio_resync_diagnostic{};
+    safetyhook::MidHook audio_resync_policy{};
     safetyhook::MidHook gameplay_effect_advance{};
     safetyhook::MidHook effect_cadence_6{};
     safetyhook::MidHook effect_cadence_5{};
@@ -92,9 +93,6 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t bgm_preload_calls{0};
     std::atomic_uint64_t bgm_preload_skips{0};
     std::atomic_uint64_t countdown_compare_hits{0};
-    std::atomic_uint64_t audio_resync_seeks{0};
-    std::atomic_uint64_t audio_resync_margin_seeks{0};
-    std::atomic_uint64_t audio_resync_interval_seeks{0};
     std::atomic_uint64_t audio_skip_margin_clamps{0};
     std::atomic_uint64_t audio_skip_interval_conversions{0};
     std::atomic_uint64_t gameplay_effect_advances{0};
@@ -162,7 +160,7 @@ void HookStageBgmPreload(safetyhook::Context&);
 void HookTuneCountdownCompare(safetyhook::Context&);
 void HookAudioSkipMargin(safetyhook::Context&);
 void HookAudioSkipInterval(safetyhook::Context&);
-void HookAudioResyncDiagnostic(safetyhook::Context&);
+void HookAudioResyncPolicy(safetyhook::Context&);
 void HookGameplayEffectAdvance(safetyhook::Context&);
 void HookEffectCadence6(safetyhook::Context&);
 void HookEffectCadence5(safetyhook::Context&);
@@ -356,13 +354,13 @@ void AssignHookCallbacks(
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::audio_skip_interval>;
         break;
-    case FramerateHookId::AudioResyncDiagnostic:
+    case FramerateHookId::AudioResyncPolicy:
         operation.install = &InstallMidHook<
-            &FramerateHookStorage::audio_resync_diagnostic,
-            HookAudioResyncDiagnostic,
+            &FramerateHookStorage::audio_resync_policy,
+            HookAudioResyncPolicy,
             0x002401C4>;
         operation.reset = &ResetOwnedHook<
-            &FramerateHookStorage::audio_resync_diagnostic>;
+            &FramerateHookStorage::audio_resync_policy>;
         break;
     case FramerateHookId::GameplayEffectAdvance:
         operation.install = &InstallMidHook<
@@ -888,48 +886,21 @@ void HookAudioSkipInterval(safetyhook::Context& context) {
     context.eip += 3;
 }
 
-void HookAudioResyncDiagnostic(safetyhook::Context& context) {
-    const auto expected_ms = ReadI32Stack(context, -0x08);
-    const auto cursor_ms = ReadI32Stack(context, -0x10, -1);
-    const auto drift_ms = ReadI32Stack(context, -0x0C);
-    const auto margin_ms = ReadI32Stack(context, -0x24);
-    std::uint32_t tune{};
-    (void)ReadU32Safe(context.ebp - 0x28, tune);
-
-    std::uint32_t frame_counter{};
-    std::uint32_t frame_step{};
-    (void)ReadU32Safe(
-        static_cast<std::uintptr_t>(tune) + 0x10, frame_counter);
-    (void)ReadU32Safe(
-        static_cast<std::uintptr_t>(tune) + 0x14, frame_step);
-
-    const auto abs_drift = drift_ms < 0
-        ? -static_cast<std::int64_t>(drift_ms)
-        : static_cast<std::int64_t>(drift_ms);
-    const bool margin_seek = abs_drift > margin_ms;
-    const auto total = g_runtime->counters.audio_resync_seeks.fetch_add(
-        1, std::memory_order_relaxed) + 1;
-    if (margin_seek) {
-        g_runtime->counters.audio_resync_margin_seeks.fetch_add(
-            1, std::memory_order_relaxed);
-    } else {
-        g_runtime->counters.audio_resync_interval_seeks.fetch_add(
-            1, std::memory_order_relaxed);
+void HookAudioResyncPolicy(safetyhook::Context& context) {
+    std::int32_t drift_ms{};
+    std::int32_t margin_ms{};
+    if (!ReadI32StackSafe(context, -0x0C, drift_ms) ||
+        !ReadI32StackSafe(context, -0x24, margin_ms) ||
+        margin_ms < 0) {
+        return;
     }
 
-    const auto target = g_runtime->profile.target_fps();
-    const auto periodic_interval = std::max(1U, target / 2);
-    if (total <= target || (total % periodic_interval) == 0) {
-        PLOG_INFO << "FrameratePatch_AUDIO: target_fps=" << target
-                  << " resync_seek=" << total
-                  << " reason=" << (margin_seek ? "margin" : "interval")
-                  << " frame=" << frame_counter
-                  << " step=" << frame_step
-                  << " expected_ms=" << expected_ms
-                  << " cursor_ms=" << cursor_ms
-                  << " drift_ms=" << drift_ms
-                  << " abs_drift_ms=" << abs_drift
-                  << " skip_margin_ms=" << margin_ms;
+    const auto abs_drift_ms = drift_ms < 0
+        ? -static_cast<std::int64_t>(drift_ms)
+        : static_cast<std::int64_t>(drift_ms);
+    if (abs_drift_ms <= static_cast<std::int64_t>(margin_ms)) {
+        context.eip = static_cast<std::uint32_t>(
+            ExecutableBase() + kAudioResyncEpilogueRva);
     }
 }
 
@@ -1135,14 +1106,7 @@ void MaybeLogRuntimeStats(std::int64_t now) {
               << " countdown_cmp_hits="
               << counters.countdown_compare_hits.load(
                      std::memory_order_relaxed)
-              << " audio_resync=" << counters.audio_resync_seeks.load(
-                     std::memory_order_relaxed)
-              << "/margin=" << counters.audio_resync_margin_seeks.load(
-                     std::memory_order_relaxed)
-              << "/interval="
-              << counters.audio_resync_interval_seeks.load(
-                     std::memory_order_relaxed)
-              << "/margin_clamps="
+              << " audio_margin_clamps="
               << counters.audio_skip_margin_clamps.load(
                      std::memory_order_relaxed)
               << "/interval_conversions="
@@ -1299,7 +1263,7 @@ bool FramerateHookHasRuntimeBinding(FramerateHookId id) noexcept {
     return operation.install != nullptr && operation.reset != nullptr;
 }
 
-bool FrameratePatchInit() {
+bool FrameratePatchInit(bool wasapi_audio_committed) {
     static std::atomic_bool initialized{false};
     bool expected = false;
     if (!initialized.compare_exchange_strong(expected, true)) {
@@ -1349,10 +1313,11 @@ bool FrameratePatchInit() {
         return false;
     }
 
-    const auto hook_contracts = FramerateHookContracts(
-        !g_runtime->profile.native_timing());
+    const auto hook_plan = BuildFramerateHookPlan(
+        !g_runtime->profile.native_timing(),
+        wasapi_audio_committed);
     const auto hook_operations = BuildHookOperations(
-        hook_contracts, *g_runtime);
+        hook_plan.view(), *g_runtime);
 
     ReportFramerateStartup(
         g_runtime->profile,

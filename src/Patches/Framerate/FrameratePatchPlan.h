@@ -38,7 +38,7 @@ enum class FramerateHookId {
     TuneCountdownCompare,
     AudioSkipMargin,
     AudioSkipInterval,
-    AudioResyncDiagnostic,
+    AudioResyncPolicy,
     GameplayEffectAdvance,
     EffectCadence6,
     EffectCadence5,
@@ -80,6 +80,16 @@ struct FramerateHookContract {
     const char* name{};
 };
 
+struct FramerateHookPlan {
+    std::array<FramerateHookContract, kMaximumFramerateHooks> contracts{};
+    std::size_t count{};
+
+    [[nodiscard]] std::span<const FramerateHookContract>
+    view() const noexcept {
+        return {contracts.data(), count};
+    }
+};
+
 [[nodiscard]] std::expected<
     FramerateDirectPatchPlan,
     FrameratePatchPlanError>
@@ -90,6 +100,10 @@ BuildFramerateDirectPatchPlan(
 
 [[nodiscard]] std::span<const FramerateHookContract>
 FramerateHookContracts(bool transformed_timing) noexcept;
+
+[[nodiscard]] FramerateHookPlan BuildFramerateHookPlan(
+    bool transformed_timing,
+    bool wasapi_audio_committed) noexcept;
 
 [[nodiscard]] std::uint32_t ApplyCmp32Flags(
     std::uint32_t existing_eflags,

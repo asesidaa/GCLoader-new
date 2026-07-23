@@ -101,7 +101,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 }
                 PLOG_DEBUG << "RFID/JVS feature init complete!";
 
-                if (!gc::framerate::FrameratePatchInit()) {
+                if (!gc::framerate::FrameratePatchInit(
+                        gc::audio::IsWasapiAudioHookCommitted())) {
                     PLOG_ERROR
                         << "FrameratePatch: fail-closed DLL attach";
                     return FALSE;

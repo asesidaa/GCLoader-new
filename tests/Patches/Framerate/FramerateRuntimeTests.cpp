@@ -275,7 +275,7 @@ for (const std::uint32_t cap : {120U, 144U, 165U, 240U, 360U, 500U}) {
 }
 
 static_assert(std::same_as<
-    decltype(gc::framerate::FrameratePatchInit()), bool>);
+    decltype(gc::framerate::FrameratePatchInit(false)), bool>);
 
 return failures == 0 ? 0 : 1;
 }

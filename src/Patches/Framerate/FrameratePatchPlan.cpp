@@ -95,9 +95,15 @@ constexpr std::array<FramerateHookContract, 42> kHookContracts{{
     {FramerateHookId::AudioSkipInterval, 0x002401BD,
         Pattern(0xF7, 0x79, 0x3C),
         "audio skip-interval duration"},
-    {FramerateHookId::AudioResyncDiagnostic, 0x002401C4,
-        Pattern(0x8B, 0x55, 0xF8),
-        "audio resync diagnostic"},
+    {FramerateHookId::AudioResyncPolicy, 0x002401C4,
+        Pattern(
+            0x8B, 0x55, 0xF8,
+            0x52,
+            0xE8, 0x33, 0x02, 0xFD, 0xFF,
+            0x8B, 0xC8,
+            0xE8, 0x2C, 0x12, 0xFD, 0xFF,
+            0x5E, 0x8B, 0xE5, 0x5D, 0xC3),
+        "WASAPI interval-only audio resync policy"},
     {FramerateHookId::GameplayEffectAdvance, 0x00264E2D,
         Pattern(0xE8, 0x6E, 0xBA, 0xF8, 0xFF),
         "gameplay effect authored-60Hz advance"},
@@ -353,6 +359,23 @@ std::span<const FramerateHookContract>
 FramerateHookContracts(bool transformed_timing) noexcept {
     const std::span<const FramerateHookContract> contracts{kHookContracts};
     return transformed_timing ? contracts : contracts.last(1);
+}
+
+FramerateHookPlan BuildFramerateHookPlan(
+    bool transformed_timing,
+    bool wasapi_audio_committed) noexcept {
+    FramerateHookPlan plan{};
+    for (const auto& contract : kHookContracts) {
+        const bool selected =
+            contract.id == FramerateHookId::OuterFrame ||
+            (contract.id == FramerateHookId::AudioResyncPolicy
+                 ? wasapi_audio_committed
+                 : transformed_timing);
+        if (selected) {
+            plan.contracts[plan.count++] = contract;
+        }
+    }
+    return plan;
 }
 
 std::uint32_t ApplyCmp32Flags(
