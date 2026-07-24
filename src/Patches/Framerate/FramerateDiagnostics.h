@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Patches/Framerate/FramerateEffectTiming.h"
 #include "Patches/Framerate/FramerateMonitor.h"
 #include "Patches/Framerate/FramerateProfile.h"
 
@@ -7,6 +8,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace gc::framerate {
@@ -26,6 +28,14 @@ struct FramerateStartupPatchSummary {
     std::int32_t menu_repeat_initial{};
     std::int32_t menu_repeat_interval{};
     float authored_frame_milliseconds{};
+    EffectTimingManifestSummary effect_timing{};
+};
+
+struct FramerateEffectRuntimeStats {
+    std::uint64_t flow_item_mappings{};
+    std::uint64_t tutorial_elapsed_mappings{};
+    std::uint64_t chart_preroll_scalings{};
+    std::uint64_t player_modulo_mappings{};
 };
 
 [[nodiscard]] FrameratePlatformActions ProductionFrameratePlatformActions()
@@ -35,6 +45,9 @@ void ReportFramerateStartup(
     const FramerateProfile& profile,
     const FramerateStartupPatchSummary& summary,
     FrameratePlatformActions actions) noexcept;
+
+[[nodiscard]] std::string FormatFramerateEffectRuntimeStats(
+    const FramerateEffectRuntimeStats& stats);
 
 [[nodiscard]] bool ShouldSuggestIntervalModeOne(
     std::uint32_t target_fps,

@@ -1,4 +1,5 @@
 #include "Patches/Framerate/FramerateDiagnostics.h"
+#include "Patches/Framerate/FramerateEffectTiming.h"
 #include "Patches/Framerate/FramerateProfile.h"
 
 #include <Windows.h>
@@ -64,10 +65,11 @@ DiagnosticState validated_startup;
 g_state = &validated_startup;
 const FramerateStartupPatchSummary transformed_summary{
     .direct_write_count = 17,
-    .hook_count = 41,
+    .hook_count = 45,
     .menu_repeat_initial = 38,
     .menu_repeat_interval = 7,
     .authored_frame_milliseconds = 1000.0F / 60.0F,
+    .effect_timing = SummarizeEffectTimingManifest(),
 };
 ReportFramerateStartup(
     FramerateProfile::Create(144).value(),
@@ -83,7 +85,7 @@ failures += Expect(
             validated_startup.infos[0],
             "authored_clock=deterministic_phase") &&
         Contains(validated_startup.infos[0], "direct_writes=17") &&
-        Contains(validated_startup.infos[0], "hooks=41") &&
+        Contains(validated_startup.infos[0], "hooks=45") &&
         Contains(validated_startup.infos[0], "menu_repeat=38/7") &&
         Contains(
             validated_startup.infos[0],
@@ -95,7 +97,33 @@ failures += Expect(
             "countdown_asset=authored60") &&
         Contains(
             validated_startup.infos[0],
-            "player_duration=dynamic_scaled"),
+            "player_duration=dynamic_scaled") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_timing=producer_boundary") &&
+        Contains(validated_startup.infos[0], "effect_manifest_rows=67") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_registration_sites=34") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_duration_queries=9") &&
+        Contains(validated_startup.infos[0], "effect_hooks=34") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_manager_gated=1") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_already_authored=12") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_reset_or_constant=9") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_child_inherited=1") &&
+        Contains(
+            validated_startup.infos[0],
+            "effect_non_ctune_out_of_scope=12"),
     "transformed startup logs complete timing ownership");
 
 DiagnosticState native_startup;
@@ -108,11 +136,13 @@ ReportFramerateStartup(
         .menu_repeat_initial = 16,
         .menu_repeat_interval = 3,
         .authored_frame_milliseconds = 1000.0F / 60.0F,
+        .effect_timing = SummarizeEffectTimingManifest(),
     },
     Actions());
 failures += Expect(
     Contains(native_startup.infos[0], "mode=native") &&
         Contains(native_startup.infos[0], "authored_clock=native_bypass") &&
+        Contains(native_startup.infos[0], "effect_timing=native_bypass") &&
         Contains(native_startup.infos[0], "direct_writes=0") &&
         Contains(native_startup.infos[0], "hooks=1"),
     "native startup reports bypass and one cap hook");
@@ -123,10 +153,11 @@ ReportFramerateStartup(
     FramerateProfile::Create(200).value(),
     FramerateStartupPatchSummary{
         .direct_write_count = 17,
-        .hook_count = 41,
+        .hook_count = 45,
         .menu_repeat_initial = 53,
         .menu_repeat_interval = 10,
         .authored_frame_milliseconds = 1000.0F / 60.0F,
+        .effect_timing = SummarizeEffectTimingManifest(),
     },
     Actions());
 failures += Expect(
@@ -240,6 +271,14 @@ failures += Expect(
         runtime.termination_codes.size() == 1 &&
         runtime.fail_fast_calls == 1,
     "runtime transform failure publication is one-shot");
+
+failures += Expect(
+    FormatFramerateEffectRuntimeStats({1, 2, 3, 4}) ==
+        " effect_flow_item=1"
+        " effect_tutorial_elapsed=2"
+        " effect_chart_preroll=3"
+        " effect_player_modulo=4",
+    "effect runtime formatter emits stable per-site fields");
 
 return failures == 0 ? 0 : 1;
 }

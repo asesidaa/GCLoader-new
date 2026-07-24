@@ -122,6 +122,28 @@ void ReportFramerateStartup(
                << " player_decrement=native"
                << " countdown_asset=authored60"
                << " player_duration=dynamic_scaled"
+               << " effect_timing="
+               << (profile.native_timing()
+                       ? "native_bypass"
+                       : "producer_boundary")
+               << " effect_manifest_rows="
+               << summary.effect_timing.timing_sites
+               << " effect_registration_sites="
+               << summary.effect_timing.registration_sites
+               << " effect_duration_queries="
+               << summary.effect_timing.duration_queries
+               << " effect_hooks="
+               << summary.effect_timing.hook_contracts
+               << " effect_manager_gated="
+               << summary.effect_timing.manager_gated
+               << " effect_already_authored="
+               << summary.effect_timing.already_authored
+               << " effect_reset_or_constant="
+               << summary.effect_timing.reset_or_constant
+               << " effect_child_inherited="
+               << summary.effect_timing.child_inherited
+               << " effect_non_ctune_out_of_scope="
+               << summary.effect_timing.non_ctune_out_of_scope
                << " two_second_frames=" << profile.two_second_frames()
                << " palette_frame_cap=" << profile.palette_frame_cap()
                << " render_smoothing_step="
@@ -151,6 +173,17 @@ void ReportFramerateStartup(
             }
         });
     }
+}
+
+std::string FormatFramerateEffectRuntimeStats(
+    const FramerateEffectRuntimeStats& stats) {
+    std::ostringstream stream;
+    stream << " effect_flow_item=" << stats.flow_item_mappings
+           << " effect_tutorial_elapsed="
+           << stats.tutorial_elapsed_mappings
+           << " effect_chart_preroll=" << stats.chart_preroll_scalings
+           << " effect_player_modulo=" << stats.player_modulo_mappings;
+    return stream.str();
 }
 
 bool ShouldSuggestIntervalModeOne(

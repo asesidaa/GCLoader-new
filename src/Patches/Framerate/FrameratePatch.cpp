@@ -1160,6 +1160,19 @@ void MaybeLogRuntimeStats(std::int64_t now) {
     }
     g_runtime->previous_stats_qpc = now;
     const auto& counters = g_runtime->counters;
+    const FramerateEffectRuntimeStats effect_stats{
+        .flow_item_mappings = counters.effect_flow_item_mappings.load(
+            std::memory_order_relaxed),
+        .tutorial_elapsed_mappings =
+            counters.effect_tutorial_elapsed_mappings.load(
+                std::memory_order_relaxed),
+        .chart_preroll_scalings =
+            counters.effect_chart_preroll_scalings.load(
+                std::memory_order_relaxed),
+        .player_modulo_mappings =
+            counters.effect_player_modulo_mappings.load(
+                std::memory_order_relaxed),
+    };
     PLOG_INFO << "FrameratePatch: runtime_stats"
               << " target_fps=" << g_runtime->profile.target_fps()
               << " outer=" << counters.outer_calls.load(
@@ -1229,7 +1242,8 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << "/denominator="
               << counters.player_position_denominator_redirects.load(
-                     std::memory_order_relaxed);
+                     std::memory_order_relaxed)
+              << FormatFramerateEffectRuntimeStats(effect_stats);
 }
 
 void HookOuterFrame(safetyhook::Context&) {
@@ -1413,6 +1427,7 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
             .menu_repeat_interval = direct_plan->menu_repeat_interval,
             .authored_frame_milliseconds =
                 g_runtime->authored_frame_operand.frame_milliseconds,
+            .effect_timing = SummarizeEffectTimingManifest(),
         },
         actions);
 
