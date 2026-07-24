@@ -1,9 +1,13 @@
 #pragma once
 
+#include "Patches/Framerate/FramerateProfile.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
+
+#include <safetyhook.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <span>
 
@@ -61,6 +65,10 @@ struct EffectTimingManifestSummary {
     std::size_t non_ctune_out_of_scope{};
 };
 
+enum class EffectTimingTransformError {
+    ProfileConversion,
+};
+
 [[nodiscard]] std::span<const EffectRegistrationSite>
 EffectRegistrationSites() noexcept;
 
@@ -75,5 +83,20 @@ FramerateEffectHookContracts() noexcept;
 
 [[nodiscard]] EffectTimingManifestSummary
 SummarizeEffectTimingManifest() noexcept;
+
+[[nodiscard]] std::expected<void, EffectTimingTransformError>
+MapEffectFrameEaxToAuthored60(
+    safetyhook::Context& context,
+    const FramerateProfile& profile) noexcept;
+
+[[nodiscard]] std::expected<void, EffectTimingTransformError>
+MapEffectFrameEdxToAuthored60(
+    safetyhook::Context& context,
+    const FramerateProfile& profile) noexcept;
+
+[[nodiscard]] std::expected<void, EffectTimingTransformError>
+ScaleEffectDurationEaxToTarget(
+    safetyhook::Context& context,
+    const FramerateProfile& profile) noexcept;
 
 } // namespace gc::framerate

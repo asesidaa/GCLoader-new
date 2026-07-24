@@ -1,12 +1,16 @@
 #include "Patches/Framerate/FramerateEffectTiming.h"
 
+#include <safetyhook.hpp>
+
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -34,6 +38,49 @@ gc::framerate::BytePattern Pattern(
 
 bool NonEmpty(const char* value) {
     return value != nullptr && value[0] != '\0';
+}
+
+safetyhook::Context CanaryContext() {
+    safetyhook::Context context{};
+    context.eax = 0x11111111;
+    context.ebx = 0x22222222;
+    context.ecx = 0x33333333;
+    context.edx = 0x44444444;
+    context.esi = 0x55555555;
+    context.edi = 0x66666666;
+    context.ebp = 0x77777777;
+    context.esp = 0x88888888;
+    context.eip = 0x99999999;
+    context.eflags = 0xA5A5A5A5;
+    return context;
+}
+
+bool PreservedExceptEax(
+    const safetyhook::Context& actual,
+    const safetyhook::Context& original) {
+    return actual.ebx == original.ebx &&
+        actual.ecx == original.ecx &&
+        actual.edx == original.edx &&
+        actual.esi == original.esi &&
+        actual.edi == original.edi &&
+        actual.ebp == original.ebp &&
+        actual.esp == original.esp &&
+        actual.eip == original.eip &&
+        actual.eflags == original.eflags;
+}
+
+bool PreservedExceptEdx(
+    const safetyhook::Context& actual,
+    const safetyhook::Context& original) {
+    return actual.eax == original.eax &&
+        actual.ebx == original.ebx &&
+        actual.ecx == original.ecx &&
+        actual.esi == original.esi &&
+        actual.edi == original.edi &&
+        actual.ebp == original.ebp &&
+        actual.esp == original.esp &&
+        actual.eip == original.eip &&
+        actual.eflags == original.eflags;
 }
 
 bool IsKnownDisposition(
@@ -269,6 +316,142 @@ failures += Expect(
         summary.child_inherited == 1 &&
         summary.non_ctune_out_of_scope == 12,
     "manifest summary matches exhaustive effect census");
+
+const auto profile60 = FramerateProfile::Create(60).value();
+const auto profile144 = FramerateProfile::Create(144).value();
+const auto profile240 = FramerateProfile::Create(240).value();
+
+{
+    auto context = CanaryContext();
+    const auto original = context;
+    context.eax = 8;
+    failures += Expect(
+        MapEffectFrameEaxToAuthored60(context, profile240).has_value() &&
+            context.eax == 2 &&
+            PreservedExceptEax(context, original),
+        "EAX effect frame maps 240 target frames to authored 60");
+}
+{
+    auto context = CanaryContext();
+    const auto original = context;
+    context.eax = 12;
+    failures += Expect(
+        MapEffectFrameEaxToAuthored60(context, profile144).has_value() &&
+            context.eax == 5 &&
+            PreservedExceptEax(context, original),
+        "EAX effect frame maps rational 144 target frames");
+}
+{
+    auto context = CanaryContext();
+    const auto original = context;
+    context.edx = 8;
+    failures += Expect(
+        MapEffectFrameEdxToAuthored60(context, profile240).has_value() &&
+            context.edx == 2 &&
+            PreservedExceptEdx(context, original),
+        "EDX effect frame maps 240 target frames to authored 60");
+}
+{
+    auto context = CanaryContext();
+    const auto original = context;
+    context.eax = 25;
+    failures += Expect(
+        ScaleEffectDurationEaxToTarget(context, profile240).has_value() &&
+            context.eax == 100 &&
+            PreservedExceptEax(context, original),
+        "EAX effect duration scales from authored 60 to target 240");
+}
+{
+    auto context = CanaryContext();
+    const auto original = context;
+    context.eax = 25;
+    failures += Expect(
+        ScaleEffectDurationEaxToTarget(context, profile144).has_value() &&
+            context.eax == 60 &&
+            PreservedExceptEax(context, original),
+        "EAX effect duration scales rationally to target 144");
+}
+
+constexpr std::array signed_nonpositive{
+    0U,
+    std::bit_cast<std::uint32_t>(std::int32_t{-1}),
+    std::bit_cast<std::uint32_t>(
+        std::numeric_limits<std::int32_t>::min()),
+};
+for (const auto sentinel : signed_nonpositive) {
+    auto eax_map = CanaryContext();
+    const auto eax_original = eax_map;
+    eax_map.eax = sentinel;
+    failures += Expect(
+        MapEffectFrameEaxToAuthored60(eax_map, profile240).has_value() &&
+            eax_map.eax == sentinel &&
+            PreservedExceptEax(eax_map, eax_original),
+        "EAX mapping preserves signed-nonpositive sentinel and context");
+
+    auto edx_map = CanaryContext();
+    const auto edx_original = edx_map;
+    edx_map.edx = sentinel;
+    failures += Expect(
+        MapEffectFrameEdxToAuthored60(edx_map, profile240).has_value() &&
+            edx_map.edx == sentinel &&
+            PreservedExceptEdx(edx_map, edx_original),
+        "EDX mapping preserves signed-nonpositive sentinel and context");
+
+    auto scale = CanaryContext();
+    const auto scale_original = scale;
+    scale.eax = sentinel;
+    failures += Expect(
+        ScaleEffectDurationEaxToTarget(scale, profile240).has_value() &&
+            scale.eax == sentinel &&
+            PreservedExceptEax(scale, scale_original),
+        "duration scaling preserves signed-nonpositive sentinel and context");
+}
+
+{
+    auto eax_map = CanaryContext();
+    const auto eax_original = eax_map;
+    eax_map.eax = 37;
+    failures += Expect(
+        MapEffectFrameEaxToAuthored60(eax_map, profile60).has_value() &&
+            eax_map.eax == 37 &&
+            PreservedExceptEax(eax_map, eax_original),
+        "native EAX mapping leaves positive frame unchanged");
+
+    auto edx_map = CanaryContext();
+    const auto edx_original = edx_map;
+    edx_map.edx = 37;
+    failures += Expect(
+        MapEffectFrameEdxToAuthored60(edx_map, profile60).has_value() &&
+            edx_map.edx == 37 &&
+            PreservedExceptEdx(edx_map, edx_original),
+        "native EDX mapping leaves positive frame unchanged");
+
+    auto scale = CanaryContext();
+    const auto scale_original = scale;
+    scale.eax = 37;
+    failures += Expect(
+        ScaleEffectDurationEaxToTarget(scale, profile60).has_value() &&
+            scale.eax == 37 &&
+            PreservedExceptEax(scale, scale_original),
+        "native duration scaling leaves positive frame unchanged");
+}
+
+{
+    const auto profile500 = FramerateProfile::Create(500).value();
+    auto context = CanaryContext();
+    context.eax = static_cast<std::uint32_t>(
+        std::numeric_limits<std::int32_t>::max());
+    const auto original = context;
+    const auto result =
+        ScaleEffectDurationEaxToTarget(context, profile500);
+    failures += Expect(
+        !result &&
+            result.error() ==
+                EffectTimingTransformError::ProfileConversion &&
+            context.eax == original.eax &&
+            PreservedExceptEax(context, original),
+        "duration overflow reports conversion failure without mutation");
+}
 
 return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
