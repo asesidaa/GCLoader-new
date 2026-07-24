@@ -69,6 +69,10 @@ enum class FramerateHookId {
     PlayerPositionAssetFrame,
     PlayerPositionDenominatorA,
     PlayerPositionDenominatorB,
+    EffectFlowItemFrame,
+    EffectTutorialElapsed,
+    EffectChartPreRollDuration,
+    EffectPlayerModuloDividend,
     NavigatorAdvance,
     OuterFrame,
 };

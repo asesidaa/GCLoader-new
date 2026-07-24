@@ -292,8 +292,8 @@ failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
 failures += Expect(
-    transformed_hooks.size() == 42,
-    "complete transformed mode has 42 hooks");
+    transformed_hooks.size() == 46,
+    "complete transformed mode has 46 hooks");
 for (const auto removed_rva :
      {0x00218A50U, 0x002544D0U, 0x00230AB6U, 0x0024F0C6U}) {
     const bool present = std::any_of(
@@ -304,10 +304,10 @@ for (const auto removed_rva :
     failures += Expect(!present, "invalid timing contract is absent");
 }
 failures += Expect(
-    transformed_hooks.size() > 41 &&
+    transformed_hooks.size() > 45 &&
         transformed_hooks.back().id == FramerateHookId::OuterFrame &&
-        transformed_hooks[41].id == FramerateHookId::OuterFrame,
-    "outer frame is final hook at index 41");
+        transformed_hooks[45].id == FramerateHookId::OuterFrame,
+    "outer frame is final hook at index 45");
 const auto navigator_hook = std::find_if(
     transformed_hooks.begin(), transformed_hooks.end(),
     [](const auto& hook) { return hook.rva == 0x001B6310; });
@@ -323,7 +323,7 @@ failures += Expect(
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 42> expected_hooks{{
+const std::array<FramerateHookContract, 46> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -411,6 +411,14 @@ const std::array<FramerateHookContract, 42> expected_hooks{{
         Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
     {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
         Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
+    {FramerateHookId::EffectFlowItemFrame, 0x001F0310,
+        Pattern({0x89, 0x42, 0x08}), ""},
+    {FramerateHookId::EffectTutorialElapsed, 0x00249593,
+        Pattern({0x89, 0x95, 0x74, 0xFF, 0xFF, 0xFF}), ""},
+    {FramerateHookId::EffectChartPreRollDuration, 0x0024A934,
+        Pattern({0x89, 0x45, 0x9C}), ""},
+    {FramerateHookId::EffectPlayerModuloDividend, 0x0025072E,
+        Pattern({0xF7, 0xF9}), ""},
     {FramerateHookId::NavigatorAdvance, 0x001B6310,
         Pattern({0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
             0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
@@ -425,6 +433,19 @@ for (std::size_t index = 0; index < expected_hooks.size(); ++index) {
             transformed_hooks[index].expected == expected_hooks[index].expected,
         "exact hook ID/RVA/byte contract");
 }
+
+failures += Expect(
+    BuildFramerateHookPlan(false, false).count == 1,
+    "native plan without WASAPI contains outer hook only");
+failures += Expect(
+    BuildFramerateHookPlan(false, true).count == 2,
+    "native plan with WASAPI contains policy and outer hooks");
+failures += Expect(
+    BuildFramerateHookPlan(true, false).count == 45,
+    "transformed plan without WASAPI omits only audio policy");
+failures += Expect(
+    BuildFramerateHookPlan(true, true).count == 46,
+    "transformed plan with WASAPI contains all hooks");
 
 failures += Expect(
     !BuildFramerateDirectPatchPlan(

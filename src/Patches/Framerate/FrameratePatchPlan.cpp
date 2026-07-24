@@ -1,4 +1,5 @@
 #include "Patches/Framerate/FrameratePatchPlan.h"
+#include "Patches/Framerate/FramerateEffectTiming.h"
 
 #include <bit>
 #include <cstddef>
@@ -66,7 +67,7 @@ bool AddWrite(
     return true;
 }
 
-constexpr std::array<FramerateHookContract, 42> kHookContracts{{
+constexpr std::array<FramerateHookContract, 10> kPreEffectHookContracts{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern(0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00),
         "MovieClip goto-frame depth guard"},
@@ -104,96 +105,9 @@ constexpr std::array<FramerateHookContract, 42> kHookContracts{{
             0xE8, 0x2C, 0x12, 0xFD, 0xFF,
             0x5E, 0x8B, 0xE5, 0x5D, 0xC3),
         "WASAPI interval-only audio resync policy"},
-    {FramerateHookId::GameplayEffectAdvance, 0x00264E2D,
-        Pattern(0xE8, 0x6E, 0xBA, 0xF8, 0xFF),
-        "gameplay effect authored-60Hz advance"},
-    {FramerateHookId::EffectCadence6, 0x0024063B,
-        Pattern(0x85, 0xD2),
-        "gameplay effect period-6 cadence"},
-    {FramerateHookId::EffectCadence5, 0x002408D7,
-        Pattern(0x85, 0xD2),
-        "gameplay effect period-5 cadence"},
-    {FramerateHookId::EffectCadence4, 0x00240C9C,
-        Pattern(0x85, 0xD2),
-        "gameplay effect period-4 cadence"},
-    {FramerateHookId::EffectCadence16A, 0x00241213,
-        Pattern(0x85, 0xD2),
-        "gameplay effect period-16 cadence A"},
-    {FramerateHookId::EffectCadence16B, 0x0024122F,
-        Pattern(0x81, 0xE1, 0x0F, 0x00, 0x00, 0x80),
-        "gameplay effect period-16 cadence B"},
-    {FramerateHookId::EffectCadence8, 0x00241268,
-        Pattern(0x85, 0xC0),
-        "gameplay effect period-8 cadence"},
-    {FramerateHookId::RemoteCadenceA, 0x002632DB,
-        Pattern(0x85, 0xD2),
-        "remote gameplay period-4 cadence A"},
-    {FramerateHookId::RemoteCadenceB, 0x00263646,
-        Pattern(0x85, 0xD2),
-        "remote gameplay period-4 cadence B"},
-    {FramerateHookId::GameplayBlink, 0x0024A1B9,
-        Pattern(0xD1, 0xF8),
-        "gameplay authored-frame blink"},
-    {FramerateHookId::GreatGoodLifetimeOperand, 0x002464A8,
-        Pattern(0xD8, 0x48, 0x18),
-        "GREAT/GOOD lifetime authored-ms operand (dead EAX)"},
-    {FramerateHookId::GreatGoodFrameOperand, 0x00246528,
-        Pattern(0xD8, 0x71, 0x18),
-        "GREAT/GOOD frame authored-ms operand (dead ECX)"},
-    {FramerateHookId::EffectLifetimeAOperand, 0x00248F00,
-        Pattern(0xD8, 0x49, 0x18),
-        "effect lifetime A authored-ms operand (dead ECX)"},
-    {FramerateHookId::EffectFrameAOperand, 0x00248F8C,
-        Pattern(0xD8, 0x72, 0x18),
-        "effect frame A authored-ms operand (dead EDX)"},
-    {FramerateHookId::EffectLifetimeBOperand, 0x0024912B,
-        Pattern(0xD8, 0x49, 0x18),
-        "effect lifetime B authored-ms operand (dead ECX)"},
-    {FramerateHookId::EffectFrameBOperand, 0x002491E0,
-        Pattern(0xD8, 0x72, 0x18),
-        "effect frame B authored-ms operand (dead EDX)"},
-    {FramerateHookId::DirectEffectFrameOperand, 0x00249C14,
-        Pattern(0xD8, 0x72, 0x18),
-        "direct effect frame authored-ms operand (dead EDX)"},
-    {FramerateHookId::ChartEffectFrameAOperand, 0x0024BC8B,
-        Pattern(0xD8, 0x71, 0x18),
-        "chart effect frame A authored-ms operand (dead ECX)"},
-    {FramerateHookId::ChartEffectFrameBOperand, 0x0024CC8A,
-        Pattern(0xD8, 0x71, 0x18),
-        "chart effect frame B authored-ms operand (dead ECX)"},
-    {FramerateHookId::ChartEffectFrameCOperand, 0x0024CCBE,
-        Pattern(0xD8, 0x72, 0x18),
-        "chart effect frame C authored-ms operand (dead EDX)"},
-    {FramerateHookId::ChartEffectFrameDOperand, 0x0024D836,
-        Pattern(0xD8, 0x70, 0x18),
-        "chart effect frame D authored-ms operand (dead EAX)"},
-    {FramerateHookId::FixedVisualFrameOperand, 0x00250AD5,
-        Pattern(0xD8, 0x71, 0x18),
-        "fixed visual frame authored-ms operand (dead ECX)"},
-    {FramerateHookId::GameplayCountdownAssetFrame, 0x00249A9C,
-        Pattern(0x89, 0x48, 0x08),
-        "gameplay countdown authored asset-frame mapping"},
-    {FramerateHookId::PlayerPositionInitA, 0x00263240,
-        Pattern(0x89, 0x84, 0x91, 0x54, 0x1D, 0x00, 0x00),
-        "player-position duration initialization A"},
-    {FramerateHookId::PlayerPositionInitB, 0x002632B2,
-        Pattern(0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
-        "player-position duration initialization B"},
-    {FramerateHookId::PlayerPositionInitC, 0x0026359B,
-        Pattern(0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
-        "player-position duration initialization C"},
-    {FramerateHookId::PlayerPositionInitD, 0x00263615,
-        Pattern(0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
-        "player-position duration initialization D"},
-    {FramerateHookId::PlayerPositionAssetFrame, 0x0024EF43,
-        Pattern(0x2B, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00),
-        "player-position authored asset-frame mapping"},
-    {FramerateHookId::PlayerPositionDenominatorA, 0x0024F76D,
-        Pattern(0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00),
-        "player-position scaled denominator A"},
-    {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
-        Pattern(0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00),
-        "player-position scaled denominator B"},
+}};
+
+constexpr std::array<FramerateHookContract, 2> kPostEffectHookContracts{{
     {FramerateHookId::NavigatorAdvance, 0x001B6310,
         Pattern(0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
             0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
@@ -203,6 +117,26 @@ constexpr std::array<FramerateHookContract, 42> kHookContracts{{
         Pattern(0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24),
         "outer-frame cap validation and deterministic authored phase"},
 }};
+
+const std::array<FramerateHookContract, kMaximumFramerateHooks>&
+AllHookContracts() noexcept {
+    static_assert(kMaximumFramerateHooks == 46);
+    static const auto contracts = [] {
+        std::array<FramerateHookContract, kMaximumFramerateHooks> result{};
+        std::size_t index = 0;
+        for (const auto& contract : kPreEffectHookContracts) {
+            result[index++] = contract;
+        }
+        for (const auto& contract : FramerateEffectHookContracts()) {
+            result[index++] = contract;
+        }
+        for (const auto& contract : kPostEffectHookContracts) {
+            result[index++] = contract;
+        }
+        return result;
+    }();
+    return contracts;
+}
 
 } // namespace
 
@@ -357,7 +291,8 @@ BuildFramerateDirectPatchPlan(
 
 std::span<const FramerateHookContract>
 FramerateHookContracts(bool transformed_timing) noexcept {
-    const std::span<const FramerateHookContract> contracts{kHookContracts};
+    const std::span<const FramerateHookContract> contracts{
+        AllHookContracts()};
     return transformed_timing ? contracts : contracts.last(1);
 }
 
@@ -365,7 +300,7 @@ FramerateHookPlan BuildFramerateHookPlan(
     bool transformed_timing,
     bool wasapi_audio_committed) noexcept {
     FramerateHookPlan plan{};
-    for (const auto& contract : kHookContracts) {
+    for (const auto& contract : AllHookContracts()) {
         const bool selected =
             contract.id == FramerateHookId::OuterFrame ||
             (contract.id == FramerateHookId::AudioResyncPolicy
