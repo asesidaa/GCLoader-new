@@ -4,6 +4,7 @@
 #include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateDiagnostics.h"
+#include "Patches/Framerate/FramerateEffectTiming.h"
 #include "Patches/Framerate/FramerateHookTransforms.h"
 #include "Patches/Framerate/FramerateMonitor.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
@@ -75,6 +76,10 @@ struct FramerateHookStorage {
     safetyhook::MidHook player_position_asset_frame{};
     safetyhook::MidHook player_position_denominator_a{};
     safetyhook::MidHook player_position_denominator_b{};
+    safetyhook::MidHook effect_flow_item_frame{};
+    safetyhook::MidHook effect_tutorial_elapsed{};
+    safetyhook::MidHook effect_chart_preroll_duration{};
+    safetyhook::MidHook effect_player_modulo_dividend{};
     safetyhook::MidHook outer_frame{};
 };
 
@@ -107,6 +112,10 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t player_position_initializations{0};
     std::atomic_uint64_t player_position_asset_mappings{0};
     std::atomic_uint64_t player_position_denominator_redirects{0};
+    std::atomic_uint64_t effect_flow_item_mappings{0};
+    std::atomic_uint64_t effect_tutorial_elapsed_mappings{0};
+    std::atomic_uint64_t effect_chart_preroll_scalings{0};
+    std::atomic_uint64_t effect_player_modulo_mappings{0};
 };
 
 struct FramerateRuntimeState {
@@ -178,6 +187,10 @@ void HookGameplayCountdownAssetFrame(safetyhook::Context&);
 void HookPlayerPositionInitialization(safetyhook::Context&);
 void HookPlayerPositionAssetFrame(safetyhook::Context&);
 void HookPlayerPositionDenominator(safetyhook::Context&);
+void HookEffectFlowItemFrame(safetyhook::Context&);
+void HookEffectTutorialElapsed(safetyhook::Context&);
+void HookEffectChartPreRollDuration(safetyhook::Context&);
+void HookEffectPlayerModuloDividend(safetyhook::Context&);
 void HookOuterFrame(safetyhook::Context&);
 
 [[nodiscard]] std::uintptr_t ExecutableBase() noexcept {
@@ -601,6 +614,38 @@ void AssignHookCallbacks(
             0x0024FD40>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::player_position_denominator_b>;
+        break;
+    case FramerateHookId::EffectFlowItemFrame:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_flow_item_frame,
+            HookEffectFlowItemFrame,
+            0x001F0310>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_flow_item_frame>;
+        break;
+    case FramerateHookId::EffectTutorialElapsed:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_tutorial_elapsed,
+            HookEffectTutorialElapsed,
+            0x00249593>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_tutorial_elapsed>;
+        break;
+    case FramerateHookId::EffectChartPreRollDuration:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_chart_preroll_duration,
+            HookEffectChartPreRollDuration,
+            0x0024A934>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_chart_preroll_duration>;
+        break;
+    case FramerateHookId::EffectPlayerModuloDividend:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::effect_player_modulo_dividend,
+            HookEffectPlayerModuloDividend,
+            0x0025072E>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::effect_player_modulo_dividend>;
         break;
     case FramerateHookId::NavigatorAdvance:
         operation.install = &InstallInlineHook<
@@ -1035,6 +1080,46 @@ void HookPlayerPositionDenominator(safetyhook::Context& context) {
         return;
     }
     g_runtime->counters.player_position_denominator_redirects.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookEffectFlowItemFrame(safetyhook::Context& context) {
+    if (!MapEffectFrameEaxToAuthored60(context, g_runtime->profile)) {
+        FatalRuntimeConversion(
+            "effect flow-item authored-frame mapping");
+        return;
+    }
+    g_runtime->counters.effect_flow_item_mappings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookEffectTutorialElapsed(safetyhook::Context& context) {
+    if (!MapEffectFrameEdxToAuthored60(context, g_runtime->profile)) {
+        FatalRuntimeConversion(
+            "effect tutorial elapsed authored-frame mapping");
+        return;
+    }
+    g_runtime->counters.effect_tutorial_elapsed_mappings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookEffectChartPreRollDuration(safetyhook::Context& context) {
+    if (!ScaleEffectDurationEaxToTarget(context, g_runtime->profile)) {
+        FatalRuntimeConversion(
+            "effect chart pre-roll duration scaling");
+        return;
+    }
+    g_runtime->counters.effect_chart_preroll_scalings.fetch_add(
+        1, std::memory_order_relaxed);
+}
+
+void HookEffectPlayerModuloDividend(safetyhook::Context& context) {
+    if (!MapEffectFrameEaxToAuthored60(context, g_runtime->profile)) {
+        FatalRuntimeConversion(
+            "effect player modulo-dividend authored-frame mapping");
+        return;
+    }
+    g_runtime->counters.effect_player_modulo_mappings.fetch_add(
         1, std::memory_order_relaxed);
 }
 

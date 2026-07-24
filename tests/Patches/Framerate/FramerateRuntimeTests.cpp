@@ -251,11 +251,20 @@ failures += Expect(
     MapPositiveTargetFrameToAuthored60(profile240, 8).value() == 2,
     "blink maps target frames to authored frames");
 
-static_assert(kMaximumFramerateHooks == 42);
+static_assert(kMaximumFramerateHooks == 46);
 for (const auto& contract : FramerateHookContracts(true)) {
     failures += Expect(
         FramerateHookHasRuntimeBinding(contract.id),
         "every transformed contract has a runtime binding");
+}
+for (const auto id : {
+         FramerateHookId::EffectFlowItemFrame,
+         FramerateHookId::EffectTutorialElapsed,
+         FramerateHookId::EffectChartPreRollDuration,
+         FramerateHookId::EffectPlayerModuloDividend}) {
+    failures += Expect(
+        FramerateHookHasRuntimeBinding(id),
+        "new effect producer has an explicit runtime binding");
 }
 
 for (const std::uint32_t cap : {120U, 144U, 165U, 240U, 360U, 500U}) {
