@@ -289,7 +289,65 @@ Follow-up status:
 
 ## Stage B — Corrected with Diagnostics Retained
 
-Status: gated on completed Stage A evidence.
+Status: implementation and static verification complete; corrected gameplay
+deployment pending explicit user authorization.
+
+### Corrected build identity
+
+Build evidence appended on 2026-07-26:
+
+- Source commit:
+  `7ab8e9a7dc865050e844c0ea8b737ea177ed40c2`
+- Branch: `ctune-effect-timing`
+- Active internal mode: `correct`
+- Release candidate:
+  `H:\gc\artifacts\GCLoader\.worktrees\ctune-effect-timing\build-msvc32-release\dist\iDmacDrv32.dll`
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-b-correct\FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922\iDmacDrv32.dll`
+- Size: `5656064` bytes
+- Candidate UTC timestamp: `2026-07-25T20:19:33.7044882Z`
+- Candidate and archive SHA-256:
+  `FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922`
+- `dumpbin /headers` reports machine `14C (x86)` and a 32-bit word
+  machine.
+- Executable SHA-256:
+  `FEAD3BD4D0E0985F101965EDC417DD2B96522F8716FF789D84618FEB0D7A2522`
+- IDB SHA-256:
+  `55D119762B0706549AB5AA9C7D5D2DDF3C902AE322462D025D570C8181C50C1F`
+- The live `H:\gc\iDmacDrv32.dll` was not replaced. It remains the Stage A
+  Observe build with SHA-256
+  `2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026`.
+
+### Static verification
+
+- The active-build regression was run before the production selector change.
+  `FramerateMenuTimingTests` failed only for the expected Correct-mode
+  identity, preprocessing exemption, Ranking gate, HitChart gate, and three
+  UnlockReward gates.
+- After changing only `ActiveMenuTimingMode()` from `Observe` to `Correct`,
+  the focused `FramerateMenuTimingTests` passed.
+- The focused Debug framerate gate passed all `9/9` tests.
+- Fresh `msvc32-debug` configure and complete build succeeded; its complete
+  CTest suite passed `57/57`.
+- Fresh `msvc32-release` configure and complete build succeeded; its complete
+  CTest suite passed `57/57`.
+- The verified policy simulations cover 60, 120, 144, and 240 FPS, including
+  the deterministic 144 FPS rational phase sequence and the Ranking,
+  HitChart, UnlockReward primary, and UnlockReward secondary transition
+  lengths.
+- The corrected contract remains at capacity `53`: the complete transformed
+  view has 53 contracts, selected transformed plans contain exactly `52/53`
+  hooks without/with optional WASAPI, and native plans contain exactly `1/2`.
+- Navigator remains transformed contract index 51 and `OuterFrame` remains
+  index 52. Every transformed contract has a non-null runtime binding, and
+  rollback tests pass across all 53 hook positions.
+- All Stage A diagnostics remain installed and represented, including
+  `MovieClipStopDiagnostic`, preprocessing causal-stop attribution, MovieClip
+  revisit/collision tracking, activation/sample lines, boundary counters, and
+  diagnostic-read failures.
+
+This is static/build evidence only. No Stage B visual, timing, input, crash,
+Ranking, HitChart, or UnlockReward runtime verdict has been recorded.
 
 ## Stage C — Accepted Diagnostic Cleanup
 
