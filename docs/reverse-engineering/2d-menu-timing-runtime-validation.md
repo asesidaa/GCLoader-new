@@ -115,6 +115,31 @@ retained as historical context and is superseded by this entry:
 
 Status: observe-only Stage A DLL deployed; user diagnostic run pending.
 
+Crash-repair redeployment evidence appended on 2026-07-26; the preceding
+deployment identifies the rejected crashing DLL and is retained:
+
+- Deployment time:
+  `2026-07-26T03:35:03.7629848+08:00`
+  (`2026-07-25T19:35:03.7629848Z`)
+- Live path: `H:\gc\iDmacDrv32.dll`
+- Source archive:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-a-observe\2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026\iDmacDrv32.dll`
+- Live size: `5,656,064` bytes
+- Live SHA-256:
+  `2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026`
+- Pre-deployment process check: no `game471` process
+- Post-copy verification: Release candidate, immutable archive, and live
+  SHA-256 values match exactly
+- Preserved prior full-session log SHA-256:
+  `29935BEC9AB11736AEEAAEDC6396DCBC2A01C40F81C1DA13F7FBB2C85C4FE7A3`
+- Preserved prior crash dump SHA-256:
+  `DF24E584FC5D7C55BCDA5AE3E32F3A165CB067F53BD7D09884A3362E7E62E611`
+- The rejected DLL remains available in its immutable hash archive and crash
+  run archive.
+
+Status: relocated-hook observe-only candidate deployed; Ranking and HitChart
+runtime safety/activation test pending.
+
 ### Runtime exercises
 
 Status: user run not yet performed.
