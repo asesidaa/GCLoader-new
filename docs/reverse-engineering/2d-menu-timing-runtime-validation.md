@@ -43,6 +43,43 @@ as the historical starting state and is superseded by this entry:
 This is static evidence only. No live DLL was copied and no gameplay run was
 performed.
 
+Crash-repair static evidence appended on 2026-07-26; this is a new
+observe-only candidate and does not rehabilitate the rejected crashing build:
+
+- Source commit:
+  `55e3b4f0b15381faf73667f99442570adf23ee70`
+- Active mode: `observe`
+- Release candidate:
+  `H:\gc\artifacts\GCLoader\.worktrees\ctune-effect-timing\build-msvc32-release\dist\iDmacDrv32.dll`
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-a-observe\2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026\iDmacDrv32.dll`
+- Size: `5,656,064` bytes
+- Last write time:
+  `2026-07-26T03:32:00.3685629+08:00`
+  (`2026-07-25T19:32:00.3685629Z`)
+- SHA-256:
+  `2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026`
+- Architecture: PE `14C machine (x86)`, 32-bit word machine
+- Debug gate: complete build and `57/57` CTest tests passed
+- RelWithDebInfo gate: complete build and `57/57` CTest tests passed
+- Candidate/archive hash comparison: exact match
+- Ranking contract:
+  RVA `0x00216EB4`, bytes `8B 4D E0 89 01`, shared continuation
+  `0x00216EB9`
+- HitChart contract:
+  RVA `0x0026562F`, bytes `8B 8D 6C FF FF FF`, suppression continuation
+  `0x00265637`
+- The five counter paths now use explicit original-code continuations instead
+  of trampoline-relative instruction-length increments.
+- The rejected DLL, full-session log, crash dump, and immutable crash-run
+  archive remain unchanged.
+
+This candidate still performs no menu timing correction. Its next runtime gate
+is limited to proving that Ranking and HitChart can activate and complete
+without the previous interior-detour crash. Required evidence is nonzero
+`ranking_entry` and `hitchart_entry` activation/counters, no crash through both
+attract screens, and a final `menu_timing_mode=observe` record.
+
 ### Reproduction configuration
 
 Read from `H:\gc\data\expconfig.cfg` without modification:
