@@ -43,4 +43,9 @@ add_executable(FramerateEffectTimingTests
 target_link_libraries(FramerateEffectTimingTests PRIVATE gc_runtime_patches)
 add_test(NAME FramerateEffectTimingTests COMMAND FramerateEffectTimingTests)
 
+add_executable(FramerateMenuTimingTests
+        Framerate/FramerateMenuTimingTests.cpp)
+target_link_libraries(FramerateMenuTimingTests PRIVATE gc_runtime_patches)
+add_test(NAME FramerateMenuTimingTests COMMAND FramerateMenuTimingTests)
+
 add_subdirectory(TestModeTiming)

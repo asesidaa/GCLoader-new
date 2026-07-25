@@ -3,6 +3,7 @@ add_library(gc_runtime_patches STATIC
         Framerate/FramerateDiagnostics.cpp
         Framerate/FramerateEffectTiming.cpp
         Framerate/FramerateHookTransforms.cpp
+        Framerate/FramerateMenuTiming.cpp
         Framerate/FrameratePatch.cpp
         Framerate/FrameratePatchPlan.cpp
         Framerate/FramerateMonitor.cpp
