@@ -7,6 +7,12 @@
 - Plans:
   `docs/superpowers/plans/2026-07-25-complete-2d-menu-timing/README.md`
 
+> **2026-07-26 safety correction:** The Ranking and HitChart hook addresses,
+> byte spans, destination-register assumptions, and relative `EIP` skip
+> semantics in this document are superseded by
+> [Safe Menu Counter Hooks Design](2026-07-26-safe-menu-counter-hooks-design.md).
+> The remaining timing design is unchanged.
+
 ## Objective
 
 Correct every material 2D menu timing problem proven by the 2026-07-25 audit

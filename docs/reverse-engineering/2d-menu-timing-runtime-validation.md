@@ -82,13 +82,67 @@ Status: observe-only Stage A DLL deployed; user diagnostic run pending.
 
 Status: user run not yet performed.
 
+Runtime evidence appended on 2026-07-26; the initial status above is retained
+as historical context and is superseded by this entry:
+
+- User exercise: one complete 240 FPS gameplay session through post-play reward
+  and entry into the ranking screen
+- Result: the ranking screen crashed; Stage A is rejected as unsafe
+- Preserved evidence:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-a-observe\runs\20260726-033536-ranking-crash`
+- Full-session log SHA-256:
+  `29935BEC9AB11736AEEAAEDC6396DCBC2A01C40F81C1DA13F7FBB2C85C4FE7A3`
+- Crash dump SHA-256:
+  `DF24E584FC5D7C55BCDA5AE3E32F3A165CB067F53BD7D09884A3362E7E62E611`
+- Live DLL SHA-256:
+  `4D2336BE5A6BD1F0009692BB0382BD9284D0204038C3568FE850B74B25D3028F`
+- The live DLL and release candidate hashes match exactly.
+- The 240 FPS external cap validated at measured FPS `240.159`.
+- Final menu counters before the crash:
+  - `movieclip_preprocess=0/0/0`
+  - `movieclip_preprocess_stop=0/0`
+  - `movieclip_revisit=0/151900`
+    (zero same-epoch revisits, 151,900 tracker hash collisions)
+  - `ranking_entry=0/0`
+  - `hitchart_entry=0/0`
+  - `unlock_countdown=2/8/1`
+  - `unlock_state_primary=0/0/0`
+  - `unlock_state_secondary=2/8/1`
+  - `menu_diagnostic_read_failures=0`
+- The unlock countdown and secondary-state samples were both observed on
+  non-authored ticks with action `would_suppress`.
+- Gameplay-effect evidence from the same final record:
+  - `gameplay_effect=6598/skip=19796`
+  - `effect_tutorial_elapsed=3021`
+  - `effect_chart_preroll=0`
+  - `effect_player_modulo=0`
+
 ### Codex interpretation
 
 Status: no runtime log has been supplied.
 
+Interpretation appended on 2026-07-26; the initial status above is superseded:
+
+- The full session exercised the unlock countdown and secondary-state paths,
+  but not the primary-state path.
+- The MovieClip preprocessing visitor and causal-stop diagnostics did not
+  activate. The ordinary MovieClip tracker found no same-object repeat within
+  an outer epoch; its direct-mapped table accumulated 151,900 collisions.
+- Ranking did not produce a callback sample. Dump and IDA evidence proves this
+  was not merely an unexercised counter: the ranking screen took a branch into
+  the interior of the seven-byte SafetyHook overwrite before the callback.
+- Root cause and the paired hit-chart exposure are recorded in
+  `2d-menu-timing-ranking-crash-investigation.md`.
+
 ### User verdict
 
 Stage A is diagnostic-only and carries no fix verdict.
+
+User-reported runtime verdict appended on 2026-07-26:
+
+- full gameplay session completed
+- ranking screen crashes with the Stage A hooks installed
+- no menu timing correction acceptance is implied
 
 ## Stage B — Corrected with Diagnostics Retained
 

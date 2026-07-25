@@ -4,6 +4,11 @@ This directory turns the approved
 [Complete 2D Menu Timing Fix Design](../../specs/2026-07-25-complete-2d-menu-timing-design.md)
 into three separately gated implementation plans.
 
+> **2026-07-26 safety correction:** Ranking and HitChart hook geometry and all
+> counter-gate continuation semantics are superseded by the
+> [Safe Menu Counter Hooks plan](../2026-07-26-safe-menu-counter-hooks/PLAN.md).
+> The original stage plans remain as the historical execution record.
+
 **Implementation baseline:** `817b25d` (`docs: design complete 2D menu timing fixes`)
 
 **Execution mode:** inline in the
