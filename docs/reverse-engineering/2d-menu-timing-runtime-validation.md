@@ -289,8 +289,7 @@ Follow-up status:
 
 ## Stage B — Corrected with Diagnostics Retained
 
-Status: implementation and static verification complete; corrected gameplay
-deployment pending explicit user authorization.
+Status: corrected DLL deployed; gameplay acceptance pending.
 
 ### Corrected build identity
 
@@ -348,6 +347,29 @@ Build evidence appended on 2026-07-26:
 
 This is static/build evidence only. No Stage B visual, timing, input, crash,
 Ranking, HitChart, or UnlockReward runtime verdict has been recorded.
+
+### Corrected deployment identity
+
+Deployment evidence appended on 2026-07-26:
+
+- User authorization: `Deploy the dll`
+- Pre-deployment process check: no `game471.exe` process was running.
+- Deployment timestamp: `2026-07-25T22:12:41.5560533Z`
+- Previous live Stage A SHA-256:
+  `2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026`
+- Previous live DLL and loader log snapshot:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\pre-deploy\20260726-061142`
+- Deployment source:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-b-correct\FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922\iDmacDrv32.dll`
+- New live path: `H:\gc\iDmacDrv32.dll`
+- Source and live SHA-256:
+  `FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922`
+- Live size: `5656064` bytes
+- Post-deployment process check: no `game471.exe` process was running.
+
+This is deployment identity evidence only. Runtime behavior remains unaccepted
+until the user completes gameplay testing and supplies the resulting log and
+visual, timing, input, and crash verdicts.
 
 ## Stage C — Accepted Diagnostic Cleanup
 
