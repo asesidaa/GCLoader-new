@@ -6,6 +6,7 @@
 #include "Patches/Framerate/FramerateDiagnostics.h"
 #include "Patches/Framerate/FramerateEffectTiming.h"
 #include "Patches/Framerate/FramerateHookTransforms.h"
+#include "Patches/Framerate/FramerateMenuTiming.h"
 #include "Patches/Framerate/FramerateMonitor.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
 #include "Patches/Framerate/FrameratePatchTransaction.h"
@@ -37,6 +38,8 @@ constexpr std::uintptr_t kAudioResyncEpilogueRva = 0x002401D4;
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
     safetyhook::InlineHook movieclip_advance{};
+    safetyhook::InlineHook movieclip_preprocess_visit{};
+    safetyhook::InlineHook movieclip_stop_diagnostic{};
     safetyhook::InlineHook navigator_advance{};
     safetyhook::MidHook palette_compare{};
     safetyhook::MidHook stage_clip_frame{};
@@ -80,6 +83,11 @@ struct FramerateHookStorage {
     safetyhook::MidHook effect_tutorial_elapsed{};
     safetyhook::MidHook effect_chart_preroll_duration{};
     safetyhook::MidHook effect_player_modulo_dividend{};
+    safetyhook::MidHook ranking_entry_counter_store{};
+    safetyhook::MidHook hitchart_entry_counter_store{};
+    safetyhook::MidHook unlock_reward_countdown_store{};
+    safetyhook::MidHook unlock_reward_primary_state_store{};
+    safetyhook::MidHook unlock_reward_secondary_state_store{};
     safetyhook::MidHook outer_frame{};
 };
 
@@ -118,6 +126,42 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t effect_player_modulo_mappings{0};
 };
 
+struct MenuCounterRuntimeCounters {
+    std::atomic_uint64_t commits{0};
+    std::atomic_uint64_t suppressions{0};
+    std::atomic_uint64_t boundaries{0};
+};
+
+struct FramerateMenuRuntimeCounters {
+    std::atomic_uint64_t preprocessing_visits{0};
+    std::atomic_uint64_t preprocessing_non_tick_skips{0};
+    std::atomic_uint64_t preprocessing_forced{0};
+    std::atomic_uint64_t preprocessing_stops{0};
+    std::atomic_uint64_t preprocessing_causal_stops{0};
+    std::atomic_uint64_t movieclip_same_epoch_revisits{0};
+    std::atomic_uint64_t movieclip_hash_collisions{0};
+    MenuCounterRuntimeCounters ranking_entry{};
+    MenuCounterRuntimeCounters hitchart_entry{};
+    MenuCounterRuntimeCounters unlock_countdown{};
+    MenuCounterRuntimeCounters unlock_primary{};
+    MenuCounterRuntimeCounters unlock_secondary{};
+    std::atomic_uint64_t diagnostic_read_failures{0};
+};
+
+struct FramerateMenuDiagnosticLatches {
+    std::atomic_bool preprocessing_activation{false};
+    std::atomic_bool preprocessing_causal_sample{false};
+    std::atomic_bool revisit_activation{false};
+    std::atomic_bool ranking_activation{false};
+    std::atomic_bool ranking_sample{false};
+    std::atomic_bool hitchart_activation{false};
+    std::atomic_bool hitchart_sample{false};
+    std::atomic_bool unlock_activation{false};
+    std::atomic_bool unlock_countdown_sample{false};
+    std::atomic_bool unlock_primary_sample{false};
+    std::atomic_bool unlock_secondary_sample{false};
+};
+
 struct FramerateRuntimeState {
     FramerateRuntimeState(
         FramerateProfile profile_value,
@@ -142,8 +186,11 @@ struct FramerateRuntimeState {
     AuthoredFrameOperand authored_frame_operand{};
     PlayerPositionDurationOperand player_position_duration_operand{};
     FramerateRuntimeCounters counters;
+    FramerateMenuRuntimeCounters menu_counters;
+    FramerateMenuDiagnosticLatches menu_latches;
     std::atomic_bool fatal_published{false};
     std::atomic_bool authored_60hz_tick{true};
+    std::atomic_uint64_t outer_epoch{0};
     std::int64_t previous_stats_qpc{};
 };
 
@@ -158,9 +205,13 @@ struct FramerateHookOperationPlan {
 
 std::optional<FramerateRuntimeState> g_runtime;
 thread_local int g_movieclip_goto_depth = 0;
+thread_local MovieClipPreprocessTracker g_movieclip_preprocess_tracker;
+thread_local MovieClipVisitTracker g_movieclip_visit_tracker;
 
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
+void __fastcall HookMovieClipPreprocessVisit(void*, void*, int);
+void __fastcall HookMovieClipStopDiagnostic(void*, void*);
 void* __fastcall HookNavigatorAdvance(void*, void*);
 void HookPaletteCompare(safetyhook::Context&);
 void HookStageClipFrame(safetyhook::Context&);
@@ -191,6 +242,11 @@ void HookEffectFlowItemFrame(safetyhook::Context&);
 void HookEffectTutorialElapsed(safetyhook::Context&);
 void HookEffectChartPreRollDuration(safetyhook::Context&);
 void HookEffectPlayerModuloDividend(safetyhook::Context&);
+void HookRankingEntryCounterStore(safetyhook::Context&);
+void HookHitChartEntryCounterStore(safetyhook::Context&);
+void HookUnlockRewardCountdownStore(safetyhook::Context&);
+void HookUnlockRewardPrimaryStateStore(safetyhook::Context&);
+void HookUnlockRewardSecondaryStateStore(safetyhook::Context&);
 void HookOuterFrame(safetyhook::Context&);
 
 [[nodiscard]] std::uintptr_t ExecutableBase() noexcept {
@@ -207,6 +263,23 @@ void HookOuterFrame(safetyhook::Context&);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
+    }
+}
+
+template <typename Builder>
+void LogMenuDiagnosticOnce(
+    std::atomic_bool& latch,
+    Builder&& builder) noexcept {
+    bool expected = false;
+    if (!latch.compare_exchange_strong(
+            expected,
+            true,
+            std::memory_order_relaxed)) {
+        return;
+    }
+    try {
+        PLOG_INFO << builder();
+    } catch (...) {
     }
 }
 
@@ -647,6 +720,62 @@ void AssignHookCallbacks(
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::effect_player_modulo_dividend>;
         break;
+    case FramerateHookId::MovieClipPreprocessVisit:
+        operation.install = &InstallInlineHook<
+            &FramerateHookStorage::movieclip_preprocess_visit,
+            HookMovieClipPreprocessVisit,
+            0x000EFB90>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::movieclip_preprocess_visit>;
+        break;
+    case FramerateHookId::MovieClipStopDiagnostic:
+        operation.install = &InstallInlineHook<
+            &FramerateHookStorage::movieclip_stop_diagnostic,
+            HookMovieClipStopDiagnostic,
+            0x000D1730>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::movieclip_stop_diagnostic>;
+        break;
+    case FramerateHookId::RankingEntryCounterStore:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::ranking_entry_counter_store,
+            HookRankingEntryCounterStore,
+            0x00216EB7>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::ranking_entry_counter_store>;
+        break;
+    case FramerateHookId::HitChartEntryCounterStore:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::hitchart_entry_counter_store,
+            HookHitChartEntryCounterStore,
+            0x00265635>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::hitchart_entry_counter_store>;
+        break;
+    case FramerateHookId::UnlockRewardCountdownStore:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::unlock_reward_countdown_store,
+            HookUnlockRewardCountdownStore,
+            0x00030DA3>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::unlock_reward_countdown_store>;
+        break;
+    case FramerateHookId::UnlockRewardPrimaryStateStore:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::unlock_reward_primary_state_store,
+            HookUnlockRewardPrimaryStateStore,
+            0x00030E54>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::unlock_reward_primary_state_store>;
+        break;
+    case FramerateHookId::UnlockRewardSecondaryStateStore:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::unlock_reward_secondary_state_store,
+            HookUnlockRewardSecondaryStateStore,
+            0x00030F23>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::unlock_reward_secondary_state_store>;
+        break;
     case FramerateHookId::NavigatorAdvance:
         operation.install = &InstallInlineHook<
             &FramerateHookStorage::navigator_advance,
@@ -776,26 +905,376 @@ char __fastcall HookMovieClipGoto(
         self, frame, subframe);
 }
 
+void __fastcall HookMovieClipPreprocessVisit(
+    void* self,
+    void*,
+    int traversal_arg) {
+    std::uint32_t raw_movieclip = 0;
+    if (!ReadU32Safe(
+            reinterpret_cast<std::uintptr_t>(self) + 0x7C,
+            raw_movieclip)) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+
+    const auto epoch =
+        g_runtime->outer_epoch.load(std::memory_order_acquire);
+    MovieClipPreprocessScope scope{
+        g_movieclip_preprocess_tracker,
+        static_cast<std::uintptr_t>(raw_movieclip),
+        epoch};
+    g_runtime->menu_counters.preprocessing_visits.fetch_add(
+        1, std::memory_order_relaxed);
+
+    LogMenuDiagnosticOnce(
+        g_runtime->menu_latches.preprocessing_activation,
+        [] {
+            std::ostringstream stream;
+            stream
+                << "FrameratePatch: menu_timing_activation"
+                << " menu_timing_mode="
+                << MenuTimingModeName(ActiveMenuTimingMode())
+                << " path=movieclip_preprocess"
+                << " screen=global_asset_load";
+            return stream.str();
+        });
+
+    g_runtime->hooks.movieclip_preprocess_visit
+        .unsafe_thiscall<void>(self, traversal_arg);
+}
+
 char __fastcall HookMovieClipAdvance(
     void* self,
     void*,
     char forward,
     char loop) {
-    if (g_movieclip_goto_depth > 0) {
-        g_runtime->counters.movieclip_goto_calls.fetch_add(
-            1, std::memory_order_relaxed);
-        return g_runtime->hooks.movieclip_advance.unsafe_thiscall<char>(
-            self, forward, loop);
+    const auto context = g_movieclip_goto_depth > 0
+        ? MovieClipAdvanceContext::Goto
+        : g_movieclip_preprocess_tracker.active()
+            ? MovieClipAdvanceContext::Preprocess
+            : MovieClipAdvanceContext::Ordinary;
+    const bool authored_tick = IsAuthored60HzTick();
+    const auto epoch =
+        g_runtime->outer_epoch.load(std::memory_order_acquire);
+
+    if (context == MovieClipAdvanceContext::Ordinary) {
+        const auto observation = g_movieclip_visit_tracker.Observe(
+            reinterpret_cast<std::uintptr_t>(self),
+            epoch);
+        if (observation.same_epoch_revisit) {
+            g_runtime->menu_counters.movieclip_same_epoch_revisits.fetch_add(
+                1, std::memory_order_relaxed);
+            LogMenuDiagnosticOnce(
+                g_runtime->menu_latches.revisit_activation,
+                [] {
+                    std::ostringstream stream;
+                    stream
+                        << "FrameratePatch: menu_timing_activation"
+                        << " menu_timing_mode="
+                        << MenuTimingModeName(ActiveMenuTimingMode())
+                        << " path=movieclip_same_epoch_revisit"
+                        << " screen=ordinary_movieclip";
+                    return stream.str();
+                });
+        }
+        if (observation.hash_collision) {
+            g_runtime->menu_counters.movieclip_hash_collisions.fetch_add(
+                1, std::memory_order_relaxed);
+        }
     }
-    if (!IsAuthored60HzTick()) {
+
+    const auto decision = DecideMovieClipAdvance(
+        ActiveMenuTimingMode(),
+        context,
+        authored_tick);
+    if (decision.preprocessing_non_tick_skip) {
+        g_runtime->menu_counters.preprocessing_non_tick_skips.fetch_add(
+            1, std::memory_order_relaxed);
+        g_movieclip_preprocess_tracker.RecordSkippedAdvance(
+            reinterpret_cast<std::uintptr_t>(self),
+            epoch);
+    }
+    if (decision.preprocessing_forced) {
+        g_runtime->menu_counters.preprocessing_forced.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+
+    if (decision.action ==
+        MovieClipAdvanceAction::ReturnSuccessWithoutMotion) {
         g_runtime->counters.movieclip_skips.fetch_add(
             1, std::memory_order_relaxed);
         return 1;
     }
-    g_runtime->counters.movieclip_calls.fetch_add(
-        1, std::memory_order_relaxed);
+    if (context == MovieClipAdvanceContext::Goto) {
+        g_runtime->counters.movieclip_goto_calls.fetch_add(
+            1, std::memory_order_relaxed);
+    } else {
+        g_runtime->counters.movieclip_calls.fetch_add(
+            1, std::memory_order_relaxed);
+    }
     return g_runtime->hooks.movieclip_advance.unsafe_thiscall<char>(
         self, forward, loop);
+}
+
+void __fastcall HookMovieClipStopDiagnostic(void* self, void*) {
+    const auto epoch =
+        g_runtime->outer_epoch.load(std::memory_order_acquire);
+    const auto observation = g_movieclip_preprocess_tracker.ObserveStop(
+        reinterpret_cast<std::uintptr_t>(self),
+        epoch);
+
+    if (observation != PreprocessStopObservation::OutsidePreprocess) {
+        g_runtime->menu_counters.preprocessing_stops.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+    if (observation ==
+        PreprocessStopObservation::CausalAfterSkippedAdvance) {
+        g_runtime->menu_counters.preprocessing_causal_stops.fetch_add(
+            1, std::memory_order_relaxed);
+        LogMenuDiagnosticOnce(
+            g_runtime->menu_latches.preprocessing_causal_sample,
+            [self, epoch] {
+                std::ostringstream stream;
+                stream
+                    << "FrameratePatch: menu_timing_sample"
+                    << " menu_timing_mode="
+                    << MenuTimingModeName(ActiveMenuTimingMode())
+                    << " path=movieclip_preprocess_stop"
+                    << " cause=skipped_non_tick_advance"
+                    << " movieclip=" << self
+                    << " outer_epoch=" << epoch;
+                return stream.str();
+            });
+    }
+
+    g_runtime->hooks.movieclip_stop_diagnostic
+        .unsafe_thiscall<void>(self);
+}
+
+struct MenuCounterStoreDescriptor {
+    const char* path{};
+    const char* activation_path{};
+    const char* screen{};
+    const char* asset{};
+    std::uint32_t instruction_length{};
+    std::optional<std::uint32_t> boundary{};
+    MenuCounterRuntimeCounters* counters{};
+    std::atomic_bool* activation_latch{};
+    std::atomic_bool* sample_latch{};
+};
+
+[[nodiscard]] MenuCounterStoreDescriptor
+RankingStoreDescriptor() noexcept {
+    return {
+        .path = "ranking_entry",
+        .activation_path = "ranking_entry",
+        .screen = "attract_ranking",
+        .asset = "ranking.rvb",
+        .instruction_length = 2,
+        .counters = &g_runtime->menu_counters.ranking_entry,
+        .activation_latch =
+            &g_runtime->menu_latches.ranking_activation,
+        .sample_latch = &g_runtime->menu_latches.ranking_sample,
+    };
+}
+
+[[nodiscard]] MenuCounterStoreDescriptor
+HitChartStoreDescriptor() noexcept {
+    return {
+        .path = "hitchart_entry",
+        .activation_path = "hitchart_entry",
+        .screen = "attract_hitchart",
+        .asset = "hitchart.rvb",
+        .instruction_length = 2,
+        .counters = &g_runtime->menu_counters.hitchart_entry,
+        .activation_latch =
+            &g_runtime->menu_latches.hitchart_activation,
+        .sample_latch = &g_runtime->menu_latches.hitchart_sample,
+    };
+}
+
+[[nodiscard]] MenuCounterStoreDescriptor
+UnlockCountdownStoreDescriptor() noexcept {
+    return {
+        .path = "unlock_countdown",
+        .activation_path = "unlock_reward",
+        .screen = "postplay_unlock_reward",
+        .asset = "unlock_reward.rvb",
+        .instruction_length = 6,
+        .boundary = 0,
+        .counters = &g_runtime->menu_counters.unlock_countdown,
+        .activation_latch =
+            &g_runtime->menu_latches.unlock_activation,
+        .sample_latch =
+            &g_runtime->menu_latches.unlock_countdown_sample,
+    };
+}
+
+[[nodiscard]] MenuCounterStoreDescriptor
+UnlockPrimaryStoreDescriptor() noexcept {
+    return {
+        .path = "unlock_state_primary",
+        .activation_path = "unlock_reward",
+        .screen = "postplay_unlock_reward",
+        .asset = "unlock_reward.rvb",
+        .instruction_length = 6,
+        .boundary = 31,
+        .counters = &g_runtime->menu_counters.unlock_primary,
+        .activation_latch =
+            &g_runtime->menu_latches.unlock_activation,
+        .sample_latch =
+            &g_runtime->menu_latches.unlock_primary_sample,
+    };
+}
+
+[[nodiscard]] MenuCounterStoreDescriptor
+UnlockSecondaryStoreDescriptor() noexcept {
+    return {
+        .path = "unlock_state_secondary",
+        .activation_path = "unlock_reward",
+        .screen = "postplay_unlock_reward",
+        .asset = "unlock_reward.rvb",
+        .instruction_length = 6,
+        .boundary = 43,
+        .counters = &g_runtime->menu_counters.unlock_secondary,
+        .activation_latch =
+            &g_runtime->menu_latches.unlock_activation,
+        .sample_latch =
+            &g_runtime->menu_latches.unlock_secondary_sample,
+    };
+}
+
+[[nodiscard]] const char* MenuStoreActionName(
+    MenuCounterStoreAction action) noexcept {
+    switch (action) {
+    case MenuCounterStoreAction::Commit:
+        return "commit";
+    case MenuCounterStoreAction::WouldSuppress:
+        return "would_suppress";
+    case MenuCounterStoreAction::Suppress:
+        return "suppress";
+    }
+    return "invalid";
+}
+
+void ObserveMenuCounterStore(
+    safetyhook::Context& context,
+    const MenuCounterStoreDescriptor& descriptor,
+    std::uintptr_t destination,
+    std::uint32_t new_value) {
+    const bool authored_tick = IsAuthored60HzTick();
+    const auto action = ApplyMenuCounterStoreGate(
+        context,
+        ActiveMenuTimingMode(),
+        authored_tick,
+        descriptor.instruction_length);
+
+    if (action == MenuCounterStoreAction::Commit) {
+        descriptor.counters->commits.fetch_add(
+            1, std::memory_order_relaxed);
+    } else {
+        descriptor.counters->suppressions.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+
+    LogMenuDiagnosticOnce(
+        *descriptor.activation_latch,
+        [&descriptor] {
+            std::ostringstream stream;
+            stream
+                << "FrameratePatch: menu_timing_activation"
+                << " menu_timing_mode="
+                << MenuTimingModeName(ActiveMenuTimingMode())
+                << " path=" << descriptor.activation_path
+                << " screen=" << descriptor.screen
+                << " asset=" << descriptor.asset;
+            return stream.str();
+        });
+
+    std::uint32_t old_value{};
+    if (!ReadU32Safe(destination, old_value)) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (action != MenuCounterStoreAction::Suppress &&
+        descriptor.boundary.has_value() &&
+        old_value != descriptor.boundary.value() &&
+        new_value == descriptor.boundary.value()) {
+        descriptor.counters->boundaries.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+
+    const auto epoch =
+        g_runtime->outer_epoch.load(std::memory_order_acquire);
+    LogMenuDiagnosticOnce(
+        *descriptor.sample_latch,
+        [&descriptor,
+         destination,
+         old_value,
+         new_value,
+         authored_tick,
+         action,
+         epoch] {
+            std::ostringstream stream;
+            stream
+                << "FrameratePatch: menu_timing_sample"
+                << " menu_timing_mode="
+                << MenuTimingModeName(ActiveMenuTimingMode())
+                << " path=" << descriptor.path
+                << " screen=" << descriptor.screen
+                << " asset=" << descriptor.asset
+                << " destination=0x" << std::hex << destination
+                << std::dec
+                << " outer_epoch=" << epoch
+                << " old_value=" << old_value
+                << " new_value=" << new_value
+                << " authored_phase="
+                << (authored_tick ? "tick" : "non_tick")
+                << " action=" << MenuStoreActionName(action);
+            return stream.str();
+        });
+}
+
+void HookRankingEntryCounterStore(safetyhook::Context& context) {
+    ObserveMenuCounterStore(
+        context,
+        RankingStoreDescriptor(),
+        context.ecx,
+        context.eax);
+}
+
+void HookHitChartEntryCounterStore(safetyhook::Context& context) {
+    ObserveMenuCounterStore(
+        context,
+        HitChartStoreDescriptor(),
+        context.ecx,
+        context.eax);
+}
+
+void HookUnlockRewardCountdownStore(safetyhook::Context& context) {
+    ObserveMenuCounterStore(
+        context,
+        UnlockCountdownStoreDescriptor(),
+        context.eax + 0x376C,
+        context.edx);
+}
+
+void HookUnlockRewardPrimaryStateStore(safetyhook::Context& context) {
+    ObserveMenuCounterStore(
+        context,
+        UnlockPrimaryStoreDescriptor(),
+        context.ecx + 0x37D4,
+        context.eax);
+}
+
+void HookUnlockRewardSecondaryStateStore(safetyhook::Context& context) {
+    ObserveMenuCounterStore(
+        context,
+        UnlockSecondaryStoreDescriptor(),
+        context.eax + 0x37D4,
+        context.edx);
 }
 
 void* __fastcall HookNavigatorAdvance(void* self, void*) {
@@ -1173,6 +1652,66 @@ void MaybeLogRuntimeStats(std::int64_t now) {
             counters.effect_player_modulo_mappings.load(
                 std::memory_order_relaxed),
     };
+    const auto& menu = g_runtime->menu_counters;
+    const FramerateMenuRuntimeStats menu_stats{
+        .preprocessing_visits = menu.preprocessing_visits.load(
+            std::memory_order_relaxed),
+        .preprocessing_non_tick_skips =
+            menu.preprocessing_non_tick_skips.load(
+                std::memory_order_relaxed),
+        .preprocessing_forced = menu.preprocessing_forced.load(
+            std::memory_order_relaxed),
+        .preprocessing_stops = menu.preprocessing_stops.load(
+            std::memory_order_relaxed),
+        .preprocessing_causal_stops =
+            menu.preprocessing_causal_stops.load(
+                std::memory_order_relaxed),
+        .movieclip_same_epoch_revisits =
+            menu.movieclip_same_epoch_revisits.load(
+                std::memory_order_relaxed),
+        .movieclip_hash_collisions =
+            menu.movieclip_hash_collisions.load(
+                std::memory_order_relaxed),
+        .ranking_entry = {
+            .commits = menu.ranking_entry.commits.load(
+                std::memory_order_relaxed),
+            .suppressions = menu.ranking_entry.suppressions.load(
+                std::memory_order_relaxed),
+        },
+        .hitchart_entry = {
+            .commits = menu.hitchart_entry.commits.load(
+                std::memory_order_relaxed),
+            .suppressions = menu.hitchart_entry.suppressions.load(
+                std::memory_order_relaxed),
+        },
+        .unlock_countdown = {
+            .commits = menu.unlock_countdown.commits.load(
+                std::memory_order_relaxed),
+            .suppressions = menu.unlock_countdown.suppressions.load(
+                std::memory_order_relaxed),
+            .boundaries = menu.unlock_countdown.boundaries.load(
+                std::memory_order_relaxed),
+        },
+        .unlock_primary = {
+            .commits = menu.unlock_primary.commits.load(
+                std::memory_order_relaxed),
+            .suppressions = menu.unlock_primary.suppressions.load(
+                std::memory_order_relaxed),
+            .boundaries = menu.unlock_primary.boundaries.load(
+                std::memory_order_relaxed),
+        },
+        .unlock_secondary = {
+            .commits = menu.unlock_secondary.commits.load(
+                std::memory_order_relaxed),
+            .suppressions = menu.unlock_secondary.suppressions.load(
+                std::memory_order_relaxed),
+            .boundaries = menu.unlock_secondary.boundaries.load(
+                std::memory_order_relaxed),
+        },
+        .diagnostic_read_failures =
+            menu.diagnostic_read_failures.load(
+                std::memory_order_relaxed),
+    };
     PLOG_INFO << "FrameratePatch: runtime_stats"
               << " target_fps=" << g_runtime->profile.target_fps()
               << " outer=" << counters.outer_calls.load(
@@ -1243,10 +1782,15 @@ void MaybeLogRuntimeStats(std::int64_t now) {
               << "/denominator="
               << counters.player_position_denominator_redirects.load(
                      std::memory_order_relaxed)
-              << FormatFramerateEffectRuntimeStats(effect_stats);
+              << FormatFramerateEffectRuntimeStats(effect_stats)
+              << FormatFramerateMenuRuntimeStats(
+                     ActiveMenuTimingMode(),
+                     menu_stats);
 }
 
 void HookOuterFrame(safetyhook::Context&) {
+    g_runtime->outer_epoch.fetch_add(1, std::memory_order_release);
+
     LARGE_INTEGER now{};
     if (!QueryPerformanceCounter(&now)) {
         ReportFramerateClockFailure(
@@ -1430,6 +1974,12 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
             .effect_timing = SummarizeEffectTimingManifest(),
         },
         actions);
+
+    PLOG_INFO
+        << "FrameratePatch: menu_timing startup"
+        << " menu_timing_mode="
+        << MenuTimingModeName(ActiveMenuTimingMode())
+        << " contracts=7 permanent=6 temporary=1";
 
     const auto installed = g_runtime->transaction.Install(
         direct_plan->view(), hook_operations.view());

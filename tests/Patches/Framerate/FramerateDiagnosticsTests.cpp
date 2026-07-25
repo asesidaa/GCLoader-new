@@ -65,7 +65,7 @@ DiagnosticState validated_startup;
 g_state = &validated_startup;
 const FramerateStartupPatchSummary transformed_summary{
     .direct_write_count = 17,
-    .hook_count = 45,
+    .hook_count = 52,
     .menu_repeat_initial = 38,
     .menu_repeat_interval = 7,
     .authored_frame_milliseconds = 1000.0F / 60.0F,
@@ -85,7 +85,7 @@ failures += Expect(
             validated_startup.infos[0],
             "authored_clock=deterministic_phase") &&
         Contains(validated_startup.infos[0], "direct_writes=17") &&
-        Contains(validated_startup.infos[0], "hooks=45") &&
+        Contains(validated_startup.infos[0], "hooks=52") &&
         Contains(validated_startup.infos[0], "menu_repeat=38/7") &&
         Contains(
             validated_startup.infos[0],
@@ -153,7 +153,7 @@ ReportFramerateStartup(
     FramerateProfile::Create(200).value(),
     FramerateStartupPatchSummary{
         .direct_write_count = 17,
-        .hook_count = 45,
+        .hook_count = 52,
         .menu_repeat_initial = 53,
         .menu_repeat_interval = 10,
         .authored_frame_milliseconds = 1000.0F / 60.0F,

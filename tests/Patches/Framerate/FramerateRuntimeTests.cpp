@@ -251,7 +251,7 @@ failures += Expect(
     MapPositiveTargetFrameToAuthored60(profile240, 8).value() == 2,
     "blink maps target frames to authored frames");
 
-static_assert(kMaximumFramerateHooks == 46);
+static_assert(kMaximumFramerateHooks == 53);
 for (const auto& contract : FramerateHookContracts(true)) {
     failures += Expect(
         FramerateHookHasRuntimeBinding(contract.id),
@@ -265,6 +265,18 @@ for (const auto id : {
     failures += Expect(
         FramerateHookHasRuntimeBinding(id),
         "new effect producer has an explicit runtime binding");
+}
+for (const auto id : {
+         FramerateHookId::MovieClipPreprocessVisit,
+         FramerateHookId::MovieClipStopDiagnostic,
+         FramerateHookId::RankingEntryCounterStore,
+         FramerateHookId::HitChartEntryCounterStore,
+         FramerateHookId::UnlockRewardCountdownStore,
+         FramerateHookId::UnlockRewardPrimaryStateStore,
+         FramerateHookId::UnlockRewardSecondaryStateStore}) {
+    failures += Expect(
+        FramerateHookHasRuntimeBinding(id),
+        "menu timing hook has an explicit runtime binding");
 }
 
 for (const std::uint32_t cap : {120U, 144U, 165U, 240U, 360U, 500U}) {
