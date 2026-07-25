@@ -740,7 +740,7 @@ void AssignHookCallbacks(
         operation.install = &InstallMidHook<
             &FramerateHookStorage::ranking_entry_counter_store,
             HookRankingEntryCounterStore,
-            0x00216EB7>;
+            kRankingEntryCounterHookGeometry.hook_rva>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::ranking_entry_counter_store>;
         break;
@@ -748,7 +748,7 @@ void AssignHookCallbacks(
         operation.install = &InstallMidHook<
             &FramerateHookStorage::hitchart_entry_counter_store,
             HookHitChartEntryCounterStore,
-            0x00265635>;
+            kHitChartEntryCounterHookGeometry.hook_rva>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::hitchart_entry_counter_store>;
         break;
@@ -756,7 +756,7 @@ void AssignHookCallbacks(
         operation.install = &InstallMidHook<
             &FramerateHookStorage::unlock_reward_countdown_store,
             HookUnlockRewardCountdownStore,
-            0x00030DA3>;
+            kUnlockRewardCountdownHookGeometry.hook_rva>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::unlock_reward_countdown_store>;
         break;
@@ -764,7 +764,7 @@ void AssignHookCallbacks(
         operation.install = &InstallMidHook<
             &FramerateHookStorage::unlock_reward_primary_state_store,
             HookUnlockRewardPrimaryStateStore,
-            0x00030E54>;
+            kUnlockRewardPrimaryHookGeometry.hook_rva>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::unlock_reward_primary_state_store>;
         break;
@@ -772,7 +772,7 @@ void AssignHookCallbacks(
         operation.install = &InstallMidHook<
             &FramerateHookStorage::unlock_reward_secondary_state_store,
             HookUnlockRewardSecondaryStateStore,
-            0x00030F23>;
+            kUnlockRewardSecondaryHookGeometry.hook_rva>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::unlock_reward_secondary_state_store>;
         break;
@@ -1056,7 +1056,7 @@ struct MenuCounterStoreDescriptor {
     const char* activation_path{};
     const char* screen{};
     const char* asset{};
-    std::uint32_t instruction_length{};
+    std::uintptr_t suppress_resume_rva{};
     std::optional<std::uint32_t> boundary{};
     MenuCounterRuntimeCounters* counters{};
     std::atomic_bool* activation_latch{};
@@ -1070,7 +1070,8 @@ RankingStoreDescriptor() noexcept {
         .activation_path = "ranking_entry",
         .screen = "attract_ranking",
         .asset = "ranking.rvb",
-        .instruction_length = 2,
+        .suppress_resume_rva =
+            kRankingEntryCounterHookGeometry.suppress_resume_rva,
         .counters = &g_runtime->menu_counters.ranking_entry,
         .activation_latch =
             &g_runtime->menu_latches.ranking_activation,
@@ -1085,7 +1086,8 @@ HitChartStoreDescriptor() noexcept {
         .activation_path = "hitchart_entry",
         .screen = "attract_hitchart",
         .asset = "hitchart.rvb",
-        .instruction_length = 2,
+        .suppress_resume_rva =
+            kHitChartEntryCounterHookGeometry.suppress_resume_rva,
         .counters = &g_runtime->menu_counters.hitchart_entry,
         .activation_latch =
             &g_runtime->menu_latches.hitchart_activation,
@@ -1100,7 +1102,8 @@ UnlockCountdownStoreDescriptor() noexcept {
         .activation_path = "unlock_reward",
         .screen = "postplay_unlock_reward",
         .asset = "unlock_reward.rvb",
-        .instruction_length = 6,
+        .suppress_resume_rva =
+            kUnlockRewardCountdownHookGeometry.suppress_resume_rva,
         .boundary = 0,
         .counters = &g_runtime->menu_counters.unlock_countdown,
         .activation_latch =
@@ -1117,7 +1120,8 @@ UnlockPrimaryStoreDescriptor() noexcept {
         .activation_path = "unlock_reward",
         .screen = "postplay_unlock_reward",
         .asset = "unlock_reward.rvb",
-        .instruction_length = 6,
+        .suppress_resume_rva =
+            kUnlockRewardPrimaryHookGeometry.suppress_resume_rva,
         .boundary = 31,
         .counters = &g_runtime->menu_counters.unlock_primary,
         .activation_latch =
@@ -1134,7 +1138,8 @@ UnlockSecondaryStoreDescriptor() noexcept {
         .activation_path = "unlock_reward",
         .screen = "postplay_unlock_reward",
         .asset = "unlock_reward.rvb",
-        .instruction_length = 6,
+        .suppress_resume_rva =
+            kUnlockRewardSecondaryHookGeometry.suppress_resume_rva,
         .boundary = 43,
         .counters = &g_runtime->menu_counters.unlock_secondary,
         .activation_latch =
@@ -1157,17 +1162,18 @@ UnlockSecondaryStoreDescriptor() noexcept {
     return "invalid";
 }
 
+template <typename DestinationResolver>
 void ObserveMenuCounterStore(
     safetyhook::Context& context,
     const MenuCounterStoreDescriptor& descriptor,
-    std::uintptr_t destination,
+    DestinationResolver&& resolve_destination,
     std::uint32_t new_value) {
     const bool authored_tick = IsAuthored60HzTick();
     const auto action = ApplyMenuCounterStoreGate(
         context,
         ActiveMenuTimingMode(),
         authored_tick,
-        descriptor.instruction_length);
+        ExecutableBase() + descriptor.suppress_resume_rva);
 
     if (action == MenuCounterStoreAction::Commit) {
         descriptor.counters->commits.fetch_add(
@@ -1191,8 +1197,18 @@ void ObserveMenuCounterStore(
             return stream.str();
         });
 
+    const std::optional<std::uintptr_t> destination =
+        std::forward<DestinationResolver>(
+            resolve_destination)();
+    if (!destination.has_value()) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return;
+    }
+
+    const auto resolved_destination = destination.value();
     std::uint32_t old_value{};
-    if (!ReadU32Safe(destination, old_value)) {
+    if (!ReadU32Safe(resolved_destination, old_value)) {
         g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
             1, std::memory_order_relaxed);
         return;
@@ -1211,7 +1227,7 @@ void ObserveMenuCounterStore(
     LogMenuDiagnosticOnce(
         *descriptor.sample_latch,
         [&descriptor,
-         destination,
+         resolved_destination,
          old_value,
          new_value,
          authored_tick,
@@ -1225,7 +1241,8 @@ void ObserveMenuCounterStore(
                 << " path=" << descriptor.path
                 << " screen=" << descriptor.screen
                 << " asset=" << descriptor.asset
-                << " destination=0x" << std::hex << destination
+                << " destination=0x" << std::hex
+                << resolved_destination
                 << std::dec
                 << " outer_epoch=" << epoch
                 << " old_value=" << old_value
@@ -1241,7 +1258,12 @@ void HookRankingEntryCounterStore(safetyhook::Context& context) {
     ObserveMenuCounterStore(
         context,
         RankingStoreDescriptor(),
-        context.ecx,
+        [&context] {
+            return ResolveMenuCounterDestinationFromFrame(
+                context,
+                -0x20,
+                &ReadU32Safe);
+        },
         context.eax);
 }
 
@@ -1249,7 +1271,12 @@ void HookHitChartEntryCounterStore(safetyhook::Context& context) {
     ObserveMenuCounterStore(
         context,
         HitChartStoreDescriptor(),
-        context.ecx,
+        [&context] {
+            return ResolveMenuCounterDestinationFromFrame(
+                context,
+                -0x94,
+                &ReadU32Safe);
+        },
         context.eax);
 }
 
@@ -1257,7 +1284,10 @@ void HookUnlockRewardCountdownStore(safetyhook::Context& context) {
     ObserveMenuCounterStore(
         context,
         UnlockCountdownStoreDescriptor(),
-        context.eax + 0x376C,
+        [&context] {
+            return std::optional<std::uintptr_t>{
+                context.eax + 0x376C};
+        },
         context.edx);
 }
 
@@ -1265,7 +1295,10 @@ void HookUnlockRewardPrimaryStateStore(safetyhook::Context& context) {
     ObserveMenuCounterStore(
         context,
         UnlockPrimaryStoreDescriptor(),
-        context.ecx + 0x37D4,
+        [&context] {
+            return std::optional<std::uintptr_t>{
+                context.ecx + 0x37D4};
+        },
         context.eax);
 }
 
@@ -1273,7 +1306,10 @@ void HookUnlockRewardSecondaryStateStore(safetyhook::Context& context) {
     ObserveMenuCounterStore(
         context,
         UnlockSecondaryStoreDescriptor(),
-        context.eax + 0x37D4,
+        [&context] {
+            return std::optional<std::uintptr_t>{
+                context.eax + 0x37D4};
+        },
         context.edx);
 }
 

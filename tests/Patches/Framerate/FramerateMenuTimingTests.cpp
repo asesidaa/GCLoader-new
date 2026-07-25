@@ -14,6 +14,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <thread>
@@ -63,13 +64,36 @@ bool ContextEquals(
 bool ContextEqualsExceptEip(
     const safetyhook::Context& actual,
     const safetyhook::Context& original,
-    std::uint32_t instruction_length) {
-    if (actual.eip != original.eip + instruction_length) {
+    std::uint32_t expected_eip) {
+    if (actual.eip != expected_eip) {
         return false;
     }
     auto restored = actual;
     restored.eip = original.eip;
     return ContextEquals(restored, original);
+}
+
+bool ContainsInteriorEntry(
+    std::uintptr_t hook_rva,
+    std::size_t overwrite_length,
+    std::uintptr_t target_rva) {
+    return target_rva > hook_rva &&
+        target_rva < hook_rva + overwrite_length;
+}
+
+std::uintptr_t g_expected_menu_read_address{};
+std::uint32_t g_menu_read_value{};
+bool g_menu_read_succeeds{};
+
+bool StubMenuReadU32(
+    std::uintptr_t address,
+    std::uint32_t& value) noexcept {
+    if (!g_menu_read_succeeds ||
+        address != g_expected_menu_read_address) {
+        return false;
+    }
+    value = g_menu_read_value;
+    return true;
 }
 
 std::uint32_t TargetCallsForAuthoredSteps(
@@ -122,14 +146,14 @@ int main() {
             MenuTimingHookKind::Inline},
         ExpectedMenuHook{
             FramerateHookId::RankingEntryCounterStore,
-            0x00216EB7,
-            Pattern({0x89, 0x01}),
+            0x00216EB4,
+            Pattern({0x8B, 0x4D, 0xE0, 0x89, 0x01}),
             "Ranking entry authored counter store",
             MenuTimingHookKind::Mid},
         ExpectedMenuHook{
             FramerateHookId::HitChartEntryCounterStore,
-            0x00265635,
-            Pattern({0x89, 0x01}),
+            0x0026562F,
+            Pattern({0x8B, 0x8D, 0x6C, 0xFF, 0xFF, 0xFF}),
             "HitChart entry authored counter store",
             MenuTimingHookKind::Mid},
         ExpectedMenuHook{
@@ -169,6 +193,62 @@ int main() {
                 std::string_view{actual.contract.name} == expected.name &&
                 actual.kind == expected.kind,
             "menu hook has exact ID, RVA, bytes, name, and kind");
+    }
+
+    failures += Expect(
+        ContainsInteriorEntry(
+            0x00216EB7,
+            7,
+            0x00216EB9) &&
+            ContainsInteriorEntry(
+                0x00265635,
+                5,
+                0x00265637),
+        "old short-store detours contain proven external branch targets");
+    failures += Expect(
+        !ContainsInteriorEntry(
+            0x00216EB4,
+            5,
+            0x00216EB9) &&
+            !ContainsInteriorEntry(
+                0x0026562F,
+                6,
+                0x00265637),
+        "relocated detours exclude proven external branch targets");
+
+    struct ExpectedCounterGeometry {
+        MenuCounterHookGeometry actual;
+        std::uintptr_t hook_rva;
+        std::uintptr_t suppress_resume_rva;
+    };
+    constexpr std::array expected_counter_geometries{
+        ExpectedCounterGeometry{
+            kRankingEntryCounterHookGeometry,
+            0x00216EB4,
+            0x00216EB9},
+        ExpectedCounterGeometry{
+            kHitChartEntryCounterHookGeometry,
+            0x0026562F,
+            0x00265637},
+        ExpectedCounterGeometry{
+            kUnlockRewardCountdownHookGeometry,
+            0x00030DA3,
+            0x00030DA9},
+        ExpectedCounterGeometry{
+            kUnlockRewardPrimaryHookGeometry,
+            0x00030E54,
+            0x00030E5A},
+        ExpectedCounterGeometry{
+            kUnlockRewardSecondaryHookGeometry,
+            0x00030F23,
+            0x00030F29},
+    };
+    for (const auto& expected : expected_counter_geometries) {
+        failures += Expect(
+            expected.actual.hook_rva == expected.hook_rva &&
+                expected.actual.suppress_resume_rva ==
+                    expected.suppress_resume_rva,
+            "counter hook geometry has exact binding and continuation RVAs");
     }
 
     struct AdvanceCase {
@@ -290,21 +370,22 @@ int main() {
                 MenuCounterStoreAction::Suppress,
         "menu counter decision distinguishes observe and correction");
 
-    for (const std::uint32_t instruction_length : {2U, 6U}) {
+    for (const std::uint32_t suppress_resume_eip :
+         {0x13572468U, 0x24681357U}) {
         auto context = CanaryContext();
         const auto before = context;
         const auto action = ApplyMenuCounterStoreGate(
             context,
             MenuTimingMode::Correct,
             false,
-            instruction_length);
+            suppress_resume_eip);
         failures += Expect(
             action == MenuCounterStoreAction::Suppress &&
                 ContextEqualsExceptEip(
                     context,
                     before,
-                    instruction_length),
-            "suppressed store changes only EIP by its instruction length");
+                    suppress_resume_eip),
+            "suppressed store assigns only the exact continuation EIP");
     }
     for (const auto test : {
              std::pair{MenuTimingMode::Observe, true},
@@ -316,12 +397,65 @@ int main() {
             context,
             test.first,
             test.second,
-            6);
+            0xDEADBEEFU);
         failures += Expect(
             action != MenuCounterStoreAction::Suppress &&
                 ContextEquals(context, before),
             "non-suppressed store preserves the complete x86 context");
     }
+
+    auto ranking_context = CanaryContext();
+    ranking_context.ebp = 0x10002000;
+    const auto ranking_context_before = ranking_context;
+    g_expected_menu_read_address = 0x10001FE0;
+    g_menu_read_value = 0x12345678;
+    g_menu_read_succeeds = true;
+    const auto ranking_destination =
+        ResolveMenuCounterDestinationFromFrame(
+            ranking_context,
+            -0x20,
+            &StubMenuReadU32);
+    failures += Expect(
+        ranking_destination.has_value() &&
+            *ranking_destination == 0x12345678 &&
+            ContextEquals(ranking_context, ranking_context_before),
+        "Ranking destination resolves from EBP-20 without context mutation");
+
+    auto hitchart_context = CanaryContext();
+    hitchart_context.ebp = 0x20003000;
+    const auto hitchart_context_before = hitchart_context;
+    g_expected_menu_read_address = 0x20002F6C;
+    g_menu_read_value = 0x23456789;
+    const auto hitchart_destination =
+        ResolveMenuCounterDestinationFromFrame(
+            hitchart_context,
+            -0x94,
+            &StubMenuReadU32);
+    failures += Expect(
+        hitchart_destination.has_value() &&
+            *hitchart_destination == 0x23456789 &&
+            ContextEquals(hitchart_context, hitchart_context_before),
+        "HitChart destination resolves from EBP-94 without context mutation");
+
+    g_expected_menu_read_address = 0x20002F6C;
+    g_menu_read_succeeds = false;
+    failures += Expect(
+        !ResolveMenuCounterDestinationFromFrame(
+             hitchart_context,
+             -0x94,
+             &StubMenuReadU32)
+             .has_value(),
+        "frame-local destination rejects a failed diagnostic read");
+
+    g_menu_read_succeeds = true;
+    g_menu_read_value = 0;
+    failures += Expect(
+        !ResolveMenuCounterDestinationFromFrame(
+             hitchart_context,
+             -0x94,
+             &StubMenuReadU32)
+             .has_value(),
+        "frame-local destination rejects a null counter pointer");
 
     MovieClipPreprocessTracker preprocess;
     failures += Expect(

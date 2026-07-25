@@ -42,8 +42,8 @@ constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
     {
         .contract = {
             .id = FramerateHookId::RankingEntryCounterStore,
-            .rva = 0x00216EB7,
-            .expected = Pattern(0x89, 0x01),
+            .rva = kRankingEntryCounterHookGeometry.hook_rva,
+            .expected = Pattern(0x8B, 0x4D, 0xE0, 0x89, 0x01),
             .name = "Ranking entry authored counter store",
         },
         .kind = MenuTimingHookKind::Mid,
@@ -51,8 +51,9 @@ constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
     {
         .contract = {
             .id = FramerateHookId::HitChartEntryCounterStore,
-            .rva = 0x00265635,
-            .expected = Pattern(0x89, 0x01),
+            .rva = kHitChartEntryCounterHookGeometry.hook_rva,
+            .expected = Pattern(
+                0x8B, 0x8D, 0x6C, 0xFF, 0xFF, 0xFF),
             .name = "HitChart entry authored counter store",
         },
         .kind = MenuTimingHookKind::Mid,
@@ -60,7 +61,7 @@ constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
     {
         .contract = {
             .id = FramerateHookId::UnlockRewardCountdownStore,
-            .rva = 0x00030DA3,
+            .rva = kUnlockRewardCountdownHookGeometry.hook_rva,
             .expected = Pattern(0x89, 0x90, 0x6C, 0x37, 0x00, 0x00),
             .name = "UnlockReward countdown authored counter store",
         },
@@ -69,7 +70,7 @@ constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
     {
         .contract = {
             .id = FramerateHookId::UnlockRewardPrimaryStateStore,
-            .rva = 0x00030E54,
+            .rva = kUnlockRewardPrimaryHookGeometry.hook_rva,
             .expected = Pattern(0x89, 0x81, 0xD4, 0x37, 0x00, 0x00),
             .name = "UnlockReward primary-state authored counter store",
         },
@@ -78,7 +79,7 @@ constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
     {
         .contract = {
             .id = FramerateHookId::UnlockRewardSecondaryStateStore,
-            .rva = 0x00030F23,
+            .rva = kUnlockRewardSecondaryHookGeometry.hook_rva,
             .expected = Pattern(0x89, 0x90, 0xD4, 0x37, 0x00, 0x00),
             .name = "UnlockReward secondary-state authored counter store",
         },
@@ -152,12 +153,33 @@ MenuCounterStoreAction ApplyMenuCounterStoreGate(
     safetyhook::Context& context,
     MenuTimingMode mode,
     bool authored_tick,
-    std::uint32_t instruction_length) noexcept {
+    std::uintptr_t suppress_resume_eip) noexcept {
     const auto action = DecideMenuCounterStore(mode, authored_tick);
     if (action == MenuCounterStoreAction::Suppress) {
-        context.eip += instruction_length;
+        context.eip =
+            static_cast<std::uint32_t>(suppress_resume_eip);
     }
     return action;
+}
+
+std::optional<std::uintptr_t>
+ResolveMenuCounterDestinationFromFrame(
+    const safetyhook::Context& context,
+    std::intptr_t frame_offset,
+    MenuDiagnosticReadU32 read_u32) noexcept {
+    if (read_u32 == nullptr) {
+        return std::nullopt;
+    }
+
+    std::uint32_t destination{};
+    const auto slot_address =
+        static_cast<std::uintptr_t>(context.ebp) +
+        static_cast<std::uintptr_t>(frame_offset);
+    if (!read_u32(slot_address, destination) ||
+        destination == 0) {
+        return std::nullopt;
+    }
+    return static_cast<std::uintptr_t>(destination);
 }
 
 void MovieClipPreprocessTracker::Enter(

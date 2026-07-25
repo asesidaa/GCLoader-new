@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -17,6 +18,37 @@ enum class MenuTimingHookKind {
     Inline,
     Mid,
 };
+
+struct MenuCounterHookGeometry {
+    std::uintptr_t hook_rva{};
+    std::uintptr_t suppress_resume_rva{};
+};
+
+inline constexpr MenuCounterHookGeometry
+    kRankingEntryCounterHookGeometry{
+        .hook_rva = 0x00216EB4,
+        .suppress_resume_rva = 0x00216EB9,
+    };
+inline constexpr MenuCounterHookGeometry
+    kHitChartEntryCounterHookGeometry{
+        .hook_rva = 0x0026562F,
+        .suppress_resume_rva = 0x00265637,
+    };
+inline constexpr MenuCounterHookGeometry
+    kUnlockRewardCountdownHookGeometry{
+        .hook_rva = 0x00030DA3,
+        .suppress_resume_rva = 0x00030DA9,
+    };
+inline constexpr MenuCounterHookGeometry
+    kUnlockRewardPrimaryHookGeometry{
+        .hook_rva = 0x00030E54,
+        .suppress_resume_rva = 0x00030E5A,
+    };
+inline constexpr MenuCounterHookGeometry
+    kUnlockRewardSecondaryHookGeometry{
+        .hook_rva = 0x00030F23,
+        .suppress_resume_rva = 0x00030F29,
+    };
 
 struct MenuTimingHookSite {
     FramerateHookContract contract{};
@@ -71,7 +103,17 @@ enum class MenuCounterStoreAction {
     safetyhook::Context& context,
     MenuTimingMode mode,
     bool authored_tick,
-    std::uint32_t instruction_length) noexcept;
+    std::uintptr_t suppress_resume_eip) noexcept;
+
+using MenuDiagnosticReadU32 = bool (*)(
+    std::uintptr_t address,
+    std::uint32_t& value) noexcept;
+
+[[nodiscard]] std::optional<std::uintptr_t>
+ResolveMenuCounterDestinationFromFrame(
+    const safetyhook::Context& context,
+    std::intptr_t frame_offset,
+    MenuDiagnosticReadU32 read_u32) noexcept;
 
 enum class PreprocessStopObservation {
     OutsidePreprocess,
