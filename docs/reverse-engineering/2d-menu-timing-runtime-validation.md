@@ -206,6 +206,87 @@ User-reported runtime verdict appended on 2026-07-26:
 - ranking screen crashes with the Stage A hooks installed
 - no menu timing correction acceptance is implied
 
+### Relocated-hook follow-up run
+
+Runtime evidence appended on 2026-07-26:
+
+- User exercise: one complete 240 FPS gameplay session with Ranking available
+  and an eligible `unlock_reward` flow.
+- Preserved evidence:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-a-observe\runs\20260726-035055-ranking-safe-reward-flash`
+- Full-session log SHA-256:
+  `B01E64BF966D41F097A486A41B18E8E8496BB2DDE89EBB0B84EB2F2438032A57`
+- Live DLL SHA-256:
+  `2581359EAF0149A116B407289B4E2E5ACAFEA35C095458201C76FBA372723026`
+- Active mode: `observe`; no menu timing stores were suppressed.
+- The external cap validated at target `240` and measured FPS `240.174`.
+- Ranking activated at `2026-07-26 04:42:51.279`. Its first sample was a
+  non-authored `0 -> 1` store with action `would_suppress`.
+- Final Ranking counters were `ranking_entry=32445/97335`, an exact 1:3
+  authored/non-authored split. The relocated Ranking hook remained active for
+  the rest of the session without the previous crash.
+- HitChart remained `hitchart_entry=0/0` for the entire run. It was not
+  presented by the game, so its relocated hook remains runtime-unaccepted.
+- UnlockReward activated at `2026-07-26 04:46:01.489`.
+- Its first countdown sample was `10 -> 9` on a non-authored tick.
+- Its first secondary-state sample was `33 -> 34` on a non-authored tick.
+- Final UnlockReward counters were:
+  - `unlock_countdown=2/8/1`
+  - `unlock_state_primary=0/0/0`
+  - `unlock_state_secondary=2/8/1`
+- `menu_diagnostic_read_failures=0`.
+- No fatal/error/crash record was present, and the input worker stopped after
+  the game process exited.
+
+User-visible evidence:
+
+- The user identified the affected scene as `unlock_reward`, not `reward2`.
+- The instruction text represented by
+  `unlock_reward_xfl\LIBRARY\Image1.png` and `Image2.png` visibly flashed much
+  too quickly.
+
+### Relocated-hook follow-up interpretation
+
+IDA and RVB/XFL evidence appended on 2026-07-26:
+
+- Existing `game471.exe.i64` daemon PID `54944`, port `63612`, was reused in
+  read-only mode.
+- `0x00430520` sends the root MovieClip to `jf_unlock_start` when the native
+  state reaches 31, or directly when no pending reward node exists.
+- The root `jf_unlock_start` action sends `imc_un_navi` to
+  `tg_instmsg01_start`.
+- In the original `unlock_reward.rvb`, `Image1.png` is shape `UNIQUE_2`,
+  wrapped by `UNIQUE_3`; `Image2.png` is shape `UNIQUE_5`, wrapped by
+  `UNIQUE_6`. Both wrappers are owned by the instruction/navigator clip
+  `UNIQUE_7`, instantiated as root path `imc_un_navi`.
+- `UNIQUE_7` has matching ten-update entrance sequences:
+  - `tg_instmsg01_start` begins at frame 1, moves through frames 2 through 9,
+    settles the `UNIQUE_3` instruction at frame 10, and stops at frame 11.
+  - `tg_instmsg02_start` begins at frame 23, moves through frames 24 through
+    31, settles the `UNIQUE_6` instruction at frame 32, and stops at frame 33.
+- In `0x00430C00`, native field `this+0x37D4` advances from 33 through 43
+  once per recurrent IFBL update. Reaching 43 participates in completion of
+  the UnlockReward flow.
+- The runtime `2/8/1` secondary-state split proves that this ten-update native
+  window completed with only two authored 60 Hz stores and eight extra
+  non-authored 240 Hz stores. Observe mode deliberately allowed all ten.
+- The shared MovieClip path remained gated to authored ticks, so the native
+  completion window ran approximately four times faster than its coupled
+  ten-frame instruction animation. This is the direct cause of the reported
+  Image1/Image2 flash.
+- Correct mode's existing narrow store gate is the intended correction: retain
+  elapsed-time motion, drawing, input, and semantic gotos, while suppressing
+  only the eight non-authored countdown/state stores observed here.
+
+Follow-up status:
+
+- Ranking relocated-hook runtime safety: accepted for this 240 FPS run.
+- HitChart relocated-hook runtime safety: still unexercised and unaccepted.
+- UnlockReward coverage finding: promoted from medium-confidence visible risk
+  to runtime-confirmed visible defect.
+- Stage A remains diagnostic-only; the user should still expect the visual
+  defect in Observe mode.
+
 ## Stage B — Corrected with Diagnostics Retained
 
 Status: gated on completed Stage A evidence.
