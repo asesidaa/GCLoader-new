@@ -22,6 +22,27 @@
 
 Status: build not yet produced.
 
+Static evidence appended on 2026-07-25; the initial status above is retained
+as the historical starting state and is superseded by this entry:
+
+- Source commit:
+  `99b42a6412fae0850886806283581498887a0b58`
+- Release candidate:
+  `H:\gc\artifacts\GCLoader\.worktrees\ctune-effect-timing\build-msvc32-release\dist\iDmacDrv32.dll`
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-a-observe\4D2336BE5A6BD1F0009692BB0382BD9284D0204038C3568FE850B74B25D3028F\iDmacDrv32.dll`
+- Size: `5,656,064` bytes
+- Last write time (UTC): `2026-07-25T14:59:47.1836121Z`
+- SHA-256:
+  `4D2336BE5A6BD1F0009692BB0382BD9284D0204038C3568FE850B74B25D3028F`
+- Architecture: PE `14C machine (x86)`, 32-bit word machine
+- Debug gate: complete build and `57/57` CTest tests passed
+- RelWithDebInfo gate: complete build and `57/57` CTest tests passed
+- Candidate/archive hash comparison: exact match
+
+This is static evidence only. No live DLL was copied and no gameplay run was
+performed.
+
 ### Reproduction configuration
 
 Read from `H:\gc\data\expconfig.cfg` without modification:
