@@ -58,6 +58,26 @@ activation has not yet been demonstrated.
 
 Status: not yet authorized.
 
+Deployment evidence appended on 2026-07-26; the initial status above is
+retained as historical context and is superseded by this entry:
+
+- User authorization: explicit live deployment authorization received
+- Deployment time: `2026-07-26T02:33:25.8779529+08:00`
+  (`2026-07-25T18:33:25.8809714Z`)
+- Live path: `H:\gc\iDmacDrv32.dll`
+- Source archive:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-a-observe\4D2336BE5A6BD1F0009692BB0382BD9284D0204038C3568FE850B74B25D3028F\iDmacDrv32.dll`
+- Live size: `5,656,064` bytes
+- Live SHA-256:
+  `4D2336BE5A6BD1F0009692BB0382BD9284D0204038C3568FE850B74B25D3028F`
+- Pre-deployment process check: no `game471` process and no process with the
+  live DLL loaded
+- Post-copy verification: archive and live SHA-256 values match exactly
+- Preservation: the existing DLL and loader log were not preserved, per the
+  user's explicit direction
+
+Status: observe-only Stage A DLL deployed; user diagnostic run pending.
+
 ### Runtime exercises
 
 Status: user run not yet performed.
