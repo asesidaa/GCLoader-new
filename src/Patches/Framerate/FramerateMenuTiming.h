@@ -1,14 +1,30 @@
 #pragma once
 
+#include "Patches/Framerate/FrameratePatchPlan.h"
+
 #include <safetyhook.hpp>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
 namespace gc::framerate {
+
+enum class MenuTimingHookKind {
+    Inline,
+    Mid,
+};
+
+struct MenuTimingHookSite {
+    FramerateHookContract contract{};
+    MenuTimingHookKind kind{};
+};
+
+[[nodiscard]] std::span<const MenuTimingHookSite>
+FramerateMenuTimingHookSites() noexcept;
 
 enum class MenuTimingMode {
     Observe,

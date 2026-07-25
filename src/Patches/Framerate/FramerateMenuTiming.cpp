@@ -4,6 +4,95 @@
 
 namespace gc::framerate {
 
+namespace {
+
+template <typename... Values>
+constexpr BytePattern Pattern(Values... values) noexcept {
+    static_assert(sizeof...(Values) <= kMaximumPatternBytes);
+    BytePattern result{};
+    result.size = static_cast<std::uint8_t>(sizeof...(Values));
+    std::size_t index = 0;
+    ((result.bytes[index++] =
+          static_cast<std::byte>(static_cast<std::uint8_t>(values))), ...);
+    return result;
+}
+
+constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
+    {
+        .contract = {
+            .id = FramerateHookId::MovieClipPreprocessVisit,
+            .rva = 0x000EFB90,
+            .expected =
+                Pattern(0x6A, 0xFF, 0x68, 0x10, 0x49, 0x67, 0x00),
+            .name = "MovieClip preprocessing visitor scope",
+        },
+        .kind = MenuTimingHookKind::Inline,
+    },
+    {
+        .contract = {
+            .id = FramerateHookId::MovieClipStopDiagnostic,
+            .rva = 0x000D1730,
+            .expected = Pattern(
+                0xC7, 0x81, 0x1C, 0x01, 0x00, 0x00,
+                0x01, 0x00, 0x00, 0x00, 0xC3),
+            .name = "MovieClip preprocessing stop diagnostic",
+        },
+        .kind = MenuTimingHookKind::Inline,
+    },
+    {
+        .contract = {
+            .id = FramerateHookId::RankingEntryCounterStore,
+            .rva = 0x00216EB7,
+            .expected = Pattern(0x89, 0x01),
+            .name = "Ranking entry authored counter store",
+        },
+        .kind = MenuTimingHookKind::Mid,
+    },
+    {
+        .contract = {
+            .id = FramerateHookId::HitChartEntryCounterStore,
+            .rva = 0x00265635,
+            .expected = Pattern(0x89, 0x01),
+            .name = "HitChart entry authored counter store",
+        },
+        .kind = MenuTimingHookKind::Mid,
+    },
+    {
+        .contract = {
+            .id = FramerateHookId::UnlockRewardCountdownStore,
+            .rva = 0x00030DA3,
+            .expected = Pattern(0x89, 0x90, 0x6C, 0x37, 0x00, 0x00),
+            .name = "UnlockReward countdown authored counter store",
+        },
+        .kind = MenuTimingHookKind::Mid,
+    },
+    {
+        .contract = {
+            .id = FramerateHookId::UnlockRewardPrimaryStateStore,
+            .rva = 0x00030E54,
+            .expected = Pattern(0x89, 0x81, 0xD4, 0x37, 0x00, 0x00),
+            .name = "UnlockReward primary-state authored counter store",
+        },
+        .kind = MenuTimingHookKind::Mid,
+    },
+    {
+        .contract = {
+            .id = FramerateHookId::UnlockRewardSecondaryStateStore,
+            .rva = 0x00030F23,
+            .expected = Pattern(0x89, 0x90, 0xD4, 0x37, 0x00, 0x00),
+            .name = "UnlockReward secondary-state authored counter store",
+        },
+        .kind = MenuTimingHookKind::Mid,
+    },
+}};
+
+} // namespace
+
+std::span<const MenuTimingHookSite>
+FramerateMenuTimingHookSites() noexcept {
+    return kMenuTimingHookSites;
+}
+
 MenuTimingMode ActiveMenuTimingMode() noexcept {
     return MenuTimingMode::Observe;
 }

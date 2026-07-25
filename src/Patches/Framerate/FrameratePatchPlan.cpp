@@ -1,5 +1,6 @@
 #include "Patches/Framerate/FrameratePatchPlan.h"
 #include "Patches/Framerate/FramerateEffectTiming.h"
+#include "Patches/Framerate/FramerateMenuTiming.h"
 
 #include <bit>
 #include <cstddef>
@@ -120,7 +121,7 @@ constexpr std::array<FramerateHookContract, 2> kPostEffectHookContracts{{
 
 const std::array<FramerateHookContract, kMaximumFramerateHooks>&
 AllHookContracts() noexcept {
-    static_assert(kMaximumFramerateHooks == 46);
+    static_assert(kMaximumFramerateHooks == 53);
     static const auto contracts = [] {
         std::array<FramerateHookContract, kMaximumFramerateHooks> result{};
         std::size_t index = 0;
@@ -129,6 +130,9 @@ AllHookContracts() noexcept {
         }
         for (const auto& contract : FramerateEffectHookContracts()) {
             result[index++] = contract;
+        }
+        for (const auto& site : FramerateMenuTimingHookSites()) {
+            result[index++] = site.contract;
         }
         for (const auto& contract : kPostEffectHookContracts) {
             result[index++] = contract;

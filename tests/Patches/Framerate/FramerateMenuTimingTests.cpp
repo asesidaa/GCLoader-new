@@ -1,16 +1,21 @@
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateMenuTiming.h"
+#include "Patches/Framerate/FrameratePatchPlan.h"
 #include "Patches/Framerate/FramerateProfile.h"
 
 #include <safetyhook.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
+#include <span>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -24,6 +29,20 @@ int Expect(bool condition, const char* name) {
     }
     std::cerr << "Expectation failed: " << name << "\n";
     return 1;
+}
+
+gc::framerate::BytePattern Pattern(
+    std::initializer_list<std::uint8_t> values) {
+    gc::framerate::BytePattern pattern{};
+    pattern.size = static_cast<std::uint8_t>(values.size());
+    std::transform(
+        values.begin(),
+        values.end(),
+        pattern.bytes.begin(),
+        [](std::uint8_t value) {
+            return static_cast<std::byte>(value);
+        });
+    return pattern;
 }
 
 safetyhook::Context CanaryContext() {
@@ -78,6 +97,79 @@ std::uint32_t TargetCallsForAuthoredSteps(
 int main() {
     using namespace gc::framerate;
     int failures = 0;
+
+    struct ExpectedMenuHook {
+        FramerateHookId id;
+        std::uintptr_t rva;
+        BytePattern expected;
+        std::string_view name;
+        MenuTimingHookKind kind;
+    };
+    const std::array expected_menu_hooks{
+        ExpectedMenuHook{
+            FramerateHookId::MovieClipPreprocessVisit,
+            0x000EFB90,
+            Pattern({0x6A, 0xFF, 0x68, 0x10, 0x49, 0x67, 0x00}),
+            "MovieClip preprocessing visitor scope",
+            MenuTimingHookKind::Inline},
+        ExpectedMenuHook{
+            FramerateHookId::MovieClipStopDiagnostic,
+            0x000D1730,
+            Pattern({
+                0xC7, 0x81, 0x1C, 0x01, 0x00, 0x00,
+                0x01, 0x00, 0x00, 0x00, 0xC3}),
+            "MovieClip preprocessing stop diagnostic",
+            MenuTimingHookKind::Inline},
+        ExpectedMenuHook{
+            FramerateHookId::RankingEntryCounterStore,
+            0x00216EB7,
+            Pattern({0x89, 0x01}),
+            "Ranking entry authored counter store",
+            MenuTimingHookKind::Mid},
+        ExpectedMenuHook{
+            FramerateHookId::HitChartEntryCounterStore,
+            0x00265635,
+            Pattern({0x89, 0x01}),
+            "HitChart entry authored counter store",
+            MenuTimingHookKind::Mid},
+        ExpectedMenuHook{
+            FramerateHookId::UnlockRewardCountdownStore,
+            0x00030DA3,
+            Pattern({0x89, 0x90, 0x6C, 0x37, 0x00, 0x00}),
+            "UnlockReward countdown authored counter store",
+            MenuTimingHookKind::Mid},
+        ExpectedMenuHook{
+            FramerateHookId::UnlockRewardPrimaryStateStore,
+            0x00030E54,
+            Pattern({0x89, 0x81, 0xD4, 0x37, 0x00, 0x00}),
+            "UnlockReward primary-state authored counter store",
+            MenuTimingHookKind::Mid},
+        ExpectedMenuHook{
+            FramerateHookId::UnlockRewardSecondaryStateStore,
+            0x00030F23,
+            Pattern({0x89, 0x90, 0xD4, 0x37, 0x00, 0x00}),
+            "UnlockReward secondary-state authored counter store",
+            MenuTimingHookKind::Mid},
+    };
+    const auto menu_hooks = FramerateMenuTimingHookSites();
+    failures += Expect(
+        menu_hooks.size() == expected_menu_hooks.size(),
+        "menu timing manifest contains exactly seven hooks");
+    for (std::size_t index = 0;
+         index < expected_menu_hooks.size() &&
+         index < menu_hooks.size();
+         ++index) {
+        const auto& actual = menu_hooks[index];
+        const auto& expected = expected_menu_hooks[index];
+        failures += Expect(
+            actual.contract.id == expected.id &&
+                actual.contract.rva == expected.rva &&
+                actual.contract.expected == expected.expected &&
+                actual.contract.name != nullptr &&
+                std::string_view{actual.contract.name} == expected.name &&
+                actual.kind == expected.kind,
+            "menu hook has exact ID, RVA, bytes, name, and kind");
+    }
 
     struct AdvanceCase {
         MenuTimingMode mode;
