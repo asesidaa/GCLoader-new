@@ -1,9 +1,11 @@
 # Complete 2D Menu Timing Fix Design
 
-- Status: approved design, awaiting implementation plan
+- Status: approved design, staged implementation plans written
 - Date: 2026-07-25
 - Source worktree: `H:\gc\artifacts\GCLoader\.worktrees\ctune-effect-timing`
 - Branch baseline: `ctune-effect-timing` at `2354d0f`
+- Plans:
+  `docs/superpowers/plans/2026-07-25-complete-2d-menu-timing/README.md`
 
 ## Objective
 
@@ -215,9 +217,11 @@ optional WASAPI policy.
 | `UnlockRewardSecondaryStateStore` | `0x00430F23` | `0x00030F23` | `89 90 D4 37 00 00` | Mid | Permanent |
 
 All new menu contracts are installed before Navigator and `OuterFrame`.
-`OuterFrame` remains the final transformed contract. Native 60 FPS mode
-continues to install only `OuterFrame`; the diagnostic hooks do not alter the
-native baseline.
+`OuterFrame` remains the final transformed contract. The native framerate
+contract view continues to contain only `OuterFrame`, and no new menu hook is
+selected at native 60 FPS. Preserve the independently optional, already
+committed WASAPI policy: the actual native plan therefore remains one hook
+without WASAPI or two hooks with WASAPI.
 
 ### Store-site safety
 
@@ -460,7 +464,8 @@ Stage A/B assertions:
 - all seven new IDs, RVAs, bytes, names, and hook kinds match;
 - every contract has a non-null runtime binding;
 - Navigator is penultimate and `OuterFrame` is last;
-- native 60 has only `OuterFrame`; and
+- native 60 contains no menu hook and retains exact one/two installed counts
+  without/with the optional WASAPI policy; and
 - rollback succeeds from every possible hook position at full capacity.
 
 Stage C assertions:
@@ -534,9 +539,12 @@ The implementation plan should limit changes to:
 - `src/Patches/Framerate/FrameratePatch.cpp`;
 - `src/Patches/Framerate/FrameratePatchPlan.h`;
 - `src/Patches/Framerate/FrameratePatchPlan.cpp`;
+- `src/Patches/Framerate/FrameratePatchTransaction.h`;
 - `src/Patches/CMakeLists.txt`;
 - `tests/Patches/Framerate/FramerateMenuTimingTests.cpp`;
+- `tests/Patches/Framerate/FramerateDiagnosticsTests.cpp`;
 - `tests/Patches/Framerate/FrameratePatchPlanTests.cpp`;
+- `tests/Patches/Framerate/FrameratePatchTransactionTests.cpp`;
 - `tests/Patches/Framerate/FramerateRuntimeTests.cpp`;
 - `tests/Patches/CMakeLists.txt`;
 - the runtime-validation document; and
