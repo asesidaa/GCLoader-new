@@ -95,7 +95,7 @@ FramerateMenuTimingHookSites() noexcept {
 }
 
 MenuTimingMode ActiveMenuTimingMode() noexcept {
-    return MenuTimingMode::Observe;
+    return MenuTimingMode::Correct;
 }
 
 std::string_view MenuTimingModeName(MenuTimingMode mode) noexcept {

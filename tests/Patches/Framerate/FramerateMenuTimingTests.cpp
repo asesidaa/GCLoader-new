@@ -617,8 +617,59 @@ int main() {
     }
 
     failures += Expect(
-        ActiveMenuTimingMode() == MenuTimingMode::Observe,
-        "Stage A binary is unambiguously observe-only");
+        ActiveMenuTimingMode() == MenuTimingMode::Correct,
+        "Stage B binary is unambiguously corrected");
+
+    const auto active_preprocess = DecideMovieClipAdvance(
+        ActiveMenuTimingMode(),
+        MovieClipAdvanceContext::Preprocess,
+        false);
+    failures += Expect(
+        active_preprocess.action ==
+                MovieClipAdvanceAction::ExecuteOriginal &&
+            active_preprocess.preprocessing_forced &&
+            !active_preprocess.preprocessing_non_tick_skip,
+        "active build preserves non-tick preprocessing movement");
+
+    struct ActiveCounterCase {
+        std::uintptr_t suppress_resume_eip;
+        const char* expectation;
+    };
+    constexpr std::array active_counter_cases{
+        ActiveCounterCase{
+            0x00616EB9,
+            "active build freezes Ranking entry state on non-ticks"},
+        ActiveCounterCase{
+            0x00665637,
+            "active build freezes HitChart entry state on non-ticks"},
+        ActiveCounterCase{
+            0x00430DA9,
+            "active build freezes UnlockReward countdown on non-ticks"},
+        ActiveCounterCase{
+            0x00430E5A,
+            "active build freezes UnlockReward primary state on non-ticks"},
+        ActiveCounterCase{
+            0x00430F29,
+            "active build freezes flashing UnlockReward text state on non-ticks"},
+    };
+    for (const auto& test : active_counter_cases) {
+        auto context = CanaryContext();
+        const auto before = context;
+        const auto action = ApplyMenuCounterStoreGate(
+            context,
+            ActiveMenuTimingMode(),
+            false,
+            test.suppress_resume_eip);
+        failures += Expect(
+            action == MenuCounterStoreAction::Suppress &&
+                ContextEqualsExceptEip(
+                    context,
+                    before,
+                    static_cast<std::uint32_t>(
+                        test.suppress_resume_eip)),
+            test.expectation);
+    }
+
     FramerateMenuRuntimeStats stats{
         .preprocessing_visits = 1,
         .preprocessing_non_tick_skips = 2,
