@@ -975,3 +975,56 @@ This authorizes removal of temporary diagnostic machinery only. The exact
 UnlockReward prompt-frame hold, the preprocessing exemption, the five safe
 counter-store gates, their lightweight cumulative totals, and all immutable
 DLL/log evidence remain permanent.
+
+### Final cleanup build
+
+Stage C cleanup is recorded by:
+
+- `a594bed` — `refactor: remove accepted menu stop diagnostic hook`;
+- `1099541` — `refactor: trim accepted menu timing diagnostics`.
+
+The final source state is `1099541` on `ctune-effect-timing`. It retains:
+
+- the exact UnlockReward prompt-frame hold and its transition/stable totals;
+- the depth-only preprocessing exemption and visit/forced totals;
+- the relocated safe Ranking and HitChart counter hooks;
+- all three UnlockReward raw-store gates;
+- exact child/owner/frame/stopped fail-closed matching; and
+- the existing shared authored-60 phase, Navigator behavior, and
+  `OuterFrame` ownership.
+
+It removes the temporary Stop hook, mode selector, causal Stop state, Stamp
+and UnlockReward sample streams, destination/value/boundary reads, activation
+latches, outer diagnostic epoch, revisit tracker, and diagnostic read-failure
+aggregation.
+
+Final static verification:
+
+- full transformed contract capacity: 52;
+- transformed plans: 51 hooks without optional WASAPI and 52 with it;
+- native plans: 1 hook without optional WASAPI and 2 with it;
+- `NavigatorAdvance` / `OuterFrame` final indices: 50 / 51;
+- complete x86 Debug suite: 57 of 57 passed;
+- complete x86 Release suite: 57 of 57 passed;
+- temporary-symbol negative source/test search: passed;
+- `git diff --check`: passed; and
+- Release image: `14C machine (x86)`, 32-bit.
+
+Final Release DLL:
+
+- size: 5,622,784 bytes;
+- UTC timestamp: `2026-07-26T17:45:47.6134954Z`;
+- SHA-256:
+  `7E667E693B33E0C312A91A9B0D258EC8826EBC70282DDF25BBCA911FFA37C8A3`;
+- immutable archive:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-c-final\7E667E693B33E0C312A91A9B0D258EC8826EBC70282DDF25BBCA911FFA37C8A3\iDmacDrv32.dll`.
+
+The final cleanup DLL was not copied to `H:\gc\iDmacDrv32.dll`. The live DLL
+remains the accepted Stage B build with SHA-256
+`4560F5FFFD67431E6C48DD83B383DBB996F107D89ACF5CA844EDE2AF320E56FA`,
+and its accepted log remains untouched. Therefore Stage C has static
+verification but no post-cleanup runtime smoke verdict.
+
+Transformed 120 and 144 FPS, UnlockReward primary-state cadence, and every
+path not named in the accepted 240 FPS session remain unaccepted. They are
+not promoted to pass by cleanup or by the successful static suites.
