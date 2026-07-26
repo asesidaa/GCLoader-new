@@ -371,6 +371,121 @@ This is deployment identity evidence only. Runtime behavior remains unaccepted
 until the user completes gameplay testing and supplies the resulting log and
 visual, timing, input, and crash verdicts.
 
+### Corrected-build full-session verdict: prompt flash persists
+
+Runtime evidence appended on 2026-07-26:
+
+- User verdict after another complete session: the other exercised menu
+  timing paths appear correct, but the instruction text on `unlock_reward`
+  still flashes.
+- The failed run is preserved at:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-b-correct\FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922\runs\20260726-174555-unlock-flash-still`.
+- Preserved `loader-log.txt` SHA-256:
+  `F8598F7749AD790EBB097D3B1F4DE2FB59C1299A4E8B259E3EB0840789BC3052`.
+- The preserved and live DLL identity is the corrected Stage B build:
+  `FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922`.
+- Startup selected `menu_timing_mode=correct`, installed all seven menu
+  timing contracts, and committed 17 direct writes plus 53 hooks.
+- The external 240 FPS cap validated at approximately `239.987` FPS.
+- `unlock_reward` activated at `2026-07-26 18:43:26.122`.
+- Final UnlockReward counters were:
+  - `unlock_countdown=10/29/1`;
+  - `unlock_state_primary=0/0/0`;
+  - `unlock_state_secondary=10/28/1`; and
+  - `menu_diagnostic_read_failures=0`.
+- There was no fatal error or crash record. The exact deployed build and all
+  three relevant store gates therefore executed as designed; stale
+  deployment and failed hook installation are excluded.
+
+This run falsifies the earlier exact-symptom attribution recorded for Stage A.
+The raw 33-through-43 state was a real inverse-FPS path and Stage B corrected
+it from target cadence to approximately 60 committed updates per second, but
+that correction did not remove the visible text flash. The earlier record is
+retained as historical reasoning; this section supersedes its claim that the
+secondary state was the direct and sufficient cause.
+
+The `unlock_state_primary=0/0/0` result is also material. In this reproduction,
+the controller took the no-pending-reward-node path: `0x00430520` moved state
+zero directly to 32 and played `jf_unlock_start`; the 1-through-31 primary
+range never ran. The remaining ten secondary commits reproduce the original
+60 FPS wall time rather than proving an additional high-FPS acceleration.
+
+Follow-up IDA and original-RVB evidence:
+
+- The existing read-only daemon for `H:\gc\game471.exe.i64` remained healthy
+  at PID `54944`, port `63612`, with `database_opened=true` and
+  `ida_available=true`.
+- `0x00430A60` initializes the elapsed completion timer at `this+0x3770` to
+  `60.0` seconds through `0x00430240`. This is distinct from the
+  `this+0x37D0` activity field.
+- After callback `0x005F7D20 -> 0x00430C00` returns true, the IFBL sequence
+  conditionally executes a `0.5`-second float wait (opcode `0x10`), then
+  opcode `0x22` plays `jf_unlock_end`. The interpreter subtracts its
+  elapsed-delta field before evaluating that float wait, so it is not another
+  raw target-frame wait.
+- In the original `unlock_reward.rvb`, navigator symbol `UNIQUE_7` fades the
+  prompt in for ten frames, stops fully opaque, and only fades it out after
+  `tg_instmsg01_end` or `tg_instmsg02_end`.
+- The Image1 and Image2 bitmap wrappers are `UNIQUE_3` and `UNIQUE_6`.
+  Each wrapper has exactly two frames: frame one places the bitmap and frame
+  two removes it. Unlike the other two-frame control symbols in this asset,
+  neither wrapper contains a `stop()` action.
+
+The two-frame wrappers are a newly isolated, independent flash mechanism.
+Their runtime play/graphic synchronization and actual cadence still require
+proof before changing code. No broader MovieClip cadence change is justified:
+the user's full-session verdict says the other exercised paths are now fine,
+and the failed-run log shows the shared MovieClip gate continuing at its
+expected approximately 1:3 run/skip ratio.
+
+#### Narrow prompt-wrapper corrective candidate
+
+Follow-up MovieClip class analysis established the runtime identity and
+default-play mechanism needed for a scoped correction:
+
+- MovieClipInstance `this+0x110` is its parent/owner pointer.
+- `this+0x120` is the instance-name pointer and `this+0x140` is the
+  zero-seeded 33x name hash.
+- `this+0x11C` is the play/stop flag. Construction initializes it to playing;
+  neither `UNIQUE_3` nor `UNIQUE_6` invokes the stop method.
+- The two prompt-child instance names and hashes are:
+  - `imc_tx` / `0xFCDA0604`; and
+  - `igr_un_instmsg01_img` / `0x9D55AF65`.
+- Their required direct parent is `imc_un_navi` / `0x59FE24C8`.
+
+The candidate therefore suppresses ordinary timeline motion only for either
+exact child identity under that exact parent while menu correction mode is
+active. Goto and preprocessing advances remain untouched. The parent
+`imc_un_navi` continues to play its authored fade-in, stop, and fade-out
+frames; only the nested visible/empty two-frame loop is held on its initially
+visible frame. Hashes are only a fast prefilter: the candidate also safely
+reads and exactly compares both names so a collision or a generic `imc_tx`
+elsewhere cannot activate the correction.
+
+Runtime evidence remains enabled. Periodic statistics publish
+`unlock_prompt_holds=<transition>/<stable>`, and separate one-time activation
+records identify which of the two prompt-child paths executed. Any invalid
+MovieClip identity read increments `menu_diagnostic_read_failures`.
+
+Test-first verification:
+
+- The new policy test first failed because the identity policy and diagnostic
+  fields did not exist.
+- It covers both exact positive identities plus observe mode, goto,
+  preprocessing, wrong parent, wrong name, and synthetic hash-collision
+  negatives.
+- The complete Debug and Release suites pass: 57 of 57 tests in each
+  configuration.
+- Candidate SHA-256:
+  `F76FDE7FE654E506C8F84A4F3BD0E0245E6429A919BD12A6D1626966FE5535E2`.
+- Preserved candidate:
+  `H:\gc\artifacts\runtime-builds\2d-menu-timing\stage-b-prompt-hold\F76FDE7FE654E506C8F84A4F3BD0E0245E6429A919BD12A6D1626966FE5535E2\iDmacDrv32.dll`.
+
+This candidate has not been deployed. The live DLL remains corrected Stage B
+hash `FD719CDF4539387AA2E1550840265B46BC13A2F14B57CEB4AD7483AE2C7A8922`;
+visual acceptance and the two new hold counters remain pending a gameplay
+run.
+
 ## Stage C — Accepted Diagnostic Cleanup
 
 Status: gated on explicit user acceptance of Stage B.

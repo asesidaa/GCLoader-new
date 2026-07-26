@@ -78,6 +78,13 @@ enum class MovieClipAdvanceAction {
     ReturnSuccessWithoutMotion,
 };
 
+inline constexpr std::uint32_t
+    kUnlockRewardPromptTransitionNameHash = 0xFCDA0604;
+inline constexpr std::uint32_t
+    kUnlockRewardPromptStableNameHash = 0x9D55AF65;
+inline constexpr std::uint32_t
+    kUnlockRewardNavigatorNameHash = 0x59FE24C8;
+
 struct MovieClipAdvanceDecision {
     MovieClipAdvanceAction action{MovieClipAdvanceAction::ExecuteOriginal};
     bool preprocessing_non_tick_skip{};
@@ -88,6 +95,14 @@ struct MovieClipAdvanceDecision {
     MenuTimingMode mode,
     MovieClipAdvanceContext context,
     bool authored_tick) noexcept;
+
+[[nodiscard]] bool ShouldHoldUnlockRewardPromptFrame(
+    MenuTimingMode mode,
+    MovieClipAdvanceContext context,
+    std::uint32_t instance_name_hash,
+    std::string_view instance_name,
+    std::uint32_t parent_name_hash,
+    std::string_view parent_name) noexcept;
 
 enum class MenuCounterStoreAction {
     Commit,
@@ -210,6 +225,8 @@ struct FramerateMenuRuntimeStats {
     std::uint64_t preprocessing_causal_stops{};
     std::uint64_t movieclip_same_epoch_revisits{};
     std::uint64_t movieclip_hash_collisions{};
+    std::uint64_t unlock_prompt_transition_holds{};
+    std::uint64_t unlock_prompt_stable_holds{};
     MenuCounterPathStats ranking_entry{};
     MenuCounterPathStats hitchart_entry{};
     MenuCounterBoundaryPathStats unlock_countdown{};

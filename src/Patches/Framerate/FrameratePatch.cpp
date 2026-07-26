@@ -34,6 +34,10 @@ namespace {
 
 constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
 constexpr std::uintptr_t kAudioResyncEpilogueRva = 0x002401D4;
+constexpr std::uintptr_t kMovieClipParentOffset = 0x110;
+constexpr std::uintptr_t kMovieClipInstanceNameOffset = 0x120;
+constexpr std::uintptr_t kMovieClipInstanceNameHashOffset = 0x140;
+constexpr std::size_t kMaximumMovieClipInstanceNameBytes = 32;
 
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
@@ -140,6 +144,8 @@ struct FramerateMenuRuntimeCounters {
     std::atomic_uint64_t preprocessing_causal_stops{0};
     std::atomic_uint64_t movieclip_same_epoch_revisits{0};
     std::atomic_uint64_t movieclip_hash_collisions{0};
+    std::atomic_uint64_t unlock_prompt_transition_holds{0};
+    std::atomic_uint64_t unlock_prompt_stable_holds{0};
     MenuCounterRuntimeCounters ranking_entry{};
     MenuCounterRuntimeCounters hitchart_entry{};
     MenuCounterRuntimeCounters unlock_countdown{};
@@ -152,6 +158,8 @@ struct FramerateMenuDiagnosticLatches {
     std::atomic_bool preprocessing_activation{false};
     std::atomic_bool preprocessing_causal_sample{false};
     std::atomic_bool revisit_activation{false};
+    std::atomic_bool unlock_prompt_transition_hold_activation{false};
+    std::atomic_bool unlock_prompt_stable_hold_activation{false};
     std::atomic_bool ranking_activation{false};
     std::atomic_bool ranking_sample{false};
     std::atomic_bool hitchart_activation{false};
@@ -261,6 +269,34 @@ void HookOuterFrame(safetyhook::Context&);
     __try {
         value = *reinterpret_cast<volatile std::uint32_t*>(address);
         return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+[[nodiscard]] bool ReadCStringSafe(
+    std::uintptr_t address,
+    std::span<char> destination,
+    std::size_t& length) noexcept {
+    length = 0;
+    if (address == 0 || destination.empty()) {
+        return false;
+    }
+
+    __try {
+        for (std::size_t index = 0;
+             index < destination.size();
+             ++index) {
+            const char value =
+                *reinterpret_cast<const volatile char*>(
+                    address + index);
+            if (value == '\0') {
+                length = index;
+                return true;
+            }
+            destination[index] = value;
+        }
+        return false;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -814,6 +850,107 @@ void AssignHookCallbacks(
     return g_runtime->authored_60hz_tick.load(std::memory_order_acquire);
 }
 
+[[nodiscard]] bool ShouldHoldUnlockRewardPromptMovieClip(
+    void* self,
+    MovieClipAdvanceContext context,
+    std::uint32_t& matched_instance_name_hash) noexcept {
+    if (ActiveMenuTimingMode() != MenuTimingMode::Correct ||
+        context != MovieClipAdvanceContext::Ordinary) {
+        return false;
+    }
+
+    const auto movieclip = reinterpret_cast<std::uintptr_t>(self);
+    std::uint32_t instance_name_hash{};
+    if (!ReadU32Safe(
+            movieclip + kMovieClipInstanceNameHashOffset,
+            instance_name_hash)) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+    }
+    if (instance_name_hash !=
+            kUnlockRewardPromptTransitionNameHash &&
+        instance_name_hash !=
+            kUnlockRewardPromptStableNameHash) {
+        return false;
+    }
+
+    std::uint32_t parent{};
+    if (!ReadU32Safe(
+            movieclip + kMovieClipParentOffset,
+            parent) ||
+        parent == 0) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+    }
+
+    std::uint32_t parent_name_hash{};
+    if (!ReadU32Safe(
+            parent + kMovieClipInstanceNameHashOffset,
+            parent_name_hash)) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+    }
+    if (parent_name_hash != kUnlockRewardNavigatorNameHash) {
+        return false;
+    }
+
+    std::uint32_t instance_name_address{};
+    std::uint32_t parent_name_address{};
+    if (!ReadU32Safe(
+            movieclip + kMovieClipInstanceNameOffset,
+            instance_name_address) ||
+        !ReadU32Safe(
+            parent + kMovieClipInstanceNameOffset,
+            parent_name_address) ||
+        instance_name_address == 0 ||
+        parent_name_address == 0) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+    }
+
+    std::array<
+        char,
+        kMaximumMovieClipInstanceNameBytes> instance_name_buffer{};
+    std::array<
+        char,
+        kMaximumMovieClipInstanceNameBytes> parent_name_buffer{};
+    std::size_t instance_name_length{};
+    std::size_t parent_name_length{};
+    if (!ReadCStringSafe(
+            instance_name_address,
+            instance_name_buffer,
+            instance_name_length) ||
+        !ReadCStringSafe(
+            parent_name_address,
+            parent_name_buffer,
+            parent_name_length)) {
+        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+    }
+
+    if (!ShouldHoldUnlockRewardPromptFrame(
+            ActiveMenuTimingMode(),
+            context,
+            instance_name_hash,
+            std::string_view{
+                instance_name_buffer.data(),
+                instance_name_length},
+            parent_name_hash,
+            std::string_view{
+                parent_name_buffer.data(),
+                parent_name_length})) {
+        return false;
+    }
+
+    matched_instance_name_hash = instance_name_hash;
+    return true;
+}
+
 [[nodiscard]] bool ReadTuneFrame(
     const safetyhook::Context& context,
     std::intptr_t tune_stack_offset,
@@ -981,6 +1118,54 @@ char __fastcall HookMovieClipAdvance(
             g_runtime->menu_counters.movieclip_hash_collisions.fetch_add(
                 1, std::memory_order_relaxed);
         }
+    }
+
+    std::uint32_t unlock_prompt_instance_name_hash{};
+    if (ShouldHoldUnlockRewardPromptMovieClip(
+            self,
+            context,
+            unlock_prompt_instance_name_hash)) {
+        // These two-frame children alternate visible/empty without a stop
+        // action. Hold their initial visible frame while their parent keeps
+        // driving the authored prompt fade.
+        const bool transition =
+            unlock_prompt_instance_name_hash ==
+            kUnlockRewardPromptTransitionNameHash;
+        auto& hold_counter = transition
+            ? g_runtime->menu_counters.unlock_prompt_transition_holds
+            : g_runtime->menu_counters.unlock_prompt_stable_holds;
+        hold_counter.fetch_add(
+            1, std::memory_order_relaxed);
+        g_runtime->counters.movieclip_skips.fetch_add(
+            1, std::memory_order_relaxed);
+        auto& activation_latch = transition
+            ? g_runtime->menu_latches
+                  .unlock_prompt_transition_hold_activation
+            : g_runtime->menu_latches
+                  .unlock_prompt_stable_hold_activation;
+        LogMenuDiagnosticOnce(
+            activation_latch,
+            [unlock_prompt_instance_name_hash, epoch] {
+                const auto instance_name =
+                    unlock_prompt_instance_name_hash ==
+                            kUnlockRewardPromptTransitionNameHash
+                        ? "imc_tx"
+                        : "igr_un_instmsg01_img";
+                std::ostringstream stream;
+                stream
+                    << "FrameratePatch: menu_timing_activation"
+                    << " menu_timing_mode="
+                    << MenuTimingModeName(ActiveMenuTimingMode())
+                    << " path=unlock_reward_prompt_hold"
+                    << " screen=postplay_unlock_reward"
+                    << " asset=unlock_reward.rvb"
+                    << " parent=imc_un_navi"
+                    << " instance=" << instance_name
+                    << " action=hold_visible_frame"
+                    << " outer_epoch=" << epoch;
+                return stream.str();
+            });
+        return 1;
     }
 
     const auto decision = DecideMovieClipAdvance(
@@ -1707,6 +1892,12 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                 std::memory_order_relaxed),
         .movieclip_hash_collisions =
             menu.movieclip_hash_collisions.load(
+                std::memory_order_relaxed),
+        .unlock_prompt_transition_holds =
+            menu.unlock_prompt_transition_holds.load(
+                std::memory_order_relaxed),
+        .unlock_prompt_stable_holds =
+            menu.unlock_prompt_stable_holds.load(
                 std::memory_order_relaxed),
         .ranking_entry = {
             .commits = menu.ranking_entry.commits.load(

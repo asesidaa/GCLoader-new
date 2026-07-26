@@ -359,6 +359,109 @@ int main() {
             "MovieClip advance policy matches the complete decision matrix");
     }
 
+    struct UnlockPromptHoldCase {
+        MenuTimingMode mode;
+        MovieClipAdvanceContext context;
+        std::uint32_t instance_name_hash;
+        std::string_view instance_name;
+        std::uint32_t parent_name_hash;
+        std::string_view parent_name;
+        bool should_hold;
+    };
+    constexpr std::array unlock_prompt_hold_cases{
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0xFCDA0604,
+            "imc_tx",
+            0x59FE24C8,
+            "imc_un_navi",
+            true},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0x9D55AF65,
+            "igr_un_instmsg01_img",
+            0x59FE24C8,
+            "imc_un_navi",
+            true},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Observe,
+            MovieClipAdvanceContext::Ordinary,
+            0xFCDA0604,
+            "imc_tx",
+            0x59FE24C8,
+            "imc_un_navi",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Goto,
+            0xFCDA0604,
+            "imc_tx",
+            0x59FE24C8,
+            "imc_un_navi",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Preprocess,
+            0x9D55AF65,
+            "igr_un_instmsg01_img",
+            0x59FE24C8,
+            "imc_un_navi",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0xFCDA0604,
+            "imc_tx",
+            0x59FE24C8,
+            "imc_other_navi",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0xFCDA0604,
+            "imc_tx_other",
+            0x59FE24C8,
+            "imc_un_navi",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0x9D55AF65,
+            "igr_un_instmsg01_img",
+            0x59FE24C8,
+            "imc_un_navi_other",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0,
+            "imc_tx",
+            0x59FE24C8,
+            "imc_un_navi",
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0xFCDA0604,
+            "imc_tx",
+            0,
+            "imc_un_navi",
+            false},
+    };
+    for (const auto& test : unlock_prompt_hold_cases) {
+        failures += Expect(
+            ShouldHoldUnlockRewardPromptFrame(
+                test.mode,
+                test.context,
+                test.instance_name_hash,
+                test.instance_name,
+                test.parent_name_hash,
+                test.parent_name) == test.should_hold,
+            "only exact UnlockReward prompt children are held under the exact navigator during corrected ordinary playback");
+    }
+
     failures += Expect(
         DecideMenuCounterStore(MenuTimingMode::Observe, true) ==
                 MenuCounterStoreAction::Commit &&
@@ -678,6 +781,8 @@ int main() {
         .preprocessing_causal_stops = 5,
         .movieclip_same_epoch_revisits = 6,
         .movieclip_hash_collisions = 7,
+        .unlock_prompt_transition_holds = 22,
+        .unlock_prompt_stable_holds = 23,
         .ranking_entry = {.commits = 8, .suppressions = 9},
         .hitchart_entry = {.commits = 10, .suppressions = 11},
         .unlock_countdown = {
@@ -699,6 +804,7 @@ int main() {
         " movieclip_preprocess=1/2/3"
         " movieclip_preprocess_stop=4/5"
         " movieclip_revisit=6/7"
+        " unlock_prompt_holds=22/23"
         " ranking_entry=8/9"
         " hitchart_entry=10/11"
         " unlock_countdown=12/13/14"
@@ -710,6 +816,7 @@ int main() {
         " movieclip_preprocess=1/2/3"
         " movieclip_preprocess_stop=4/5"
         " movieclip_revisit=6/7"
+        " unlock_prompt_holds=22/23"
         " ranking_entry=8/9"
         " hitchart_entry=10/11"
         " unlock_countdown=12/13/14"

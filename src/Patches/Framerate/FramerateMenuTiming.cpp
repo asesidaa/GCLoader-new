@@ -138,6 +138,29 @@ MovieClipAdvanceDecision DecideMovieClipAdvance(
     };
 }
 
+bool ShouldHoldUnlockRewardPromptFrame(
+    MenuTimingMode mode,
+    MovieClipAdvanceContext context,
+    std::uint32_t instance_name_hash,
+    std::string_view instance_name,
+    std::uint32_t parent_name_hash,
+    std::string_view parent_name) noexcept {
+    if (mode != MenuTimingMode::Correct ||
+        context != MovieClipAdvanceContext::Ordinary ||
+        parent_name_hash != kUnlockRewardNavigatorNameHash ||
+        parent_name != "imc_un_navi") {
+        return false;
+    }
+
+    return
+        (instance_name_hash ==
+                kUnlockRewardPromptTransitionNameHash &&
+            instance_name == "imc_tx") ||
+        (instance_name_hash ==
+                kUnlockRewardPromptStableNameHash &&
+            instance_name == "igr_un_instmsg01_img");
+}
+
 MenuCounterStoreAction DecideMenuCounterStore(
     MenuTimingMode mode,
     bool authored_tick) noexcept {
@@ -304,6 +327,9 @@ std::string FormatFramerateMenuRuntimeStats(
         << " movieclip_revisit="
         << stats.movieclip_same_epoch_revisits << '/'
         << stats.movieclip_hash_collisions
+        << " unlock_prompt_holds="
+        << stats.unlock_prompt_transition_holds << '/'
+        << stats.unlock_prompt_stable_holds
         << " ranking_entry="
         << stats.ranking_entry.commits << '/'
         << stats.ranking_entry.suppressions
