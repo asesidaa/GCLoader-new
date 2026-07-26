@@ -112,9 +112,12 @@ After the process exits, the offline analyzer adds:
       ...
 ```
 
-`submitted.wav` contains only blocks for which
-`WasapiEndpoint::SubmitPcm16` succeeded. It is the exact interleaved PCM16
-payload copied from `pcm16_mix_`, not a second render or a reconstruction.
+For a complete session, `submitted.wav` contains the exact interleaved PCM16
+payload copied from `pcm16_mix_` for every block where
+`WasapiEndpoint::SubmitPcm16` succeeded. It is not a second render or a
+reconstruction. If capture overflow forces a writer-side silent placeholder,
+the affected range is explicitly marked incomplete and those placeholder
+samples are never described as submitted audio.
 
 ### Real-time handoff
 
@@ -141,6 +144,24 @@ If a PCM sequence number is missing because the queue overflowed, the writer
 inserts an equal-duration silent placeholder to preserve wall-time alignment,
 records the missing range, and marks the session incomplete. An incomplete
 region cannot establish that the submitted stream was clean.
+
+### Ownership and teardown
+
+`WasapiAudioPatch` owns the temporary recorder for the complete lifetime of
+all audio components that can publish to it. It creates the recorder before
+starting the exclusive engine and passes stable non-owning references to the
+engine, mixer, and DirectSound facade. The audio thread therefore does not
+take shared-ownership locks or perform reference-count traffic per block.
+
+The framerate resync hook publishes through an atomic active-sink pointer.
+That pointer is set only after recorder initialization and is cleared before
+the recorder can be destroyed. Calls before activation or after clearing are
+no-ops.
+
+Teardown disables new diagnostic publication, stops the render producer,
+drains and joins the writer, destroys audio components, and only then destroys
+the recorder. Queue storage therefore outlives every producer, including
+failure and rollback paths.
 
 ### Voice identity and source progression
 
@@ -343,7 +364,9 @@ After the user accepts the correction:
 - build, hash, deploy, and smoke-test a clean production DLL.
 
 The final product has no diagnostic configuration, dormant branch, retained
-counter, recorder thread, file output, trace format, or periodic log.
+counter, recorder thread, file output, trace format, or diagnostic log field.
+The accepted production startup, failure, and aggregate runtime-health
+reporting remains unchanged.
 
 ## Expected temporary source scope
 
@@ -415,4 +438,3 @@ The diagnostic effort is complete only when:
 7. the clean final production build passes focused regression verification;
    and
 8. the user completes a final runtime smoke test with the diagnostic-free DLL.
-
