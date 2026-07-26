@@ -1,14 +1,19 @@
 #include "Patches/Framerate/FrameratePatch.h"
+#include "Audio/Diagnostics/AudioFlightRecorder.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateHookTransforms.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
 #include "Patches/Framerate/FrameratePatchTransaction.h"
 #include "Patches/Framerate/FramerateProfile.h"
 
+#include <array>
+#include <atomic>
+#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <span>
 
 using namespace gc::framerate;
 
@@ -37,6 +42,37 @@ bool ReadTransformValue(
     return true;
 }
 
+class FixedAudioDiagnosticSink final
+    : public gc::audio::diagnostics::IAudioDiagnosticSink {
+public:
+    bool StartSession(
+        const gc::audio::diagnostics::AudioFlightRecorderSession&)
+        noexcept override {
+        return true;
+    }
+
+    void PublishEvent(
+        gc::audio::diagnostics::AudioDiagnosticEvent event)
+        noexcept override {
+        const auto index =
+            count.fetch_add(1, std::memory_order_relaxed);
+        if (index < events.size()) {
+            events[index] = event;
+        }
+    }
+
+    gc::audio::diagnostics::PcmPublishResult PublishSubmittedPcm(
+        const gc::audio::diagnostics::SubmittedPcmMetadata&,
+        std::span<const std::int16_t>) noexcept override {
+        return {};
+    }
+
+    std::array<
+        gc::audio::diagnostics::AudioDiagnosticEvent,
+        3> events{};
+    std::atomic_size_t count{};
+};
+
 } // namespace
 
 int main() {
@@ -44,6 +80,52 @@ int failures = 0;
 
 static_assert(offsetof(AuthoredFrameOperand, frame_milliseconds) == 0x18);
 static_assert(offsetof(PlayerPositionDurationOperand, duration_frames) == 0xC4);
+
+FixedAudioDiagnosticSink audio_diagnostics;
+gc::audio::diagnostics::ActivateAudioDiagnosticSink(&audio_diagnostics);
+gc::framerate::detail::PublishAudioResyncDiagnostic(
+    -17, 48, true, true);
+gc::framerate::detail::PublishAudioResyncDiagnostic(
+    63, 48, true, false);
+gc::framerate::detail::PublishAudioResyncDiagnostic(
+    0, 0, false, false);
+gc::audio::diagnostics::DeactivateAudioDiagnosticSink(&audio_diagnostics);
+failures += Expect(
+    audio_diagnostics.count.load(std::memory_order_relaxed) == 3,
+    "audio resync diagnostic publishes every policy observation");
+using ResyncDecision =
+    gc::audio::diagnostics::AudioResyncDecision;
+failures += Expect(
+    audio_diagnostics.events[0].kind ==
+            gc::audio::diagnostics::AudioDiagnosticEventKind::AudioResync &&
+        std::bit_cast<std::int32_t>(
+            audio_diagnostics.events[0].signed_value0) == -17 &&
+        std::bit_cast<std::int32_t>(
+            audio_diagnostics.events[0].signed_value1) == 48 &&
+        audio_diagnostics.events[0].decision ==
+            static_cast<std::uint8_t>(
+                ResyncDecision::SuppressedInMargin) &&
+        audio_diagnostics.events[0].qpc_ticks != 0,
+    "in-margin resync diagnostic preserves signed values");
+failures += Expect(
+    std::bit_cast<std::int32_t>(
+        audio_diagnostics.events[1].signed_value0) == 63 &&
+        std::bit_cast<std::int32_t>(
+            audio_diagnostics.events[1].signed_value1) == 48 &&
+        audio_diagnostics.events[1].decision ==
+            static_cast<std::uint8_t>(
+                ResyncDecision::AllowedOutOfMargin) &&
+        audio_diagnostics.events[1].qpc_ticks != 0,
+    "out-of-margin resync diagnostic preserves policy decision");
+failures += Expect(
+    std::bit_cast<std::int32_t>(
+        audio_diagnostics.events[2].signed_value0) == 0 &&
+        std::bit_cast<std::int32_t>(
+            audio_diagnostics.events[2].signed_value1) == 0 &&
+        audio_diagnostics.events[2].decision ==
+            static_cast<std::uint8_t>(ResyncDecision::Unreadable) &&
+        audio_diagnostics.events[2].qpc_ticks != 0,
+    "unreadable resync diagnostic remains distinct");
 
 AuthoredFrameOperand authored_operand{};
 safetyhook::Context redirected{};

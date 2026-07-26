@@ -96,11 +96,44 @@ public:
         std::span<const std::int16_t>) noexcept = 0;
 };
 
-void ActivateAudioDiagnosticSink(IAudioDiagnosticSink*) noexcept;
-void DeactivateAudioDiagnosticSink(IAudioDiagnosticSink*) noexcept;
+inline std::atomic<IAudioDiagnosticSink*> active_sink{};
+
+inline void ActivateAudioDiagnosticSink(
+    IAudioDiagnosticSink* sink) noexcept {
+    if (sink == nullptr) {
+        return;
+    }
+    IAudioDiagnosticSink* expected = nullptr;
+    static_cast<void>(active_sink.compare_exchange_strong(
+        expected,
+        sink,
+        std::memory_order_release,
+        std::memory_order_relaxed));
+}
+
+inline void DeactivateAudioDiagnosticSink(
+    IAudioDiagnosticSink* sink) noexcept {
+    if (sink == nullptr) {
+        return;
+    }
+    auto* expected = sink;
+    static_cast<void>(active_sink.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire));
+}
+
 std::uint64_t CaptureAudioDiagnosticQpcTicks() noexcept;
-void PublishActiveAudioDiagnosticEvent(
-    AudioDiagnosticEvent) noexcept;
+
+inline void PublishActiveAudioDiagnosticEvent(
+    AudioDiagnosticEvent event) noexcept {
+    if (auto* const sink =
+            active_sink.load(std::memory_order_acquire);
+        sink != nullptr) {
+        sink->PublishEvent(event);
+    }
+}
 
 struct AudioFlightRecorderOptions {
     std::filesystem::path root_directory{"audio-diagnostics"};

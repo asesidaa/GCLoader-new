@@ -27,35 +27,7 @@ static_assert(std::atomic_uint64_t::is_always_lock_free);
 static_assert(
     std::atomic<AudioFlightRecorderState>::is_always_lock_free);
 
-std::atomic<IAudioDiagnosticSink*> active_sink{};
-
 } // namespace
-
-void ActivateAudioDiagnosticSink(IAudioDiagnosticSink* sink) noexcept {
-    if (sink == nullptr) {
-        return;
-    }
-
-    IAudioDiagnosticSink* expected = nullptr;
-    static_cast<void>(active_sink.compare_exchange_strong(
-        expected,
-        sink,
-        std::memory_order_release,
-        std::memory_order_relaxed));
-}
-
-void DeactivateAudioDiagnosticSink(IAudioDiagnosticSink* sink) noexcept {
-    if (sink == nullptr) {
-        return;
-    }
-
-    auto* expected = sink;
-    static_cast<void>(active_sink.compare_exchange_strong(
-        expected,
-        nullptr,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire));
-}
 
 std::uint64_t CaptureAudioDiagnosticQpcTicks() noexcept {
     LARGE_INTEGER ticks{};
@@ -63,15 +35,6 @@ std::uint64_t CaptureAudioDiagnosticQpcTicks() noexcept {
         return 0;
     }
     return static_cast<std::uint64_t>(ticks.QuadPart);
-}
-
-void PublishActiveAudioDiagnosticEvent(
-    AudioDiagnosticEvent event) noexcept {
-    if (auto* const sink =
-            active_sink.load(std::memory_order_acquire);
-        sink != nullptr) {
-        sink->PublishEvent(event);
-    }
 }
 
 namespace detail {

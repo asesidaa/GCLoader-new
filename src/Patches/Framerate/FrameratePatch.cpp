@@ -1,5 +1,6 @@
 #include "Patches/Framerate/FrameratePatch.h"
 
+#include "Audio/Diagnostics/AudioFlightRecorder.h"
 #include "Config/config.h"
 #include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -29,6 +31,37 @@
 #include <utility>
 
 namespace gc::framerate {
+
+namespace detail {
+
+void PublishAudioResyncDiagnostic(
+    std::int32_t drift_ms,
+    std::int32_t margin_ms,
+    bool readable,
+    bool suppressed) noexcept {
+    LARGE_INTEGER ticks{};
+    const auto qpc_ticks =
+        QueryPerformanceCounter(&ticks) && ticks.QuadPart >= 0
+        ? static_cast<std::uint64_t>(ticks.QuadPart)
+        : 0;
+    const auto decision = !readable
+        ? audio::diagnostics::AudioResyncDecision::Unreadable
+        : suppressed
+            ? audio::diagnostics::AudioResyncDecision::
+                SuppressedInMargin
+            : audio::diagnostics::AudioResyncDecision::
+                AllowedOutOfMargin;
+    audio::diagnostics::PublishActiveAudioDiagnosticEvent({
+        .kind =
+            audio::diagnostics::AudioDiagnosticEventKind::AudioResync,
+        .decision = static_cast<std::uint8_t>(decision),
+        .signed_value0 = std::bit_cast<std::uint32_t>(drift_ms),
+        .signed_value1 = std::bit_cast<std::uint32_t>(margin_ms),
+        .qpc_ticks = qpc_ticks,
+    });
+}
+
+} // namespace detail
 
 namespace {
 
@@ -1255,13 +1288,19 @@ void HookAudioResyncPolicy(safetyhook::Context& context) {
     if (!ReadI32StackSafe(context, -0x0C, drift_ms) ||
         !ReadI32StackSafe(context, -0x24, margin_ms) ||
         margin_ms < 0) {
+        detail::PublishAudioResyncDiagnostic(
+            drift_ms, margin_ms, false, false);
         return;
     }
 
     const auto abs_drift_ms = drift_ms < 0
         ? -static_cast<std::int64_t>(drift_ms)
         : static_cast<std::int64_t>(drift_ms);
-    if (abs_drift_ms <= static_cast<std::int64_t>(margin_ms)) {
+    const bool suppressed =
+        abs_drift_ms <= static_cast<std::int64_t>(margin_ms);
+    detail::PublishAudioResyncDiagnostic(
+        drift_ms, margin_ms, true, suppressed);
+    if (suppressed) {
         context.eip = static_cast<std::uint32_t>(
             ExecutableBase() + kAudioResyncEpilogueRva);
     }

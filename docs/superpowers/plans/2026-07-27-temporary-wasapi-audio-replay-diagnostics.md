@@ -1013,7 +1013,7 @@ Run:
 Expected: all four targets pass, including existing concurrency, generation,
 drain, looping, and conversion tests.
 
-- [ ] **Step 9: Commit mixer/source tracing**
+- [x] **Step 9: Commit mixer/source tracing**
 
 Run:
 
@@ -1048,7 +1048,7 @@ void PublishAudioResyncDiagnostic(
 } // namespace gc::framerate::detail
 ```
 
-- [ ] **Step 1: Add a failing resync publication test**
+- [x] **Step 1: Add a failing resync publication test**
 
 In `FramerateRuntimeTests.cpp`, activate a fixed-array fake sink and call:
 
@@ -1065,7 +1065,7 @@ Assert the three events preserve signed drift/margin and classify as
 `SuppressedInMargin`, `AllowedOutOfMargin`, and `Unreadable`. Retain the
 existing assertion that `AudioResyncPolicy` has a runtime binding.
 
-- [ ] **Step 2: Run the test to verify the helper is absent**
+- [x] **Step 2: Run the test to verify the helper is absent**
 
 Run:
 
@@ -1075,7 +1075,7 @@ Run:
 
 Expected: compile failure because the temporary helper is undefined.
 
-- [ ] **Step 3: Implement game-thread publication**
+- [x] **Step 3: Implement game-thread publication**
 
 The helper captures raw `QueryPerformanceCounter` ticks and publishes one
 `AudioResync` event through the active sink. QPC failure records zero ticks;
@@ -1094,7 +1094,7 @@ In `HookAudioResyncPolicy`:
 Do not recompute the interval, change the comparison, log directly, or alter
 registers/flags beyond the existing `EIP` bypass.
 
-- [ ] **Step 4: Run framerate policy tests**
+- [x] **Step 4: Run framerate policy tests**
 
 Run:
 
@@ -1105,7 +1105,7 @@ Run:
 Expected: all three targets pass; hook count, RVA, expected bytes, optional
 WASAPI selection, and rollback behavior are unchanged.
 
-- [ ] **Step 5: Review the hook diff for behavior identity**
+- [x] **Step 5: Review the hook diff for behavior identity**
 
 Run:
 
