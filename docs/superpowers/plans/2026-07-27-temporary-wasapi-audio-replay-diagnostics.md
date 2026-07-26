@@ -1364,7 +1364,7 @@ Expected:
 
 Do not commit the WAVs or generated analyzer outputs.
 
-- [ ] **Step 9: Commit the analyzer**
+- [x] **Step 9: Commit the analyzer**
 
 Run:
 
@@ -1386,7 +1386,7 @@ git commit -m "feat: analyze temporary audio replay captures"
 - Produces: one statically verified, hashed Stage A DLL and an append-only
   validation record with runtime status explicitly unaccepted.
 
-- [ ] **Step 1: Create the validation record**
+- [x] **Step 1: Create the validation record**
 
 Create the document with these concrete sections:
 
@@ -1434,7 +1434,7 @@ directories, and diagnostic log lines must remain through the corrected
 diagnostic run and be removed from the final production DLL.
 ```
 
-- [ ] **Step 2: Run Python verification**
+- [x] **Step 2: Run Python verification**
 
 Run:
 
@@ -1444,7 +1444,7 @@ python -m unittest tools.analysis.tests.test_audio_replay_analyzer -v
 
 Expected: all analyzer tests pass.
 
-- [ ] **Step 3: Build the exact focused x86 slice**
+- [x] **Step 3: Build the exact focused x86 slice**
 
 Run:
 
@@ -1455,7 +1455,7 @@ Run:
 Expected: all eleven focused targets pass and
 `build-msvc32-release/dist/iDmacDrv32.dll` links.
 
-- [ ] **Step 4: Audit the real-time source boundary**
+- [x] **Step 4: Audit the real-time source boundary**
 
 Run:
 
@@ -1470,7 +1470,7 @@ discontinuity advancement contains only fixed-record construction, PCM copy,
 atomic publication, and non-blocking wake signaling. No new formatting,
 logging, file operation, allocation, lock, wait, or sleep appears there.
 
-- [ ] **Step 5: Audit behavior and configuration non-changes**
+- [x] **Step 5: Audit behavior and configuration non-changes**
 
 Run:
 
@@ -1488,7 +1488,7 @@ Expected:
 - the same in-margin comparison and epilogue target remain;
 - no config or Config GUI diff.
 
-- [ ] **Step 6: Verify source scope and cleanup markers**
+- [x] **Step 6: Verify source scope and cleanup markers**
 
 Run:
 
@@ -1503,7 +1503,7 @@ Expected: only the file map in this plan, the approved spec/plan commits, and
 the validation record differ from `d799e77`. Preserve the `rg` result as the
 mechanical Stage C removal manifest. Diff check exits zero.
 
-- [ ] **Step 7: Verify machine type and hash the candidate**
+- [x] **Step 7: Verify machine type and hash the candidate**
 
 Run:
 
@@ -1516,7 +1516,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath $candidate
 
 Expected: PE machine is x86 and one candidate SHA-256 is printed.
 
-- [ ] **Step 8: Append build identity and commit validation**
+- [x] **Step 8: Append build identity and commit validation**
 
 Append the current implementation commits, test results, candidate path,
 length, timestamp, and SHA-256 beneath `## Stage A build`. Keep capture,
