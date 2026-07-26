@@ -1118,7 +1118,7 @@ boolean naming the existing `abs_drift <= margin` condition. RVA
 `0x002401C4`, epilogue RVA `0x002401D4`, and the branch condition are
 unchanged.
 
-- [ ] **Step 6: Commit resync observation**
+- [x] **Step 6: Commit resync observation**
 
 Run:
 
@@ -1179,7 +1179,7 @@ Implement these exact public call shapes:
 
 Their complete behavior is defined in Steps 3–6.
 
-- [ ] **Step 1: Add failing synthetic analyzer tests**
+- [x] **Step 1: Add failing synthetic analyzer tests**
 
 Use `unittest`, `tempfile`, `wave`, `array`, and deterministic pseudo-random
 PCM. Add these exact test classes and methods:
@@ -1199,7 +1199,7 @@ Rewind copies 40 ms from immediately before the event. Crossfaded replay uses
 50 ms from 50 ms earlier and linearly blends the first/last 10 ms. Candidate
 start must be within 20 ms of each injected event.
 
-- [ ] **Step 2: Run the tests to prove the analyzer is absent**
+- [x] **Step 2: Run the tests to prove the analyzer is absent**
 
 Run:
 
@@ -1209,7 +1209,7 @@ python -m unittest tools.analysis.tests.test_audio_replay_analyzer -v
 
 Expected: import failure because `audio_replay_analyzer.py` does not exist.
 
-- [ ] **Step 3: Implement strict RIFF and timeline parsing**
+- [x] **Step 3: Implement strict RIFF and timeline parsing**
 
 Use the Python standard library only. Parse RIFF chunks explicitly rather than
 trusting a stale header after process termination. Accept only:
@@ -1236,7 +1236,7 @@ Round down to a complete four-byte stereo frame. Preserve every `pcm_gap` or
 versions, non-monotonic checkpoints, or a checkpoint larger than the actual
 file.
 
-- [ ] **Step 4: Implement a two-stage bounded replay scan**
+- [x] **Step 4: Implement a two-stage bounded replay scan**
 
 Avoid an all-samples/all-lags quadratic loop.
 
@@ -1263,7 +1263,7 @@ score = correlation - 0.25 * normalized_error
 Sort descending by score, then ascending by start frame for deterministic
 output.
 
-- [ ] **Step 5: Correlate causal evidence**
+- [x] **Step 5: Correlate causal evidence**
 
 Normalize `AudioDiagnosticEvent.qpc_ticks` to 100 ns with checked integer
 arithmetic using `session.json.qpc_frequency`. For each candidate, attach an
@@ -1294,7 +1294,7 @@ waveform-only candidates:
 A musical waveform match without causal evidence remains a listening
 candidate, not a defect verdict.
 
-- [ ] **Step 6: Write reports and clips**
+- [x] **Step 6: Write reports and clips**
 
 `report.md` must contain:
 
@@ -1326,7 +1326,7 @@ python tools/analysis/audio_replay_analyzer.py --wav-only 'control.wav' --output
 Exit 0 for a valid conclusive analysis, 2 for incomplete capture, and 1 for
 invalid input or writer/schema failure.
 
-- [ ] **Step 7: Run unit tests**
+- [x] **Step 7: Run unit tests**
 
 Run:
 
@@ -1337,7 +1337,7 @@ python -m unittest tools.analysis.tests.test_audio_replay_analyzer -v
 Expected: clean/no-artifact, rewind, crossfaded replay, malformed input, gap,
 causal correlation, report, and clip tests all pass.
 
-- [ ] **Step 8: Verify against the existing listening sweep**
+- [x] **Step 8: Verify against the existing listening sweep**
 
 Run:
 
