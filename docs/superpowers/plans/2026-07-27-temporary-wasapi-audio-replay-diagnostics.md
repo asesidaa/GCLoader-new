@@ -222,7 +222,7 @@ Its factory functions give the generic fields stable event-specific meaning:
 | `RenderSpan` | voice ID, epoch, output/source begin/end, required/copied/consumed/produced counts, snapshot generation, loop/end flags |
 | `AudioResync` | raw QPC ticks, signed drift, signed margin, unreadable/suppressed/allowed decision |
 
-- [ ] **Step 1: Add failing queue and active-sink tests**
+- [x] **Step 1: Add failing queue and active-sink tests**
 
 Create `AudioFlightRecorderTests.cpp` with the repository's existing
 `Expect(bool, std::string_view)` harness. The first tests must exercise these
@@ -251,7 +251,7 @@ join them, then assert that every retained record has a unique sequence and
 valid producer payload. Use a queue large enough to prevent loss in the
 preservation test and capacity 8 in the drop test.
 
-- [ ] **Step 2: Register the test and verify the missing API fails**
+- [x] **Step 2: Register the test and verify the missing API fails**
 
 Add only `AudioFlightRecorderTests` to `GC_AUDIO_TESTS`; do not add the
 production source to `gc_audio` yet.
@@ -266,7 +266,7 @@ Expected: compilation fails because `AudioFlightRecorder.h` does not yet
 provide the tested event and queue APIs. A pass means the new target did not
 compile the failing test.
 
-- [ ] **Step 3: Implement the event factories and active sink**
+- [x] **Step 3: Implement the event factories and active sink**
 
 Create `AudioFlightRecorder.h` and `AudioFlightRecorder.cpp`, then add
 `Diagnostics/AudioFlightRecorder.cpp` to `gc_audio`.
@@ -295,7 +295,7 @@ stamp `qpc_ticks` with `CaptureAudioDiagnosticQpcTicks`; the helper returns
 zero only when `QueryPerformanceCounter` fails. Audio-thread events already
 carry an exact output frame and do not make an additional QPC call per voice.
 
-- [ ] **Step 4: Implement the SPSC PCM queue**
+- [x] **Step 4: Implement the SPSC PCM queue**
 
 Allocate header slots and one contiguous PCM sample array in `Initialize`.
 `TryPush` must:
@@ -326,7 +326,7 @@ the consumer has not popped. At a checkpoint, the writer drains all visible
 records through the acquired `completed_sequence`; any absent tail sequence
 through that bound is a proven drop, not an in-progress producer.
 
-- [ ] **Step 5: Implement the loss-detecting bounded MPSC event queue**
+- [x] **Step 5: Implement the loss-detecting bounded MPSC event queue**
 
 Use a bounded per-slot sequence queue. Initialize slot `i` with
 `slot.sequence == i`. A producer compares the slot sequence at
@@ -339,11 +339,12 @@ slot, then release-stores
 `dequeue_position + capacity` to return the slot.
 
 Do not overwrite an unconsumed slot: that would race the consumer's ordinary
-payload copy. Return `Dropped` immediately when the sequence comparison proves
-the queue full or after four failed reservation CAS attempts. Increment one
-atomic lost-event counter for every dropped publication. The writer snapshots
-the counter at each checkpoint and emits an `event_gap` covering that
-checkpoint's QPC/output-frame interval whenever the count advanced.
+payload copy. Retry a stale reservation CAS without waiting on any slot,
+consumer, or writer; return `Dropped` only when the sequence comparison proves
+the queue full. Increment one atomic lost-event counter for every dropped
+publication. The writer snapshots the counter at each checkpoint and emits an
+`event_gap` covering that checkpoint's QPC/output-frame interval whenever the
+count advanced.
 
 The read contract is:
 
@@ -371,7 +372,7 @@ Return `Empty` when the next owned position is not yet published. A producer
 never spins on a claimed slot, waits for another producer, waits for the
 writer, or writes payload bytes unless it owns the slot.
 
-- [ ] **Step 6: Run the focused queue tests**
+- [x] **Step 6: Run the focused queue tests**
 
 Run:
 
@@ -382,7 +383,7 @@ Run:
 Expected: `AudioFlightRecorderTests` passes repeatedly, including the
 four-producer case.
 
-- [ ] **Step 7: Commit the record and queue foundation**
+- [x] **Step 7: Commit the record and queue foundation**
 
 Run:
 
