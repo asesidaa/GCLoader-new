@@ -55,7 +55,6 @@ struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
     safetyhook::InlineHook movieclip_advance{};
     safetyhook::InlineHook movieclip_preprocess_visit{};
-    safetyhook::InlineHook movieclip_stop_diagnostic{};
     safetyhook::InlineHook navigator_advance{};
     safetyhook::MidHook palette_compare{};
     safetyhook::MidHook stage_clip_frame{};
@@ -248,7 +247,6 @@ thread_local MovieClipVisitTracker g_movieclip_visit_tracker;
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
 void __fastcall HookMovieClipPreprocessVisit(void*, void*, int);
-void __fastcall HookMovieClipStopDiagnostic(void*, void*);
 void* __fastcall HookNavigatorAdvance(void*, void*);
 void HookPaletteCompare(safetyhook::Context&);
 void HookStageClipFrame(safetyhook::Context&);
@@ -801,14 +799,6 @@ void AssignHookCallbacks(
             0x000EFB90>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::movieclip_preprocess_visit>;
-        break;
-    case FramerateHookId::MovieClipStopDiagnostic:
-        operation.install = &InstallInlineHook<
-            &FramerateHookStorage::movieclip_stop_diagnostic,
-            HookMovieClipStopDiagnostic,
-            0x000D1730>;
-        operation.reset = &ResetOwnedHook<
-            &FramerateHookStorage::movieclip_stop_diagnostic>;
         break;
     case FramerateHookId::RankingEntryCounterStore:
         operation.install = &InstallMidHook<
@@ -1773,41 +1763,6 @@ char __fastcall HookMovieClipAdvance(
             epoch);
     }
     return result;
-}
-
-void __fastcall HookMovieClipStopDiagnostic(void* self, void*) {
-    const auto epoch =
-        g_runtime->outer_epoch.load(std::memory_order_acquire);
-    const auto observation = g_movieclip_preprocess_tracker.ObserveStop(
-        reinterpret_cast<std::uintptr_t>(self),
-        epoch);
-
-    if (observation != PreprocessStopObservation::OutsidePreprocess) {
-        g_runtime->menu_counters.preprocessing_stops.fetch_add(
-            1, std::memory_order_relaxed);
-    }
-    if (observation ==
-        PreprocessStopObservation::CausalAfterSkippedAdvance) {
-        g_runtime->menu_counters.preprocessing_causal_stops.fetch_add(
-            1, std::memory_order_relaxed);
-        LogMenuDiagnosticOnce(
-            g_runtime->menu_latches.preprocessing_causal_sample,
-            [self, epoch] {
-                std::ostringstream stream;
-                stream
-                    << "FrameratePatch: menu_timing_sample"
-                    << " menu_timing_mode="
-                    << MenuTimingModeName(ActiveMenuTimingMode())
-                    << " path=movieclip_preprocess_stop"
-                    << " cause=skipped_non_tick_advance"
-                    << " movieclip=" << self
-                    << " outer_epoch=" << epoch;
-                return stream.str();
-            });
-    }
-
-    g_runtime->hooks.movieclip_stop_diagnostic
-        .unsafe_thiscall<void>(self);
 }
 
 struct MenuCounterStoreDescriptor {

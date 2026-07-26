@@ -121,7 +121,7 @@ constexpr std::array<FramerateHookContract, 2> kPostEffectHookContracts{{
 
 const std::array<FramerateHookContract, kMaximumFramerateHooks>&
 AllHookContracts() noexcept {
-    static_assert(kMaximumFramerateHooks == 53);
+    static_assert(kMaximumFramerateHooks == 52);
     static const auto contracts = [] {
         std::array<FramerateHookContract, kMaximumFramerateHooks> result{};
         std::size_t index = 0;

@@ -17,7 +17,7 @@ constexpr BytePattern Pattern(Values... values) noexcept {
     return result;
 }
 
-constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
+constexpr std::array<MenuTimingHookSite, 6> kMenuTimingHookSites{{
     {
         .contract = {
             .id = FramerateHookId::MovieClipPreprocessVisit,
@@ -25,17 +25,6 @@ constexpr std::array<MenuTimingHookSite, 7> kMenuTimingHookSites{{
             .expected =
                 Pattern(0x6A, 0xFF, 0x68, 0x10, 0x49, 0x67, 0x00),
             .name = "MovieClip preprocessing visitor scope",
-        },
-        .kind = MenuTimingHookKind::Inline,
-    },
-    {
-        .contract = {
-            .id = FramerateHookId::MovieClipStopDiagnostic,
-            .rva = 0x000D1730,
-            .expected = Pattern(
-                0xC7, 0x81, 0x1C, 0x01, 0x00, 0x00,
-                0x01, 0x00, 0x00, 0x00, 0xC3),
-            .name = "MovieClip preprocessing stop diagnostic",
         },
         .kind = MenuTimingHookKind::Inline,
     },

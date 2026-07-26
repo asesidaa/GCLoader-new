@@ -94,7 +94,7 @@ int main() {
 using namespace gc::framerate;
 int failures = 0;
 
-static_assert(kMaximumFramerateHooks == 53);
+static_assert(kMaximumFramerateHooks == 52);
 
 const auto native_profile = FramerateProfile::Create(60).value();
 const auto native_plan = BuildFramerateDirectPatchPlan(
@@ -294,8 +294,8 @@ failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
 failures += Expect(
-    transformed_hooks.size() == 53,
-    "full transformed view has 53 contracts");
+    transformed_hooks.size() == 52,
+    "full transformed view has 52 contracts");
 for (const auto diagnostic_rva : {
          0x000E12A0U,
          0x000DC575U,
@@ -323,8 +323,8 @@ for (const auto removed_rva :
     failures += Expect(!present, "invalid timing contract is absent");
 }
 failures += Expect(
-        transformed_hooks[51].id == FramerateHookId::NavigatorAdvance &&
-        transformed_hooks[52].id == FramerateHookId::OuterFrame,
+        transformed_hooks[50].id == FramerateHookId::NavigatorAdvance &&
+        transformed_hooks[51].id == FramerateHookId::OuterFrame,
     "Navigator and OuterFrame remain final");
 const auto navigator_hook = std::find_if(
     transformed_hooks.begin(), transformed_hooks.end(),
@@ -341,7 +341,7 @@ failures += Expect(
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 53> expected_hooks{{
+const std::array<FramerateHookContract, 52> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -439,10 +439,6 @@ const std::array<FramerateHookContract, 53> expected_hooks{{
         Pattern({0xF7, 0xF9}), ""},
     {FramerateHookId::MovieClipPreprocessVisit, 0x000EFB90,
         Pattern({0x6A, 0xFF, 0x68, 0x10, 0x49, 0x67, 0x00}), ""},
-    {FramerateHookId::MovieClipStopDiagnostic, 0x000D1730,
-        Pattern({
-            0xC7, 0x81, 0x1C, 0x01, 0x00, 0x00,
-            0x01, 0x00, 0x00, 0x00, 0xC3}), ""},
     {FramerateHookId::RankingEntryCounterStore, 0x00216EB4,
         Pattern({0x8B, 0x4D, 0xE0, 0x89, 0x01}), ""},
     {FramerateHookId::HitChartEntryCounterStore, 0x0026562F,
@@ -475,8 +471,8 @@ failures += Expect(
         BuildFramerateHookPlan(false, true).count == 2,
     "native selection preserves optional WASAPI only");
 failures += Expect(
-    BuildFramerateHookPlan(true, false).count == 52 &&
-        BuildFramerateHookPlan(true, true).count == 53,
+    BuildFramerateHookPlan(true, false).count == 51 &&
+        BuildFramerateHookPlan(true, true).count == 52,
     "transformed selection has exact optional counts");
 
 const auto native_without_wasapi =
@@ -485,7 +481,6 @@ const auto native_with_wasapi =
     BuildFramerateHookPlan(false, true);
 for (const auto id : {
          FramerateHookId::MovieClipPreprocessVisit,
-         FramerateHookId::MovieClipStopDiagnostic,
          FramerateHookId::RankingEntryCounterStore,
          FramerateHookId::HitChartEntryCounterStore,
          FramerateHookId::UnlockRewardCountdownStore,

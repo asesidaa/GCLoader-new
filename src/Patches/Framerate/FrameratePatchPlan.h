@@ -74,7 +74,6 @@ enum class FramerateHookId {
     EffectChartPreRollDuration,
     EffectPlayerModuloDividend,
     MovieClipPreprocessVisit,
-    MovieClipStopDiagnostic,
     RankingEntryCounterStore,
     HitChartEntryCounterStore,
     UnlockRewardCountdownStore,

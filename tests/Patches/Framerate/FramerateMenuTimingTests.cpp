@@ -137,14 +137,6 @@ int main() {
             "MovieClip preprocessing visitor scope",
             MenuTimingHookKind::Inline},
         ExpectedMenuHook{
-            FramerateHookId::MovieClipStopDiagnostic,
-            0x000D1730,
-            Pattern({
-                0xC7, 0x81, 0x1C, 0x01, 0x00, 0x00,
-                0x01, 0x00, 0x00, 0x00, 0xC3}),
-            "MovieClip preprocessing stop diagnostic",
-            MenuTimingHookKind::Inline},
-        ExpectedMenuHook{
             FramerateHookId::RankingEntryCounterStore,
             0x00216EB4,
             Pattern({0x8B, 0x4D, 0xE0, 0x89, 0x01}),
@@ -178,7 +170,7 @@ int main() {
     const auto menu_hooks = FramerateMenuTimingHookSites();
     failures += Expect(
         menu_hooks.size() == expected_menu_hooks.size(),
-        "menu timing manifest contains exactly seven hooks");
+        "menu timing manifest contains exactly six permanent hooks");
     for (std::size_t index = 0;
          index < expected_menu_hooks.size() &&
          index < menu_hooks.size();
@@ -194,6 +186,14 @@ int main() {
                 actual.kind == expected.kind,
             "menu hook has exact ID, RVA, bytes, name, and kind");
     }
+    failures += Expect(
+        std::none_of(
+            menu_hooks.begin(),
+            menu_hooks.end(),
+            [](const auto& hook) {
+                return hook.contract.rva == 0x000D1730;
+            }),
+        "temporary MovieClip Stop hook is absent");
 
     failures += Expect(
         ContainsInteriorEntry(
