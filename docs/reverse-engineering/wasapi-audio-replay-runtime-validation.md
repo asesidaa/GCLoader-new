@@ -54,6 +54,23 @@ Verified candidate:
 
 Runtime deployment and capture remain unexercised at this point.
 
+## Stage A deployment
+
+Deployed at 2026-07-27 06:18:52 +08:00 while `game471.exe` was not running.
+
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\wasapi-audio-replay\stage-a-diagnostic\F0C35C3673859BF8294B3391F03607ADE4C302F8D2B50CF4C5DF6084A521A1BC\iDmacDrv32.dll`
+- Runtime destination: `H:\gc\iDmacDrv32.dll`
+- Candidate/archive/runtime SHA-256:
+  `F0C35C3673859BF8294B3391F03607ADE4C302F8D2B50CF4C5DF6084A521A1BC`
+- Rollback copy:
+  `H:\gc\deploy-backups\wasapi-audio-replay-stage-a-20260727-061852\iDmacDrv32.pre-diagnostic.dll`
+- Rollback SHA-256:
+  `FE490E13D535AA7F1077561676F399A4026F5159040B1150FE1F946BCC3472AB`
+
+No configuration file was altered. Runtime startup and capture remain
+unexercised.
+
 ## Stage A capture
 
 No Stage A capture has been analyzed yet.

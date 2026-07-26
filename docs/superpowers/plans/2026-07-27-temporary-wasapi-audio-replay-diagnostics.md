@@ -1552,7 +1552,7 @@ git commit -m "docs: record audio replay diagnostic build"
   verdict, and one evidence-backed root-cause classification. It produces no
   fix.
 
-- [ ] **Step 1: Refuse deployment while the game is running**
+- [x] **Step 1: Refuse deployment while the game is running**
 
 Run:
 
@@ -1565,7 +1565,7 @@ if (Get-Process -Name game471 -ErrorAction SilentlyContinue) {
 Expected: no output. If it throws, ask the user to close the game. Do not
 terminate it automatically.
 
-- [ ] **Step 2: Archive the immutable Stage A candidate**
+- [x] **Step 2: Archive the immutable Stage A candidate**
 
 Run:
 
@@ -1595,7 +1595,7 @@ if ($archiveHash -ne $candidateHash) {
 
 Expected: archive path contains the candidate hash and the two hashes match.
 
-- [ ] **Step 3: Back up the live DLL and deploy**
+- [x] **Step 3: Back up the live DLL and deploy**
 
 Run:
 
