@@ -4,10 +4,8 @@
 
 #include <safetyhook.hpp>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -58,15 +56,6 @@ struct MenuTimingHookSite {
 [[nodiscard]] std::span<const MenuTimingHookSite>
 FramerateMenuTimingHookSites() noexcept;
 
-enum class MenuTimingMode {
-    Observe,
-    Correct,
-};
-
-[[nodiscard]] MenuTimingMode ActiveMenuTimingMode() noexcept;
-[[nodiscard]] std::string_view MenuTimingModeName(
-    MenuTimingMode mode) noexcept;
-
 enum class MovieClipAdvanceContext {
     Ordinary,
     Goto,
@@ -84,12 +73,9 @@ inline constexpr std::uint32_t
     kUnlockRewardPromptStableNameHash = 0x9D55AF65;
 inline constexpr std::uint32_t
     kUnlockRewardNavigatorNameHash = 0x59FE24C8;
-inline constexpr std::uint32_t kStampCardNameHash = 0x09CA86C5;
-inline constexpr std::uint32_t kStampWindowNameHash = 0x4CE37C30;
 
 // game471.exe MovieClipInstance layout, proved from the constructor,
 // placement core, Stop, and AdvanceOneTimelineFrame.
-inline constexpr std::uintptr_t kMovieClipDefinitionOffset = 0x118;
 inline constexpr std::uintptr_t kMovieClipStopFlagOffset = 0x11C;
 inline constexpr std::uintptr_t kMovieClipInstanceNameOffset = 0x120;
 inline constexpr std::uintptr_t kMovieClipInstanceNameHashOffset = 0x140;
@@ -97,120 +83,52 @@ inline constexpr std::uintptr_t kMovieClipOwnerOffset = 0x150;
 inline constexpr std::uintptr_t kMovieClipCurrentFrameLowOffset = 0x178;
 inline constexpr std::uintptr_t kMovieClipCurrentFrameHighOffset = 0x17C;
 
-enum class MovieClipDiagnosticTarget : std::uint8_t {
-    None,
-    StampCard,
-    StampWindow,
-    UnlockPromptTransition,
-    UnlockPromptStable,
-};
-
-inline constexpr std::size_t kMovieClipDiagnosticTargetCount = 4;
-
-[[nodiscard]] MovieClipDiagnosticTarget
-ClassifyMovieClipDiagnosticTarget(
-    std::uint32_t instance_name_hash,
-    std::string_view instance_name,
-    std::uint32_t parent_name_hash,
-    std::string_view parent_name) noexcept;
-
-// Raw diagnostic fallback. Hashes are fields on the instance and remain
-// useful when the string pointer or owner chain cannot be read.
-[[nodiscard]] MovieClipDiagnosticTarget
-ClassifyMovieClipDiagnosticCandidate(
-    std::uint32_t instance_name_hash,
-    std::string_view instance_name) noexcept;
-
-[[nodiscard]] std::string_view MovieClipDiagnosticTargetName(
-    MovieClipDiagnosticTarget target) noexcept;
-
 struct MovieClipAdvanceDecision {
     MovieClipAdvanceAction action{MovieClipAdvanceAction::ExecuteOriginal};
-    bool preprocessing_non_tick_skip{};
     bool preprocessing_forced{};
 };
 
 [[nodiscard]] MovieClipAdvanceDecision DecideMovieClipAdvance(
-    MenuTimingMode mode,
     MovieClipAdvanceContext context,
     bool authored_tick) noexcept;
 
 [[nodiscard]] bool ShouldHoldUnlockRewardPromptFrame(
-    MenuTimingMode mode,
     MovieClipAdvanceContext context,
     std::uint32_t instance_name_hash,
     std::string_view instance_name,
-    std::uint32_t parent_name_hash,
-    std::string_view parent_name,
+    std::uint32_t owner_name_hash,
+    std::string_view owner_name,
     std::uint64_t current_frame,
     std::uint32_t stopped) noexcept;
 
 enum class MenuCounterStoreAction {
     Commit,
-    WouldSuppress,
     Suppress,
 };
 
 [[nodiscard]] MenuCounterStoreAction DecideMenuCounterStore(
-    MenuTimingMode mode,
     bool authored_tick) noexcept;
 
 [[nodiscard]] MenuCounterStoreAction ApplyMenuCounterStoreGate(
     safetyhook::Context& context,
-    MenuTimingMode mode,
     bool authored_tick,
     std::uintptr_t suppress_resume_eip) noexcept;
 
-using MenuDiagnosticReadU32 = bool (*)(
-    std::uintptr_t address,
-    std::uint32_t& value) noexcept;
-
-[[nodiscard]] std::optional<std::uintptr_t>
-ResolveMenuCounterDestinationFromFrame(
-    const safetyhook::Context& context,
-    std::intptr_t frame_offset,
-    MenuDiagnosticReadU32 read_u32) noexcept;
-
-enum class PreprocessStopObservation {
-    OutsidePreprocess,
-    InPreprocess,
-    CausalAfterSkippedAdvance,
-};
-
-class MovieClipPreprocessTracker {
+class MovieClipPreprocessDepth {
 public:
-    static constexpr std::size_t kMaximumTrackedDepth = 32;
-
-    void Enter(
-        std::uintptr_t movieclip,
-        std::uint64_t outer_epoch) noexcept;
+    void Enter() noexcept;
     void Leave() noexcept;
-    void RecordSkippedAdvance(
-        std::uintptr_t movieclip,
-        std::uint64_t outer_epoch) noexcept;
-    [[nodiscard]] PreprocessStopObservation ObserveStop(
-        std::uintptr_t movieclip,
-        std::uint64_t outer_epoch) noexcept;
     [[nodiscard]] bool active() const noexcept;
-    [[nodiscard]] std::size_t depth() const noexcept;
+    [[nodiscard]] std::uint32_t depth() const noexcept;
 
 private:
-    struct Frame {
-        std::uintptr_t movieclip{};
-        std::uint64_t outer_epoch{};
-        bool skipped_advance{};
-    };
-
-    std::array<Frame, kMaximumTrackedDepth> frames_{};
-    std::size_t depth_{};
+    std::uint32_t depth_{};
 };
 
 class MovieClipPreprocessScope {
 public:
-    MovieClipPreprocessScope(
-        MovieClipPreprocessTracker& tracker,
-        std::uintptr_t movieclip,
-        std::uint64_t outer_epoch) noexcept;
+    explicit MovieClipPreprocessScope(
+        MovieClipPreprocessDepth& depth) noexcept;
     ~MovieClipPreprocessScope() noexcept;
 
     MovieClipPreprocessScope(const MovieClipPreprocessScope&) = delete;
@@ -218,33 +136,7 @@ public:
         const MovieClipPreprocessScope&) = delete;
 
 private:
-    MovieClipPreprocessTracker* tracker_{};
-};
-
-struct MovieClipVisitObservation {
-    bool same_epoch_revisit{};
-    bool hash_collision{};
-
-    friend bool operator==(
-        const MovieClipVisitObservation&,
-        const MovieClipVisitObservation&) = default;
-};
-
-class MovieClipVisitTracker {
-public:
-    static constexpr std::size_t kSlotCount = 1024;
-
-    [[nodiscard]] MovieClipVisitObservation Observe(
-        std::uintptr_t movieclip,
-        std::uint64_t outer_epoch) noexcept;
-
-private:
-    struct Slot {
-        std::uintptr_t movieclip{};
-        std::uint64_t outer_epoch{};
-    };
-
-    std::array<Slot, kSlotCount> slots_{};
+    MovieClipPreprocessDepth* depth_{};
 };
 
 struct MenuCounterPathStats {
@@ -252,46 +144,19 @@ struct MenuCounterPathStats {
     std::uint64_t suppressions{};
 };
 
-struct MenuCounterBoundaryPathStats {
-    std::uint64_t commits{};
-    std::uint64_t suppressions{};
-    std::uint64_t boundaries{};
-};
-
-struct MovieClipDiagnosticPathStats {
-    std::uint64_t ordinary_runs{};
-    std::uint64_t ordinary_skips{};
-    std::uint64_t preprocess_runs{};
-    std::uint64_t preprocess_skips{};
-    std::uint64_t goto_calls{};
-    std::uint64_t frame_changes{};
-    std::uint64_t samples_logged{};
-    std::uint64_t samples_suppressed{};
-};
-
 struct FramerateMenuRuntimeStats {
     std::uint64_t preprocessing_visits{};
-    std::uint64_t preprocessing_non_tick_skips{};
     std::uint64_t preprocessing_forced{};
-    std::uint64_t preprocessing_stops{};
-    std::uint64_t preprocessing_causal_stops{};
-    std::uint64_t movieclip_same_epoch_revisits{};
-    std::uint64_t movieclip_hash_collisions{};
     std::uint64_t unlock_prompt_transition_holds{};
     std::uint64_t unlock_prompt_stable_holds{};
-    std::array<
-        MovieClipDiagnosticPathStats,
-        kMovieClipDiagnosticTargetCount> movieclip_diagnostics{};
     MenuCounterPathStats ranking_entry{};
     MenuCounterPathStats hitchart_entry{};
-    MenuCounterBoundaryPathStats unlock_countdown{};
-    MenuCounterBoundaryPathStats unlock_primary{};
-    MenuCounterBoundaryPathStats unlock_secondary{};
-    std::uint64_t diagnostic_read_failures{};
+    MenuCounterPathStats unlock_countdown{};
+    MenuCounterPathStats unlock_primary{};
+    MenuCounterPathStats unlock_secondary{};
 };
 
 [[nodiscard]] std::string FormatFramerateMenuRuntimeStats(
-    MenuTimingMode mode,
     const FramerateMenuRuntimeStats& stats);
 
 } // namespace gc::framerate

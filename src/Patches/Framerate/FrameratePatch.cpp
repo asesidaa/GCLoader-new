@@ -35,21 +35,6 @@ namespace {
 constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
 constexpr std::uintptr_t kAudioResyncEpilogueRva = 0x002401D4;
 constexpr std::size_t kMaximumMovieClipInstanceNameBytes = 32;
-constexpr std::uint64_t kUnobservedMovieClipState =
-    std::numeric_limits<std::uint64_t>::max();
-constexpr std::uint64_t kMaximumMovieClipDiagnosticSamplesPerTarget = 512;
-
-enum class UnlockDiagnosticReadStage : std::size_t {
-    StopFlag,
-    NamePointer,
-    NameString,
-    NameHash,
-    Owner,
-    FrameLow,
-    FrameHigh,
-    CounterDestination,
-    CounterValue,
-};
 
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
@@ -144,59 +129,18 @@ struct FramerateRuntimeCounters {
 struct MenuCounterRuntimeCounters {
     std::atomic_uint64_t commits{0};
     std::atomic_uint64_t suppressions{0};
-    std::atomic_uint64_t boundaries{0};
-};
-
-struct MovieClipDiagnosticRuntimeCounters {
-    std::atomic_uint64_t ordinary_runs{0};
-    std::atomic_uint64_t ordinary_skips{0};
-    std::atomic_uint64_t preprocess_runs{0};
-    std::atomic_uint64_t preprocess_skips{0};
-    std::atomic_uint64_t goto_calls{0};
-    std::atomic_uint64_t frame_changes{0};
-    std::atomic_uint64_t samples_logged{0};
-    std::atomic_uint64_t samples_suppressed{0};
-    std::atomic_uint64_t last_state_signature{
-        kUnobservedMovieClipState};
-    std::array<std::atomic_bool, 5> path_sampled{};
-    std::atomic_bool activation_logged{false};
 };
 
 struct FramerateMenuRuntimeCounters {
     std::atomic_uint64_t preprocessing_visits{0};
-    std::atomic_uint64_t preprocessing_non_tick_skips{0};
     std::atomic_uint64_t preprocessing_forced{0};
-    std::atomic_uint64_t preprocessing_stops{0};
-    std::atomic_uint64_t preprocessing_causal_stops{0};
-    std::atomic_uint64_t movieclip_same_epoch_revisits{0};
-    std::atomic_uint64_t movieclip_hash_collisions{0};
     std::atomic_uint64_t unlock_prompt_transition_holds{0};
     std::atomic_uint64_t unlock_prompt_stable_holds{0};
-    std::array<
-        MovieClipDiagnosticRuntimeCounters,
-        kMovieClipDiagnosticTargetCount> movieclip_diagnostics{};
     MenuCounterRuntimeCounters ranking_entry{};
     MenuCounterRuntimeCounters hitchart_entry{};
     MenuCounterRuntimeCounters unlock_countdown{};
     MenuCounterRuntimeCounters unlock_primary{};
     MenuCounterRuntimeCounters unlock_secondary{};
-    std::atomic_uint64_t diagnostic_read_failures{0};
-};
-
-struct FramerateMenuDiagnosticLatches {
-    std::atomic_bool preprocessing_activation{false};
-    std::atomic_bool preprocessing_causal_sample{false};
-    std::atomic_bool revisit_activation{false};
-    std::atomic_bool unlock_prompt_transition_hold_activation{false};
-    std::atomic_bool unlock_prompt_stable_hold_activation{false};
-    std::atomic_bool ranking_activation{false};
-    std::atomic_bool ranking_sample{false};
-    std::atomic_bool hitchart_activation{false};
-    std::atomic_bool hitchart_sample{false};
-    std::atomic_bool unlock_activation{false};
-    std::atomic_bool unlock_countdown_sample{false};
-    std::atomic_bool unlock_primary_sample{false};
-    std::atomic_bool unlock_secondary_sample{false};
 };
 
 struct FramerateRuntimeState {
@@ -224,10 +168,8 @@ struct FramerateRuntimeState {
     PlayerPositionDurationOperand player_position_duration_operand{};
     FramerateRuntimeCounters counters;
     FramerateMenuRuntimeCounters menu_counters;
-    FramerateMenuDiagnosticLatches menu_latches;
     std::atomic_bool fatal_published{false};
     std::atomic_bool authored_60hz_tick{true};
-    std::atomic_uint64_t outer_epoch{0};
     std::int64_t previous_stats_qpc{};
 };
 
@@ -242,8 +184,7 @@ struct FramerateHookOperationPlan {
 
 std::optional<FramerateRuntimeState> g_runtime;
 thread_local int g_movieclip_goto_depth = 0;
-thread_local MovieClipPreprocessTracker g_movieclip_preprocess_tracker;
-thread_local MovieClipVisitTracker g_movieclip_visit_tracker;
+thread_local MovieClipPreprocessDepth g_movieclip_preprocess_depth;
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
 void __fastcall HookMovieClipPreprocessVisit(void*, void*, int);
@@ -327,31 +268,6 @@ void HookOuterFrame(safetyhook::Context&);
         return false;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
-    }
-}
-
-void RecordUnlockDiagnosticReadFailure(
-    UnlockDiagnosticReadStage,
-    std::uintptr_t,
-    std::uintptr_t = 0) noexcept {
-    g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
-        1, std::memory_order_relaxed);
-}
-
-template <typename Builder>
-void LogMenuDiagnosticOnce(
-    std::atomic_bool& latch,
-    Builder&& builder) noexcept {
-    bool expected = false;
-    if (!latch.compare_exchange_strong(
-            expected,
-            true,
-            std::memory_order_relaxed)) {
-        return;
-    }
-    try {
-        PLOG_INFO << builder();
-    } catch (...) {
     }
 }
 
@@ -878,608 +794,120 @@ void AssignHookCallbacks(
     return g_runtime->authored_60hz_tick.load(std::memory_order_acquire);
 }
 
-struct MovieClipDiagnosticIdentity {
-    MovieClipDiagnosticTarget target{MovieClipDiagnosticTarget::None};
-    std::uintptr_t movieclip{};
-    std::uintptr_t parent{};
-    std::uint32_t name_hash{};
-    std::array<
-        char,
-        kMaximumMovieClipInstanceNameBytes> name{};
-    std::size_t name_length{};
-    std::uint32_t parent_name_hash{};
-    std::array<
-        char,
-        kMaximumMovieClipInstanceNameBytes> parent_name{};
-    std::size_t parent_name_length{};
-    bool name_available{};
-    bool owner_available{};
-    bool owner_verified{};
+enum class UnlockRewardPromptTarget : std::uint8_t {
+    Transition,
+    Stable,
 };
 
-struct MovieClipDiagnosticSnapshot {
-    std::uint64_t frame{};
-    std::uint32_t stopped{};
-    bool has_parent{};
-    std::uint64_t parent_frame{};
-    std::uint32_t parent_stopped{};
+[[nodiscard]] std::optional<UnlockRewardPromptTarget>
+IdentifyUnlockRewardPromptHold(
+    void* self,
+    MovieClipAdvanceContext context) noexcept {
+    if (context != MovieClipAdvanceContext::Ordinary) {
+        return std::nullopt;
+    }
 
-    friend bool operator==(
-        const MovieClipDiagnosticSnapshot&,
-        const MovieClipDiagnosticSnapshot&) = default;
-};
-
-[[nodiscard]] bool IsTrackedMovieClipNameHash(
-    std::uint32_t name_hash) noexcept {
-    return name_hash == kStampCardNameHash ||
-        name_hash == kStampWindowNameHash ||
-        name_hash == kUnlockRewardPromptTransitionNameHash ||
-        name_hash == kUnlockRewardPromptStableNameHash;
-}
-
-[[nodiscard]] bool IsUnlockPromptNameHash(
-    std::uint32_t name_hash) noexcept {
-    return name_hash == kUnlockRewardPromptTransitionNameHash ||
-        name_hash == kUnlockRewardPromptStableNameHash;
-}
-
-[[nodiscard]] std::optional<MovieClipDiagnosticIdentity>
-IdentifyTrackedMovieClip(void* self) noexcept {
     const auto movieclip = reinterpret_cast<std::uintptr_t>(self);
     std::uint32_t instance_name_hash{};
     if (!ReadU32Safe(
             movieclip + kMovieClipInstanceNameHashOffset,
             instance_name_hash)) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::NameHash,
-            movieclip + kMovieClipInstanceNameHashOffset,
-            movieclip);
         return std::nullopt;
     }
-    if (!IsTrackedMovieClipNameHash(instance_name_hash)) {
+
+    UnlockRewardPromptTarget target{};
+    if (instance_name_hash ==
+        kUnlockRewardPromptTransitionNameHash) {
+        target = UnlockRewardPromptTarget::Transition;
+    } else if (instance_name_hash ==
+               kUnlockRewardPromptStableNameHash) {
+        target = UnlockRewardPromptTarget::Stable;
+    } else {
         return std::nullopt;
     }
+
     std::uint32_t instance_name_address{};
-    std::uint32_t parent{};
-    const bool name_pointer_available = ReadU32Safe(
-        movieclip + kMovieClipInstanceNameOffset,
-        instance_name_address);
-    if (!name_pointer_available) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::NamePointer,
+    std::uint32_t owner{};
+    if (!ReadU32Safe(
             movieclip + kMovieClipInstanceNameOffset,
-            movieclip);
-    }
-    const bool owner_available = ReadU32Safe(
-        movieclip + kMovieClipOwnerOffset,
-        parent);
-    if (!owner_available) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::Owner,
+            instance_name_address) ||
+        instance_name_address == 0 ||
+        !ReadU32Safe(
             movieclip + kMovieClipOwnerOffset,
-            movieclip);
-    }
-
-    std::array<
-        char,
-        kMaximumMovieClipInstanceNameBytes> instance_name_buffer{};
-    std::size_t instance_name_length{};
-    const bool name_available =
-        name_pointer_available &&
-        instance_name_address != 0 &&
-        ReadCStringSafe(
-            instance_name_address,
-            instance_name_buffer,
-            instance_name_length);
-    if (!name_available) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::NameString,
-            instance_name_address,
-            movieclip);
-    }
-
-    std::uint32_t parent_name_hash{};
-    std::array<
-        char,
-        kMaximumMovieClipInstanceNameBytes> parent_name_buffer{};
-    std::size_t parent_name_length{};
-    bool owner_verified = false;
-    if (IsUnlockPromptNameHash(instance_name_hash)) {
-        std::uint32_t parent_name_address{};
-        if (owner_available && parent != 0) {
-            const bool owner_hash_available = ReadU32Safe(
-                static_cast<std::uintptr_t>(parent) +
-                    kMovieClipInstanceNameHashOffset,
-                parent_name_hash);
-            const bool owner_name_pointer_available = ReadU32Safe(
-                static_cast<std::uintptr_t>(parent) +
-                    kMovieClipInstanceNameOffset,
-                parent_name_address);
-            const bool owner_name_available =
-                owner_name_pointer_available &&
-                parent_name_address != 0 &&
-                ReadCStringSafe(
-                    parent_name_address,
-                    parent_name_buffer,
-                    parent_name_length);
-            owner_verified =
-                owner_hash_available &&
-                owner_name_available &&
-                parent_name_hash == kUnlockRewardNavigatorNameHash &&
-                std::string_view{
-                    parent_name_buffer.data(),
-                    parent_name_length} == "imc_un_navi";
-            if (!owner_hash_available) {
-                RecordUnlockDiagnosticReadFailure(
-                    UnlockDiagnosticReadStage::NameHash,
-                    static_cast<std::uintptr_t>(parent) +
-                        kMovieClipInstanceNameHashOffset,
-                    parent);
-            }
-            if (!owner_name_pointer_available) {
-                RecordUnlockDiagnosticReadFailure(
-                    UnlockDiagnosticReadStage::NamePointer,
-                    static_cast<std::uintptr_t>(parent) +
-                        kMovieClipInstanceNameOffset,
-                    parent);
-            } else if (!owner_name_available) {
-                RecordUnlockDiagnosticReadFailure(
-                    UnlockDiagnosticReadStage::NameString,
-                    parent_name_address,
-                    parent);
-            }
-        }
-    }
-
-    const auto target = ClassifyMovieClipDiagnosticCandidate(
-        instance_name_hash,
-        std::string_view{
-            instance_name_buffer.data(),
-            name_available ? instance_name_length : 0});
-    if (target == MovieClipDiagnosticTarget::None) {
+            owner) ||
+        owner == 0) {
         return std::nullopt;
     }
-    return MovieClipDiagnosticIdentity{
-        .target = target,
-        .movieclip = movieclip,
-        .parent = static_cast<std::uintptr_t>(parent),
-        .name_hash = instance_name_hash,
-        .name = instance_name_buffer,
-        .name_length =
-            name_available ? instance_name_length : 0,
-        .parent_name_hash = parent_name_hash,
-        .parent_name = parent_name_buffer,
-        .parent_name_length =
-            owner_verified ? parent_name_length : 0,
-        .name_available = name_available,
-        .owner_available = owner_available,
-        .owner_verified = owner_verified,
-    };
-}
 
-[[nodiscard]] bool ReadMovieClipFrameState(
-    std::uintptr_t movieclip,
-    std::uint64_t& frame,
-    std::uint32_t& stopped) noexcept {
+    std::array<
+        char,
+        kMaximumMovieClipInstanceNameBytes> instance_name{};
+    std::size_t instance_name_length{};
+    if (!ReadCStringSafe(
+            instance_name_address,
+            instance_name,
+            instance_name_length)) {
+        return std::nullopt;
+    }
+
+    const auto owner_address =
+        static_cast<std::uintptr_t>(owner);
+    std::uint32_t owner_name_hash{};
+    std::uint32_t owner_name_address{};
+    if (!ReadU32Safe(
+            owner_address + kMovieClipInstanceNameHashOffset,
+            owner_name_hash) ||
+        !ReadU32Safe(
+            owner_address + kMovieClipInstanceNameOffset,
+            owner_name_address) ||
+        owner_name_address == 0) {
+        return std::nullopt;
+    }
+
+    std::array<
+        char,
+        kMaximumMovieClipInstanceNameBytes> owner_name{};
+    std::size_t owner_name_length{};
+    if (!ReadCStringSafe(
+            owner_name_address,
+            owner_name,
+            owner_name_length)) {
+        return std::nullopt;
+    }
+
     std::uint32_t frame_low{};
     std::uint32_t frame_high{};
-    const bool low_available = ReadU32Safe(
-        movieclip + kMovieClipCurrentFrameLowOffset,
-        frame_low);
-    const bool high_available = ReadU32Safe(
-        movieclip + kMovieClipCurrentFrameHighOffset,
-        frame_high);
-    const bool stop_available = ReadU32Safe(
-        movieclip + kMovieClipStopFlagOffset,
-        stopped);
-    if (!low_available) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::FrameLow,
+    std::uint32_t stopped{};
+    if (!ReadU32Safe(
             movieclip + kMovieClipCurrentFrameLowOffset,
-            movieclip);
-    }
-    if (!high_available) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::FrameHigh,
+            frame_low) ||
+        !ReadU32Safe(
             movieclip + kMovieClipCurrentFrameHighOffset,
-            movieclip);
-    }
-    if (!stop_available) {
-        RecordUnlockDiagnosticReadFailure(
-            UnlockDiagnosticReadStage::StopFlag,
+            frame_high) ||
+        !ReadU32Safe(
             movieclip + kMovieClipStopFlagOffset,
-            movieclip);
-    }
-    if (!low_available || !high_available || !stop_available) {
-        return false;
-    }
-    frame =
-        (static_cast<std::uint64_t>(frame_high) << 32U) |
-        frame_low;
-    return true;
-}
-
-[[nodiscard]] std::optional<MovieClipDiagnosticSnapshot>
-CaptureMovieClipDiagnosticSnapshot(
-    const MovieClipDiagnosticIdentity& identity) noexcept {
-    MovieClipDiagnosticSnapshot snapshot{};
-    if (!ReadMovieClipFrameState(
-            identity.movieclip,
-            snapshot.frame,
-            snapshot.stopped)) {
+            stopped)) {
         return std::nullopt;
     }
-    if (identity.parent == 0) {
-        return snapshot;
+    const std::uint64_t current_frame =
+        (static_cast<std::uint64_t>(frame_high) << 32U) |
+        frame_low;
+
+    if (!ShouldHoldUnlockRewardPromptFrame(
+            context,
+            instance_name_hash,
+            std::string_view{
+                instance_name.data(),
+                instance_name_length},
+            owner_name_hash,
+            std::string_view{
+                owner_name.data(),
+                owner_name_length},
+            current_frame,
+            stopped)) {
+        return std::nullopt;
     }
-    if (!ReadMovieClipFrameState(
-            identity.parent,
-            snapshot.parent_frame,
-            snapshot.parent_stopped)) {
-        return snapshot;
-    }
-    snapshot.has_parent = true;
-    return snapshot;
-}
-
-[[nodiscard]] std::size_t MovieClipDiagnosticTargetIndex(
-    MovieClipDiagnosticTarget target) noexcept {
-    return static_cast<std::size_t>(target) - 1;
-}
-
-[[nodiscard]] MovieClipDiagnosticRuntimeCounters&
-MovieClipDiagnosticCounters(
-    MovieClipDiagnosticTarget target) noexcept {
-    return g_runtime->menu_counters.movieclip_diagnostics[
-        MovieClipDiagnosticTargetIndex(target)];
-}
-
-[[nodiscard]] std::string_view MovieClipDiagnosticScreen(
-    MovieClipDiagnosticTarget target) noexcept {
-    switch (target) {
-    case MovieClipDiagnosticTarget::StampCard:
-    case MovieClipDiagnosticTarget::StampWindow:
-        return "postplay_stamp";
-    case MovieClipDiagnosticTarget::UnlockPromptTransition:
-    case MovieClipDiagnosticTarget::UnlockPromptStable:
-        return "postplay_unlock_reward";
-    case MovieClipDiagnosticTarget::None:
-        break;
-    }
-    return "unknown";
-}
-
-[[nodiscard]] std::string_view MovieClipDiagnosticAsset(
-    MovieClipDiagnosticTarget target) noexcept {
-    switch (target) {
-    case MovieClipDiagnosticTarget::StampCard:
-    case MovieClipDiagnosticTarget::StampWindow:
-        return "stamp.rvb|stamp_eng.rvb";
-    case MovieClipDiagnosticTarget::UnlockPromptTransition:
-    case MovieClipDiagnosticTarget::UnlockPromptStable:
-        return "unlock_reward.rvb";
-    case MovieClipDiagnosticTarget::None:
-        break;
-    }
-    return "unknown";
-}
-
-[[nodiscard]] std::string_view MovieClipDiagnosticInstance(
-    MovieClipDiagnosticTarget target) noexcept {
-    switch (target) {
-    case MovieClipDiagnosticTarget::StampCard:
-        return "imc_scard";
-    case MovieClipDiagnosticTarget::StampWindow:
-        return "imc_window";
-    case MovieClipDiagnosticTarget::UnlockPromptTransition:
-        return "imc_tx";
-    case MovieClipDiagnosticTarget::UnlockPromptStable:
-        return "igr_un_instmsg01_img";
-    case MovieClipDiagnosticTarget::None:
-        break;
-    }
-    return "unknown";
-}
-
-[[nodiscard]] std::uint64_t MovieClipDiagnosticStateSignature(
-    const MovieClipDiagnosticSnapshot& snapshot) noexcept {
-    std::uint64_t hash = 1469598103934665603ULL;
-    const auto mix = [&hash](std::uint64_t value) {
-        hash ^= value;
-        hash *= 1099511628211ULL;
-    };
-    mix(snapshot.frame);
-    mix(snapshot.stopped);
-    mix(snapshot.has_parent ? 1U : 0U);
-    mix(snapshot.parent_frame);
-    mix(snapshot.parent_stopped);
-    return hash;
-}
-
-[[nodiscard]] bool ObserveMovieClipDiagnosticStateChange(
-    MovieClipDiagnosticRuntimeCounters& counters,
-    const std::optional<MovieClipDiagnosticSnapshot>& snapshot) noexcept {
-    if (!snapshot) {
-        return false;
-    }
-    const auto signature =
-        MovieClipDiagnosticStateSignature(snapshot.value());
-    const auto previous = counters.last_state_signature.exchange(
-        signature, std::memory_order_relaxed);
-    if (previous == kUnobservedMovieClipState ||
-        previous == signature) {
-        return false;
-    }
-    counters.frame_changes.fetch_add(1, std::memory_order_relaxed);
-    return true;
-}
-
-[[nodiscard]] bool ReserveMovieClipDiagnosticSample(
-    MovieClipDiagnosticRuntimeCounters& counters) noexcept {
-    auto current =
-        counters.samples_logged.load(std::memory_order_relaxed);
-    while (current <
-           kMaximumMovieClipDiagnosticSamplesPerTarget) {
-        if (counters.samples_logged.compare_exchange_weak(
-                current,
-                current + 1,
-                std::memory_order_relaxed)) {
-            return true;
-        }
-    }
-    counters.samples_suppressed.fetch_add(
-        1, std::memory_order_relaxed);
-    return false;
-}
-
-[[nodiscard]] std::string_view MovieClipAdvanceContextName(
-    MovieClipAdvanceContext context) noexcept {
-    switch (context) {
-    case MovieClipAdvanceContext::Ordinary:
-        return "ordinary";
-    case MovieClipAdvanceContext::Goto:
-        return "goto";
-    case MovieClipAdvanceContext::Preprocess:
-        return "preprocess";
-    }
-    return "invalid";
-}
-
-void LogMovieClipDiagnosticActivation(
-    const MovieClipDiagnosticIdentity& identity) noexcept {
-    auto& counters = MovieClipDiagnosticCounters(identity.target);
-    LogMenuDiagnosticOnce(
-        counters.activation_logged,
-        [&identity] {
-            std::ostringstream stream;
-            stream
-                << "FrameratePatch: movieclip_diag_activation"
-                << " target="
-                << MovieClipDiagnosticTargetName(identity.target)
-                << " screen="
-                << MovieClipDiagnosticScreen(identity.target)
-                << " asset="
-                << MovieClipDiagnosticAsset(identity.target)
-                << " instance="
-                << MovieClipDiagnosticInstance(identity.target)
-                 << " movieclip=0x" << std::hex
-                 << identity.movieclip
-                 << " parent=0x" << identity.parent
-                 << " name_hash=0x" << identity.name_hash
-                 << std::dec
-                 << " name_available="
-                 << (identity.name_available ? 1 : 0)
-                 << " owner_available="
-                 << (identity.owner_available ? 1 : 0)
-                 << " owner_verified="
-                 << (identity.owner_verified ? 1 : 0);
-            return stream.str();
-        });
-}
-
-void AppendMovieClipDiagnosticSnapshot(
-    std::ostringstream& stream,
-    std::string_view prefix,
-    const std::optional<MovieClipDiagnosticSnapshot>& snapshot) {
-    if (!snapshot) {
-        stream << ' ' << prefix << "_snapshot=unavailable";
-        return;
-    }
-    stream
-        << ' ' << prefix << "_frame=" << snapshot->frame
-        << ' ' << prefix << "_stopped=" << snapshot->stopped;
-    if (snapshot->has_parent) {
-        stream
-            << ' ' << prefix
-            << "_parent_frame=" << snapshot->parent_frame
-            << ' ' << prefix
-            << "_parent_stopped=" << snapshot->parent_stopped;
-    } else {
-        stream << ' ' << prefix << "_parent=none";
-    }
-}
-
-void RecordMovieClipAdvanceDiagnostic(
-    const MovieClipDiagnosticIdentity& identity,
-    MovieClipAdvanceContext context,
-    bool authored_tick,
-    MovieClipAdvanceAction action,
-    char forward,
-    char loop,
-    char result,
-    const std::optional<MovieClipDiagnosticSnapshot>& before,
-    const std::optional<MovieClipDiagnosticSnapshot>& after,
-    std::uint64_t epoch) noexcept {
-    auto& counters = MovieClipDiagnosticCounters(identity.target);
-    const bool skipped =
-        action == MovieClipAdvanceAction::ReturnSuccessWithoutMotion;
-    std::size_t path_index{};
-    if (context == MovieClipAdvanceContext::Preprocess) {
-        if (skipped) {
-            counters.preprocess_skips.fetch_add(
-                1, std::memory_order_relaxed);
-            path_index = 3;
-        } else {
-            counters.preprocess_runs.fetch_add(
-                1, std::memory_order_relaxed);
-            path_index = 2;
-        }
-    } else {
-        if (skipped) {
-            counters.ordinary_skips.fetch_add(
-                1, std::memory_order_relaxed);
-            path_index = 1;
-        } else {
-            counters.ordinary_runs.fetch_add(
-                1, std::memory_order_relaxed);
-            path_index = 0;
-        }
-    }
-
-    const bool first_path_sample =
-        !counters.path_sampled[path_index].exchange(
-            true, std::memory_order_relaxed);
-    const bool state_changed =
-        ObserveMovieClipDiagnosticStateChange(counters, after);
-    LogMovieClipDiagnosticActivation(identity);
-    if ((!first_path_sample && !state_changed) ||
-        !ReserveMovieClipDiagnosticSample(counters)) {
-        return;
-    }
-
-    try {
-        std::ostringstream stream;
-        stream
-            << "FrameratePatch: movieclip_diag_sample"
-            << " target="
-            << MovieClipDiagnosticTargetName(identity.target)
-            << " event=advance"
-            << " context=" << MovieClipAdvanceContextName(context)
-            << " authored_tick=" << (authored_tick ? 1 : 0)
-            << " action=" << (skipped ? "skip" : "run")
-            << " forward=" << static_cast<int>(forward)
-            << " loop=" << static_cast<int>(loop)
-            << " result=" << static_cast<int>(result)
-            << " state_changed=" << (state_changed ? 1 : 0)
-            << " outer_epoch=" << epoch;
-        AppendMovieClipDiagnosticSnapshot(stream, "before", before);
-        AppendMovieClipDiagnosticSnapshot(stream, "after", after);
-        PLOG_INFO << stream.str();
-    } catch (...) {
-    }
-}
-
-void RecordMovieClipGotoDiagnostic(
-    const MovieClipDiagnosticIdentity& identity,
-    int requested_frame,
-    int requested_subframe,
-    char result,
-    const std::optional<MovieClipDiagnosticSnapshot>& before,
-    const std::optional<MovieClipDiagnosticSnapshot>& after,
-    std::uint64_t epoch) noexcept {
-    auto& counters = MovieClipDiagnosticCounters(identity.target);
-    counters.goto_calls.fetch_add(1, std::memory_order_relaxed);
-    const bool first_path_sample =
-        !counters.path_sampled[4].exchange(
-            true, std::memory_order_relaxed);
-    const bool state_changed =
-        ObserveMovieClipDiagnosticStateChange(counters, after);
-    LogMovieClipDiagnosticActivation(identity);
-    if ((!first_path_sample && !state_changed) ||
-        !ReserveMovieClipDiagnosticSample(counters)) {
-        return;
-    }
-
-    try {
-        std::ostringstream stream;
-        stream
-            << "FrameratePatch: movieclip_diag_sample"
-            << " target="
-            << MovieClipDiagnosticTargetName(identity.target)
-            << " event=goto"
-            << " requested_frame=" << requested_frame
-            << " requested_subframe=" << requested_subframe
-            << " result=" << static_cast<int>(result)
-            << " state_changed=" << (state_changed ? 1 : 0)
-            << " outer_epoch=" << epoch;
-        AppendMovieClipDiagnosticSnapshot(stream, "before", before);
-        AppendMovieClipDiagnosticSnapshot(stream, "after", after);
-        PLOG_INFO << stream.str();
-    } catch (...) {
-    }
-}
-
-[[nodiscard]] bool ShouldHoldUnlockRewardPromptMovieClip(
-    const std::optional<MovieClipDiagnosticIdentity>& identity,
-    const std::optional<MovieClipDiagnosticSnapshot>& snapshot,
-    MovieClipAdvanceContext context) noexcept {
-    if (!identity || !snapshot) {
-        return false;
-    }
-
-    return ShouldHoldUnlockRewardPromptFrame(
-        ActiveMenuTimingMode(),
-        context,
-        identity->name_hash,
-        std::string_view{
-            identity->name.data(),
-            identity->name_length},
-        identity->parent_name_hash,
-        std::string_view{
-            identity->parent_name.data(),
-            identity->parent_name_length},
-        snapshot->frame,
-        snapshot->stopped);
-}
-
-void RecordUnlockRewardPromptHold(
-    const MovieClipDiagnosticIdentity& identity,
-    const MovieClipDiagnosticSnapshot& snapshot) noexcept {
-    std::atomic_uint64_t* counter = nullptr;
-    std::atomic_bool* activation = nullptr;
-    switch (identity.target) {
-    case MovieClipDiagnosticTarget::UnlockPromptTransition:
-        counter =
-            &g_runtime->menu_counters.unlock_prompt_transition_holds;
-        activation =
-            &g_runtime->menu_latches
-                 .unlock_prompt_transition_hold_activation;
-        break;
-    case MovieClipDiagnosticTarget::UnlockPromptStable:
-        counter =
-            &g_runtime->menu_counters.unlock_prompt_stable_holds;
-        activation =
-            &g_runtime->menu_latches
-                 .unlock_prompt_stable_hold_activation;
-        break;
-    case MovieClipDiagnosticTarget::None:
-    case MovieClipDiagnosticTarget::StampCard:
-    case MovieClipDiagnosticTarget::StampWindow:
-        return;
-    }
-
-    counter->fetch_add(1, std::memory_order_relaxed);
-    LogMenuDiagnosticOnce(
-        *activation,
-        [&identity, &snapshot] {
-            std::ostringstream stream;
-            stream
-                << "FrameratePatch: menu_timing_activation"
-                << " menu_timing_mode="
-                << MenuTimingModeName(ActiveMenuTimingMode())
-                << " path=unlock_reward_prompt_hold"
-                << " screen=postplay_unlock_reward"
-                << " asset=unlock_reward.rvb"
-                << " target="
-                << MovieClipDiagnosticTargetName(identity.target)
-                << " instance="
-                << MovieClipDiagnosticInstance(identity.target)
-                << " parent=imc_un_navi"
-                << " frame=" << snapshot.frame
-                << " stopped=" << snapshot.stopped
-                << " action=hold_visible_frame";
-            return stream.str();
-        });
+    return target;
 }
 
 [[nodiscard]] bool ReadTuneFrame(
@@ -1565,75 +993,23 @@ char __fastcall HookMovieClipGoto(
     void*,
     int frame,
     int subframe) {
-    const auto diagnostic_identity = IdentifyTrackedMovieClip(self);
-    const auto before = diagnostic_identity
-        ? CaptureMovieClipDiagnosticSnapshot(
-              diagnostic_identity.value())
-        : std::nullopt;
-    const auto epoch =
-        g_runtime->outer_epoch.load(std::memory_order_acquire);
-
     struct DepthGuard {
         DepthGuard() { ++g_movieclip_goto_depth; }
         ~DepthGuard() { --g_movieclip_goto_depth; }
     };
 
-    char result{};
-    {
-        DepthGuard guard;
-        result = g_runtime->hooks.movieclip_goto
-            .unsafe_thiscall<char>(self, frame, subframe);
-    }
-
-    if (diagnostic_identity) {
-        const auto after = CaptureMovieClipDiagnosticSnapshot(
-            diagnostic_identity.value());
-        RecordMovieClipGotoDiagnostic(
-            diagnostic_identity.value(),
-            frame,
-            subframe,
-            result,
-            before,
-            after,
-            epoch);
-    }
-    return result;
+    DepthGuard guard;
+    return g_runtime->hooks.movieclip_goto
+        .unsafe_thiscall<char>(self, frame, subframe);
 }
 
 void __fastcall HookMovieClipPreprocessVisit(
     void* self,
     void*,
     int traversal_arg) {
-    std::uint32_t raw_movieclip = 0;
-    if (!ReadU32Safe(
-            reinterpret_cast<std::uintptr_t>(self) + 0x7C,
-            raw_movieclip)) {
-        g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
-            1, std::memory_order_relaxed);
-    }
-
-    const auto epoch =
-        g_runtime->outer_epoch.load(std::memory_order_acquire);
-    MovieClipPreprocessScope scope{
-        g_movieclip_preprocess_tracker,
-        static_cast<std::uintptr_t>(raw_movieclip),
-        epoch};
+    MovieClipPreprocessScope scope{g_movieclip_preprocess_depth};
     g_runtime->menu_counters.preprocessing_visits.fetch_add(
         1, std::memory_order_relaxed);
-
-    LogMenuDiagnosticOnce(
-        g_runtime->menu_latches.preprocessing_activation,
-        [] {
-            std::ostringstream stream;
-            stream
-                << "FrameratePatch: menu_timing_activation"
-                << " menu_timing_mode="
-                << MenuTimingModeName(ActiveMenuTimingMode())
-                << " path=movieclip_preprocess"
-                << " screen=global_asset_load";
-            return stream.str();
-        });
-
     g_runtime->hooks.movieclip_preprocess_visit
         .unsafe_thiscall<void>(self, traversal_arg);
 }
@@ -1645,97 +1021,38 @@ char __fastcall HookMovieClipAdvance(
     char loop) {
     const auto context = g_movieclip_goto_depth > 0
         ? MovieClipAdvanceContext::Goto
-        : g_movieclip_preprocess_tracker.active()
+        : g_movieclip_preprocess_depth.active()
             ? MovieClipAdvanceContext::Preprocess
             : MovieClipAdvanceContext::Ordinary;
     const bool authored_tick = IsAuthored60HzTick();
-    const auto epoch =
-        g_runtime->outer_epoch.load(std::memory_order_acquire);
-    const auto diagnostic_identity =
-        context == MovieClipAdvanceContext::Goto
-        ? std::optional<MovieClipDiagnosticIdentity>{}
-        : IdentifyTrackedMovieClip(self);
-    const auto diagnostic_before = diagnostic_identity
-        ? CaptureMovieClipDiagnosticSnapshot(
-              diagnostic_identity.value())
-        : std::nullopt;
-    const bool hold_unlock_reward_prompt =
-        ShouldHoldUnlockRewardPromptMovieClip(
-            diagnostic_identity,
-            diagnostic_before,
-            context);
+    const auto hold_target =
+        IdentifyUnlockRewardPromptHold(self, context);
+    auto decision =
+        DecideMovieClipAdvance(context, authored_tick);
 
-    if (context == MovieClipAdvanceContext::Ordinary) {
-        const auto observation = g_movieclip_visit_tracker.Observe(
-            reinterpret_cast<std::uintptr_t>(self),
-            epoch);
-        if (observation.same_epoch_revisit) {
-            g_runtime->menu_counters.movieclip_same_epoch_revisits.fetch_add(
-                1, std::memory_order_relaxed);
-            LogMenuDiagnosticOnce(
-                g_runtime->menu_latches.revisit_activation,
-                [] {
-                    std::ostringstream stream;
-                    stream
-                        << "FrameratePatch: menu_timing_activation"
-                        << " menu_timing_mode="
-                        << MenuTimingModeName(ActiveMenuTimingMode())
-                        << " path=movieclip_same_epoch_revisit"
-                        << " screen=ordinary_movieclip";
-                    return stream.str();
-                });
-        }
-        if (observation.hash_collision) {
-            g_runtime->menu_counters.movieclip_hash_collisions.fetch_add(
-                1, std::memory_order_relaxed);
-        }
-    }
-
-    auto decision = DecideMovieClipAdvance(
-        ActiveMenuTimingMode(),
-        context,
-        authored_tick);
-    if (hold_unlock_reward_prompt) {
+    if (hold_target) {
         decision.action =
             MovieClipAdvanceAction::ReturnSuccessWithoutMotion;
-        RecordUnlockRewardPromptHold(
-            diagnostic_identity.value(),
-            diagnostic_before.value());
-    }
-    if (decision.preprocessing_non_tick_skip) {
-        g_runtime->menu_counters.preprocessing_non_tick_skips.fetch_add(
-            1, std::memory_order_relaxed);
-        g_movieclip_preprocess_tracker.RecordSkippedAdvance(
-            reinterpret_cast<std::uintptr_t>(self),
-            epoch);
+        auto& counter =
+            hold_target.value() ==
+                    UnlockRewardPromptTarget::Transition
+                ? g_runtime->menu_counters
+                      .unlock_prompt_transition_holds
+                : g_runtime->menu_counters
+                      .unlock_prompt_stable_holds;
+        counter.fetch_add(1, std::memory_order_relaxed);
     }
     if (decision.preprocessing_forced) {
         g_runtime->menu_counters.preprocessing_forced.fetch_add(
             1, std::memory_order_relaxed);
     }
-
     if (decision.action ==
         MovieClipAdvanceAction::ReturnSuccessWithoutMotion) {
         g_runtime->counters.movieclip_skips.fetch_add(
             1, std::memory_order_relaxed);
-        if (diagnostic_identity) {
-            const auto diagnostic_after =
-                CaptureMovieClipDiagnosticSnapshot(
-                    diagnostic_identity.value());
-            RecordMovieClipAdvanceDiagnostic(
-                diagnostic_identity.value(),
-                context,
-                authored_tick,
-                decision.action,
-                forward,
-                loop,
-                1,
-                diagnostic_before,
-                diagnostic_after,
-                epoch);
-        }
         return 1;
     }
+
     if (context == MovieClipAdvanceContext::Goto) {
         g_runtime->counters.movieclip_goto_calls.fetch_add(
             1, std::memory_order_relaxed);
@@ -1743,303 +1060,60 @@ char __fastcall HookMovieClipAdvance(
         g_runtime->counters.movieclip_calls.fetch_add(
             1, std::memory_order_relaxed);
     }
-    const auto result =
-        g_runtime->hooks.movieclip_advance.unsafe_thiscall<char>(
-        self, forward, loop);
-    if (diagnostic_identity) {
-        const auto diagnostic_after =
-            CaptureMovieClipDiagnosticSnapshot(
-                diagnostic_identity.value());
-        RecordMovieClipAdvanceDiagnostic(
-            diagnostic_identity.value(),
-            context,
-            authored_tick,
-            decision.action,
-            forward,
-            loop,
-            result,
-            diagnostic_before,
-            diagnostic_after,
-            epoch);
-    }
-    return result;
+    return g_runtime->hooks.movieclip_advance
+        .unsafe_thiscall<char>(self, forward, loop);
 }
 
-struct MenuCounterStoreDescriptor {
-    const char* path{};
-    const char* activation_path{};
-    const char* screen{};
-    const char* asset{};
-    std::uintptr_t suppress_resume_rva{};
-    std::optional<std::uint32_t> boundary{};
-    MenuCounterRuntimeCounters* counters{};
-    std::atomic_bool* activation_latch{};
-    std::atomic_bool* sample_latch{};
-};
-
-[[nodiscard]] MenuCounterStoreDescriptor
-RankingStoreDescriptor() noexcept {
-    return {
-        .path = "ranking_entry",
-        .activation_path = "ranking_entry",
-        .screen = "attract_ranking",
-        .asset = "ranking.rvb",
-        .suppress_resume_rva =
-            kRankingEntryCounterHookGeometry.suppress_resume_rva,
-        .counters = &g_runtime->menu_counters.ranking_entry,
-        .activation_latch =
-            &g_runtime->menu_latches.ranking_activation,
-        .sample_latch = &g_runtime->menu_latches.ranking_sample,
-    };
-}
-
-[[nodiscard]] MenuCounterStoreDescriptor
-HitChartStoreDescriptor() noexcept {
-    return {
-        .path = "hitchart_entry",
-        .activation_path = "hitchart_entry",
-        .screen = "attract_hitchart",
-        .asset = "hitchart.rvb",
-        .suppress_resume_rva =
-            kHitChartEntryCounterHookGeometry.suppress_resume_rva,
-        .counters = &g_runtime->menu_counters.hitchart_entry,
-        .activation_latch =
-            &g_runtime->menu_latches.hitchart_activation,
-        .sample_latch = &g_runtime->menu_latches.hitchart_sample,
-    };
-}
-
-[[nodiscard]] MenuCounterStoreDescriptor
-UnlockCountdownStoreDescriptor() noexcept {
-    return {
-        .path = "unlock_countdown",
-        .activation_path = "unlock_reward",
-        .screen = "postplay_unlock_reward",
-        .asset = "unlock_reward.rvb",
-        .suppress_resume_rva =
-            kUnlockRewardCountdownHookGeometry.suppress_resume_rva,
-        .boundary = 0,
-        .counters = &g_runtime->menu_counters.unlock_countdown,
-        .activation_latch =
-            &g_runtime->menu_latches.unlock_activation,
-        .sample_latch =
-            &g_runtime->menu_latches.unlock_countdown_sample,
-    };
-}
-
-[[nodiscard]] MenuCounterStoreDescriptor
-UnlockPrimaryStoreDescriptor() noexcept {
-    return {
-        .path = "unlock_state_primary",
-        .activation_path = "unlock_reward",
-        .screen = "postplay_unlock_reward",
-        .asset = "unlock_reward.rvb",
-        .suppress_resume_rva =
-            kUnlockRewardPrimaryHookGeometry.suppress_resume_rva,
-        .boundary = 31,
-        .counters = &g_runtime->menu_counters.unlock_primary,
-        .activation_latch =
-            &g_runtime->menu_latches.unlock_activation,
-        .sample_latch =
-            &g_runtime->menu_latches.unlock_primary_sample,
-    };
-}
-
-[[nodiscard]] MenuCounterStoreDescriptor
-UnlockSecondaryStoreDescriptor() noexcept {
-    return {
-        .path = "unlock_state_secondary",
-        .activation_path = "unlock_reward",
-        .screen = "postplay_unlock_reward",
-        .asset = "unlock_reward.rvb",
-        .suppress_resume_rva =
-            kUnlockRewardSecondaryHookGeometry.suppress_resume_rva,
-        .boundary = 43,
-        .counters = &g_runtime->menu_counters.unlock_secondary,
-        .activation_latch =
-            &g_runtime->menu_latches.unlock_activation,
-        .sample_latch =
-            &g_runtime->menu_latches.unlock_secondary_sample,
-    };
-}
-
-[[nodiscard]] const char* MenuStoreActionName(
-    MenuCounterStoreAction action) noexcept {
-    switch (action) {
-    case MenuCounterStoreAction::Commit:
-        return "commit";
-    case MenuCounterStoreAction::WouldSuppress:
-        return "would_suppress";
-    case MenuCounterStoreAction::Suppress:
-        return "suppress";
-    }
-    return "invalid";
-}
-
-template <typename DestinationResolver>
-void ObserveMenuCounterStore(
+void ApplyPermanentMenuCounterStore(
     safetyhook::Context& context,
-    const MenuCounterStoreDescriptor& descriptor,
-    DestinationResolver&& resolve_destination,
-    std::uint32_t new_value) {
-    const bool unlock_descriptor =
-        std::string_view{descriptor.screen} ==
-        "postplay_unlock_reward";
-    const bool authored_tick = IsAuthored60HzTick();
+    MenuCounterRuntimeCounters& counters,
+    std::uintptr_t suppress_resume_rva) noexcept {
     const auto action = ApplyMenuCounterStoreGate(
         context,
-        ActiveMenuTimingMode(),
-        authored_tick,
-        ExecutableBase() + descriptor.suppress_resume_rva);
-
-    if (action == MenuCounterStoreAction::Commit) {
-        descriptor.counters->commits.fetch_add(
-            1, std::memory_order_relaxed);
-    } else {
-        descriptor.counters->suppressions.fetch_add(
-            1, std::memory_order_relaxed);
-    }
-
-    LogMenuDiagnosticOnce(
-        *descriptor.activation_latch,
-        [&descriptor] {
-            std::ostringstream stream;
-            stream
-                << "FrameratePatch: menu_timing_activation"
-                << " menu_timing_mode="
-                << MenuTimingModeName(ActiveMenuTimingMode())
-                << " path=" << descriptor.activation_path
-                << " screen=" << descriptor.screen
-                << " asset=" << descriptor.asset;
-            return stream.str();
-        });
-
-    const std::optional<std::uintptr_t> destination =
-        std::forward<DestinationResolver>(
-            resolve_destination)();
-    if (!destination.has_value()) {
-        if (unlock_descriptor) {
-            RecordUnlockDiagnosticReadFailure(
-                UnlockDiagnosticReadStage::CounterDestination,
-                0);
-        } else {
-            g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
-                1, std::memory_order_relaxed);
-        }
-        return;
-    }
-
-    const auto resolved_destination = destination.value();
-    std::uint32_t old_value{};
-    if (!ReadU32Safe(resolved_destination, old_value)) {
-        if (unlock_descriptor) {
-            RecordUnlockDiagnosticReadFailure(
-                UnlockDiagnosticReadStage::CounterValue,
-                resolved_destination);
-        } else {
-            g_runtime->menu_counters.diagnostic_read_failures.fetch_add(
-                1, std::memory_order_relaxed);
-        }
-        return;
-    }
-
-    if (action != MenuCounterStoreAction::Suppress &&
-        descriptor.boundary.has_value() &&
-        old_value != descriptor.boundary.value() &&
-        new_value == descriptor.boundary.value()) {
-        descriptor.counters->boundaries.fetch_add(
-            1, std::memory_order_relaxed);
-    }
-
-    const auto epoch =
-        g_runtime->outer_epoch.load(std::memory_order_acquire);
-    LogMenuDiagnosticOnce(
-        *descriptor.sample_latch,
-        [&descriptor,
-         resolved_destination,
-         old_value,
-         new_value,
-         authored_tick,
-         action,
-         epoch] {
-            std::ostringstream stream;
-            stream
-                << "FrameratePatch: menu_timing_sample"
-                << " menu_timing_mode="
-                << MenuTimingModeName(ActiveMenuTimingMode())
-                << " path=" << descriptor.path
-                << " screen=" << descriptor.screen
-                << " asset=" << descriptor.asset
-                << " destination=0x" << std::hex
-                << resolved_destination
-                << std::dec
-                << " outer_epoch=" << epoch
-                << " old_value=" << old_value
-                << " new_value=" << new_value
-                << " authored_phase="
-                << (authored_tick ? "tick" : "non_tick")
-                << " action=" << MenuStoreActionName(action);
-            return stream.str();
-        });
+        IsAuthored60HzTick(),
+        ExecutableBase() + suppress_resume_rva);
+    auto& counter =
+        action == MenuCounterStoreAction::Commit
+        ? counters.commits
+        : counters.suppressions;
+    counter.fetch_add(1, std::memory_order_relaxed);
 }
 
 void HookRankingEntryCounterStore(safetyhook::Context& context) {
-    ObserveMenuCounterStore(
+    ApplyPermanentMenuCounterStore(
         context,
-        RankingStoreDescriptor(),
-        [&context] {
-            return ResolveMenuCounterDestinationFromFrame(
-                context,
-                -0x20,
-                &ReadU32Safe);
-        },
-        context.eax);
+        g_runtime->menu_counters.ranking_entry,
+        kRankingEntryCounterHookGeometry.suppress_resume_rva);
 }
 
 void HookHitChartEntryCounterStore(safetyhook::Context& context) {
-    ObserveMenuCounterStore(
+    ApplyPermanentMenuCounterStore(
         context,
-        HitChartStoreDescriptor(),
-        [&context] {
-            return ResolveMenuCounterDestinationFromFrame(
-                context,
-                -0x94,
-                &ReadU32Safe);
-        },
-        context.eax);
+        g_runtime->menu_counters.hitchart_entry,
+        kHitChartEntryCounterHookGeometry.suppress_resume_rva);
 }
 
 void HookUnlockRewardCountdownStore(safetyhook::Context& context) {
-    ObserveMenuCounterStore(
+    ApplyPermanentMenuCounterStore(
         context,
-        UnlockCountdownStoreDescriptor(),
-        [&context] {
-            return std::optional<std::uintptr_t>{
-                context.eax + 0x376C};
-        },
-        context.edx);
+        g_runtime->menu_counters.unlock_countdown,
+        kUnlockRewardCountdownHookGeometry.suppress_resume_rva);
 }
 
-void HookUnlockRewardPrimaryStateStore(safetyhook::Context& context) {
-    ObserveMenuCounterStore(
+void HookUnlockRewardPrimaryStateStore(
+    safetyhook::Context& context) {
+    ApplyPermanentMenuCounterStore(
         context,
-        UnlockPrimaryStoreDescriptor(),
-        [&context] {
-            return std::optional<std::uintptr_t>{
-                context.ecx + 0x37D4};
-        },
-        context.eax);
+        g_runtime->menu_counters.unlock_primary,
+        kUnlockRewardPrimaryHookGeometry.suppress_resume_rva);
 }
 
-void HookUnlockRewardSecondaryStateStore(safetyhook::Context& context) {
-    ObserveMenuCounterStore(
+void HookUnlockRewardSecondaryStateStore(
+    safetyhook::Context& context) {
+    ApplyPermanentMenuCounterStore(
         context,
-        UnlockSecondaryStoreDescriptor(),
-        [&context] {
-            return std::optional<std::uintptr_t>{
-                context.eax + 0x37D4};
-        },
-        context.edx);
+        g_runtime->menu_counters.unlock_secondary,
+        kUnlockRewardSecondaryHookGeometry.suppress_resume_rva);
 }
 
 void* __fastcall HookNavigatorAdvance(void* self, void*) {
@@ -2418,58 +1492,17 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                 std::memory_order_relaxed),
     };
     const auto& menu = g_runtime->menu_counters;
-    std::array<
-        MovieClipDiagnosticPathStats,
-        kMovieClipDiagnosticTargetCount> movieclip_diagnostics{};
-    for (std::size_t index = 0;
-         index < movieclip_diagnostics.size();
-         ++index) {
-        const auto& source = menu.movieclip_diagnostics[index];
-        movieclip_diagnostics[index] = {
-            .ordinary_runs = source.ordinary_runs.load(
-                std::memory_order_relaxed),
-            .ordinary_skips = source.ordinary_skips.load(
-                std::memory_order_relaxed),
-            .preprocess_runs = source.preprocess_runs.load(
-                std::memory_order_relaxed),
-            .preprocess_skips = source.preprocess_skips.load(
-                std::memory_order_relaxed),
-            .goto_calls = source.goto_calls.load(
-                std::memory_order_relaxed),
-            .frame_changes = source.frame_changes.load(
-                std::memory_order_relaxed),
-            .samples_logged = source.samples_logged.load(
-                std::memory_order_relaxed),
-            .samples_suppressed = source.samples_suppressed.load(
-                std::memory_order_relaxed),
-        };
-    }
     const FramerateMenuRuntimeStats menu_stats{
         .preprocessing_visits = menu.preprocessing_visits.load(
             std::memory_order_relaxed),
-        .preprocessing_non_tick_skips =
-            menu.preprocessing_non_tick_skips.load(
-                std::memory_order_relaxed),
         .preprocessing_forced = menu.preprocessing_forced.load(
             std::memory_order_relaxed),
-        .preprocessing_stops = menu.preprocessing_stops.load(
-            std::memory_order_relaxed),
-        .preprocessing_causal_stops =
-            menu.preprocessing_causal_stops.load(
-                std::memory_order_relaxed),
-        .movieclip_same_epoch_revisits =
-            menu.movieclip_same_epoch_revisits.load(
-                std::memory_order_relaxed),
-        .movieclip_hash_collisions =
-            menu.movieclip_hash_collisions.load(
-                std::memory_order_relaxed),
         .unlock_prompt_transition_holds =
             menu.unlock_prompt_transition_holds.load(
                 std::memory_order_relaxed),
         .unlock_prompt_stable_holds =
             menu.unlock_prompt_stable_holds.load(
                 std::memory_order_relaxed),
-        .movieclip_diagnostics = movieclip_diagnostics,
         .ranking_entry = {
             .commits = menu.ranking_entry.commits.load(
                 std::memory_order_relaxed),
@@ -2487,15 +1520,11 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                 std::memory_order_relaxed),
             .suppressions = menu.unlock_countdown.suppressions.load(
                 std::memory_order_relaxed),
-            .boundaries = menu.unlock_countdown.boundaries.load(
-                std::memory_order_relaxed),
         },
         .unlock_primary = {
             .commits = menu.unlock_primary.commits.load(
                 std::memory_order_relaxed),
             .suppressions = menu.unlock_primary.suppressions.load(
-                std::memory_order_relaxed),
-            .boundaries = menu.unlock_primary.boundaries.load(
                 std::memory_order_relaxed),
         },
         .unlock_secondary = {
@@ -2503,12 +1532,7 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                 std::memory_order_relaxed),
             .suppressions = menu.unlock_secondary.suppressions.load(
                 std::memory_order_relaxed),
-            .boundaries = menu.unlock_secondary.boundaries.load(
-                std::memory_order_relaxed),
         },
-        .diagnostic_read_failures =
-            menu.diagnostic_read_failures.load(
-                std::memory_order_relaxed),
     };
     PLOG_INFO << "FrameratePatch: runtime_stats"
               << " target_fps=" << g_runtime->profile.target_fps()
@@ -2581,14 +1605,10 @@ void MaybeLogRuntimeStats(std::int64_t now) {
               << counters.player_position_denominator_redirects.load(
                      std::memory_order_relaxed)
               << FormatFramerateEffectRuntimeStats(effect_stats)
-              << FormatFramerateMenuRuntimeStats(
-                     ActiveMenuTimingMode(),
-                     menu_stats);
+              << FormatFramerateMenuRuntimeStats(menu_stats);
 }
 
 void HookOuterFrame(safetyhook::Context&) {
-    g_runtime->outer_epoch.fetch_add(1, std::memory_order_release);
-
     LARGE_INTEGER now{};
     if (!QueryPerformanceCounter(&now)) {
         ReportFramerateClockFailure(
@@ -2775,9 +1795,8 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
 
     PLOG_INFO
         << "FrameratePatch: menu_timing startup"
-        << " menu_timing_mode="
-        << MenuTimingModeName(ActiveMenuTimingMode())
-        << " contracts=14 permanent=6 temporary=8";
+        << " policy=corrected"
+        << " contracts=6 temporary=0";
 
     const auto installed = g_runtime->transaction.Install(
         direct_plan->view(), hook_operations.view());
