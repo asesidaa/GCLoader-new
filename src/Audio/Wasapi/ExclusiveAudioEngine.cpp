@@ -255,7 +255,8 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             frames,
             output_sample_rate,
             mixer_allocations_,
-            &mixer_result);
+            &mixer_result,
+            diagnostic_sink_);
         if (mixer_ == nullptr) {
             failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
             CleanupEndpointOnAudioThread();

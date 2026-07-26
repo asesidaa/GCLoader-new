@@ -98,6 +98,7 @@ bool ScaleFloor(
 
 struct MiniaudioMixerState {
     std::shared_ptr<const ma_allocation_callbacks> allocation_callbacks_owner;
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink{};
     ma_engine engine{};
     std::uint32_t period_frames{};
     std::uint32_t output_sample_rate{};
@@ -108,6 +109,7 @@ struct MiniaudioMixerState {
     std::atomic_uint64_t native_gameplay_buffers{};
     std::atomic_uint32_t active_voices{};
     std::atomic_uint32_t maximum_simultaneous_voices{};
+    std::atomic_uint64_t next_diagnostic_voice_id{1};
     bool initialized{};
 
     ~MiniaudioMixerState() {
@@ -367,12 +369,13 @@ struct MixerVoiceState {
         std::atomic_uint64_t sequence{};
         std::atomic_uint64_t source_frame{};
         std::atomic_uint64_t epoch{1};
+        std::atomic_bool explicit_request{};
 
         void Publish(
             std::uint64_t frame,
             std::uint64_t new_epoch) noexcept {
             std::lock_guard lock(writer_mutex);
-            PublishLocked(frame, new_epoch);
+            PublishLocked(frame, new_epoch, true);
         }
 
         void PublishForPlay(
@@ -385,18 +388,24 @@ struct MixerVoiceState {
             const auto frame = current_sequence != applied_sequence
                 ? source_frame.load(std::memory_order_seq_cst)
                 : fallback_frame;
-            PublishLocked(frame, new_epoch);
+            const auto explicit_seek =
+                current_sequence != applied_sequence &&
+                explicit_request.load(std::memory_order_seq_cst);
+            PublishLocked(frame, new_epoch, explicit_seek);
         }
 
     private:
         void PublishLocked(
             std::uint64_t frame,
-            std::uint64_t new_epoch) noexcept {
+            std::uint64_t new_epoch,
+            bool is_explicit) noexcept {
             const auto stable = sequence.load(std::memory_order_seq_cst);
             const auto writing = (stable & 1U) == 0 ? stable + 1 : stable + 2;
             sequence.store(writing, std::memory_order_seq_cst);
             source_frame.store(frame, std::memory_order_seq_cst);
             epoch.store(new_epoch, std::memory_order_seq_cst);
+            explicit_request.store(
+                is_explicit, std::memory_order_seq_cst);
             sequence.store(writing + 1, std::memory_order_seq_cst);
         }
     } seek_mailbox;
@@ -410,6 +419,7 @@ struct MixerVoiceState {
     std::vector<std::byte> input_scratch;
     std::uint64_t input_scratch_frames{};
     std::uint64_t source_length_frames{};
+    std::uint64_t diagnostic_voice_id{};
     std::atomic_uint64_t cursor{};
     std::atomic_uint64_t applied_seek_sequence{};
     detail::VoicePlaybackStateMachine playback;
@@ -446,7 +456,8 @@ struct MixerVoiceState {
     bool ReadStableSeek(
         std::uint64_t* sequence_out,
         std::uint64_t* frame_out,
-        std::uint64_t* epoch_out) noexcept {
+        std::uint64_t* epoch_out,
+        bool* explicit_out) noexcept {
         const auto before = seek_mailbox.sequence.load(
             std::memory_order_seq_cst);
         if ((before & 1U) != 0) {
@@ -456,6 +467,9 @@ struct MixerVoiceState {
             std::memory_order_seq_cst);
         const auto new_epoch = seek_mailbox.epoch.load(
             std::memory_order_seq_cst);
+        const auto explicit_request =
+            seek_mailbox.explicit_request.load(
+                std::memory_order_seq_cst);
         const auto after = seek_mailbox.sequence.load(
             std::memory_order_seq_cst);
         if (before != after || (after & 1U) != 0) {
@@ -464,7 +478,16 @@ struct MixerVoiceState {
         *sequence_out = after;
         *frame_out = frame;
         *epoch_out = new_epoch;
+        *explicit_out = explicit_request;
         return true;
+    }
+
+    void PublishDiagnostic(
+        diagnostics::AudioDiagnosticEvent event) noexcept {
+        event.voice_id = diagnostic_voice_id;
+        if (mixer->diagnostic_sink != nullptr) {
+            mixer->diagnostic_sink->PublishEvent(event);
+        }
     }
 
     void EndPlayback(
@@ -707,10 +730,26 @@ DiscontinuityAdvanceResult AdvanceVoiceAcrossDiscontinuity(
     const auto new_position = is_looping
         ? source_end % voice.source_length_frames
         : std::min(source_end, voice.source_length_frames);
+    const auto old_position =
+        voice.cursor.load(std::memory_order_seq_cst);
     voice.cursor.store(new_position, std::memory_order_seq_cst);
     if (ma_data_converter_reset(&voice.converter) != MA_SUCCESS) {
         return DiscontinuityAdvanceResult::Failed;
     }
+    voice.PublishDiagnostic({
+        .kind = diagnostics::AudioDiagnosticEventKind::ConverterReset,
+        .decision = static_cast<std::uint8_t>(
+            diagnostics::ConverterResetReason::OutputDiscontinuity),
+        .flags = static_cast<std::uint16_t>(
+            (loop_wrapped ? 0x1U : 0U) |
+            (source_ended ? 0x2U : 0U)),
+        .epoch = voice.epoch,
+        .output_frame_begin = render.output_frame_begin,
+        .source_frame_begin = old_position,
+        .source_frame_end = new_position,
+        .value0 = render.discontinuity_frames,
+        .value1 = represented,
+    });
 
     if (source_ended) {
         voice.EndPlayback(playback_run, gap_begin + represented);
@@ -752,10 +791,12 @@ void VoiceNodeProcess(
     std::uint64_t seek_sequence{};
     std::uint64_t seek_frame{};
     std::uint64_t seek_epoch{};
+    bool explicit_seek{};
     if (!voice.ReadStableSeek(
             &seek_sequence,
             &seek_frame,
-            &seek_epoch)) {
+            &seek_epoch,
+            &explicit_seek)) {
         voice.render_output_offset += requested;
         return;
     }
@@ -764,8 +805,13 @@ void VoiceNodeProcess(
         std::memory_order_seq_cst);
     bool applied_new_generation{};
     if (seek_sequence != applied) {
-        if (seek_frame >= voice.source_length_frames ||
-            ma_data_converter_reset(&voice.converter) != MA_SUCCESS) {
+        if (seek_frame >= voice.source_length_frames) {
+            voice.render_output_offset += requested;
+            return;
+        }
+        const auto old_cursor =
+            voice.cursor.load(std::memory_order_seq_cst);
+        if (ma_data_converter_reset(&voice.converter) != MA_SUCCESS) {
             voice.render_output_offset += requested;
             return;
         }
@@ -779,6 +825,27 @@ void VoiceNodeProcess(
         voice.applied_seek_sequence.store(
             seek_sequence,
             std::memory_order_seq_cst);
+        if (explicit_seek) {
+            voice.PublishDiagnostic({
+                .kind = diagnostics::AudioDiagnosticEventKind::
+                    ConverterReset,
+                .decision = static_cast<std::uint8_t>(
+                    diagnostics::ConverterResetReason::Seek),
+                .epoch = seek_epoch,
+                .output_frame_begin = render->output_frame_begin,
+                .source_frame_begin = old_cursor,
+                .source_frame_end = seek_frame,
+            });
+            voice.PublishDiagnostic({
+                .kind =
+                    diagnostics::AudioDiagnosticEventKind::SeekApplied,
+                .epoch = seek_epoch,
+                .output_frame_begin = render->output_frame_begin,
+                .source_frame_begin = old_cursor,
+                .source_frame_end = seek_frame,
+                .value0 = seek_sequence,
+            });
+        }
         applied_new_generation = true;
     }
 
@@ -815,6 +882,7 @@ void VoiceNodeProcess(
     std::uint64_t copied{};
     auto position = source_begin;
     bool copied_wrap{};
+    std::uint64_t snapshot_generation{};
 
     {
         auto* const snapshot = voice.snapshot.get();
@@ -823,6 +891,7 @@ void VoiceNodeProcess(
             voice.render_output_offset += requested;
             return;
         }
+        snapshot_generation = view.generation();
 
         while (copied < required_input) {
             if (position == voice.source_length_frames) {
@@ -882,6 +951,24 @@ void VoiceNodeProcess(
 
     const bool source_ended =
         !is_looping && new_position == voice.source_length_frames;
+    const auto output_begin = render->output_frame_begin +
+        voice.render_output_offset;
+    voice.PublishDiagnostic({
+        .kind = diagnostics::AudioDiagnosticEventKind::RenderSpan,
+        .flags = static_cast<std::uint16_t>(
+            (loop_wrapped ? 0x1U : 0U) |
+            (source_ended ? 0x2U : 0U)),
+        .epoch = voice.epoch,
+        .generation = snapshot_generation,
+        .output_frame_begin = output_begin,
+        .output_frame_end = output_begin + produced,
+        .source_frame_begin = source_begin,
+        .source_frame_end = new_position,
+        .value0 = required_input,
+        .value1 = copied,
+        .value2 = consumed,
+        .value3 = produced,
+    });
     const auto remaining_output = render->frame_count -
         std::min<std::uint64_t>(
             voice.render_output_offset,
@@ -897,8 +984,6 @@ void VoiceNodeProcess(
         remaining_output);
     std::uint64_t final_output_end{};
     if (published_output != 0) {
-        const auto output_begin = render->output_frame_begin +
-            voice.render_output_offset;
         const auto published = PublishMappedSpans(
             voice,
             output_begin,
@@ -966,6 +1051,14 @@ HRESULT MixerVoice::Play(
         }
         return ResultToHresult(result);
     }
+    state_->PublishDiagnostic({
+        .kind = diagnostics::AudioDiagnosticEventKind::VoicePlay,
+        .flags = static_cast<std::uint16_t>(
+            should_loop ? 0x1U : 0U),
+        .qpc_ticks = diagnostics::CaptureAudioDiagnosticQpcTicks(),
+        .epoch = epoch,
+        .value0 = play.run_token,
+    });
     return DS_OK;
 }
 
@@ -979,12 +1072,25 @@ void MixerVoice::Stop() noexcept {
     if (stopped_run != 0) {
         state_->mixer->VoiceStopped();
         state_->playback.CompleteStop(stopped_run);
+        state_->PublishDiagnostic({
+            .kind = diagnostics::AudioDiagnosticEventKind::VoiceStop,
+            .flags = static_cast<std::uint16_t>(
+                state_->looping.load(std::memory_order_seq_cst)
+                    ? 0x1U
+                    : 0U),
+            .qpc_ticks =
+                diagnostics::CaptureAudioDiagnosticQpcTicks(),
+            .epoch = state_->accepted_epoch.load(
+                std::memory_order_seq_cst),
+            .value0 = stopped_run,
+        });
     }
 }
 
 HRESULT MixerVoice::Seek(
     std::uint64_t source_frame,
-    std::uint64_t epoch) noexcept {
+    std::uint64_t epoch,
+    MixerSeekDiagnosticContext diagnostic_context) noexcept {
     if (state_ == nullptr) {
         return DSERR_UNINITIALIZED;
     }
@@ -992,6 +1098,17 @@ HRESULT MixerVoice::Seek(
         return DSERR_INVALIDPARAM;
     }
     std::lock_guard control_lock(state_->control_mutex);
+    state_->PublishDiagnostic({
+        .kind = diagnostics::AudioDiagnosticEventKind::SeekRequested,
+        .qpc_ticks = diagnostics::CaptureAudioDiagnosticQpcTicks(),
+        .epoch = epoch,
+        .source_frame_begin =
+            state_->cursor.load(std::memory_order_seq_cst),
+        .source_frame_end = source_frame,
+        .value0 = diagnostic_context.requested_byte_position,
+        .value1 =
+            diagnostic_context.previous_reported_source_frame,
+    });
     state_->seek_mailbox.Publish(source_frame, epoch);
     state_->accepted_epoch.store(epoch, std::memory_order_seq_cst);
     return DS_OK;
@@ -1038,23 +1155,31 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
     std::uint32_t period_frames,
     std::uint32_t output_sample_rate,
     const ma_allocation_callbacks* callbacks,
-    ma_result* result) noexcept {
+    ma_result* result,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink) noexcept {
     return CreateWithOwner(
-        period_frames, output_sample_rate, callbacks, {}, result);
+        period_frames,
+        output_sample_rate,
+        callbacks,
+        {},
+        result,
+        diagnostic_sink);
 }
 
 std::unique_ptr<MiniaudioMixer> MiniaudioMixer::Create(
     std::uint32_t period_frames,
     std::uint32_t output_sample_rate,
     std::shared_ptr<const ma_allocation_callbacks> callbacks,
-    ma_result* result) noexcept {
+    ma_result* result,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink) noexcept {
     const auto* const borrowed_callbacks = callbacks.get();
     return CreateWithOwner(
         period_frames,
         output_sample_rate,
         borrowed_callbacks,
         std::move(callbacks),
-        result);
+        result,
+        diagnostic_sink);
 }
 
 std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
@@ -1062,7 +1187,8 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
     std::uint32_t output_sample_rate,
     const ma_allocation_callbacks* callbacks,
     std::shared_ptr<const ma_allocation_callbacks> callback_owner,
-    ma_result* result) noexcept {
+    ma_result* result,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink) noexcept {
     if (result != nullptr) {
         *result = MA_INVALID_ARGS;
     }
@@ -1074,6 +1200,7 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
     try {
         auto state = std::make_shared<MiniaudioMixerState>();
         state->allocation_callbacks_owner = std::move(callback_owner);
+        state->diagnostic_sink = diagnostic_sink;
         state->period_frames = period_frames;
         state->output_sample_rate = output_sample_rate;
 
@@ -1134,6 +1261,9 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
         voice_state->timeline = std::move(timeline);
         voice_state->source_length_frames =
             voice_state->snapshot->byte_length() / format.block_align;
+        voice_state->diagnostic_voice_id =
+            state_->next_diagnostic_voice_id.fetch_add(
+                1, std::memory_order_relaxed);
         voice_state->node.state = voice_state.get();
 
         auto converter_config = ma_data_converter_config_init(
@@ -1213,6 +1343,15 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
             return nullptr;
         }
         voice_state->node_attached = true;
+        voice_state->PublishDiagnostic({
+            .kind = diagnostics::AudioDiagnosticEventKind::VoiceCreated,
+            .qpc_ticks = diagnostics::CaptureAudioDiagnosticQpcTicks(),
+            .source_frame_end = voice_state->source_length_frames,
+            .value0 = format.sample_rate,
+            .value1 = format.channels,
+            .value2 = format.block_align,
+            .value3 = static_cast<std::uint64_t>(usage),
+        });
 
         state_->native_rate_buffers.fetch_add(
             format.sample_rate == state_->output_sample_rate ? 1 : 0,

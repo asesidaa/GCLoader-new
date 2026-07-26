@@ -1,4 +1,5 @@
 #include "Audio/Mixer/MiniaudioMixer.h"
+#include "Audio/Diagnostics/AudioFlightRecorder.h"
 
 #include <algorithm>
 #include <array>
@@ -32,6 +33,63 @@ using gc::audio::kFallbackEndpointSampleRate;
 using gc::audio::kGamePrimarySampleRate;
 
 constexpr std::uint32_t kPeriodFrames = 8;
+
+class FixedAudioDiagnosticSink final
+    : public gc::audio::diagnostics::IAudioDiagnosticSink {
+public:
+    bool StartSession(
+        const gc::audio::diagnostics::AudioFlightRecorderSession&)
+        noexcept override {
+        return true;
+    }
+
+    void PublishEvent(
+        gc::audio::diagnostics::AudioDiagnosticEvent event)
+        noexcept override {
+        const auto index =
+            event_count.fetch_add(1, std::memory_order_relaxed);
+        if (index < events.size()) {
+            events[index] = event;
+        }
+    }
+
+    gc::audio::diagnostics::PcmPublishResult PublishSubmittedPcm(
+        const gc::audio::diagnostics::SubmittedPcmMetadata&,
+        std::span<const std::int16_t>) noexcept override {
+        return {};
+    }
+
+    void Clear() noexcept {
+        event_count.store(0, std::memory_order_relaxed);
+    }
+
+    std::span<const gc::audio::diagnostics::AudioDiagnosticEvent>
+    Published() const noexcept {
+        return {
+            events.data(),
+            std::min(event_count.load(std::memory_order_relaxed),
+                     events.size()),
+        };
+    }
+
+    std::array<
+        gc::audio::diagnostics::AudioDiagnosticEvent,
+        64> events{};
+    std::atomic_size_t event_count{};
+};
+
+std::vector<gc::audio::diagnostics::AudioDiagnosticEvent>
+EventsOfKind(
+    const FixedAudioDiagnosticSink& sink,
+    gc::audio::diagnostics::AudioDiagnosticEventKind kind) {
+    std::vector<gc::audio::diagnostics::AudioDiagnosticEvent> result;
+    for (const auto& event : sink.Published()) {
+        if (event.kind == kind) {
+            result.push_back(event);
+        }
+    }
+    return result;
+}
 
 int Expect(bool condition, std::string_view name) {
     if (condition) {
@@ -1121,6 +1179,352 @@ int TestExplicitGenerationWinsOverDiscontinuity() {
     return failures;
 }
 
+int TestDiagnosticsRecordConvertedSourceSpans() {
+    int failures = 0;
+    FixedAudioDiagnosticSink sink;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(
+        480,
+        kFallbackEndpointSampleRate,
+        nullptr,
+        &result,
+        &sink);
+    failures += Expect(
+        result == MA_SUCCESS && mixer != nullptr,
+        "diagnostic 48 kHz mixer creation");
+
+    std::vector<std::int16_t> samples(2'000 * 2);
+    for (std::size_t index = 0; index < samples.size(); ++index) {
+        samples[index] = static_cast<std::int16_t>(
+            1'000 + index % 20'000);
+    }
+    const auto bytes = Pcm16Bytes(samples);
+    auto source = MakeSource(
+        Pcm(2, kGamePrimarySampleRate, 16),
+        bytes,
+        failures,
+        "diagnostic 44.1 kHz stereo source");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::GameplayNativeCandidate,
+        failures,
+        "diagnostic converted voice creation");
+    failures += Expect(
+        voice != nullptr && voice->Play(true, 77) == DS_OK,
+        "diagnostic converted voice play");
+
+    std::vector<float> output(480 * 2);
+    auto rendered = mixer->Render(
+        output, MixerRenderTimeline{0, 0});
+    failures += Expect(
+        rendered.result == MA_SUCCESS && rendered.frames_read == 480,
+        "first diagnostic converted block");
+    rendered = mixer->Render(
+        output, MixerRenderTimeline{480, 0});
+    failures += Expect(
+        rendered.result == MA_SUCCESS && rendered.frames_read == 480,
+        "second diagnostic converted block");
+
+    using Kind = gc::audio::diagnostics::AudioDiagnosticEventKind;
+    const auto created = EventsOfKind(sink, Kind::VoiceCreated);
+    const auto spans = EventsOfKind(sink, Kind::RenderSpan);
+    const auto resets = EventsOfKind(sink, Kind::ConverterReset);
+    failures += Expect(
+        created.size() == 1 && created[0].voice_id != 0 &&
+            created[0].source_frame_end == 2'000 &&
+            created[0].value0 == kGamePrimarySampleRate &&
+            created[0].value1 == 2 &&
+            created[0].value2 == 4 &&
+            created[0].value3 ==
+                static_cast<std::uint64_t>(
+                    VoiceUsage::GameplayNativeCandidate) &&
+            created[0].qpc_ticks != 0,
+        "voice creation diagnostic preserves source format and usage");
+    failures += Expect(
+        spans.size() == 2 && resets.empty(),
+        "converted playback emits two spans and no false seek reset");
+    if (spans.size() == 2 && created.size() == 1) {
+        const auto generation = source->snapshot->generation();
+        failures += Expect(
+            spans[0].voice_id == created[0].voice_id &&
+                spans[0].epoch == 77 &&
+                spans[0].output_frame_begin == 0 &&
+                spans[0].output_frame_end == 480 &&
+                spans[0].source_frame_begin == 0 &&
+                spans[0].source_frame_end == 441 &&
+                spans[0].value0 == 441 &&
+                spans[0].value1 == 441 &&
+                spans[0].value2 == 441 &&
+                spans[0].value3 == 480 &&
+                spans[0].generation == generation &&
+                spans[0].flags == 0,
+            "first converted span records exact 441-to-480 progression");
+        failures += Expect(
+            spans[1].voice_id == created[0].voice_id &&
+                spans[1].epoch == 77 &&
+                spans[1].output_frame_begin == 480 &&
+                spans[1].output_frame_end == 960 &&
+                spans[1].source_frame_begin == 441 &&
+                spans[1].source_frame_end == 882 &&
+                spans[1].value0 == 441 &&
+                spans[1].value1 == 441 &&
+                spans[1].value2 == 441 &&
+                spans[1].value3 == 480 &&
+                spans[1].generation == generation &&
+                spans[1].flags == 0,
+            "second converted span records exact cumulative progression");
+    }
+    return failures;
+}
+
+int TestDiagnosticsRecordBackwardSeekRequestAndApplication() {
+    int failures = 0;
+    FixedAudioDiagnosticSink sink;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames,
+        kGamePrimarySampleRate,
+        nullptr,
+        &result,
+        &sink);
+    const auto bytes = Pcm16Bytes(
+        std::vector<std::int16_t>(64 * 2, 12'000));
+    auto source = MakeSource(
+        Pcm(2, kGamePrimarySampleRate, 16),
+        bytes,
+        failures,
+        "backward-seek diagnostic source");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "backward-seek diagnostic voice");
+    failures += Expect(
+        voice != nullptr && voice->Play(true, 1) == DS_OK,
+        "backward-seek diagnostic play");
+    std::array<float, kPeriodFrames * 2> output{};
+    failures += ExpectRender(
+        *mixer, output, 100, "backward-seek forward block");
+
+    sink.Clear();
+    failures += Expect(
+        voice->Seek(
+            2,
+            2,
+            gc::audio::MixerSeekDiagnosticContext{8, 7}) == DS_OK,
+        "backward-seek request accepted");
+    failures += ExpectRender(
+        *mixer, output, 108, "backward-seek applied block");
+
+    using Kind = gc::audio::diagnostics::AudioDiagnosticEventKind;
+    const auto requested = EventsOfKind(sink, Kind::SeekRequested);
+    const auto applied = EventsOfKind(sink, Kind::SeekApplied);
+    const auto resets = EventsOfKind(sink, Kind::ConverterReset);
+    failures += Expect(
+        requested.size() == 1 && applied.size() == 1 &&
+            resets.size() == 1,
+        "one explicit seek request has one application and reset");
+    if (requested.size() == 1 && applied.size() == 1 &&
+        resets.size() == 1) {
+        const auto voice_id = requested[0].voice_id;
+        failures += Expect(
+            voice_id != 0 && requested[0].epoch == 2 &&
+                requested[0].source_frame_begin == 8 &&
+                requested[0].source_frame_end == 2 &&
+                requested[0].value0 == 8 &&
+                requested[0].value1 == 7 &&
+                requested[0].qpc_ticks != 0,
+            "seek request preserves byte, cursor, target, and epoch context");
+        failures += Expect(
+            resets[0].voice_id == voice_id &&
+                resets[0].epoch == 2 &&
+                resets[0].decision == static_cast<std::uint8_t>(
+                    gc::audio::diagnostics::ConverterResetReason::Seek) &&
+                resets[0].source_frame_begin == 8 &&
+                resets[0].source_frame_end == 2 &&
+                resets[0].output_frame_begin == 108,
+            "seek converter reset records old and target cursor");
+        failures += Expect(
+            applied[0].voice_id == voice_id &&
+                applied[0].epoch == 2 &&
+                applied[0].source_frame_begin == 8 &&
+                applied[0].source_frame_end == 2 &&
+                applied[0].output_frame_begin == 108 &&
+                applied[0].value0 != 0,
+            "seek application records mailbox sequence and output block");
+    }
+    return failures;
+}
+
+int TestDiagnosticsDistinguishSeekAndDiscontinuityResets() {
+    int failures = 0;
+    FixedAudioDiagnosticSink sink;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames,
+        kGamePrimarySampleRate,
+        nullptr,
+        &result,
+        &sink);
+    const auto bytes = Pcm16Bytes(
+        std::vector<std::int16_t>(64 * 2, 10'000));
+    auto source = MakeSource(
+        Pcm(2, kGamePrimarySampleRate, 16),
+        bytes,
+        failures,
+        "reset-reason diagnostic source");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "reset-reason diagnostic voice");
+    failures += Expect(
+        voice != nullptr && voice->Play(true, 10) == DS_OK,
+        "reset-reason diagnostic play");
+    std::array<float, kPeriodFrames * 2> output{};
+    failures += ExpectRender(
+        *mixer, output, 100, "reset-reason initial render");
+    sink.Clear();
+    failures += Expect(
+        voice->Seek(2, 11) == DS_OK,
+        "reset-reason explicit seek");
+    failures += ExpectRender(
+        *mixer, output, 108, "reset-reason seek render");
+    failures += ExpectRender(
+        *mixer,
+        output,
+        MixerRenderTimeline{124, 8},
+        "reset-reason discontinuity render");
+
+    using Kind = gc::audio::diagnostics::AudioDiagnosticEventKind;
+    const auto resets = EventsOfKind(sink, Kind::ConverterReset);
+    failures += Expect(
+        resets.size() == 2 &&
+            resets[0].decision == static_cast<std::uint8_t>(
+                gc::audio::diagnostics::ConverterResetReason::Seek) &&
+            resets[1].decision == static_cast<std::uint8_t>(
+                gc::audio::diagnostics::ConverterResetReason::
+                    OutputDiscontinuity) &&
+            resets[1].source_frame_begin == 10 &&
+            resets[1].source_frame_end == 18 &&
+            resets[1].output_frame_begin == 124 &&
+            resets[1].value0 == 8 &&
+            resets[1].value1 == 8,
+        "seek and output-discontinuity converter resets remain distinct");
+    return failures;
+}
+
+int TestDiagnosticsMarkLegalLoopWrap() {
+    int failures = 0;
+    FixedAudioDiagnosticSink sink;
+    ma_result result = MA_ERROR;
+    auto mixer = MiniaudioMixer::Create(
+        kPeriodFrames,
+        kGamePrimarySampleRate,
+        nullptr,
+        &result,
+        &sink);
+    const auto bytes = Pcm16Bytes(
+        std::vector<std::int16_t>(4 * 2, 8'000));
+    auto source = MakeSource(
+        Pcm(2, kGamePrimarySampleRate, 16),
+        bytes,
+        failures,
+        "loop-wrap diagnostic source");
+    auto voice = MakeVoice(
+        *mixer,
+        *source,
+        VoiceUsage::General,
+        failures,
+        "loop-wrap diagnostic voice");
+    failures += Expect(
+        voice != nullptr && voice->Play(true, 20) == DS_OK,
+        "loop-wrap diagnostic play");
+    std::array<float, kPeriodFrames * 2> output{};
+    failures += ExpectRender(
+        *mixer, output, 200, "loop-wrap diagnostic render");
+
+    const auto spans = EventsOfKind(
+        sink,
+        gc::audio::diagnostics::AudioDiagnosticEventKind::RenderSpan);
+    failures += Expect(
+        spans.size() == 1 &&
+            (spans[0].flags & 0x1U) != 0 &&
+            (spans[0].flags & 0x2U) == 0 &&
+            spans[0].source_frame_begin == 0 &&
+            spans[0].source_frame_end == 0 &&
+            spans[0].output_frame_begin == 200 &&
+            spans[0].output_frame_end == 208,
+        "looping source rewind is explicitly marked as legal wrap");
+    return failures;
+}
+
+int TestNullDiagnosticsDoNotChangeRenderedPcm() {
+    int failures = 0;
+    FixedAudioDiagnosticSink sink;
+    ma_result first_result = MA_ERROR;
+    ma_result second_result = MA_ERROR;
+    auto with_diagnostics = MiniaudioMixer::Create(
+        kPeriodFrames,
+        kGamePrimarySampleRate,
+        nullptr,
+        &first_result,
+        &sink);
+    auto without_diagnostics = MiniaudioMixer::Create(
+        kPeriodFrames,
+        kGamePrimarySampleRate,
+        nullptr,
+        &second_result,
+        nullptr);
+    const auto bytes = Pcm16Bytes(
+        std::vector<std::int16_t>{
+            1'000, -1'000, 2'000, -2'000,
+            3'000, -3'000, 4'000, -4'000,
+            5'000, -5'000, 6'000, -6'000,
+            7'000, -7'000, 8'000, -8'000});
+    auto first_source = MakeSource(
+        Pcm(2, kGamePrimarySampleRate, 16),
+        bytes,
+        failures,
+        "diagnostic parity first source");
+    auto second_source = MakeSource(
+        Pcm(2, kGamePrimarySampleRate, 16),
+        bytes,
+        failures,
+        "diagnostic parity second source");
+    auto first_voice = MakeVoice(
+        *with_diagnostics,
+        *first_source,
+        VoiceUsage::General,
+        failures,
+        "diagnostic parity first voice");
+    auto second_voice = MakeVoice(
+        *without_diagnostics,
+        *second_source,
+        VoiceUsage::General,
+        failures,
+        "diagnostic parity second voice");
+    failures += Expect(
+        first_voice->Play(false, 30) == DS_OK &&
+            second_voice->Play(false, 30) == DS_OK,
+        "diagnostic parity voices play");
+    std::array<float, kPeriodFrames * 2> first_output{};
+    std::array<float, kPeriodFrames * 2> second_output{};
+    const auto first_render = with_diagnostics->Render(
+        first_output, MixerRenderTimeline{300, 0});
+    const auto second_render = without_diagnostics->Render(
+        second_output, MixerRenderTimeline{300, 0});
+    failures += Expect(
+        first_render.result == second_render.result &&
+            first_render.frames_read == second_render.frames_read &&
+            first_output == second_output,
+        "null and active diagnostics produce identical rendered PCM");
+    return failures;
+}
+
 int TestRuntimeOutputRateContract() {
     int failures = 0;
     ma_result result = MA_SUCCESS;
@@ -1689,6 +2093,11 @@ int main() {
     failures += TestConvertedRatesUseCumulativeGapMapping();
     failures += TestDiscontinuityResetsConverterHistory();
     failures += TestExplicitGenerationWinsOverDiscontinuity();
+    failures += TestDiagnosticsRecordConvertedSourceSpans();
+    failures += TestDiagnosticsRecordBackwardSeekRequestAndApplication();
+    failures += TestDiagnosticsDistinguishSeekAndDiscontinuityResets();
+    failures += TestDiagnosticsMarkLegalLoopWrap();
+    failures += TestNullDiagnosticsDoNotChangeRenderedPcm();
     failures += TestRuntimeOutputRateContract();
 
     return failures == 0 ? 0 : 1;

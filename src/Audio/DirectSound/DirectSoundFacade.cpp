@@ -710,7 +710,13 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
     const auto source_frame = position / format_.block_align;
     const auto generation = NextPlaybackGeneration(
         playback_generation_);
-    const auto result = voice_->Seek(source_frame, generation);
+    const auto result = voice_->Seek(
+        source_frame,
+        generation,
+        MixerSeekDiagnosticContext{
+            position,
+            last_reported_source_frame_,
+        });
     if (SUCCEEDED(result)) {
         playback_generation_ = generation;
         last_reported_source_frame_ = source_frame;

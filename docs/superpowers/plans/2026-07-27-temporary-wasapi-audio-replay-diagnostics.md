@@ -822,7 +822,7 @@ Expected: all three targets pass. Existing startup, failure, pacing, and
 runtime-summary assertions remain unchanged except for explicit injected sink
 parameters.
 
-- [ ] **Step 8: Commit endpoint integration**
+- [x] **Step 8: Commit endpoint integration**
 
 Run:
 
@@ -869,7 +869,7 @@ The private `CreateWithOwner` and `MiniaudioMixerState` carry the same pointer.
 Update the existing `ExclusiveAudioEngine::AudioThreadMain` mixer construction
 to pass its stored `diagnostic_sink_` as that final argument.
 
-- [ ] **Step 1: Add failing 44.1-to-48 kHz span tests**
+- [x] **Step 1: Add failing 44.1-to-48 kHz span tests**
 
 In `MiniaudioMixerTests.cpp`, add a fixed-array fake sink and:
 
@@ -896,7 +896,7 @@ The seek test renders forward, calls `Seek` to a lower source frame, renders
 again, and requires one `SeekRequested`, one `SeekApplied`, and one
 `ConverterReset(Seek)` record with the same voice ID/epoch/target.
 
-- [ ] **Step 2: Add a failing DirectSound seek-context test**
+- [x] **Step 2: Add a failing DirectSound seek-context test**
 
 In `SecondarySoundBufferTests.cpp`, create a real mixer-backed fake engine
 with the sink, call:
@@ -914,7 +914,7 @@ Assert the `SeekRequested` event records:
 - the next playback generation; and
 - unchanged `DS_OK` behavior.
 
-- [ ] **Step 3: Run tests to verify diagnostics are absent**
+- [x] **Step 3: Run tests to verify diagnostics are absent**
 
 Run:
 
@@ -925,7 +925,7 @@ Run:
 Expected: compilation or assertion failure because mixer voices have no sink,
 ID, or diagnostic events.
 
-- [ ] **Step 4: Assign IDs and publish lifecycle/control events**
+- [x] **Step 4: Assign IDs and publish lifecycle/control events**
 
 Add to `MiniaudioMixerState`:
 
@@ -950,7 +950,7 @@ after the node attaches successfully. Publish:
 No diagnostic publication participates in the control decision or changes
 the current sequentially consistent mailbox ordering.
 
-- [ ] **Step 5: Pass exact DirectSound seek context**
+- [x] **Step 5: Pass exact DirectSound seek context**
 
 Change only the existing facade call:
 
@@ -967,7 +967,7 @@ const auto result = voice_->Seek(
 Retain validation, locking, generation advancement, and
 `last_reported_source_frame_` assignment exactly as they are.
 
-- [ ] **Step 6: Publish seek application and reset reasons**
+- [x] **Step 6: Publish seek application and reset reasons**
 
 When `seek_sequence != applied`, capture the old cursor before reset/store and
 publish:
@@ -983,7 +983,7 @@ frames only after the cursor mapping succeeds and the converter reset returns
 
 Diagnostic publication failure must not enter an existing mixer error path.
 
-- [ ] **Step 7: Publish every successfully converted render span**
+- [x] **Step 7: Publish every successfully converted render span**
 
 Acquire and retain `view.generation()` beside the snapshot copy. After
 `ma_data_converter_process_pcm_frames` succeeds and `new_position` is known,
@@ -1002,7 +1002,7 @@ loop-wrapped and source-ended flags
 Publish no normal render-span event on converter failure. The existing
 silence/error behavior remains unchanged.
 
-- [ ] **Step 8: Run mixer and facade tests**
+- [x] **Step 8: Run mixer and facade tests**
 
 Run:
 
