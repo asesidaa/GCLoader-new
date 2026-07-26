@@ -1,11 +1,14 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <type_traits>
 
 namespace gc::audio::diagnostics {
@@ -42,6 +45,7 @@ struct AudioDiagnosticEvent {
     std::uint64_t qpc_ticks{};
     std::uint64_t voice_id{};
     std::uint64_t epoch{};
+    std::uint64_t generation{};
     std::uint64_t output_frame_begin{};
     std::uint64_t output_frame_end{};
     std::uint64_t source_frame_begin{};
@@ -97,6 +101,59 @@ void DeactivateAudioDiagnosticSink(IAudioDiagnosticSink*) noexcept;
 std::uint64_t CaptureAudioDiagnosticQpcTicks() noexcept;
 void PublishActiveAudioDiagnosticEvent(
     AudioDiagnosticEvent) noexcept;
+
+struct AudioFlightRecorderOptions {
+    std::filesystem::path root_directory{"audio-diagnostics"};
+    std::size_t pcm_queue_blocks{512};
+    std::size_t event_queue_records{65'536};
+    std::chrono::milliseconds checkpoint_interval{1'000};
+    std::uint64_t maximum_seconds{1'800};
+};
+
+enum class AudioFlightRecorderState : std::uint8_t {
+    Idle,
+    Active,
+    LimitReached,
+    Failed,
+    Stopped,
+};
+
+struct AudioFlightRecorderStatus {
+    AudioFlightRecorderState state{};
+    std::filesystem::path session_directory;
+    std::uint64_t submitted_blocks{};
+    std::uint64_t dropped_pcm_blocks{};
+    std::uint64_t lost_events{};
+    std::uint64_t checkpointed_blocks{};
+    std::string error;
+};
+
+class AudioFlightRecorder final : public IAudioDiagnosticSink {
+public:
+    static std::unique_ptr<AudioFlightRecorder> Create(
+        AudioFlightRecorderOptions = {}) noexcept;
+    ~AudioFlightRecorder() override;
+
+    AudioFlightRecorder(const AudioFlightRecorder&) = delete;
+    AudioFlightRecorder& operator=(const AudioFlightRecorder&) = delete;
+
+    bool StartSession(
+        const AudioFlightRecorderSession&) noexcept override;
+    void PublishEvent(AudioDiagnosticEvent) noexcept override;
+    PcmPublishResult PublishSubmittedPcm(
+        const SubmittedPcmMetadata&,
+        std::span<const std::int16_t>) noexcept override;
+    AudioFlightRecorderStatus status() const;
+    void StopAndJoin() noexcept;
+
+private:
+    struct Impl;
+
+    explicit AudioFlightRecorder(
+        AudioFlightRecorderOptions);
+
+    std::unique_ptr<Impl> impl_;
+};
 
 namespace detail {
 

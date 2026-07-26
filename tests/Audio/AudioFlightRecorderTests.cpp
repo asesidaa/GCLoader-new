@@ -1,14 +1,23 @@
 #include "Audio/Diagnostics/AudioFlightRecorder.h"
 
+#include <Windows.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iostream>
+#include <iterator>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -22,6 +31,117 @@ int Expect(bool condition, std::string_view name) {
 
     std::cerr << "Expected " << name << '\n';
     return 1;
+}
+
+class TemporaryRoot final {
+public:
+    TemporaryRoot() {
+        static std::atomic_uint32_t next_id{};
+        path_ =
+            std::filesystem::temp_directory_path() /
+            ("GCLoader-AudioFlightRecorderTests-" +
+             std::to_string(GetCurrentProcessId()) + "-" +
+             std::to_string(
+                 next_id.fetch_add(1, std::memory_order_relaxed)));
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    ~TemporaryRoot() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    const std::filesystem::path& path() const noexcept {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+std::vector<std::uint8_t> ReadBytes(
+    const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>(),
+    };
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>(),
+    };
+}
+
+std::uint16_t ReadLe16(
+    const std::vector<std::uint8_t>& bytes,
+    std::size_t offset) {
+    return static_cast<std::uint16_t>(
+        bytes.at(offset) |
+        (static_cast<std::uint16_t>(bytes.at(offset + 1)) << 8));
+}
+
+std::uint32_t ReadLe32(
+    const std::vector<std::uint8_t>& bytes,
+    std::size_t offset) {
+    return
+        static_cast<std::uint32_t>(bytes.at(offset)) |
+        (static_cast<std::uint32_t>(bytes.at(offset + 1)) << 8) |
+        (static_cast<std::uint32_t>(bytes.at(offset + 2)) << 16) |
+        (static_cast<std::uint32_t>(bytes.at(offset + 3)) << 24);
+}
+
+constexpr std::uint32_t FourCc(char a, char b, char c, char d) {
+    return static_cast<std::uint32_t>(
+        static_cast<std::uint8_t>(a)) |
+        (static_cast<std::uint32_t>(
+             static_cast<std::uint8_t>(b))
+         << 8) |
+        (static_cast<std::uint32_t>(
+             static_cast<std::uint8_t>(c))
+         << 16) |
+        (static_cast<std::uint32_t>(
+             static_cast<std::uint8_t>(d))
+         << 24);
+}
+
+bool WaitUntil(
+    const std::function<bool()>& predicate,
+    std::chrono::milliseconds timeout =
+        std::chrono::milliseconds{2'000}) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return predicate();
+}
+
+diagnostics::AudioFlightRecorderSession TestSession() {
+    return {
+        .sample_rate = 48'000,
+        .channels = 2,
+        .bits_per_sample = 16,
+        .frames_per_block = 4,
+        .qpc_frequency = 10'000'000,
+    };
+}
+
+diagnostics::AudioFlightRecorderOptions TestOptions(
+    const std::filesystem::path& root) {
+    return {
+        .root_directory = root,
+        .pcm_queue_blocks = 8,
+        .event_queue_records = 64,
+        .checkpoint_interval = std::chrono::milliseconds{10},
+        .maximum_seconds = 1'800,
+    };
 }
 
 class FakeSink final : public diagnostics::IAudioDiagnosticSink {
@@ -269,6 +389,339 @@ int TestEventRecordStaysFixedAndTriviallyCopyable() {
     return failures;
 }
 
+int TestRecorderWritesExactPcm16Wave() {
+    TemporaryRoot root;
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(
+            TestOptions(root.path()));
+    constexpr std::array<std::int16_t, 8> samples{
+        1, -1, 2, -2, 3, -3, 4, -4};
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(TestSession()),
+        "the recorder to start a valid PCM16 stereo session");
+    const auto result = recorder->PublishSubmittedPcm({}, samples);
+    failures += Expect(
+        result.queued && result.sequence == 0,
+        "the first submitted block to enter the recorder queue");
+    failures += Expect(
+        WaitUntil([&] {
+            return recorder->status().checkpointed_blocks >= 1;
+        }),
+        "the writer to checkpoint the submitted block");
+
+    const auto session_directory =
+        recorder->status().session_directory;
+    recorder->StopAndJoin();
+    const auto bytes =
+        ReadBytes(session_directory / "submitted.wav");
+
+    failures += Expect(
+        bytes.size() == 44 + samples.size() * sizeof(std::int16_t),
+        "the WAV to contain one exact interleaved PCM block");
+    failures += Expect(
+        ReadLe32(bytes, 0) == FourCc('R', 'I', 'F', 'F') &&
+            ReadLe32(bytes, 8) == FourCc('W', 'A', 'V', 'E') &&
+            ReadLe32(bytes, 12) == FourCc('f', 'm', 't', ' ') &&
+            ReadLe16(bytes, 20) == 1 &&
+            ReadLe16(bytes, 22) == 2 &&
+            ReadLe32(bytes, 24) == 48'000 &&
+            ReadLe16(bytes, 34) == 16 &&
+            ReadLe32(bytes, 40) ==
+                samples.size() * sizeof(std::int16_t),
+        "the checkpointed WAV header to describe PCM16 stereo 48 kHz");
+    failures += Expect(
+        std::equal(
+            samples.begin(),
+            samples.end(),
+            reinterpret_cast<const std::int16_t*>(
+                bytes.data() + 44)),
+        "the WAV payload to equal the submitted sample bytes");
+    return failures;
+}
+
+int TestRecorderWritesStableSessionAndTimelineSchema() {
+    TemporaryRoot root;
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(
+            TestOptions(root.path()));
+    constexpr std::array<std::int16_t, 8> samples{
+        10, -10, 20, -20, 30, -30, 40, -40};
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(TestSession()),
+        "the schema test recorder to start");
+
+    diagnostics::AudioDiagnosticEvent event{};
+    event.kind = diagnostics::AudioDiagnosticEventKind::SeekApplied;
+    event.voice_id = 7;
+    event.epoch = 9;
+    event.output_frame_begin = 123;
+    event.source_frame_begin = 456;
+    recorder->PublishEvent(event);
+
+    diagnostics::SubmittedPcmMetadata metadata{};
+    metadata.endpoint_clock_position = 1'000;
+    metadata.endpoint_qpc_100ns = 2'000;
+    metadata.presented_output_frame = 3'000;
+    metadata.output_frame_begin = 3'004;
+    metadata.submitted_tail = 3'008;
+    metadata.discontinuity_frames = 4;
+    metadata.mixer_frames_read = 4;
+    metadata.mixer_result = 0;
+    metadata.pacing_kind = 1;
+    static_cast<void>(
+        recorder->PublishSubmittedPcm(metadata, samples));
+    failures += Expect(
+        WaitUntil([&] {
+            return recorder->status().checkpointed_blocks >= 1;
+        }),
+        "the schema test block to become durable");
+
+    const auto session_directory =
+        recorder->status().session_directory;
+    recorder->StopAndJoin();
+    const auto session =
+        ReadText(session_directory / "session.json");
+    const auto timeline =
+        ReadText(session_directory / "timeline.jsonl");
+    const std::string expected_session =
+        "{\n"
+        "  \"schema_version\": 1,\n"
+        "  \"sample_rate\": 48000,\n"
+        "  \"channels\": 2,\n"
+        "  \"bits_per_sample\": 16,\n"
+        "  \"frames_per_block\": 4,\n"
+        "  \"qpc_frequency\": 10000000,\n"
+        "  \"maximum_seconds\": 1800\n"
+        "}\n";
+
+    failures += Expect(
+        session == expected_session,
+        "session.json to use the exact version-1 schema");
+    failures += Expect(
+        timeline.contains("\"kind\":\"seek_applied\"") &&
+            timeline.contains("\"voice_id\":7") &&
+            timeline.contains("\"epoch\":9") &&
+            timeline.contains("\"kind\":\"endpoint_block\"") &&
+            timeline.contains("\"pcm_sequence\":0") &&
+            timeline.contains("\"endpoint_clock_position\":1000") &&
+            timeline.contains("\"kind\":\"checkpoint\"") &&
+            timeline.contains("\"wav_data_bytes\":16"),
+        "timeline.jsonl to use stable causal, endpoint, and checkpoint keys");
+    return failures;
+}
+
+int TestCheckpointHeaderExcludesUncheckpointedTail() {
+    TemporaryRoot root;
+    auto options = TestOptions(root.path());
+    options.checkpoint_interval = std::chrono::seconds{5};
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(std::move(options));
+    constexpr std::array<std::int16_t, 8> samples{
+        1, 2, 3, 4, 5, 6, 7, 8};
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(TestSession()),
+        "the delayed-checkpoint recorder to start");
+    const auto session_directory =
+        recorder->status().session_directory;
+    static_cast<void>(
+        recorder->PublishSubmittedPcm({}, samples));
+    failures += Expect(
+        WaitUntil([&] {
+            std::error_code error;
+            return std::filesystem::file_size(
+                       session_directory / "submitted.wav",
+                       error) >= 44 + samples.size() * sizeof(std::int16_t);
+        }),
+        "the writer to append PCM before its delayed checkpoint");
+
+    const auto before =
+        ReadBytes(session_directory / "submitted.wav");
+    failures += Expect(
+        ReadLe32(before, 40) == 0,
+        "an uncheckpointed PCM tail to remain outside the WAV header");
+
+    recorder->StopAndJoin();
+    const auto after =
+        ReadBytes(session_directory / "submitted.wav");
+    failures += Expect(
+        ReadLe32(after, 40) ==
+            samples.size() * sizeof(std::int16_t),
+        "orderly stop to include the drained tail in the final header");
+    return failures;
+}
+
+int TestPcmGapInsertsMarkedSilenceAndInvalidatesRange() {
+    TemporaryRoot root;
+    auto options = TestOptions(root.path());
+    options.pcm_queue_blocks = 1;
+    options.checkpoint_interval = std::chrono::seconds{5};
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(std::move(options));
+    constexpr std::array<std::int16_t, 8> samples{
+        1, -1, 2, -2, 3, -3, 4, -4};
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(TestSession()),
+        "the one-block recorder to start");
+
+    bool observed_drop = false;
+    bool retained_after_drop = false;
+    for (std::size_t index = 0;
+         index < 20'000 && !retained_after_drop;
+         ++index) {
+        const auto result =
+            recorder->PublishSubmittedPcm({}, samples);
+        observed_drop = observed_drop || !result.queued;
+        retained_after_drop =
+            observed_drop && result.queued;
+    }
+    failures += Expect(
+        observed_drop && retained_after_drop,
+        "a saturated queue to expose a dropped middle sequence");
+
+    const auto status_before_stop = recorder->status();
+    const auto session_directory =
+        status_before_stop.session_directory;
+    recorder->StopAndJoin();
+    const auto timeline =
+        ReadText(session_directory / "timeline.jsonl");
+    const auto bytes =
+        ReadBytes(session_directory / "submitted.wav");
+    const std::array<std::uint8_t, 16> silence{};
+
+    failures += Expect(
+        status_before_stop.dropped_pcm_blocks > 0 &&
+            timeline.contains("\"kind\":\"pcm_gap\"") &&
+            timeline.contains("\"conclusive\":false"),
+        "a dropped PCM range to be explicit and inconclusive");
+    failures += Expect(
+        std::search(
+            bytes.begin() + 44,
+            bytes.end(),
+            silence.begin(),
+            silence.end()) != bytes.end(),
+        "a dropped block to receive an equal-duration silent placeholder");
+    return failures;
+}
+
+int TestCaptureLimitStopsRecorderWithoutBlockingPublisher() {
+    TemporaryRoot root;
+    auto options = TestOptions(root.path());
+    options.maximum_seconds = 1;
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(std::move(options));
+    auto session = TestSession();
+    session.sample_rate = 8;
+    constexpr std::array<std::int16_t, 8> samples{
+        1, -1, 2, -2, 3, -3, 4, -4};
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(session),
+        "the short-limit recorder to start");
+    const auto first =
+        recorder->PublishSubmittedPcm({}, samples);
+    const auto second =
+        recorder->PublishSubmittedPcm({}, samples);
+    const auto limited =
+        recorder->PublishSubmittedPcm({}, samples);
+    const auto status = recorder->status();
+    const auto session_directory = status.session_directory;
+
+    failures += Expect(
+        first.queued && second.queued && !limited.queued &&
+            status.state ==
+                diagnostics::AudioFlightRecorderState::LimitReached &&
+            status.submitted_blocks == 2,
+        "the safety limit to stop diagnostics after exactly two blocks");
+    recorder->StopAndJoin();
+    failures += Expect(
+        ReadText(session_directory / "timeline.jsonl")
+            .contains("\"kind\":\"capture_limit\""),
+        "the writer to record one capture-limit marker");
+    return failures;
+}
+
+int TestWriterFailureLeavesPublishersNonBlocking() {
+    TemporaryRoot root;
+    {
+        std::ofstream file(root.path(), std::ios::binary);
+        file << "not a directory";
+    }
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(
+            TestOptions(root.path()));
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && !recorder->StartSession(TestSession()),
+        "a regular-file capture root to fail session initialization");
+    constexpr std::array<std::int16_t, 8> samples{
+        1, -1, 2, -2, 3, -3, 4, -4};
+    for (std::size_t index = 0; index < 10'000; ++index) {
+        failures += Expect(
+            !recorder->PublishSubmittedPcm({}, samples).queued,
+            "a failed recorder publisher to return immediately");
+        if (failures != 0) {
+            break;
+        }
+    }
+    const auto status = recorder->status();
+    failures += Expect(
+        status.state ==
+                diagnostics::AudioFlightRecorderState::Failed &&
+            !status.error.empty(),
+        "the recorder to retain its first initialization failure");
+    return failures;
+}
+
+int TestStopDrainsAndFinalizesFiniteTestOwner() {
+    TemporaryRoot root;
+    auto options = TestOptions(root.path());
+    options.checkpoint_interval = std::chrono::seconds{5};
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(std::move(options));
+    constexpr std::array<std::int16_t, 8> samples{
+        1, -1, 2, -2, 3, -3, 4, -4};
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(TestSession()),
+        "the finite-owner recorder to start");
+    for (std::size_t index = 0; index < 3; ++index) {
+        failures += Expect(
+            recorder->PublishSubmittedPcm({}, samples).queued,
+            "each finite-owner block to queue");
+    }
+    const auto session_directory =
+        recorder->status().session_directory;
+    recorder->StopAndJoin();
+    recorder->StopAndJoin();
+
+    const auto bytes =
+        ReadBytes(session_directory / "submitted.wav");
+    const auto timeline =
+        ReadText(session_directory / "timeline.jsonl");
+    failures += Expect(
+        ReadLe32(bytes, 40) ==
+            3 * samples.size() * sizeof(std::int16_t),
+        "an immediate stop to drain and finalize all published PCM");
+    failures += Expect(
+        timeline.contains("\"kind\":\"checkpoint\"") &&
+            timeline.contains("\"pcm_sequence\":2") &&
+            recorder->status().state ==
+                diagnostics::AudioFlightRecorderState::Stopped,
+        "an immediate stop to persist a final checkpoint exactly once");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -279,5 +732,12 @@ int main() {
     failures += TestEventQueueReportsDroppedRecords();
     failures += TestActiveSinkPublishesAndClears();
     failures += TestEventRecordStaysFixedAndTriviallyCopyable();
+    failures += TestRecorderWritesExactPcm16Wave();
+    failures += TestRecorderWritesStableSessionAndTimelineSchema();
+    failures += TestCheckpointHeaderExcludesUncheckpointedTail();
+    failures += TestPcmGapInsertsMarkedSilenceAndInvalidatesRange();
+    failures += TestCaptureLimitStopsRecorderWithoutBlockingPublisher();
+    failures += TestWriterFailureLeavesPublishersNonBlocking();
+    failures += TestStopDrainsAndFinalizesFiniteTestOwner();
     return failures == 0 ? 0 : 1;
 }

@@ -154,6 +154,7 @@ struct AudioDiagnosticEvent {
     std::uint64_t qpc_ticks{};
     std::uint64_t voice_id{};
     std::uint64_t epoch{};
+    std::uint64_t generation{};
     std::uint64_t output_frame_begin{};
     std::uint64_t output_frame_end{};
     std::uint64_t source_frame_begin{};
@@ -445,14 +446,15 @@ public:
         const SubmittedPcmMetadata&,
         std::span<const std::int16_t>) noexcept override;
     AudioFlightRecorderStatus status() const;
-    bool WaitUntilCheckpointedForTesting(
-        std::uint64_t block_count,
-        std::chrono::milliseconds timeout) noexcept;
     void StopAndJoin() noexcept;
 };
 ```
 
-- [ ] **Step 1: Add failing persistence and failure-path tests**
+Tests poll the production `status().checkpointed_blocks` contract with a
+bounded test-side timeout; no test-only wait method is added to the production
+class.
+
+- [x] **Step 1: Add failing persistence and failure-path tests**
 
 Extend `AudioFlightRecorderTests.cpp` with:
 
@@ -483,7 +485,7 @@ the next sequence, and asserts that the WAV contains one block of zero samples
 at the missing sequence while `timeline.jsonl` contains
 `"kind":"pcm_gap"` and `"conclusive":false`.
 
-- [ ] **Step 2: Run the tests to prove persistence is absent**
+- [x] **Step 2: Run the tests to prove persistence is absent**
 
 Run:
 
@@ -494,7 +496,7 @@ Run:
 Expected: build or test failure because `AudioFlightRecorder` does not yet
 create a session or writer.
 
-- [ ] **Step 3: Implement deterministic session creation**
+- [x] **Step 3: Implement deterministic session creation**
 
 `StartSession` validates:
 
@@ -538,7 +540,7 @@ The numeric values come from `AudioFlightRecorderSession`; the example shows
 the expected runtime endpoint except that `qpc_frequency` remains the actual
 machine value.
 
-- [ ] **Step 4: Implement the writer loop and durable checkpoints**
+- [x] **Step 4: Implement the writer loop and durable checkpoints**
 
 The writer waits on a recorder-owned Win32 event with a timeout equal to the
 checkpoint interval. Producers call `SetEvent` only after publishing a slot.
@@ -582,7 +584,7 @@ Do not use `PLOG_*`, `std::ostringstream`, `std::filesystem`, or stream I/O
 from any producer method. JSON formatting and file operations stay in the
 writer loop.
 
-- [ ] **Step 5: Implement limit and failure behavior**
+- [x] **Step 5: Implement limit and failure behavior**
 
 The `maximum_blocks` check occurs before queue reservation. Once reached,
 transition `Active -> LimitReached` once, reject later PCM immediately, leave
@@ -597,7 +599,7 @@ producer calls return immediately. Audio behavior must not change.
 signals the writer, drains published slots, finalizes the header, joins, and
 is idempotent. Production must not invoke it from `DllMain`.
 
-- [ ] **Step 6: Run recorder tests and inspect one artifact**
+- [x] **Step 6: Run recorder tests and inspect one artifact**
 
 Run:
 
@@ -609,7 +611,7 @@ Expected: all recorder tests pass. The test itself verifies exact PCM bytes,
 JSON schema, gap marking, and final/checkpoint header sizes before removing its
 own temporary directory.
 
-- [ ] **Step 7: Commit the recorder writer**
+- [x] **Step 7: Commit the recorder writer**
 
 Run:
 
