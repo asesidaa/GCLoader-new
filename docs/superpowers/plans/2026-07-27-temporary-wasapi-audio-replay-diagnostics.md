@@ -653,7 +653,7 @@ The internal `StartExclusiveAudioEngineAndWait`,
 constructor carry the same raw sink pointer. Ownership remains in
 `ProductionDetourState`.
 
-- [ ] **Step 1: Add failing engine capture tests**
+- [x] **Step 1: Add failing engine capture tests**
 
 Add a fixed-capacity fake sink to `ExclusiveAudioEngineTests.cpp`:
 
@@ -699,7 +699,7 @@ event. Assert:
 - the capture call occurs while the existing allocation/render probe reports
   no forbidden allocation.
 
-- [ ] **Step 2: Add failing production ownership/formatting tests**
+- [x] **Step 2: Add failing production ownership/formatting tests**
 
 Extend `WasapiAudioPatchTests.cpp` so `fake_start_engine` accepts and records
 the forwarded sink. Add an injected recorder status formatter test requiring:
@@ -718,7 +718,7 @@ WASAPI audio diagnostic session status=unavailable
 Do not append diagnostic fields to the ordinary `WASAPI audio startup` or
 30-second runtime summary lines.
 
-- [ ] **Step 3: Run the focused tests to verify the signatures fail**
+- [x] **Step 3: Run the focused tests to verify the signatures fail**
 
 Run:
 
@@ -729,7 +729,7 @@ Run:
 Expected: compile failures at the new sink parameters and recorder startup
 expectations.
 
-- [ ] **Step 4: Thread the non-owning sink through engine startup**
+- [x] **Step 4: Thread the non-owning sink through engine startup**
 
 Store:
 
@@ -755,7 +755,7 @@ production and engine code never downcasts. The session uses:
 
 A false result does not fail WASAPI startup.
 
-- [ ] **Step 5: Publish only successfully committed PCM**
+- [x] **Step 5: Publish only successfully committed PCM**
 
 Keep the render order:
 
@@ -786,7 +786,7 @@ Ignore the returned `queued` flag in audio behavior. The recorder sequence gap
 and status own the diagnostic consequence. Do not call the sink before
 `SubmitPcm16`, on any failed submit, or for `TrySubmitSilence`.
 
-- [ ] **Step 6: Add process-lifetime production ownership**
+- [x] **Step 6: Add process-lifetime production ownership**
 
 Add `std::unique_ptr<diagnostics::AudioFlightRecorder> recorder` before
 `ProductionExclusiveEngineStartup startup` inside `ProductionDetourState`.
@@ -810,7 +810,7 @@ DirectSound detour result. Later capture state is intentionally read from the
 checkpoint/timeline during offline analysis; do not add periodic diagnostic
 log lines.
 
-- [ ] **Step 7: Run endpoint and patch tests**
+- [x] **Step 7: Run endpoint and patch tests**
 
 Run:
 

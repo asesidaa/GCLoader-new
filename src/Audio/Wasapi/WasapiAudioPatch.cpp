@@ -443,9 +443,11 @@ class ProductionExclusiveEngineStartup final
 public:
     explicit ProductionExclusiveEngineStartup(
         detail::AudioPatchPlatformActions actions,
-        REFERENCE_TIME configured_duration) noexcept
+        REFERENCE_TIME configured_duration,
+        diagnostics::AudioFlightRecorder* recorder) noexcept
         : actions_(actions),
-          configured_duration_(configured_duration) {}
+          configured_duration_(configured_duration),
+          recorder_(recorder) {}
 
     IAudioEngineServices* Start(
         AudioStartupFailure* startup_failure) noexcept override {
@@ -460,6 +462,7 @@ public:
                     E_OUTOFMEMORY,
                 };
             }
+            ReportDiagnosticStatus();
             return nullptr;
         }
 
@@ -469,7 +472,9 @@ public:
             configured_duration_,
             actions_,
             std::move(observer),
+            recorder_,
             startup_failure);
+        ReportDiagnosticStatus();
         if (engine == nullptr) {
             return nullptr;
         }
@@ -478,8 +483,22 @@ public:
     }
 
 private:
+    void ReportDiagnosticStatus() noexcept {
+        if (recorder_ == nullptr) {
+            detail::ReportAudioDiagnosticStatus({}, actions_);
+            return;
+        }
+        try {
+            detail::ReportAudioDiagnosticStatus(
+                recorder_->status(), actions_);
+        } catch (...) {
+            detail::ReportAudioDiagnosticStatus({}, actions_);
+        }
+    }
+
     detail::AudioPatchPlatformActions actions_{};
     REFERENCE_TIME configured_duration_{};
+    diagnostics::AudioFlightRecorder* recorder_{};
     std::unique_ptr<ExclusiveAudioEngine> engine_;
 };
 
@@ -507,15 +526,18 @@ struct ProductionDetourState {
                   ConfigManager::instance().GetWasapiExclusiveBufferMs())) {}
 
     explicit ProductionDetourState(REFERENCE_TIME configured_duration)
-        : startup(
+        : recorder(diagnostics::AudioFlightRecorder::Create()),
+          startup(
               production_platform_actions(),
-              configured_duration) {
+              configured_duration,
+              recorder.get()) {
         report_audio_buffer_handoff(
             production_platform_actions(),
             "detour_state",
             configured_duration);
     }
 
+    std::unique_ptr<diagnostics::AudioFlightRecorder> recorder;
     ProductionExclusiveEngineStartup startup;
     detail::CachedExclusiveEngineFactory factory{startup};
 };
@@ -697,12 +719,37 @@ void ReportAudioStartupFailure(
     }
 }
 
+void ReportAudioDiagnosticStatus(
+    const diagnostics::AudioFlightRecorderStatus& status,
+    AudioPatchPlatformActions actions) noexcept {
+    if (status.state != diagnostics::AudioFlightRecorderState::Active ||
+        status.session_directory.empty()) {
+        emit_info(
+            actions,
+            "WASAPI audio diagnostic session status=unavailable");
+        return;
+    }
+
+    try {
+        std::ostringstream stream;
+        stream << "WASAPI audio diagnostic session status=active directory=\""
+               << status.session_directory.string() << '"';
+        const auto text = stream.str();
+        emit_info(actions, text.c_str());
+    } catch (...) {
+        emit_info(
+            actions,
+            "WASAPI audio diagnostic session status=unavailable");
+    }
+}
+
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn create_api,
     StartExclusiveAudioEngineFn start_engine,
     REFERENCE_TIME configured_duration,
     AudioPatchPlatformActions actions,
     std::shared_ptr<IAudioEngineObserver> observer,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink,
     AudioStartupFailure* startup_failure) noexcept {
     report_audio_buffer_handoff(
         actions,
@@ -738,6 +785,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
         10'000,
         configured_duration,
         std::shared_ptr<const ma_allocation_callbacks>{},
+        diagnostic_sink,
         startup_failure);
 }
 

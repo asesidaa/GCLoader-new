@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Audio/Diagnostics/AudioFlightRecorder.h"
 #include "Audio/Mixer/AudioCursorTimeline.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
 #include "Audio/Wasapi/OutputPacingTracker.h"
@@ -30,6 +31,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartExclusiveAudioEngineAndWait(
     REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks>,
     const ExclusiveAudioEngineTiming&,
+    diagnostics::IAudioDiagnosticSink*,
     AudioStartupFailure*) noexcept;
 
 } // namespace detail
@@ -77,6 +79,7 @@ public:
         DWORD timeout_ms,
         REFERENCE_TIME configured_duration,
         std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+        diagnostics::IAudioDiagnosticSink*,
         AudioStartupFailure*) noexcept;
 
     std::unique_ptr<MixerVoice> CreateVoice(
@@ -100,6 +103,7 @@ private:
             REFERENCE_TIME,
             std::shared_ptr<const ma_allocation_callbacks>,
             const detail::ExclusiveAudioEngineTiming&,
+            diagnostics::IAudioDiagnosticSink*,
             AudioStartupFailure*) noexcept;
 
     ExclusiveAudioEngine(
@@ -107,6 +111,7 @@ private:
         std::shared_ptr<IAudioEngineObserver>,
         REFERENCE_TIME configured_duration,
         std::shared_ptr<const ma_allocation_callbacks>,
+        diagnostics::IAudioDiagnosticSink*,
         DWORD summary_interval_ms) noexcept;
 
     bool CreateControlEvents() noexcept;
@@ -131,6 +136,7 @@ private:
     std::unique_ptr<WasapiEndpoint> endpoint_;
     std::shared_ptr<IAudioEngineObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink_{};
     std::unique_ptr<MiniaudioMixer> mixer_;
     std::vector<float> float_mix_;
     std::vector<std::int16_t> pcm16_mix_;

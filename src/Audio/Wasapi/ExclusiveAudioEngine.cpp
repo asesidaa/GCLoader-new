@@ -29,11 +29,13 @@ ExclusiveAudioEngine::ExclusiveAudioEngine(
     std::shared_ptr<IAudioEngineObserver> observer,
     REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink,
     DWORD summary_interval_ms) noexcept
     : pending_api_(std::move(api)),
       configured_duration_(configured_duration),
       observer_(std::move(observer)),
       mixer_allocations_(std::move(mixer_allocations)),
+      diagnostic_sink_(diagnostic_sink),
       summary_interval_ms_(summary_interval_ms) {
     LARGE_INTEGER frequency{};
     if (QueryPerformanceFrequency(&frequency) &&
@@ -72,6 +74,7 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
     DWORD timeout_ms,
     REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink,
     AudioStartupFailure* startup_failure) noexcept {
     return detail::StartExclusiveAudioEngineAndWait(
         std::move(api),
@@ -80,6 +83,7 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
         configured_duration,
         std::move(mixer_allocations),
         detail::ExclusiveAudioEngineTiming{},
+        diagnostic_sink,
         startup_failure);
 }
 
@@ -91,6 +95,7 @@ detail::StartExclusiveAudioEngineAndWait(
     REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     const ExclusiveAudioEngineTiming& timing,
+    diagnostics::IAudioDiagnosticSink* diagnostic_sink,
     AudioStartupFailure* startup_failure) noexcept {
     if (startup_failure != nullptr) {
         *startup_failure = {};
@@ -109,6 +114,7 @@ detail::StartExclusiveAudioEngineAndWait(
             std::move(observer),
             configured_duration,
             std::move(mixer_allocations),
+            diagnostic_sink,
             timing.summary_interval_ms));
     if (engine == nullptr) {
         if (startup_failure != nullptr) {
@@ -283,6 +289,16 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         minimum_submitted_lead_frames_.store(
             frames, std::memory_order_relaxed);
 
+        if (diagnostic_sink_ != nullptr) {
+            static_cast<void>(diagnostic_sink_->StartSession({
+                output_sample_rate,
+                kOutputChannels,
+                kOutputBitsPerSample,
+                frames,
+                qpc_frequency_,
+            }));
+        }
+
         if (FAILED(endpoint_->Start(&failure))) {
             CleanupEndpointOnAudioThread();
             SignalInitializationFailure(
@@ -403,6 +419,21 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
             *presented,
             clock.qpc_100ns,
             submitted_tail);
+        if (diagnostic_sink_ != nullptr) {
+            static_cast<void>(diagnostic_sink_->PublishSubmittedPcm(
+                diagnostics::SubmittedPcmMetadata{
+                    clock.position,
+                    clock.qpc_100ns,
+                    *presented,
+                    decision.block_begin,
+                    submitted_tail,
+                    decision.discontinuity_frames,
+                    rendered.frames_read,
+                    rendered.result,
+                    static_cast<std::uint8_t>(decision.kind),
+                },
+                pcm16_mix_));
+        }
         RecordPacingDecision(decision);
         render_callbacks_.fetch_add(1, std::memory_order_relaxed);
     }

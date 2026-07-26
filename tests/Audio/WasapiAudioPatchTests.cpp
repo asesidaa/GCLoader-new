@@ -1,5 +1,6 @@
 #include "Audio/Wasapi/WasapiAudioPatch.h"
 #include "Audio/Wasapi/WasapiAudioPatchInternal.h"
+#include "Audio/Diagnostics/AudioFlightRecorder.h"
 
 #include <audioclient.h>
 
@@ -7,9 +8,12 @@
 #include <atomic>
 #include <condition_variable>
 #include <dsound.h>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <regex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1062,6 +1066,26 @@ std::unique_ptr<gc::audio::IWasapiApi> fake_null_wasapi_api() noexcept {
 int g_start_engine_calls{};
 DWORD g_start_engine_timeout{};
 REFERENCE_TIME g_start_engine_configured_duration{};
+gc::audio::diagnostics::IAudioDiagnosticSink* g_start_engine_sink{};
+
+class NoopAudioDiagnosticSink final
+    : public gc::audio::diagnostics::IAudioDiagnosticSink {
+public:
+    bool StartSession(
+        const gc::audio::diagnostics::AudioFlightRecorderSession&)
+        noexcept override {
+        return true;
+    }
+
+    void PublishEvent(
+        gc::audio::diagnostics::AudioDiagnosticEvent) noexcept override {}
+
+    gc::audio::diagnostics::PcmPublishResult PublishSubmittedPcm(
+        const gc::audio::diagnostics::SubmittedPcmMetadata&,
+        std::span<const std::int16_t>) noexcept override {
+        return {1, true};
+    }
+};
 
 std::unique_ptr<gc::audio::ExclusiveAudioEngine> fake_start_engine(
     std::unique_ptr<gc::audio::IWasapiApi>,
@@ -1069,11 +1093,48 @@ std::unique_ptr<gc::audio::ExclusiveAudioEngine> fake_start_engine(
     DWORD timeout,
     REFERENCE_TIME configured_duration,
     std::shared_ptr<const ma_allocation_callbacks>,
+    gc::audio::diagnostics::IAudioDiagnosticSink* diagnostic_sink,
     AudioStartupFailure*) noexcept {
     ++g_start_engine_calls;
     g_start_engine_timeout = timeout;
     g_start_engine_configured_duration = configured_duration;
+    g_start_engine_sink = diagnostic_sink;
     return nullptr;
+}
+
+int test_temporary_audio_diagnostic_status_formatting() {
+    int failures = 0;
+    DiagnosticState diagnostics;
+    g_diagnostics = &diagnostics;
+    const auto actions = fake_platform_actions();
+
+    gc::audio::diagnostics::AudioFlightRecorderStatus active{};
+    active.state =
+        gc::audio::diagnostics::AudioFlightRecorderState::Active;
+    active.session_directory =
+        std::filesystem::path{L"audio-diagnostics\\20260727-143355"};
+    gc::audio::detail::ReportAudioDiagnosticStatus(active, actions);
+    const std::regex active_line{
+        R"(^WASAPI audio diagnostic session status=active directory="audio-diagnostics\\\d{8}-\d{6}(?:-\d{2})?"$)"};
+    failures += expect(
+        diagnostics.info.size() == 1 &&
+            std::regex_match(diagnostics.info.back(), active_line) &&
+            diagnostics.errors.empty(),
+        "active diagnostic status uses exact temporary session line");
+
+    diagnostics = {};
+    gc::audio::diagnostics::AudioFlightRecorderStatus failed{};
+    failed.state =
+        gc::audio::diagnostics::AudioFlightRecorderState::Failed;
+    failed.error = "injected recorder failure";
+    gc::audio::detail::ReportAudioDiagnosticStatus(failed, actions);
+    failures += expect(
+        diagnostics.info ==
+            std::vector<std::string>{
+                "WASAPI audio diagnostic session status=unavailable"} &&
+            diagnostics.errors.empty(),
+        "failed diagnostic status uses exact unavailable line");
+    return failures;
 }
 
 int test_null_production_api_and_startup_fatal_reporting() {
@@ -1084,6 +1145,8 @@ int test_null_production_api_and_startup_fatal_reporting() {
     g_start_engine_calls = 0;
     g_start_engine_timeout = 0;
     g_start_engine_configured_duration = 0;
+    g_start_engine_sink = nullptr;
+    NoopAudioDiagnosticSink diagnostic_sink;
 
     AudioStartupFailure forwarded_failure{};
     auto engine = gc::audio::detail::StartProductionExclusiveAudioEngine(
@@ -1092,12 +1155,14 @@ int test_null_production_api_and_startup_fatal_reporting() {
         100'000,
         actions,
         {},
+        &diagnostic_sink,
         &forwarded_failure);
     failures += expect(
         engine == nullptr && g_start_engine_calls == 1 &&
             g_start_engine_timeout == 10'000 &&
-            g_start_engine_configured_duration == 100'000,
-        "production startup forwards fixed configured duration");
+            g_start_engine_configured_duration == 100'000 &&
+            g_start_engine_sink == &diagnostic_sink,
+        "production startup forwards duration and diagnostic sink");
     failures += expect(
         diagnostics.info.size() == 1 &&
             contains(
@@ -1118,6 +1183,7 @@ int test_null_production_api_and_startup_fatal_reporting() {
         100'000,
         actions,
         {},
+        &diagnostic_sink,
         &allocation_failure);
     failures += expect(
         engine == nullptr && g_start_engine_calls == 0,
@@ -1685,6 +1751,7 @@ int main() {
     failures += test_concurrent_first_callers_share_initialization();
     failures += test_production_diagnostics_use_injected_platform_actions();
     failures += test_pacing_specific_diagnostics();
+    failures += test_temporary_audio_diagnostic_status_formatting();
     failures += test_null_production_api_and_startup_fatal_reporting();
     failures += test_config_gate_and_attach_failure_policy();
 
