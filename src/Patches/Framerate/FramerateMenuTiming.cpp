@@ -108,6 +108,73 @@ std::string_view MenuTimingModeName(MenuTimingMode mode) noexcept {
     return "invalid";
 }
 
+MovieClipDiagnosticTarget ClassifyMovieClipDiagnosticTarget(
+    std::uint32_t instance_name_hash,
+    std::string_view instance_name,
+    std::uint32_t parent_name_hash,
+    std::string_view parent_name) noexcept {
+    if (instance_name_hash == kStampCardNameHash &&
+        instance_name == "imc_scard") {
+        return MovieClipDiagnosticTarget::StampCard;
+    }
+    if (instance_name_hash == kStampWindowNameHash &&
+        instance_name == "imc_window") {
+        return MovieClipDiagnosticTarget::StampWindow;
+    }
+    if (parent_name_hash != kUnlockRewardNavigatorNameHash ||
+        parent_name != "imc_un_navi") {
+        return MovieClipDiagnosticTarget::None;
+    }
+    if (instance_name_hash ==
+            kUnlockRewardPromptTransitionNameHash &&
+        instance_name == "imc_tx") {
+        return MovieClipDiagnosticTarget::UnlockPromptTransition;
+    }
+    if (instance_name_hash == kUnlockRewardPromptStableNameHash &&
+        instance_name == "igr_un_instmsg01_img") {
+        return MovieClipDiagnosticTarget::UnlockPromptStable;
+    }
+    return MovieClipDiagnosticTarget::None;
+}
+
+MovieClipDiagnosticTarget ClassifyMovieClipDiagnosticCandidate(
+    std::uint32_t instance_name_hash,
+    std::string_view instance_name) noexcept {
+    if (instance_name_hash == kStampCardNameHash &&
+        (instance_name.empty() || instance_name == "imc_scard")) {
+        return MovieClipDiagnosticTarget::StampCard;
+    }
+    if (instance_name_hash == kStampWindowNameHash &&
+        (instance_name.empty() || instance_name == "imc_window")) {
+        return MovieClipDiagnosticTarget::StampWindow;
+    }
+    if (instance_name_hash ==
+        kUnlockRewardPromptTransitionNameHash) {
+        return MovieClipDiagnosticTarget::UnlockPromptTransition;
+    }
+    if (instance_name_hash == kUnlockRewardPromptStableNameHash) {
+        return MovieClipDiagnosticTarget::UnlockPromptStable;
+    }
+    return MovieClipDiagnosticTarget::None;
+}
+
+std::string_view MovieClipDiagnosticTargetName(
+    MovieClipDiagnosticTarget target) noexcept {
+    switch (target) {
+    case MovieClipDiagnosticTarget::None:
+        return "none";
+    case MovieClipDiagnosticTarget::StampCard:
+        return "stamp_scard";
+    case MovieClipDiagnosticTarget::StampWindow:
+        return "stamp_window";
+    case MovieClipDiagnosticTarget::UnlockPromptTransition:
+        return "unlock_transition";
+    case MovieClipDiagnosticTarget::UnlockPromptStable:
+        return "unlock_stable";
+    }
+    return "invalid";
+}
+
 MovieClipAdvanceDecision DecideMovieClipAdvance(
     MenuTimingMode mode,
     MovieClipAdvanceContext context,
@@ -144,11 +211,15 @@ bool ShouldHoldUnlockRewardPromptFrame(
     std::uint32_t instance_name_hash,
     std::string_view instance_name,
     std::uint32_t parent_name_hash,
-    std::string_view parent_name) noexcept {
+    std::string_view parent_name,
+    std::uint64_t current_frame,
+    std::uint32_t stopped) noexcept {
     if (mode != MenuTimingMode::Correct ||
         context != MovieClipAdvanceContext::Ordinary ||
         parent_name_hash != kUnlockRewardNavigatorNameHash ||
-        parent_name != "imc_un_navi") {
+        parent_name != "imc_un_navi" ||
+        current_frame != 1 ||
+        stopped != 0) {
         return false;
     }
 
@@ -329,7 +400,28 @@ std::string FormatFramerateMenuRuntimeStats(
         << stats.movieclip_hash_collisions
         << " unlock_prompt_holds="
         << stats.unlock_prompt_transition_holds << '/'
-        << stats.unlock_prompt_stable_holds
+        << stats.unlock_prompt_stable_holds;
+    for (std::size_t index = 0;
+         index < stats.movieclip_diagnostics.size();
+         ++index) {
+        const auto target = static_cast<MovieClipDiagnosticTarget>(
+            index + 1);
+        const auto& diagnostic =
+            stats.movieclip_diagnostics[index];
+        stream
+            << " movieclip_diag_"
+            << MovieClipDiagnosticTargetName(target)
+            << '='
+            << diagnostic.ordinary_runs << '/'
+            << diagnostic.ordinary_skips << '/'
+            << diagnostic.preprocess_runs << '/'
+            << diagnostic.preprocess_skips << '/'
+            << diagnostic.goto_calls << '/'
+            << diagnostic.frame_changes << '/'
+            << diagnostic.samples_logged << '/'
+            << diagnostic.samples_suppressed;
+    }
+    stream
         << " ranking_entry="
         << stats.ranking_entry.commits << '/'
         << stats.ranking_entry.suppressions

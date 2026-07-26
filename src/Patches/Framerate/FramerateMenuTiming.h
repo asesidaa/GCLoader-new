@@ -84,6 +84,45 @@ inline constexpr std::uint32_t
     kUnlockRewardPromptStableNameHash = 0x9D55AF65;
 inline constexpr std::uint32_t
     kUnlockRewardNavigatorNameHash = 0x59FE24C8;
+inline constexpr std::uint32_t kStampCardNameHash = 0x09CA86C5;
+inline constexpr std::uint32_t kStampWindowNameHash = 0x4CE37C30;
+
+// game471.exe MovieClipInstance layout, proved from the constructor,
+// placement core, Stop, and AdvanceOneTimelineFrame.
+inline constexpr std::uintptr_t kMovieClipDefinitionOffset = 0x118;
+inline constexpr std::uintptr_t kMovieClipStopFlagOffset = 0x11C;
+inline constexpr std::uintptr_t kMovieClipInstanceNameOffset = 0x120;
+inline constexpr std::uintptr_t kMovieClipInstanceNameHashOffset = 0x140;
+inline constexpr std::uintptr_t kMovieClipOwnerOffset = 0x150;
+inline constexpr std::uintptr_t kMovieClipCurrentFrameLowOffset = 0x178;
+inline constexpr std::uintptr_t kMovieClipCurrentFrameHighOffset = 0x17C;
+
+enum class MovieClipDiagnosticTarget : std::uint8_t {
+    None,
+    StampCard,
+    StampWindow,
+    UnlockPromptTransition,
+    UnlockPromptStable,
+};
+
+inline constexpr std::size_t kMovieClipDiagnosticTargetCount = 4;
+
+[[nodiscard]] MovieClipDiagnosticTarget
+ClassifyMovieClipDiagnosticTarget(
+    std::uint32_t instance_name_hash,
+    std::string_view instance_name,
+    std::uint32_t parent_name_hash,
+    std::string_view parent_name) noexcept;
+
+// Raw diagnostic fallback. Hashes are fields on the instance and remain
+// useful when the string pointer or owner chain cannot be read.
+[[nodiscard]] MovieClipDiagnosticTarget
+ClassifyMovieClipDiagnosticCandidate(
+    std::uint32_t instance_name_hash,
+    std::string_view instance_name) noexcept;
+
+[[nodiscard]] std::string_view MovieClipDiagnosticTargetName(
+    MovieClipDiagnosticTarget target) noexcept;
 
 struct MovieClipAdvanceDecision {
     MovieClipAdvanceAction action{MovieClipAdvanceAction::ExecuteOriginal};
@@ -102,7 +141,9 @@ struct MovieClipAdvanceDecision {
     std::uint32_t instance_name_hash,
     std::string_view instance_name,
     std::uint32_t parent_name_hash,
-    std::string_view parent_name) noexcept;
+    std::string_view parent_name,
+    std::uint64_t current_frame,
+    std::uint32_t stopped) noexcept;
 
 enum class MenuCounterStoreAction {
     Commit,
@@ -217,6 +258,17 @@ struct MenuCounterBoundaryPathStats {
     std::uint64_t boundaries{};
 };
 
+struct MovieClipDiagnosticPathStats {
+    std::uint64_t ordinary_runs{};
+    std::uint64_t ordinary_skips{};
+    std::uint64_t preprocess_runs{};
+    std::uint64_t preprocess_skips{};
+    std::uint64_t goto_calls{};
+    std::uint64_t frame_changes{};
+    std::uint64_t samples_logged{};
+    std::uint64_t samples_suppressed{};
+};
+
 struct FramerateMenuRuntimeStats {
     std::uint64_t preprocessing_visits{};
     std::uint64_t preprocessing_non_tick_skips{};
@@ -227,6 +279,9 @@ struct FramerateMenuRuntimeStats {
     std::uint64_t movieclip_hash_collisions{};
     std::uint64_t unlock_prompt_transition_holds{};
     std::uint64_t unlock_prompt_stable_holds{};
+    std::array<
+        MovieClipDiagnosticPathStats,
+        kMovieClipDiagnosticTargetCount> movieclip_diagnostics{};
     MenuCounterPathStats ranking_entry{};
     MenuCounterPathStats hitchart_entry{};
     MenuCounterBoundaryPathStats unlock_countdown{};

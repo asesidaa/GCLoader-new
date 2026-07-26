@@ -295,7 +295,24 @@ failures += Expect(
     "native hook is outer cadence");
 failures += Expect(
     transformed_hooks.size() == 53,
-    "Stage A full transformed view has 53 contracts");
+    "full transformed view has 53 contracts");
+for (const auto diagnostic_rva : {
+         0x000E12A0U,
+         0x000DC575U,
+         0x000D19A6U,
+         0x000D19B0U,
+         0x000CEC70U,
+         0x000CEEB6U,
+         0x00058A50U}) {
+    failures += Expect(
+        std::none_of(
+            transformed_hooks.begin(),
+            transformed_hooks.end(),
+            [diagnostic_rva](const auto& hook) {
+                return hook.rva == diagnostic_rva;
+            }),
+        "exhaustive UnlockReward diagnostic hook is absent");
+}
 for (const auto removed_rva :
      {0x00218A50U, 0x002544D0U, 0x00230AB6U, 0x0024F0C6U}) {
     const bool present = std::any_of(
@@ -306,7 +323,7 @@ for (const auto removed_rva :
     failures += Expect(!present, "invalid timing contract is absent");
 }
 failures += Expect(
-    transformed_hooks[51].id == FramerateHookId::NavigatorAdvance &&
+        transformed_hooks[51].id == FramerateHookId::NavigatorAdvance &&
         transformed_hooks[52].id == FramerateHookId::OuterFrame,
     "Navigator and OuterFrame remain final");
 const auto navigator_hook = std::find_if(
@@ -460,7 +477,7 @@ failures += Expect(
 failures += Expect(
     BuildFramerateHookPlan(true, false).count == 52 &&
         BuildFramerateHookPlan(true, true).count == 53,
-    "Stage A transformed selection has exact optional counts");
+    "transformed selection has exact optional counts");
 
 const auto native_without_wasapi =
     BuildFramerateHookPlan(false, false);

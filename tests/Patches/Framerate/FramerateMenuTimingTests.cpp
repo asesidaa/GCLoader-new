@@ -359,6 +359,106 @@ int main() {
             "MovieClip advance policy matches the complete decision matrix");
     }
 
+    struct DiagnosticIdentityCase {
+        std::uint32_t instance_name_hash;
+        std::string_view instance_name;
+        std::uint32_t parent_name_hash;
+        std::string_view parent_name;
+        MovieClipDiagnosticTarget expected;
+    };
+    constexpr std::array diagnostic_identity_cases{
+        DiagnosticIdentityCase{
+            kStampCardNameHash,
+            "imc_scard",
+            0,
+            "",
+            MovieClipDiagnosticTarget::StampCard},
+        DiagnosticIdentityCase{
+            kStampWindowNameHash,
+            "imc_window",
+            0,
+            "",
+            MovieClipDiagnosticTarget::StampWindow},
+        DiagnosticIdentityCase{
+            kUnlockRewardPromptTransitionNameHash,
+            "imc_tx",
+            kUnlockRewardNavigatorNameHash,
+            "imc_un_navi",
+            MovieClipDiagnosticTarget::UnlockPromptTransition},
+        DiagnosticIdentityCase{
+            kUnlockRewardPromptStableNameHash,
+            "igr_un_instmsg01_img",
+            kUnlockRewardNavigatorNameHash,
+            "imc_un_navi",
+            MovieClipDiagnosticTarget::UnlockPromptStable},
+        DiagnosticIdentityCase{
+            kUnlockRewardPromptTransitionNameHash,
+            "imc_tx",
+            0x11111111,
+            "wrong_parent",
+            MovieClipDiagnosticTarget::None},
+        DiagnosticIdentityCase{
+            kStampCardNameHash,
+            "imc_window",
+            0,
+            "",
+            MovieClipDiagnosticTarget::None},
+        DiagnosticIdentityCase{
+            0x22222222,
+            "unrelated",
+            0,
+            "",
+            MovieClipDiagnosticTarget::None},
+    };
+    for (const auto& test : diagnostic_identity_cases) {
+        failures += Expect(
+            ClassifyMovieClipDiagnosticTarget(
+                test.instance_name_hash,
+                test.instance_name,
+                test.parent_name_hash,
+                test.parent_name) == test.expected,
+            "tracked MovieClip diagnostics require exact hash/name identity");
+    }
+    failures += Expect(
+        kMovieClipDefinitionOffset == 0x118 &&
+            kMovieClipStopFlagOffset == 0x11C &&
+            kMovieClipInstanceNameOffset == 0x120 &&
+            kMovieClipInstanceNameHashOffset == 0x140 &&
+            kMovieClipOwnerOffset == 0x150 &&
+            kMovieClipCurrentFrameLowOffset == 0x178 &&
+            kMovieClipCurrentFrameHighOffset == 0x17C,
+        "binary-proven MovieClip layout keeps diagnostic ownership at +0x150");
+    failures += Expect(
+        ClassifyMovieClipDiagnosticCandidate(
+            kUnlockRewardPromptTransitionNameHash,
+            "") == MovieClipDiagnosticTarget::UnlockPromptTransition &&
+            ClassifyMovieClipDiagnosticCandidate(
+                kUnlockRewardPromptStableNameHash,
+                "") == MovieClipDiagnosticTarget::UnlockPromptStable &&
+            ClassifyMovieClipDiagnosticCandidate(
+                kUnlockRewardPromptTransitionNameHash,
+                "unreadable_or_stale") ==
+                MovieClipDiagnosticTarget::UnlockPromptTransition &&
+            ClassifyMovieClipDiagnosticCandidate(
+                0x22222222,
+                "imc_tx") == MovieClipDiagnosticTarget::None,
+        "UnlockReward diagnostics survive missing names and owner links by hash");
+    failures += Expect(
+        MovieClipDiagnosticTargetName(
+            MovieClipDiagnosticTarget::StampCard) == "stamp_scard" &&
+            MovieClipDiagnosticTargetName(
+                MovieClipDiagnosticTarget::StampWindow) ==
+                "stamp_window" &&
+            MovieClipDiagnosticTargetName(
+                MovieClipDiagnosticTarget::UnlockPromptTransition) ==
+                "unlock_transition" &&
+            MovieClipDiagnosticTargetName(
+                MovieClipDiagnosticTarget::UnlockPromptStable) ==
+                "unlock_stable" &&
+            MovieClipDiagnosticTargetName(
+                MovieClipDiagnosticTarget::None) == "none",
+        "tracked MovieClip diagnostics expose stable log names");
+
     struct UnlockPromptHoldCase {
         MenuTimingMode mode;
         MovieClipAdvanceContext context;
@@ -366,6 +466,8 @@ int main() {
         std::string_view instance_name;
         std::uint32_t parent_name_hash;
         std::string_view parent_name;
+        std::uint64_t current_frame;
+        std::uint32_t stopped;
         bool should_hold;
     };
     constexpr std::array unlock_prompt_hold_cases{
@@ -376,6 +478,8 @@ int main() {
             "imc_tx",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             true},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -384,7 +488,29 @@ int main() {
             "igr_un_instmsg01_img",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             true},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0xFCDA0604,
+            "imc_tx",
+            0x59FE24C8,
+            "imc_un_navi",
+            2,
+            0,
+            false},
+        UnlockPromptHoldCase{
+            MenuTimingMode::Correct,
+            MovieClipAdvanceContext::Ordinary,
+            0x9D55AF65,
+            "igr_un_instmsg01_img",
+            0x59FE24C8,
+            "imc_un_navi",
+            1,
+            1,
+            false},
         UnlockPromptHoldCase{
             MenuTimingMode::Observe,
             MovieClipAdvanceContext::Ordinary,
@@ -392,6 +518,8 @@ int main() {
             "imc_tx",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -400,6 +528,8 @@ int main() {
             "imc_tx",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -408,6 +538,8 @@ int main() {
             "igr_un_instmsg01_img",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -416,6 +548,8 @@ int main() {
             "imc_tx",
             0x59FE24C8,
             "imc_other_navi",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -424,6 +558,8 @@ int main() {
             "imc_tx_other",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -432,6 +568,8 @@ int main() {
             "igr_un_instmsg01_img",
             0x59FE24C8,
             "imc_un_navi_other",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -440,6 +578,8 @@ int main() {
             "imc_tx",
             0x59FE24C8,
             "imc_un_navi",
+            1,
+            0,
             false},
         UnlockPromptHoldCase{
             MenuTimingMode::Correct,
@@ -448,6 +588,8 @@ int main() {
             "imc_tx",
             0,
             "imc_un_navi",
+            1,
+            0,
             false},
     };
     for (const auto& test : unlock_prompt_hold_cases) {
@@ -458,8 +600,10 @@ int main() {
                 test.instance_name_hash,
                 test.instance_name,
                 test.parent_name_hash,
-                test.parent_name) == test.should_hold,
-            "only exact UnlockReward prompt children are held under the exact navigator during corrected ordinary playback");
+                test.parent_name,
+                test.current_frame,
+                test.stopped) == test.should_hold,
+            "only playing exact UnlockReward prompt children already on visible frame one are held under the exact navigator during corrected ordinary playback");
     }
 
     failures += Expect(
@@ -797,7 +941,47 @@ int main() {
             .commits = 18,
             .suppressions = 19,
             .boundaries = 20},
-        .diagnostic_read_failures = 21,
+        .diagnostic_read_failures = 56,
+    };
+    stats.movieclip_diagnostics[0] = {
+        .ordinary_runs = 24,
+        .ordinary_skips = 25,
+        .preprocess_runs = 26,
+        .preprocess_skips = 27,
+        .goto_calls = 28,
+        .frame_changes = 29,
+        .samples_logged = 30,
+        .samples_suppressed = 31,
+    };
+    stats.movieclip_diagnostics[1] = {
+        .ordinary_runs = 32,
+        .ordinary_skips = 33,
+        .preprocess_runs = 34,
+        .preprocess_skips = 35,
+        .goto_calls = 36,
+        .frame_changes = 37,
+        .samples_logged = 38,
+        .samples_suppressed = 39,
+    };
+    stats.movieclip_diagnostics[2] = {
+        .ordinary_runs = 40,
+        .ordinary_skips = 41,
+        .preprocess_runs = 42,
+        .preprocess_skips = 43,
+        .goto_calls = 44,
+        .frame_changes = 45,
+        .samples_logged = 46,
+        .samples_suppressed = 47,
+    };
+    stats.movieclip_diagnostics[3] = {
+        .ordinary_runs = 48,
+        .ordinary_skips = 49,
+        .preprocess_runs = 50,
+        .preprocess_skips = 51,
+        .goto_calls = 52,
+        .frame_changes = 53,
+        .samples_logged = 54,
+        .samples_suppressed = 55,
     };
     constexpr std::string_view observe_stats =
         " menu_timing_mode=observe"
@@ -805,24 +989,32 @@ int main() {
         " movieclip_preprocess_stop=4/5"
         " movieclip_revisit=6/7"
         " unlock_prompt_holds=22/23"
+        " movieclip_diag_stamp_scard=24/25/26/27/28/29/30/31"
+        " movieclip_diag_stamp_window=32/33/34/35/36/37/38/39"
+        " movieclip_diag_unlock_transition=40/41/42/43/44/45/46/47"
+        " movieclip_diag_unlock_stable=48/49/50/51/52/53/54/55"
         " ranking_entry=8/9"
         " hitchart_entry=10/11"
         " unlock_countdown=12/13/14"
         " unlock_state_primary=15/16/17"
         " unlock_state_secondary=18/19/20"
-        " menu_diagnostic_read_failures=21";
+        " menu_diagnostic_read_failures=56";
     constexpr std::string_view correct_stats =
         " menu_timing_mode=correct"
         " movieclip_preprocess=1/2/3"
         " movieclip_preprocess_stop=4/5"
         " movieclip_revisit=6/7"
         " unlock_prompt_holds=22/23"
+        " movieclip_diag_stamp_scard=24/25/26/27/28/29/30/31"
+        " movieclip_diag_stamp_window=32/33/34/35/36/37/38/39"
+        " movieclip_diag_unlock_transition=40/41/42/43/44/45/46/47"
+        " movieclip_diag_unlock_stable=48/49/50/51/52/53/54/55"
         " ranking_entry=8/9"
         " hitchart_entry=10/11"
         " unlock_countdown=12/13/14"
         " unlock_state_primary=15/16/17"
         " unlock_state_secondary=18/19/20"
-        " menu_diagnostic_read_failures=21";
+        " menu_diagnostic_read_failures=56";
     failures += Expect(
         FormatFramerateMenuRuntimeStats(
             MenuTimingMode::Observe,
