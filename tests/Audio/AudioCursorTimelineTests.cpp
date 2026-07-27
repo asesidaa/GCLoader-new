@@ -98,17 +98,27 @@ int Expect(bool condition, std::string_view name) {
 
 bool ResolvesTo(
     const AudioCursorResolution& resolution,
-    std::uint64_t source_frame) noexcept {
+    std::uint64_t source_frame,
+    std::uint64_t source_frame_unwrapped) noexcept {
     return resolution.kind == AudioCursorResolutionKind::Resolved &&
-        resolution.source_frame == source_frame;
+        resolution.source_frame == source_frame &&
+        resolution.source_frame_unwrapped == source_frame_unwrapped;
+}
+
+bool ResolvesTo(
+    const AudioCursorResolution& resolution,
+    std::uint64_t source_frame) noexcept {
+    return ResolvesTo(resolution, source_frame, source_frame);
 }
 
 int TestEmptyTimeline() {
     const AudioCursorTimeline timeline;
+    const auto resolution = timeline.ResolveSourceFrame(0, 1, 100);
     return Expect(
-        timeline.ResolveSourceFrame(0, 1, 100).kind ==
-            AudioCursorResolutionKind::PendingGeneration,
-        "an empty timeline generation to remain pending");
+        resolution.kind == AudioCursorResolutionKind::PendingGeneration &&
+            resolution.source_frame == 0 &&
+            resolution.source_frame_unwrapped == 0,
+        "an empty timeline generation to remain pending with zero cursors");
 }
 
 int TestHalfOpenSpanInterpolation() {
@@ -191,15 +201,28 @@ int TestLoopAndEndedSpans() {
 
     int failures = 0;
     failures += Expect(
-        ResolvesTo(timeline.ResolveSourceFrame(250, 1, 100), 0),
-        "unwrapped loop span to wrap only in the source domain");
+        ResolvesTo(timeline.ResolveSourceFrame(250, 1, 100), 0, 100),
+        "loop crossing to retain unwrapped frame 100 and wrap DirectSound");
     failures += Expect(
         ResolvesTo(timeline.ResolveSourceFrame(324, 1, 100), 99),
         "ended span to resolve through its last active output frame");
+
+    const auto ended = timeline.ResolveSourceFrame(325, 1, 100);
     failures += Expect(
-        timeline.ResolveSourceFrame(325, 1, 100).kind ==
-            AudioCursorResolutionKind::Unmapped,
-        "ended span active output end to remain unmapped");
+        ended.kind == AudioCursorResolutionKind::Unmapped &&
+            ended.source_frame == 0 &&
+            ended.source_frame_unwrapped == 0,
+        "ended span active output end to remain unmapped with zero cursors");
+
+    AudioCursorTimeline later_loop;
+    later_loop.Publish({400, 500, 190, 210, 7, true, false});
+    const auto later = later_loop.ResolveSourceFrame(450, 7, 100);
+    failures += Expect(
+        ResolvesTo(later, 0, 200),
+        "later loop to preserve a source frame beyond one buffer length");
+    failures += Expect(
+        gc::audio::SourceFrameToByte(later.source_frame, 4) == 0,
+        "DirectSound byte projection to keep using the wrapped cursor");
     return failures;
 }
 

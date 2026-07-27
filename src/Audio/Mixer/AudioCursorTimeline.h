@@ -38,6 +38,7 @@ enum class AudioCursorResolutionKind : std::uint8_t {
 struct AudioCursorResolution {
     AudioCursorResolutionKind kind{};
     std::uint64_t source_frame{};
+    std::uint64_t source_frame_unwrapped{};
 };
 
 class AudioCursorTimeline {
