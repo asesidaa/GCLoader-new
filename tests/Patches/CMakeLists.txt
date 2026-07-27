@@ -38,6 +38,11 @@ add_executable(FramerateAuthoredClockTests
 target_link_libraries(FramerateAuthoredClockTests PRIVATE gc_runtime_patches)
 add_test(NAME FramerateAuthoredClockTests COMMAND FramerateAuthoredClockTests)
 
+add_executable(GameplaySongClockTests
+        Framerate/GameplaySongClockTests.cpp)
+target_link_libraries(GameplaySongClockTests PRIVATE gc_runtime_patches)
+add_test(NAME GameplaySongClockTests COMMAND GameplaySongClockTests)
+
 add_executable(FramerateEffectTimingTests
         Framerate/FramerateEffectTimingTests.cpp)
 target_link_libraries(FramerateEffectTimingTests PRIVATE gc_runtime_patches)
