@@ -117,7 +117,29 @@ in:
 
 ## Shared-clock diagnostic build
 
-Not built yet.
+Built and deployed on 2026-07-28:
+
+- Source commit:
+  `5758796fec17afbefb7f7120772c6a28b03d0e96`
+- Verification:
+  x86 `iDmacDrv32` build passed, 60/60 CTests passed, and 11/11 audio
+  replay analyzer tests passed
+- PE identity:
+  `14C machine (x86)`
+- Candidate:
+  `H:\gc\artifacts\GCLoader\.worktrees\audio-replay-diagnostics-stage-a\build-msvc32-release\dist\iDmacDrv32.dll`
+- Candidate length:
+  `5672960` bytes
+- Candidate last-write time:
+  `2026-07-28T04:38:42.3167036+08:00`
+- Candidate/archive/runtime SHA-256:
+  `E18F09A3FC8A9A001CDEB53D7C94A9B92EAA605ECB2109EFFC8AC7B3CACE2331`
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\wasapi-shared-clock\diagnostic\E18F09A3FC8A9A001CDEB53D7C94A9B92EAA605ECB2109EFFC8AC7B3CACE2331\iDmacDrv32.dll`
+- Runtime destination:
+  `H:\gc\iDmacDrv32.dll`
+- Rollback copy:
+  `H:\gc\deploy-backups\wasapi-shared-clock-diagnostic-20260728-044207\iDmacDrv32.pre-shared-clock.dll`
 
 ## Shared-clock runtime matrix
 
