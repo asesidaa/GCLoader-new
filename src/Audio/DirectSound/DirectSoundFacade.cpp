@@ -1,4 +1,5 @@
 #include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
 #include <cstring>
 #include <limits>
@@ -501,6 +502,11 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
     const auto mixing = voice_->playing();
     const auto audible_until = voice_->audible_until_output_frame();
     if (!mixing && !audible_until.has_value()) {
+        PublishGameplayAudioCursorObservation({
+            .state = GameplayAudioCursorState::Inactive,
+            .source_sample_rate = format_.sample_rate,
+            .playback_generation = playback_generation_,
+        });
         return last;
     }
 
@@ -511,6 +517,12 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
     const auto draining = audible_until.has_value() &&
         *output_frame < *audible_until;
     if (!mixing && !draining) {
+        PublishGameplayAudioCursorObservation({
+            .state = GameplayAudioCursorState::Inactive,
+            .source_sample_rate = format_.sample_rate,
+            .playback_generation = playback_generation_,
+            .output_frame = *output_frame,
+        });
         return last;
     }
     const auto resolution = timeline_->ResolveSourceFrame(
@@ -526,6 +538,13 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
         return last;
     }
     last_reported_source_frame_ = resolution.source_frame;
+    PublishGameplayAudioCursorObservation({
+        .state = GameplayAudioCursorState::Exact,
+        .source_frame_unwrapped = resolution.source_frame_unwrapped,
+        .source_sample_rate = format_.sample_rate,
+        .playback_generation = playback_generation_,
+        .output_frame = *output_frame,
+    });
     return resolution.source_frame;
 }
 

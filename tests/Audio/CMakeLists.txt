@@ -5,6 +5,7 @@ set(GC_AUDIO_TESTS
         AudioSnapshotTests
         DirectSoundDeviceTests
         ExclusiveAudioEngineTests
+        GameplayAudioCursorObservationTests
         MiniaudioMixerTests
         OutputPacingTrackerTests
         SecondarySoundBufferTests

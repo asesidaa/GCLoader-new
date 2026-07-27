@@ -1,6 +1,7 @@
 add_library(gc_audio STATIC
         Diagnostics/AudioFlightRecorder.cpp
         DirectSound/DirectSoundFacade.cpp
+        DirectSound/GameplayAudioCursorObservation.cpp
         Mixer/AudioCursorTimeline.cpp
         Mixer/AudioSnapshot.cpp
         Mixer/MiniaudioMixer.cpp

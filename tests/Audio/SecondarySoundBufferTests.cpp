@@ -1,4 +1,5 @@
 #include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Audio/Diagnostics/AudioFlightRecorder.h"
 
 #include <ks.h>
@@ -26,6 +27,7 @@ namespace {
 using gc::audio::AudioCursorTimeline;
 using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioSnapshot;
+using gc::audio::GameplayAudioCursorState;
 using gc::audio::IAudioEngineServices;
 using gc::audio::MiniaudioMixer;
 using gc::audio::MixerDiagnosticsSnapshot;
@@ -33,6 +35,7 @@ using gc::audio::MixerRenderResult;
 using gc::audio::MixerVoice;
 using gc::audio::NormalizedSourceFormat;
 using gc::audio::SecondarySoundBuffer;
+using gc::audio::ScopedGameplayAudioCursorQuery;
 using gc::audio::VoiceUsage;
 using gc::audio::kGamePrimarySampleRate;
 
@@ -768,11 +771,23 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     engine.output_frame = 701;
     DWORD cursor{};
     DWORD status{};
-    failures += Expect(
-        buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && engine.pending_cursor_queries == 0 &&
-            engine.unmapped_cursor_failures == 0,
-        "queued final span resolves hardware-mapped source bytes");
+    {
+        ScopedGameplayAudioCursorQuery draining;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 4 && engine.pending_cursor_queries == 0 &&
+                engine.unmapped_cursor_failures == 0,
+            "queued final span resolves hardware-mapped source bytes");
+        const auto observation = draining.Consume();
+        failures += Expect(
+            observation.has_value() &&
+                observation->state == GameplayAudioCursorState::Exact &&
+                observation->source_frame_unwrapped == 1 &&
+                observation->source_sample_rate == 44'100 &&
+                observation->playback_generation == 1 &&
+                observation->output_frame == 701,
+            "an audible draining span to remain an exact gameplay cursor");
+    }
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK &&
             status == DSBSTATUS_PLAYING,
@@ -782,11 +797,21 @@ int TestNonLoopingFinalSpanDrainsByEndpointClock() {
     failures += Expect(
         buffer->GetStatus(&status) == DS_OK && status == 0,
         "status stops at the final queued output boundary");
-    failures += Expect(
-        buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
-            cursor == 4 && engine.pending_cursor_queries == 0 &&
-            engine.unmapped_cursor_failures == 0,
-        "cursor remains last good after final queued output drains");
+    {
+        ScopedGameplayAudioCursorQuery drained;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 4 && engine.pending_cursor_queries == 0 &&
+                engine.unmapped_cursor_failures == 0,
+            "cursor remains last good after final queued output drains");
+        const auto observation = drained.Consume();
+        failures += Expect(
+            observation.has_value() &&
+                observation->state == GameplayAudioCursorState::Inactive &&
+                observation->playback_generation == 1 &&
+                observation->output_frame == 702,
+            "a fully drained span to publish inactive gameplay state");
+    }
     buffer->Release();
 
     MixerEngineServices stop_engine;
@@ -1200,6 +1225,135 @@ int TestSetCurrentPositionPublishesExactSeekContext() {
     return failures;
 }
 
+int TestGameplayCursorObservationFollowsFacadeResolution() {
+    MixerEngineServices engine;
+    auto wave = PcmFormat();
+    auto descriptor = BufferDescription(&wave, 32);
+    IDirectSoundBuffer8* buffer{};
+    int failures = Expect(
+        CreateBuffer(engine, descriptor, &buffer) == DS_OK,
+        "gameplay cursor observation buffer creation");
+    if (buffer == nullptr) {
+        return failures + 1;
+    }
+
+    const std::array<std::int16_t, 16> samples{
+        1'000, 1'000, 2'000, 2'000,
+        3'000, 3'000, 4'000, 4'000,
+        5'000, 5'000, 6'000, 6'000,
+        7'000, 7'000, 8'000, 8'000,
+    };
+    failures += Expect(
+        FillBuffer(buffer, samples) == DS_OK &&
+            buffer->Play(0, 0, DSBPLAY_LOOPING) == DS_OK,
+        "gameplay cursor observation playback setup");
+
+    engine.output_frame = 100;
+    DWORD cursor{};
+    {
+        ScopedGameplayAudioCursorQuery pending;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 0 &&
+                !pending.Consume().has_value(),
+            "a pending timeline to preserve the DS cursor without publication");
+    }
+
+    std::array<float, 8> output{};
+    failures += Expect(
+        engine.Render(100, output).result == MA_SUCCESS &&
+            engine.Render(104, output).result == MA_SUCCESS &&
+            engine.Render(108, output).result == MA_SUCCESS,
+        "looping gameplay cursor source render");
+    engine.output_frame = 110;
+    {
+        ScopedGameplayAudioCursorQuery exact;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 8,
+            "exact gameplay query to preserve wrapped DirectSound bytes");
+        const auto observation = exact.Consume();
+        failures += Expect(
+            observation.has_value() &&
+                observation->state == GameplayAudioCursorState::Exact &&
+                observation->source_frame_unwrapped == 10 &&
+                observation->source_sample_rate == 44'100 &&
+                observation->playback_generation == 1 &&
+                observation->output_frame == 110,
+            "exact gameplay query to publish the unwrapped source cursor");
+    }
+
+    engine.output_frame.reset();
+    {
+        ScopedGameplayAudioCursorQuery missing_clock;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 8 &&
+                !missing_clock.Consume().has_value(),
+            "a missing endpoint frame to publish no exact observation");
+    }
+
+    engine.output_frame = 999;
+    {
+        ScopedGameplayAudioCursorQuery unmapped;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 8 &&
+                !unmapped.Consume().has_value(),
+            "an unmapped active span to publish no exact observation");
+    }
+
+    failures += Expect(
+        buffer->SetCurrentPosition(8) == DS_OK,
+        "accepted gameplay cursor seek");
+    engine.output_frame = 200;
+    {
+        ScopedGameplayAudioCursorQuery seek_pending;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK &&
+                cursor == 8 &&
+                !seek_pending.Consume().has_value(),
+            "a new seek generation to remain unpublished until rendered");
+    }
+
+    output.fill(0.0F);
+    failures += Expect(
+        engine.Render(200, output).result == MA_SUCCESS,
+        "seeked gameplay cursor generation render");
+    engine.output_frame = 202;
+    {
+        ScopedGameplayAudioCursorQuery exact_after_seek;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK,
+            "seeked exact cursor to retain DS_OK");
+        const auto observation = exact_after_seek.Consume();
+        failures += Expect(
+            observation.has_value() &&
+                observation->state == GameplayAudioCursorState::Exact &&
+                observation->playback_generation == 2 &&
+                observation->output_frame == 202,
+            "accepted seek generation to reach exact publication");
+    }
+
+    failures += Expect(buffer->Stop() == DS_OK, "observed buffer stop");
+    {
+        ScopedGameplayAudioCursorQuery inactive;
+        failures += Expect(
+            buffer->GetCurrentPosition(&cursor, nullptr) == DS_OK,
+            "inactive gameplay cursor to retain DS_OK");
+        const auto observation = inactive.Consume();
+        failures += Expect(
+            observation.has_value() &&
+                observation->state == GameplayAudioCursorState::Inactive &&
+                observation->source_sample_rate == 44'100 &&
+                observation->playback_generation == 2,
+            "stopped gameplay cursor to publish inactive state");
+    }
+
+    buffer->Release();
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -1216,5 +1370,6 @@ int main() {
     failures += TestConcurrentSeeksAreOneFacadeTransactionAtATime();
     failures += TestConcurrentPlayAndSeekShareFacadeTransactionOrder();
     failures += TestSetCurrentPositionPublishesExactSeekContext();
+    failures += TestGameplayCursorObservationFollowsFacadeResolution();
     return failures == 0 ? 0 : 1;
 }
