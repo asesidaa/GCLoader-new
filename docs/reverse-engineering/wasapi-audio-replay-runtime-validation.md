@@ -52,7 +52,8 @@ Verified candidate:
 - SHA-256:
   `F0C35C3673859BF8294B3391F03607ADE4C302F8D2B50CF4C5DF6084A521A1BC`
 
-Runtime deployment and capture remain unexercised at this point.
+This identity is the Stage A observation build, not the corrected shared-clock
+candidate.
 
 ## Stage A deployment
 
@@ -68,20 +69,64 @@ Deployed at 2026-07-27 06:18:52 +08:00 while `game471.exe` was not running.
 - Rollback SHA-256:
   `FE490E13D535AA7F1077561676F399A4026F5159040B1150FE1F946BCC3472AB`
 
-No configuration file was altered. Runtime startup and capture remain
-unexercised.
+No configuration file was altered.
 
 ## Stage A capture
 
-No Stage A capture has been analyzed yet.
+The complete analyzed session is:
+
+- Directory: `H:\gc\audio-diagnostics\20260727-213445`
+- Conclusive duration: 233.95 seconds
+- Incomplete ranges: none
+- First discontinuity: capture time 104.430 seconds, source voices 86 and 87
+- Second discontinuity: capture time 160.220 seconds
+- Backward source movement: 3,043 frames at 44,100 Hz, or 69.002 ms
+- Submitted-PCM correlation with the region presented 69 ms earlier:
+  approximately 0.9993 for the first event and 0.9995 for the second
+- BGM plus `_SHOT` reconstruction correlation: 0.999995864
+
+Both long-form voices received the same group seek. `_SHOT` can make a
+repeated transient more audible, but it did not create an independent
+discontinuity.
+
+The confirmed listening file is:
+
+`H:\gc\tmp\audio-issue-identification\confirmed-capture-20260727-213445\01_first_captured_tight.wav`
 
 ## User verdict
 
-No Stage A live auditory verdict has been supplied yet.
+The user confirmed that `01_first_captured_tight.wav`, the first extracted
+event, is the exact runtime issue.
 
 ## Root-cause classification
 
-Unclassified. No correction is authorized by Stage A static evidence.
+The game's gameplay-audio watchdog compared an integer nominal gameplay clock
+against the endpoint-backed DirectSound cursor, then issued a backward
+`SetCurrentPosition` for sound group 2. The mixer and resampler followed that
+request correctly.
+
+Every 480 endpoint frames consumed exactly 441 source frames before the seek,
+so ordinary 44.1-to-48 kHz resampling was not drifting. Reducing the resync
+margin to 10 ms would create smaller but more frequent rewinds; it is not the
+selected correction.
+
+The authorized correction is the WASAPI shared gameplay song clock specified
+in:
+
+`docs/superpowers/specs/2026-07-28-wasapi-shared-gameplay-song-clock-design.md`
+
+## Shared-clock diagnostic build
+
+Not built yet.
+
+## Shared-clock runtime matrix
+
+Not exercised yet.
+
+## Diagnostic removal and production build
+
+Not started. Removal is gated on user acceptance of the corrected diagnostic
+run.
 
 ## Mandatory future cleanup
 
