@@ -167,7 +167,7 @@ int main() {
 int failures = 0;
 
 static_assert(kMaximumFramerateWrites == 17);
-static_assert(kMaximumFramerateHooks == 52);
+static_assert(kMaximumFramerateHooks == 53);
 
 for (int failed_write = 0;
      failed_write < static_cast<int>(kMaximumFramerateWrites);
@@ -228,6 +228,24 @@ for (int failed_hook = 0;
 }
 
 {
+    constexpr std::size_t kGameplaySongClockHookIndex = 10;
+    auto fixture = MakeFixture();
+    fixture.memory.bytes[
+        fixture.hooks[kGameplaySongClockHookIndex].address] =
+        std::byte{0xFF};
+    g_memory = &fixture.memory;
+    FrameratePatchTransaction transaction({FakeRead, FakeWrite});
+    const auto result = transaction.Install(fixture.writes, fixture.hooks);
+    failures += Expect(
+        !result &&
+            result.error().stage ==
+                FramerateInstallStage::PreflightMismatch &&
+            fixture.memory.write_calls == 0 &&
+            fixture.hook_state.installed.empty(),
+        "shared song-clock mismatch mutates nothing");
+}
+
+{
     auto fixture = MakeFixture();
     g_memory = &fixture.memory;
     std::array<HookOperation, kMaximumFramerateHooks + 1> too_many{};
@@ -273,7 +291,7 @@ for (int failed_hook = 0;
             fixture.hook_state.installed ==
                 ForwardIndices(kMaximumFramerateHooks) &&
             fixture.memory.bytes != fixture.original_bytes,
-        "successful transaction retains all 17 writes and 52 hooks");
+        "successful transaction retains all 17 writes and 53 hooks");
 }
 
 {

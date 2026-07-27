@@ -88,13 +88,22 @@ const gc::framerate::FramerateHookContract& FindHook(
     return *found;
 }
 
+bool PlanContainsId(
+    const gc::framerate::FramerateHookPlan& plan,
+    gc::framerate::FramerateHookId id) {
+    return std::any_of(
+        plan.view().begin(),
+        plan.view().end(),
+        [id](const auto& contract) { return contract.id == id; });
+}
+
 } // namespace
 
 int main() {
 using namespace gc::framerate;
 int failures = 0;
 
-static_assert(kMaximumFramerateHooks == 52);
+static_assert(kMaximumFramerateHooks == 53);
 
 const auto native_profile = FramerateProfile::Create(60).value();
 const auto native_plan = BuildFramerateDirectPatchPlan(
@@ -294,8 +303,8 @@ failures += Expect(
     native_hooks[0].id == FramerateHookId::OuterFrame,
     "native hook is outer cadence");
 failures += Expect(
-    transformed_hooks.size() == 52,
-    "full transformed view has 52 contracts");
+    transformed_hooks.size() == 53,
+    "full transformed view has 53 contracts");
 for (const auto diagnostic_rva : {
          0x000E12A0U,
          0x000DC575U,
@@ -323,8 +332,8 @@ for (const auto removed_rva :
     failures += Expect(!present, "invalid timing contract is absent");
 }
 failures += Expect(
-        transformed_hooks[50].id == FramerateHookId::NavigatorAdvance &&
-        transformed_hooks[51].id == FramerateHookId::OuterFrame,
+        transformed_hooks[51].id == FramerateHookId::NavigatorAdvance &&
+        transformed_hooks[52].id == FramerateHookId::OuterFrame,
     "Navigator and OuterFrame remain final");
 const auto navigator_hook = std::find_if(
     transformed_hooks.begin(), transformed_hooks.end(),
@@ -341,7 +350,7 @@ failures += Expect(
         Pattern({0x83, 0x78, 0x0C, 0x3C}),
     "palette compare exact bytes");
 
-const std::array<FramerateHookContract, 52> expected_hooks{{
+const std::array<FramerateHookContract, 53> expected_hooks{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
     {FramerateHookId::MovieClipAdvance, 0x000DF940,
@@ -369,6 +378,8 @@ const std::array<FramerateHookContract, 52> expected_hooks{{
             0xE8, 0x2C, 0x12, 0xFD, 0xFF,
             0x5E, 0x8B, 0xE5, 0x5D, 0xC3,
         }), ""},
+    {FramerateHookId::GameplaySongClock, 0x00264DB2,
+        Pattern({0xE8, 0xB9, 0xB2, 0xFD, 0xFF}), ""},
     {FramerateHookId::GameplayEffectAdvance, 0x00264E2D,
         Pattern({0xE8, 0x6E, 0xBA, 0xF8, 0xFF}), ""},
     {FramerateHookId::EffectCadence6, 0x0024063B,
@@ -466,19 +477,88 @@ for (std::size_t index = 0; index < expected_hooks.size(); ++index) {
         "exact hook ID/RVA/byte/name contract");
 }
 
-failures += Expect(
-    BuildFramerateHookPlan(false, false).count == 1 &&
-        BuildFramerateHookPlan(false, true).count == 2,
-    "native selection preserves optional WASAPI only");
-failures += Expect(
-    BuildFramerateHookPlan(true, false).count == 51 &&
-        BuildFramerateHookPlan(true, true).count == 52,
-    "transformed selection has exact optional counts");
+const auto native_original = BuildFramerateHookPlan(
+    false, GameplayAudioClockPlan::OriginalWatchdog);
+const auto native_legacy = BuildFramerateHookPlan(
+    false, GameplayAudioClockPlan::WasapiLegacyResync);
+const auto native_shared = BuildFramerateHookPlan(
+    false, GameplayAudioClockPlan::WasapiSharedSongClock);
+const auto transformed_original = BuildFramerateHookPlan(
+    true, GameplayAudioClockPlan::OriginalWatchdog);
+const auto transformed_legacy = BuildFramerateHookPlan(
+    true, GameplayAudioClockPlan::WasapiLegacyResync);
+const auto transformed_shared = BuildFramerateHookPlan(
+    true, GameplayAudioClockPlan::WasapiSharedSongClock);
 
-const auto native_without_wasapi =
-    BuildFramerateHookPlan(false, false);
-const auto native_with_wasapi =
-    BuildFramerateHookPlan(false, true);
+failures += Expect(
+    native_original.count == 1 &&
+        native_legacy.count == 2 &&
+        native_shared.count == 9,
+    "native hook-family selections have exact counts");
+failures += Expect(
+    transformed_original.count == 51 &&
+        transformed_legacy.count == 52 &&
+        transformed_shared.count == 50,
+    "transformed hook-family selections have exact counts");
+failures += Expect(
+    PlanContainsId(native_original, FramerateHookId::OuterFrame) &&
+        !PlanContainsId(
+            native_original, FramerateHookId::GameplaySongClock) &&
+        !PlanContainsId(
+            native_original, FramerateHookId::AudioResyncPolicy),
+    "native original keeps only the outer-frame hook");
+failures += Expect(
+    PlanContainsId(native_legacy, FramerateHookId::OuterFrame) &&
+        PlanContainsId(
+            native_legacy, FramerateHookId::AudioResyncPolicy) &&
+        !PlanContainsId(
+            native_legacy, FramerateHookId::GameplaySongClock),
+    "native legacy keeps the old watchdog policy");
+for (const auto id : {
+         FramerateHookId::GameplaySongClock,
+         FramerateHookId::GameplayEffectAdvance,
+         FramerateHookId::EffectCadence6,
+         FramerateHookId::EffectCadence5,
+         FramerateHookId::EffectCadence4,
+         FramerateHookId::EffectCadence16A,
+         FramerateHookId::EffectCadence16B,
+         FramerateHookId::EffectCadence8,
+         FramerateHookId::OuterFrame}) {
+    failures += Expect(
+        PlanContainsId(native_shared, id),
+        "native shared selects root and gameplay consumers");
+}
+for (const auto id : {
+         FramerateHookId::AudioSkipMargin,
+         FramerateHookId::AudioSkipInterval,
+         FramerateHookId::AudioResyncPolicy}) {
+    failures += Expect(
+        !PlanContainsId(native_shared, id) &&
+            !PlanContainsId(transformed_shared, id),
+        "shared clock excludes every legacy audio hook");
+}
+failures += Expect(
+    !PlanContainsId(
+        transformed_original, FramerateHookId::GameplaySongClock) &&
+        !PlanContainsId(
+            transformed_legacy, FramerateHookId::GameplaySongClock) &&
+        PlanContainsId(
+            transformed_shared, FramerateHookId::GameplaySongClock),
+    "only shared mode selects the shared song-clock root");
+
+for (std::size_t left = 0; left < transformed_hooks.size(); ++left) {
+    for (std::size_t right = left + 1;
+         right < transformed_hooks.size();
+         ++right) {
+        failures += Expect(
+            transformed_hooks[left].id != transformed_hooks[right].id,
+            "hook IDs are unique");
+        failures += Expect(
+            transformed_hooks[left].rva != transformed_hooks[right].rva,
+            "hook RVAs are unique");
+    }
+}
+
 for (const auto id : {
          FramerateHookId::MovieClipPreprocessVisit,
          FramerateHookId::RankingEntryCounterStore,
@@ -486,17 +566,10 @@ for (const auto id : {
          FramerateHookId::UnlockRewardCountdownStore,
          FramerateHookId::UnlockRewardPrimaryStateStore,
          FramerateHookId::UnlockRewardSecondaryStateStore}) {
-    const auto contains_id = [id](const FramerateHookPlan& plan) {
-        return std::any_of(
-            plan.view().begin(),
-            plan.view().end(),
-            [id](const auto& contract) {
-                return contract.id == id;
-            });
-    };
     failures += Expect(
-        !contains_id(native_without_wasapi) &&
-            !contains_id(native_with_wasapi),
+        !PlanContainsId(native_original, id) &&
+            !PlanContainsId(native_legacy, id) &&
+            !PlanContainsId(native_shared, id),
         "native plans exclude every menu timing hook");
 }
 

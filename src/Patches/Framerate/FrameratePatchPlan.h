@@ -39,6 +39,7 @@ enum class FramerateHookId {
     AudioSkipMargin,
     AudioSkipInterval,
     AudioResyncPolicy,
+    GameplaySongClock,
     GameplayEffectAdvance,
     EffectCadence6,
     EffectCadence5,
@@ -83,6 +84,12 @@ enum class FramerateHookId {
     OuterFrame,
 };
 
+enum class GameplayAudioClockPlan : std::uint8_t {
+    OriginalWatchdog,
+    WasapiLegacyResync,
+    WasapiSharedSongClock,
+};
+
 struct FramerateHookContract {
     FramerateHookId id{};
     std::uintptr_t rva{};
@@ -113,7 +120,7 @@ FramerateHookContracts(bool transformed_timing) noexcept;
 
 [[nodiscard]] FramerateHookPlan BuildFramerateHookPlan(
     bool transformed_timing,
-    bool wasapi_audio_committed) noexcept;
+    GameplayAudioClockPlan audio_clock_plan) noexcept;
 
 [[nodiscard]] std::uint32_t ApplyCmp32Flags(
     std::uint32_t existing_eflags,

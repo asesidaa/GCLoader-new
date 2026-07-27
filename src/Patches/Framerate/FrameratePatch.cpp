@@ -1815,7 +1815,9 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
 
     const auto hook_plan = BuildFramerateHookPlan(
         !g_runtime->profile.native_timing(),
-        wasapi_audio_committed);
+        wasapi_audio_committed
+            ? GameplayAudioClockPlan::WasapiLegacyResync
+            : GameplayAudioClockPlan::OriginalWatchdog);
     const auto hook_operations = BuildHookOperations(
         hook_plan.view(), *g_runtime);
 

@@ -68,7 +68,7 @@ bool AddWrite(
     return true;
 }
 
-constexpr std::array<FramerateHookContract, 10> kPreEffectHookContracts{{
+constexpr std::array<FramerateHookContract, 11> kPreEffectHookContracts{{
     {FramerateHookId::MovieClipGoto, 0x000DEA30,
         Pattern(0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00),
         "MovieClip goto-frame depth guard"},
@@ -106,6 +106,9 @@ constexpr std::array<FramerateHookContract, 10> kPreEffectHookContracts{{
             0xE8, 0x2C, 0x12, 0xFD, 0xFF,
             0x5E, 0x8B, 0xE5, 0x5D, 0xC3),
         "WASAPI interval-only audio resync policy"},
+    {FramerateHookId::GameplaySongClock, 0x00264DB2,
+        Pattern(0xE8, 0xB9, 0xB2, 0xFD, 0xFF),
+        "gameplay shared song clock"},
 }};
 
 constexpr std::array<FramerateHookContract, 2> kPostEffectHookContracts{{
@@ -121,7 +124,7 @@ constexpr std::array<FramerateHookContract, 2> kPostEffectHookContracts{{
 
 const std::array<FramerateHookContract, kMaximumFramerateHooks>&
 AllHookContracts() noexcept {
-    static_assert(kMaximumFramerateHooks == 52);
+    static_assert(kMaximumFramerateHooks == 53);
     static const auto contracts = [] {
         std::array<FramerateHookContract, kMaximumFramerateHooks> result{};
         std::size_t index = 0;
@@ -140,6 +143,27 @@ AllHookContracts() noexcept {
         return result;
     }();
     return contracts;
+}
+
+bool IsLegacyAudioHook(FramerateHookId id) noexcept {
+    return id == FramerateHookId::AudioSkipMargin ||
+        id == FramerateHookId::AudioSkipInterval ||
+        id == FramerateHookId::AudioResyncPolicy;
+}
+
+bool IsSharedGameplayConsumer(FramerateHookId id) noexcept {
+    switch (id) {
+    case FramerateHookId::GameplayEffectAdvance:
+    case FramerateHookId::EffectCadence6:
+    case FramerateHookId::EffectCadence5:
+    case FramerateHookId::EffectCadence4:
+    case FramerateHookId::EffectCadence16A:
+    case FramerateHookId::EffectCadence16B:
+    case FramerateHookId::EffectCadence8:
+        return true;
+    default:
+        return false;
+    }
 }
 
 } // namespace
@@ -302,14 +326,33 @@ FramerateHookContracts(bool transformed_timing) noexcept {
 
 FramerateHookPlan BuildFramerateHookPlan(
     bool transformed_timing,
-    bool wasapi_audio_committed) noexcept {
+    GameplayAudioClockPlan audio_clock_plan) noexcept {
     FramerateHookPlan plan{};
     for (const auto& contract : AllHookContracts()) {
-        const bool selected =
-            contract.id == FramerateHookId::OuterFrame ||
-            (contract.id == FramerateHookId::AudioResyncPolicy
-                 ? wasapi_audio_committed
-                 : transformed_timing);
+        bool selected{};
+        switch (audio_clock_plan) {
+        case GameplayAudioClockPlan::OriginalWatchdog:
+            selected =
+                contract.id == FramerateHookId::OuterFrame ||
+                (transformed_timing &&
+                    contract.id != FramerateHookId::AudioResyncPolicy &&
+                    contract.id != FramerateHookId::GameplaySongClock);
+            break;
+        case GameplayAudioClockPlan::WasapiLegacyResync:
+            selected =
+                contract.id == FramerateHookId::OuterFrame ||
+                contract.id == FramerateHookId::AudioResyncPolicy ||
+                (transformed_timing &&
+                    contract.id != FramerateHookId::GameplaySongClock);
+            break;
+        case GameplayAudioClockPlan::WasapiSharedSongClock:
+            selected =
+                contract.id == FramerateHookId::OuterFrame ||
+                contract.id == FramerateHookId::GameplaySongClock ||
+                IsSharedGameplayConsumer(contract.id) ||
+                (transformed_timing && !IsLegacyAudioHook(contract.id));
+            break;
+        }
         if (selected) {
             plan.contracts[plan.count++] = contract;
         }
