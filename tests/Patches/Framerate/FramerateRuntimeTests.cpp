@@ -81,6 +81,102 @@ int failures = 0;
 static_assert(offsetof(AuthoredFrameOperand, frame_milliseconds) == 0x18);
 static_assert(offsetof(PlayerPositionDurationOperand, duration_frames) == 0xC4);
 
+using gc::audio::GameplayAudioCursorObservation;
+using gc::audio::GameplayAudioCursorState;
+using gc::framerate::detail::GameplaySongClockInputState;
+
+const GameplayAudioCursorObservation exact_cursor{
+    .query_serial = 17,
+    .state = GameplayAudioCursorState::Exact,
+    .source_frame_unwrapped = 88'200,
+    .source_sample_rate = 44'100,
+    .playback_generation = 23,
+    .output_frame = 96'000,
+};
+const auto exact_input =
+    gc::framerate::detail::SelectGameplaySongClockInput(
+        2'000, exact_cursor);
+failures += Expect(
+    exact_input.state == GameplaySongClockInputState::Exact &&
+        exact_input.observation.has_value() &&
+        exact_input.observation->kind ==
+            SongClockObservationKind::ExactSourceFrame &&
+        exact_input.observation->position == 88'200 &&
+        exact_input.observation->source_sample_rate == 44'100 &&
+        exact_input.observation->playback_generation == 23 &&
+        exact_input.output_frame == 96'000,
+    "fresh exact cursor wins over rounded group milliseconds");
+
+const auto rounded_input =
+    gc::framerate::detail::SelectGameplaySongClockInput(
+        2'000, std::nullopt);
+failures += Expect(
+    rounded_input.state == GameplaySongClockInputState::Rounded &&
+        rounded_input.observation.has_value() &&
+        rounded_input.observation->kind ==
+            SongClockObservationKind::RoundedMilliseconds &&
+        rounded_input.observation->position == 2'000,
+    "successful group getter falls back to absolute milliseconds");
+
+const GameplayAudioCursorObservation inactive_cursor{
+    .query_serial = 18,
+    .state = GameplayAudioCursorState::Inactive,
+};
+const auto inactive_input =
+    gc::framerate::detail::SelectGameplaySongClockInput(
+        -1, inactive_cursor);
+const auto failed_input =
+    gc::framerate::detail::SelectGameplaySongClockInput(
+        -1, std::nullopt);
+failures += Expect(
+    inactive_input.state == GameplaySongClockInputState::Inactive &&
+        !inactive_input.observation &&
+        failed_input.state == GameplaySongClockInputState::Failed &&
+        !failed_input.observation,
+    "negative group result distinguishes inactive from failed");
+
+auto exact_clock = GameplaySongClock::Create(60, 1).value();
+const auto exact_resolution =
+    gc::framerate::detail::ResolveGameplaySongClockStep(
+        exact_clock, 119, 0, 2'000, exact_cursor);
+failures += Expect(
+    exact_resolution.input.state ==
+            GameplaySongClockInputState::Exact &&
+        exact_resolution.decision.has_value() &&
+        exact_resolution.step == 1 &&
+        !exact_resolution.observation_rejected,
+    "valid exact selection resolves a gameplay step");
+
+auto fallback_clock = GameplaySongClock::Create(60, 1).value();
+const auto inactive_resolution =
+    gc::framerate::detail::ResolveGameplaySongClockStep(
+        fallback_clock, 120, 0, -1, inactive_cursor);
+const auto failed_resolution =
+    gc::framerate::detail::ResolveGameplaySongClockStep(
+        fallback_clock, 120, 0, -1, std::nullopt);
+const GameplayAudioCursorObservation invalid_exact_cursor{
+    .query_serial = 19,
+    .state = GameplayAudioCursorState::Exact,
+    .source_frame_unwrapped = 88'200,
+    .source_sample_rate = 0,
+    .playback_generation = 24,
+    .output_frame = 96'001,
+};
+const auto invalid_resolution =
+    gc::framerate::detail::ResolveGameplaySongClockStep(
+        fallback_clock, 120, 0, 2'000, invalid_exact_cursor);
+failures += Expect(
+    inactive_resolution.step == 1 &&
+        !inactive_resolution.decision &&
+        !inactive_resolution.observation_rejected &&
+        failed_resolution.step == 1 &&
+        !failed_resolution.decision &&
+        !failed_resolution.observation_rejected &&
+        invalid_resolution.step == 1 &&
+        !invalid_resolution.decision &&
+        invalid_resolution.observation_rejected,
+    "inactive failed and invalid observations preserve initialized step one");
+
 FixedAudioDiagnosticSink audio_diagnostics;
 gc::audio::diagnostics::ActivateAudioDiagnosticSink(&audio_diagnostics);
 gc::framerate::detail::PublishAudioResyncDiagnostic(
@@ -333,7 +429,11 @@ failures += Expect(
     MapPositiveTargetFrameToAuthored60(profile240, 8).value() == 2,
     "blink maps target frames to authored frames");
 
-static_assert(kMaximumFramerateHooks == 52);
+static_assert(kMaximumFramerateHooks == 53);
+failures += Expect(
+    FramerateHookHasRuntimeBinding(
+        FramerateHookId::GameplaySongClock),
+    "shared song-clock root has a runtime binding");
 for (const auto& contract : FramerateHookContracts(true)) {
     failures += Expect(
         FramerateHookHasRuntimeBinding(contract.id),

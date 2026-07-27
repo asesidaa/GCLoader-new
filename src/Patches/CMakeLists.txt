@@ -17,6 +17,7 @@ target_include_directories(gc_runtime_patches PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_runtime_patches PUBLIC
+        gc_audio
         gc_config
         safetyhook::safetyhook
 )

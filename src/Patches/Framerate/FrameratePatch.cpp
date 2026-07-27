@@ -1,6 +1,7 @@
 #include "Patches/Framerate/FrameratePatch.h"
 
 #include "Audio/Diagnostics/AudioFlightRecorder.h"
+#include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Config/config.h"
 #include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
@@ -33,6 +34,81 @@
 namespace gc::framerate {
 
 namespace detail {
+
+GameplaySongClockInputSelection SelectGameplaySongClockInput(
+    int group_cursor_ms,
+    std::optional<audio::GameplayAudioCursorObservation>
+        cursor_observation) noexcept {
+    if (group_cursor_ms >= 0) {
+        if (cursor_observation.has_value() &&
+            cursor_observation->state ==
+                audio::GameplayAudioCursorState::Exact) {
+            return {
+                .state = GameplaySongClockInputState::Exact,
+                .observation = SongClockObservation{
+                    .kind =
+                        SongClockObservationKind::ExactSourceFrame,
+                    .position =
+                        cursor_observation->source_frame_unwrapped,
+                    .source_sample_rate =
+                        cursor_observation->source_sample_rate,
+                    .playback_generation =
+                        cursor_observation->playback_generation,
+                },
+                .output_frame = cursor_observation->output_frame,
+            };
+        }
+        return {
+            .state = GameplaySongClockInputState::Rounded,
+            .observation = SongClockObservation{
+                .kind =
+                    SongClockObservationKind::RoundedMilliseconds,
+                .position =
+                    static_cast<std::uint64_t>(group_cursor_ms),
+            },
+        };
+    }
+
+    if (cursor_observation.has_value() &&
+        cursor_observation->state ==
+            audio::GameplayAudioCursorState::Inactive) {
+        return {
+            .state = GameplaySongClockInputState::Inactive,
+        };
+    }
+    return {
+        .state = GameplaySongClockInputState::Failed,
+    };
+}
+
+GameplaySongClockStepSelection ResolveGameplaySongClockStep(
+    GameplaySongClock& clock,
+    std::uint32_t current_tick,
+    std::int32_t game_time_offset_ms,
+    int group_cursor_ms,
+    std::optional<audio::GameplayAudioCursorObservation>
+        cursor_observation) noexcept {
+    GameplaySongClockStepSelection result{
+        .input = SelectGameplaySongClockInput(
+            group_cursor_ms, cursor_observation),
+    };
+    if (!result.input.observation.has_value()) {
+        return result;
+    }
+
+    const auto decision = clock.Observe(
+        current_tick,
+        game_time_offset_ms,
+        result.input.observation.value());
+    if (!decision) {
+        result.observation_rejected = true;
+        return result;
+    }
+
+    result.decision = decision.value();
+    result.step = decision->step;
+    return result;
+}
 
 void PublishAudioResyncDiagnostic(
     std::int32_t drift_ms,
@@ -68,6 +144,17 @@ namespace {
 constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
 constexpr std::uintptr_t kAudioResyncEpilogueRva = 0x002401D4;
 constexpr std::size_t kMaximumMovieClipInstanceNameBytes = 32;
+constexpr std::uintptr_t kGetSoundManagerRva = 0x00210400;
+constexpr std::uintptr_t kGetGroupPlayCursorMsRva = 0x002122B0;
+constexpr std::uintptr_t kGetConfigRva = 0x000011E0;
+constexpr int kGameplaySoundGroup = 2;
+constexpr std::uintptr_t kTuneCurrentTickOffset = 0x10;
+constexpr std::uintptr_t kTuneStepOffset = 0x14;
+constexpr std::uintptr_t kGameTimeOffsetOffset = 0x2C;
+
+using GetSoundManager = void* (__cdecl*)();
+using GetGroupPlayCursorMs = int (__thiscall*)(void*, int);
+using GetConfig = void* (__cdecl*)();
 
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
@@ -82,6 +169,7 @@ struct FramerateHookStorage {
     safetyhook::MidHook audio_skip_margin{};
     safetyhook::MidHook audio_skip_interval{};
     safetyhook::MidHook audio_resync_policy{};
+    safetyhook::MidHook gameplay_song_clock{};
     safetyhook::MidHook gameplay_effect_advance{};
     safetyhook::MidHook effect_cadence_6{};
     safetyhook::MidHook effect_cadence_5{};
@@ -181,13 +269,19 @@ struct FramerateRuntimeState {
         FramerateProfile profile_value,
         FramerateMonitor monitor_value,
         std::int64_t frequency_value,
-        FrameratePlatformActions platform_value) noexcept
+        FrameratePlatformActions platform_value,
+        GameplayAudioClockPlan audio_clock_plan_value,
+        std::optional<GameplaySongClock>
+            gameplay_song_clock_value) noexcept
         : profile{std::move(profile_value)},
           monitor{std::move(monitor_value)},
           authored_clock{profile},
           qpc_frequency{frequency_value},
           platform{platform_value},
-          transaction{ProductionFramerateMemoryApi()} {
+          transaction{ProductionFramerateMemoryApi()},
+          audio_clock_plan{audio_clock_plan_value},
+          gameplay_song_clock{
+              std::move(gameplay_song_clock_value)} {
     }
 
     FramerateProfile profile;
@@ -196,6 +290,9 @@ struct FramerateRuntimeState {
     std::int64_t qpc_frequency{};
     FrameratePlatformActions platform{};
     FrameratePatchTransaction transaction;
+    GameplayAudioClockPlan audio_clock_plan{
+        GameplayAudioClockPlan::OriginalWatchdog};
+    std::optional<GameplaySongClock> gameplay_song_clock;
     FramerateHookStorage hooks;
     AuthoredFrameOperand authored_frame_operand{};
     PlayerPositionDurationOperand player_position_duration_operand{};
@@ -230,6 +327,7 @@ void HookTuneCountdownCompare(safetyhook::Context&);
 void HookAudioSkipMargin(safetyhook::Context&);
 void HookAudioSkipInterval(safetyhook::Context&);
 void HookAudioResyncPolicy(safetyhook::Context&);
+void HookGameplaySongClock(safetyhook::Context&);
 void HookGameplayEffectAdvance(safetyhook::Context&);
 void HookEffectCadence6(safetyhook::Context&);
 void HookEffectCadence5(safetyhook::Context&);
@@ -468,6 +566,14 @@ void AssignHookCallbacks(
             0x002401C4>;
         operation.reset = &ResetOwnedHook<
             &FramerateHookStorage::audio_resync_policy>;
+        break;
+    case FramerateHookId::GameplaySongClock:
+        operation.install = &InstallMidHook<
+            &FramerateHookStorage::gameplay_song_clock,
+            HookGameplaySongClock,
+            0x00264DB2>;
+        operation.reset = &ResetOwnedHook<
+            &FramerateHookStorage::gameplay_song_clock>;
         break;
     case FramerateHookId::GameplayEffectAdvance:
         operation.install = &InstallMidHook<
@@ -1306,6 +1412,72 @@ void HookAudioResyncPolicy(safetyhook::Context& context) {
     }
 }
 
+void HookGameplaySongClock(safetyhook::Context& context) {
+    context.eip += 5;
+
+    if (g_runtime->audio_clock_plan !=
+            GameplayAudioClockPlan::WasapiSharedSongClock ||
+        !g_runtime->gameplay_song_clock.has_value()) {
+        FatalRuntimeConversion("shared song-clock runtime ownership");
+        return;
+    }
+
+    const auto tune = static_cast<std::uintptr_t>(context.ecx);
+    std::uint32_t current_tick{};
+    if (tune == 0 ||
+        !ReadU32Safe(
+            tune + kTuneCurrentTickOffset, current_tick)) {
+        FatalRuntimeConversion("shared song-clock tune read");
+        return;
+    }
+
+    int group_cursor_ms = -1;
+    std::optional<audio::GameplayAudioCursorObservation>
+        cursor_observation;
+    {
+        audio::ScopedGameplayAudioCursorQuery cursor_query;
+        const auto get_sound_manager =
+            reinterpret_cast<GetSoundManager>(
+                ExecutableBase() + kGetSoundManagerRva);
+        const auto get_group_play_cursor_ms =
+            reinterpret_cast<GetGroupPlayCursorMs>(
+                ExecutableBase() + kGetGroupPlayCursorMsRva);
+        if (void* const sound_manager = get_sound_manager();
+            sound_manager != nullptr) {
+            group_cursor_ms = get_group_play_cursor_ms(
+                sound_manager, kGameplaySoundGroup);
+        }
+        cursor_observation = cursor_query.Consume();
+    }
+
+    const auto get_config = reinterpret_cast<GetConfig>(
+        ExecutableBase() + kGetConfigRva);
+    void* const config = get_config();
+    std::uint32_t game_time_offset_raw{};
+    if (config == nullptr ||
+        !ReadU32Safe(
+            reinterpret_cast<std::uintptr_t>(config) +
+                kGameTimeOffsetOffset,
+            game_time_offset_raw)) {
+        FatalRuntimeConversion("shared song-clock config read");
+        return;
+    }
+
+    const auto selection = detail::ResolveGameplaySongClockStep(
+        g_runtime->gameplay_song_clock.value(),
+        current_tick,
+        static_cast<std::int32_t>(game_time_offset_raw),
+        group_cursor_ms,
+        cursor_observation);
+    if (!selection.decision.has_value()) {
+        return;
+    }
+
+    if (!WriteU32Safe(tune + kTuneStepOffset, selection.step)) {
+        FatalRuntimeConversion("shared song-clock step write");
+    }
+}
+
 void HookGameplayEffectAdvance(safetyhook::Context& context) {
     std::uint32_t frame{};
     if (!ReadTuneFrame(context, -0x2B4, frame)) {
@@ -1797,11 +1969,35 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
         return false;
     }
 
+    const auto audio_clock_plan =
+        !wasapi_audio_committed
+        ? GameplayAudioClockPlan::OriginalWatchdog
+        : profile_result->gameplay_validated()
+            ? GameplayAudioClockPlan::WasapiSharedSongClock
+            : GameplayAudioClockPlan::WasapiLegacyResync;
+    std::optional<GameplaySongClock> gameplay_song_clock;
+    if (audio_clock_plan ==
+        GameplayAudioClockPlan::WasapiSharedSongClock) {
+        auto clock_result = GameplaySongClock::Create(target, 1);
+        if (!clock_result) {
+            static std::atomic_bool startup_fatal{false};
+            ReportFramerateInitializationFailure(
+                "shared song-clock preflight failed; executable memory was not changed",
+                startup_fatal,
+                actions);
+            return false;
+        }
+        gameplay_song_clock.emplace(
+            std::move(clock_result.value()));
+    }
+
     g_runtime.emplace(
         std::move(profile_result.value()),
         std::move(monitor_result.value()),
         frequency.QuadPart,
-        actions);
+        actions,
+        audio_clock_plan,
+        std::move(gameplay_song_clock));
 
     const auto direct_plan = BuildFramerateDirectPatchPlan(
         ExecutableBase(),
@@ -1815,9 +2011,7 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
 
     const auto hook_plan = BuildFramerateHookPlan(
         !g_runtime->profile.native_timing(),
-        wasapi_audio_committed
-            ? GameplayAudioClockPlan::WasapiLegacyResync
-            : GameplayAudioClockPlan::OriginalWatchdog);
+        g_runtime->audio_clock_plan);
     const auto hook_operations = BuildHookOperations(
         hook_plan.view(), *g_runtime);
 
