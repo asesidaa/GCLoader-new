@@ -427,6 +427,8 @@ const char* EventKindName(
         return "render_span";
     case AudioDiagnosticEventKind::AudioResync:
         return "audio_resync";
+    case AudioDiagnosticEventKind::GameplaySongClock:
+        return "gameplay_song_clock";
     }
     return "unknown";
 }
@@ -449,6 +451,24 @@ const char* ResyncDecisionName(std::uint8_t decision) noexcept {
         return "suppressed_in_margin";
     case AudioResyncDecision::AllowedOutOfMargin:
         return "allowed_out_of_margin";
+    }
+    return "unknown";
+}
+
+const char* GameplaySongClockCursorSourceName(
+    std::uint8_t source) noexcept {
+    switch (
+        static_cast<GameplaySongClockCursorSource>(source)) {
+    case GameplaySongClockCursorSource::Exact:
+        return "exact";
+    case GameplaySongClockCursorSource::Rounded:
+        return "rounded";
+    case GameplaySongClockCursorSource::Inactive:
+        return "inactive";
+    case GameplaySongClockCursorSource::Failed:
+        return "failed";
+    case GameplaySongClockCursorSource::Invalid:
+        return "invalid";
     }
     return "unknown";
 }
@@ -813,6 +833,14 @@ struct AudioFlightRecorder::Impl {
                            event.signed_value1)
                     << ",\"resync_decision\":\""
                     << ResyncDecisionName(event.decision)
+                    << '"';
+            } else if (
+                event.kind ==
+                AudioDiagnosticEventKind::GameplaySongClock) {
+                json
+                    << ",\"cursor_source\":\""
+                    << GameplaySongClockCursorSourceName(
+                           event.decision)
                     << '"';
             }
             json << '}';

@@ -223,6 +223,56 @@ failures += Expect(
         audio_diagnostics.events[2].qpc_ticks != 0,
     "unreadable resync diagnostic remains distinct");
 
+FixedAudioDiagnosticSink song_clock_diagnostics;
+gc::audio::diagnostics::ActivateAudioDiagnosticSink(
+    &song_clock_diagnostics);
+gc::framerate::detail::PublishGameplaySongClockDiagnostic(
+    119, exact_resolution, 1);
+gc::framerate::detail::PublishGameplaySongClockDiagnostic(
+    120, invalid_resolution, 0);
+gc::audio::diagnostics::DeactivateAudioDiagnosticSink(
+    &song_clock_diagnostics);
+using CursorSource =
+    gc::audio::diagnostics::GameplaySongClockCursorSource;
+failures += Expect(
+    song_clock_diagnostics.count.load(
+        std::memory_order_relaxed) == 2,
+    "shared song-clock diagnostic publishes every resolution");
+failures += Expect(
+    song_clock_diagnostics.events[0].kind ==
+            gc::audio::diagnostics::AudioDiagnosticEventKind::
+                GameplaySongClock &&
+        song_clock_diagnostics.events[0].decision ==
+            static_cast<std::uint8_t>(CursorSource::Exact) &&
+        song_clock_diagnostics.events[0].flags == 0x1 &&
+        song_clock_diagnostics.events[0].generation == 23 &&
+        song_clock_diagnostics.events[0].output_frame_begin ==
+            96'000 &&
+        song_clock_diagnostics.events[0].source_frame_begin ==
+            88'200 &&
+        song_clock_diagnostics.events[0].value0 == 119 &&
+        std::bit_cast<std::int64_t>(
+            song_clock_diagnostics.events[0].value1) == 120 &&
+        song_clock_diagnostics.events[0].value2 ==
+            (std::uint64_t{1} << 32U) &&
+        song_clock_diagnostics.events[0].value3 == 1 &&
+        song_clock_diagnostics.events[0].qpc_ticks != 0,
+    "exact clock event preserves generation cursor decision and crossings");
+failures += Expect(
+    song_clock_diagnostics.events[1].decision ==
+            static_cast<std::uint8_t>(CursorSource::Invalid) &&
+        song_clock_diagnostics.events[1].flags == 0x2 &&
+        song_clock_diagnostics.events[1].generation == 24 &&
+        song_clock_diagnostics.events[1].output_frame_begin ==
+            96'001 &&
+        song_clock_diagnostics.events[1].source_frame_begin ==
+            88'200 &&
+        song_clock_diagnostics.events[1].value0 == 120 &&
+        song_clock_diagnostics.events[1].value1 == 0 &&
+        song_clock_diagnostics.events[1].value2 ==
+            (std::uint64_t{1} << 32U),
+    "invalid exact clock event retains rejected cursor evidence");
+
 AuthoredFrameOperand authored_operand{};
 safetyhook::Context redirected{};
 redirected.eax = 1;
@@ -237,6 +287,179 @@ failures += Expect(
     "authored operand changes only selected register");
 
 const auto profile240 = FramerateProfile::Create(240).value();
+const auto shared_mode =
+    GameplayAudioClockPlan::WasapiSharedSongClock;
+const auto original_mode =
+    GameplayAudioClockPlan::OriginalWatchdog;
+
+failures += Expect(
+    !gc::framerate::detail::ShouldRunGameplayCadence(
+         FramerateProfile::Create(60).value(),
+         shared_mode,
+         0,
+         0,
+         0,
+         4).value() &&
+        gc::framerate::detail::CountGameplayEffectAdvances(
+            FramerateProfile::Create(60).value(),
+            shared_mode,
+            0,
+            0).value() == 0,
+    "shared target 60 step zero runs no gameplay consumer");
+failures += Expect(
+    gc::framerate::detail::ShouldRunGameplayCadence(
+        FramerateProfile::Create(60).value(),
+        shared_mode,
+        4,
+        1,
+        0,
+        4).value() &&
+        gc::framerate::detail::CountGameplayEffectAdvances(
+            FramerateProfile::Create(60).value(),
+            shared_mode,
+            4,
+            1).value() == 1,
+    "shared target 60 step one preserves a normal event tick");
+failures += Expect(
+    gc::framerate::detail::ShouldRunGameplayCadence(
+        FramerateProfile::Create(60).value(),
+        shared_mode,
+        3,
+        2,
+        0,
+        4).value() &&
+        gc::framerate::detail::CountGameplayEffectAdvances(
+            FramerateProfile::Create(60).value(),
+            shared_mode,
+            3,
+            2).value() == 2,
+    "shared target 60 step two preserves intermediate consumers");
+
+for (const std::uint32_t target : {144U, 165U}) {
+    const auto profile = FramerateProfile::Create(target).value();
+    for (std::uint32_t current = 0; current < target * 2; ++current) {
+        for (const std::uint32_t step : {0U, 1U, 2U, 5U}) {
+            bool cadence_oracle = false;
+            for (std::uint32_t offset = 0; offset < step; ++offset) {
+                cadence_oracle =
+                    cadence_oracle ||
+                    ShouldRunAuthored60Cadence(
+                        profile,
+                        current + offset,
+                        -3,
+                        5).value();
+            }
+            const auto begin =
+                profile.MapToAuthored60(current).value();
+            const auto end =
+                profile.MapToAuthored60(current + step).value();
+            failures += Expect(
+                gc::framerate::detail::ShouldRunGameplayCadence(
+                    profile,
+                    shared_mode,
+                    current,
+                    step,
+                    -3,
+                    5).value() == cadence_oracle,
+                "fractional target shared cadence matches tick oracle");
+            failures += Expect(
+                gc::framerate::detail::CountGameplayEffectAdvances(
+                    profile,
+                    shared_mode,
+                    current,
+                    step).value() == end - begin,
+                "fractional target shared effect count matches rational oracle");
+        }
+    }
+}
+
+for (std::uint32_t current = 0; current < 16; ++current) {
+    failures += Expect(
+        gc::framerate::detail::CountGameplayEffectAdvances(
+            profile240,
+            shared_mode,
+            current,
+            1).value() == (current % 4 == 3 ? 1U : 0U),
+        "target 240 step one advances effects every fourth tick");
+}
+failures += Expect(
+    gc::framerate::detail::CountGameplayEffectAdvances(
+        profile240,
+        shared_mode,
+        2,
+        10).value() == 3,
+    "bounded multi-step update counts every authored crossing");
+failures += Expect(
+    gc::framerate::detail::ShouldRunGameplayCadence(
+        profile240,
+        original_mode,
+        24,
+        0,
+        0,
+        6).value() ==
+        ShouldRunAuthored60Cadence(
+            profile240, 24, 0, 6).value() &&
+        gc::framerate::detail::CountGameplayEffectAdvances(
+            profile240,
+            original_mode,
+            4,
+            0).value() ==
+        static_cast<std::uint32_t>(
+            IsAuthored60FrameBoundary(profile240, 4).value()),
+    "non-shared consumers retain point-test semantics");
+
+using CadenceRegister =
+    gc::framerate::detail::GameplayCadenceTestRegister;
+struct ExpectedCadenceSemantics {
+    FramerateHookId id;
+    std::uint32_t period;
+    CadenceRegister destination;
+    bool has_signed_phase;
+};
+constexpr std::array cadence_semantics{
+    ExpectedCadenceSemantics{
+        FramerateHookId::EffectCadence6,
+        6,
+        CadenceRegister::Edx,
+        false},
+    ExpectedCadenceSemantics{
+        FramerateHookId::EffectCadence5,
+        5,
+        CadenceRegister::Edx,
+        false},
+    ExpectedCadenceSemantics{
+        FramerateHookId::EffectCadence4,
+        4,
+        CadenceRegister::Edx,
+        false},
+    ExpectedCadenceSemantics{
+        FramerateHookId::EffectCadence16A,
+        16,
+        CadenceRegister::Edx,
+        true},
+    ExpectedCadenceSemantics{
+        FramerateHookId::EffectCadence16B,
+        16,
+        CadenceRegister::Ecx,
+        true},
+    ExpectedCadenceSemantics{
+        FramerateHookId::EffectCadence8,
+        8,
+        CadenceRegister::Eax,
+        true},
+};
+for (const auto& expected : cadence_semantics) {
+    const auto actual =
+        gc::framerate::detail::GetGameplayCadenceHookSemantics(
+            expected.id);
+    failures += Expect(
+        actual.has_value() &&
+            actual->authored_period == expected.period &&
+            actual->test_register == expected.destination &&
+            actual->has_signed_phase == expected.has_signed_phase,
+        "gameplay cadence register and signed phase semantics are stable");
+}
+
 safetyhook::Context countdown{};
 countdown.ecx = 480;
 countdown.eip = 0x1111;

@@ -22,6 +22,7 @@ enum class AudioDiagnosticEventKind : std::uint8_t {
     ConverterReset,
     RenderSpan,
     AudioResync,
+    GameplaySongClock,
 };
 
 enum class ConverterResetReason : std::uint8_t {
@@ -33,6 +34,14 @@ enum class AudioResyncDecision : std::uint8_t {
     Unreadable,
     SuppressedInMargin,
     AllowedOutOfMargin,
+};
+
+enum class GameplaySongClockCursorSource : std::uint8_t {
+    Exact,
+    Rounded,
+    Inactive,
+    Failed,
+    Invalid,
 };
 
 struct AudioDiagnosticEvent {

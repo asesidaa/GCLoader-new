@@ -27,6 +27,7 @@ KNOWN_TIMELINE_KINDS = {
     "converter_reset",
     "render_span",
     "audio_resync",
+    "gameplay_song_clock",
     "endpoint_block",
     "pcm_gap",
     "event_gap",
@@ -53,11 +54,31 @@ class ReplayCandidate:
 
 
 @dataclass(frozen=True)
+class SharedSongClockAnalysis:
+    total_observations: int = 0
+    exact: int = 0
+    rounded: int = 0
+    inactive: int = 0
+    failed: int = 0
+    invalid: int = 0
+    step_zero: int = 0
+    step_one: int = 0
+    step_multi: int = 0
+    maximum_absolute_tick_error: int = 0
+    maximum_remaining_backlog: int = 0
+    generation_transitions: Sequence[str] = ()
+    same_generation_backwards: Sequence[str] = ()
+    watchdog_backward_seeks: Sequence[str] = ()
+    signature_replay_candidates: Sequence[ReplayCandidate] = ()
+
+
+@dataclass(frozen=True)
 class SessionAnalysis:
     conclusive_frames: int
     incomplete_ranges: Sequence[tuple[int, int]]
     candidates: Sequence[ReplayCandidate]
     causal_findings: Sequence[str]
+    shared_song_clock: SharedSongClockAnalysis | None = None
 
 
 class _Pcm16FrameSequence(Sequence[tuple[int, int]]):
@@ -824,6 +845,173 @@ def _causal_findings(
     return tuple(unique)
 
 
+def _signed_u64(value: object) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    raw = value & ((1 << 64) - 1)
+    return raw - (1 << 64) if raw >= (1 << 63) else raw
+
+
+def analyze_shared_song_clock(
+    timeline: Sequence[dict[str, object]],
+    candidates: Sequence[ReplayCandidate] = (),
+    sample_rate: int = 48_000,
+) -> SharedSongClockAnalysis:
+    events = [
+        record
+        for record in timeline
+        if record.get("kind") == "gameplay_song_clock"
+    ]
+    source_counts = {
+        source: sum(
+            record.get("cursor_source") == source
+            for record in events
+        )
+        for source in (
+            "exact",
+            "rounded",
+            "inactive",
+            "failed",
+            "invalid",
+        )
+    }
+
+    step_zero = 0
+    step_one = 0
+    step_multi = 0
+    maximum_tick_error = 0
+    maximum_backlog = 0
+    for event in events:
+        if event.get("cursor_source") not in {"exact", "rounded"}:
+            continue
+        packed = event.get("value2")
+        current = event.get("value0")
+        desired = _signed_u64(event.get("value1"))
+        if (
+            not isinstance(packed, int)
+            or isinstance(packed, bool)
+            or packed < 0
+        ):
+            continue
+        step = (packed >> 32) & 0xFFFFFFFF
+        backlog = packed & 0xFFFFFFFF
+        if step == 0:
+            step_zero += 1
+        elif step == 1:
+            step_one += 1
+        else:
+            step_multi += 1
+        maximum_backlog = max(maximum_backlog, backlog)
+        if (
+            isinstance(current, int)
+            and not isinstance(current, bool)
+            and desired is not None
+        ):
+            maximum_tick_error = max(
+                maximum_tick_error, abs(desired - current)
+            )
+
+    generation_transitions: list[str] = []
+    previous_generation: int | None = None
+    for event in events:
+        if event.get("cursor_source") != "exact":
+            continue
+        generation = event.get("generation")
+        if not isinstance(generation, int) or isinstance(generation, bool):
+            continue
+        if (
+            previous_generation is not None
+            and generation != previous_generation
+        ):
+            generation_transitions.append(
+                f"{previous_generation}->{generation} "
+                f"at output={event.get('output_frame_begin')}"
+            )
+        previous_generation = generation
+
+    last_source_by_generation: dict[int, int] = {}
+    backwards: list[str] = []
+    for event in events:
+        if event.get("cursor_source") not in {"exact", "invalid"}:
+            continue
+        generation = event.get("generation")
+        source_frame = event.get("source_frame_begin")
+        if (
+            not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or not isinstance(source_frame, int)
+            or isinstance(source_frame, bool)
+        ):
+            continue
+        previous = last_source_by_generation.get(generation)
+        if previous is not None and source_frame < previous:
+            backwards.append(
+                f"generation={generation} source={previous}->{source_frame} "
+                f"output={event.get('output_frame_begin')}"
+            )
+        last_source_by_generation[generation] = source_frame
+
+    event_outputs = [
+        int(event["output_frame_begin"])
+        for event in events
+        if isinstance(event.get("output_frame_begin"), int)
+        and not isinstance(event.get("output_frame_begin"), bool)
+    ]
+    watchdog_seeks: list[str] = []
+    if event_outputs:
+        song_begin = min(event_outputs)
+        song_end = max(event_outputs)
+        for record in timeline:
+            if record.get("kind") != "seek_applied":
+                continue
+            output = record.get("output_frame_begin")
+            source_begin = record.get("source_frame_begin")
+            source_end = record.get("source_frame_end")
+            if (
+                isinstance(output, int)
+                and not isinstance(output, bool)
+                and song_begin <= output <= song_end
+                and isinstance(source_begin, int)
+                and not isinstance(source_begin, bool)
+                and isinstance(source_end, int)
+                and not isinstance(source_end, bool)
+                and source_end < source_begin
+            ):
+                watchdog_seeks.append(
+                    "possible watchdog-origin backward seek "
+                    f"output={output} source={source_begin}->{source_end}"
+                )
+
+    signature_candidates: tuple[ReplayCandidate, ...] = ()
+    if sample_rate > 0:
+        signature_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if 33 <=
+            abs(candidate.lag_frames) * 1_000 / sample_rate <= 100
+            and 33 <=
+            candidate.window_frames * 1_000 / sample_rate <= 100
+        )
+
+    return SharedSongClockAnalysis(
+        total_observations=len(events),
+        exact=source_counts["exact"],
+        rounded=source_counts["rounded"],
+        inactive=source_counts["inactive"],
+        failed=source_counts["failed"],
+        invalid=source_counts["invalid"],
+        step_zero=step_zero,
+        step_one=step_one,
+        step_multi=step_multi,
+        maximum_absolute_tick_error=maximum_tick_error,
+        maximum_remaining_backlog=maximum_backlog,
+        generation_transitions=tuple(generation_transitions),
+        same_generation_backwards=tuple(backwards),
+        watchdog_backward_seeks=tuple(watchdog_seeks),
+        signature_replay_candidates=signature_candidates,
+    )
+
+
 def _load_session(path: Path) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -892,6 +1080,9 @@ def analyze_session(session_directory: Path) -> SessionAnalysis:
         incomplete_ranges=tuple(incomplete),
         candidates=candidates,
         causal_findings=tuple(findings),
+        shared_song_clock=analyze_shared_song_clock(
+            timeline, candidates, wave_data.sample_rate
+        ),
     )
 
 
@@ -1010,6 +1201,73 @@ def _write_outputs(
         lines.extend(f"- {finding}" for finding in analysis.causal_findings)
     else:
         lines.append("- No deterministic timeline anomaly.")
+
+    shared = (
+        analysis.shared_song_clock
+        if analysis.shared_song_clock is not None
+        else SharedSongClockAnalysis()
+    )
+    total = shared.total_observations
+    percentage = (
+        lambda count: 100.0 * count / total if total else 0.0
+    )
+    lines.extend(
+        [
+            "",
+            "## Shared song clock",
+            "",
+            f"- Observations: {total}",
+            f"- Exact: {shared.exact} ({percentage(shared.exact):.2f}%)",
+            f"- Rounded: {shared.rounded} "
+            f"({percentage(shared.rounded):.2f}%)",
+            f"- Inactive: {shared.inactive} "
+            f"({percentage(shared.inactive):.2f}%)",
+            f"- Failed: {shared.failed} "
+            f"({percentage(shared.failed):.2f}%)",
+            f"- Invalid: {shared.invalid} "
+            f"({percentage(shared.invalid):.2f}%)",
+            "- Step zero/one/multi: "
+            f"{shared.step_zero} / {shared.step_one} / "
+            f"{shared.step_multi}",
+            "- Maximum absolute tick error: "
+            f"{shared.maximum_absolute_tick_error}",
+            "- Maximum remaining backlog: "
+            f"{shared.maximum_remaining_backlog}",
+            "- Generation transitions: "
+            f"{len(shared.generation_transitions)}",
+        ]
+    )
+    lines.extend(
+        f"  - {finding}"
+        for finding in shared.generation_transitions
+    )
+    lines.append(
+        "- Same-generation backwards cursors: "
+        f"{len(shared.same_generation_backwards)}"
+    )
+    lines.extend(
+        f"  - {finding}"
+        for finding in shared.same_generation_backwards
+    )
+    lines.append(
+        "- Watchdog-origin backward seeks during song: "
+        f"{len(shared.watchdog_backward_seeks)}"
+    )
+    lines.extend(
+        f"  - {finding}"
+        for finding in shared.watchdog_backward_seeks
+    )
+    lines.append(
+        "- Confirmed-signature replay candidates: "
+        f"{len(shared.signature_replay_candidates)}"
+    )
+    lines.extend(
+        "  - "
+        f"start={candidate.start_frame / wave_data.sample_rate:.3f}s "
+        f"lag={candidate.lag_frames * 1_000 / wave_data.sample_rate:.1f}ms "
+        f"window={candidate.window_frames * 1_000 / wave_data.sample_rate:.1f}ms"
+        for candidate in shared.signature_replay_candidates
+    )
 
     lines.extend(
         [

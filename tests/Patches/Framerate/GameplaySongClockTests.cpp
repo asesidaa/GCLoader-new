@@ -187,6 +187,23 @@ int TestStepBoundAndBacklog() {
             0, 0, Rounded(100'000'000'000ULL)).error() ==
             GameplaySongClockError::DestinationOverflow,
         "an unrepresentable diagnostic backlog to be rejected");
+
+    auto tick_overflow_clock =
+        GameplaySongClock::Create(60, 1).value();
+    constexpr auto first_unrepresentable_tick =
+        static_cast<std::uint64_t>(
+            std::numeric_limits<std::uint32_t>::max()) + 1;
+    constexpr auto first_unrepresentable_milliseconds =
+        (first_unrepresentable_tick * 1'000 + 59) / 60;
+    const auto tick_overflow = tick_overflow_clock.Observe(
+        std::numeric_limits<std::uint32_t>::max(),
+        0,
+        Rounded(first_unrepresentable_milliseconds));
+    failures += Expect(
+        !tick_overflow &&
+            tick_overflow.error() ==
+                GameplaySongClockError::DestinationOverflow,
+        "a selected step that would overflow Tune tick to be rejected");
     return failures;
 }
 

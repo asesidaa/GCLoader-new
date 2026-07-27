@@ -261,6 +261,11 @@ GameplaySongClock::Observe(
         step = static_cast<std::uint32_t>(selected);
         remaining_backlog = static_cast<std::uint32_t>(remaining);
     }
+    if (step >
+        std::numeric_limits<std::uint32_t>::max() - current_tick) {
+        return std::unexpected(
+            GameplaySongClockError::DestinationOverflow);
+    }
 
     if (observation.kind == SongClockObservationKind::ExactSourceFrame) {
         has_exact_generation_ = true;

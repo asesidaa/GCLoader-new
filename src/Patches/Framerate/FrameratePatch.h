@@ -9,6 +9,7 @@
 namespace gc::framerate {
 
 enum class FramerateHookId;
+enum class GameplayAudioClockPlan : std::uint8_t;
 
 [[nodiscard]] bool FramerateHookHasRuntimeBinding(
     FramerateHookId id) noexcept;
@@ -21,6 +22,18 @@ enum class GameplaySongClockInputState : std::uint8_t {
     Rounded,
     Inactive,
     Failed,
+};
+
+enum class GameplayCadenceTestRegister : std::uint8_t {
+    Eax,
+    Ecx,
+    Edx,
+};
+
+struct GameplayCadenceHookSemantics {
+    std::uint32_t authored_period{};
+    GameplayCadenceTestRegister test_register{};
+    bool has_signed_phase{};
 };
 
 struct GameplaySongClockInputSelection {
@@ -51,6 +64,31 @@ ResolveGameplaySongClockStep(
     int group_cursor_ms,
     std::optional<audio::GameplayAudioCursorObservation>
         cursor_observation) noexcept;
+
+[[nodiscard]] std::expected<bool, FramerateProfileError>
+ShouldRunGameplayCadence(
+    const FramerateProfile& profile,
+    GameplayAudioClockPlan audio_clock_plan,
+    std::uint32_t current_tick,
+    std::uint32_t step,
+    std::int32_t phase,
+    std::uint32_t authored_period) noexcept;
+
+[[nodiscard]] std::expected<std::uint32_t, FramerateProfileError>
+CountGameplayEffectAdvances(
+    const FramerateProfile& profile,
+    GameplayAudioClockPlan audio_clock_plan,
+    std::uint32_t current_tick,
+    std::uint32_t step) noexcept;
+
+[[nodiscard]] std::optional<GameplayCadenceHookSemantics>
+GetGameplayCadenceHookSemantics(
+    FramerateHookId id) noexcept;
+
+void PublishGameplaySongClockDiagnostic(
+    std::uint32_t current_tick,
+    const GameplaySongClockStepSelection& selection,
+    std::uint32_t crossed_authored_ticks) noexcept;
 
 void PublishAudioResyncDiagnostic(
     std::int32_t drift_ms,

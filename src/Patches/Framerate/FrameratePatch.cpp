@@ -110,6 +110,160 @@ GameplaySongClockStepSelection ResolveGameplaySongClockStep(
     return result;
 }
 
+std::expected<bool, FramerateProfileError>
+ShouldRunGameplayCadence(
+    const FramerateProfile& profile,
+    GameplayAudioClockPlan audio_clock_plan,
+    std::uint32_t current_tick,
+    std::uint32_t step,
+    std::int32_t phase,
+    std::uint32_t authored_period) noexcept {
+    if (audio_clock_plan ==
+        GameplayAudioClockPlan::WasapiSharedSongClock) {
+        return CrossesAuthored60Cadence(
+            profile,
+            current_tick,
+            step,
+            phase,
+            authored_period);
+    }
+    return ShouldRunAuthored60Cadence(
+        profile, current_tick, phase, authored_period);
+}
+
+std::expected<std::uint32_t, FramerateProfileError>
+CountGameplayEffectAdvances(
+    const FramerateProfile& profile,
+    GameplayAudioClockPlan audio_clock_plan,
+    std::uint32_t current_tick,
+    std::uint32_t step) noexcept {
+    if (audio_clock_plan ==
+        GameplayAudioClockPlan::WasapiSharedSongClock) {
+        return CountCrossedAuthored60Ticks(
+            profile, current_tick, step);
+    }
+
+    const auto boundary =
+        IsAuthored60FrameBoundary(profile, current_tick);
+    if (!boundary) {
+        return std::unexpected(boundary.error());
+    }
+    return boundary.value() ? 1U : 0U;
+}
+
+std::optional<GameplayCadenceHookSemantics>
+GetGameplayCadenceHookSemantics(
+    FramerateHookId id) noexcept {
+    using Register = GameplayCadenceTestRegister;
+    switch (id) {
+    case FramerateHookId::EffectCadence6:
+        return GameplayCadenceHookSemantics{6, Register::Edx, false};
+    case FramerateHookId::EffectCadence5:
+        return GameplayCadenceHookSemantics{5, Register::Edx, false};
+    case FramerateHookId::EffectCadence4:
+        return GameplayCadenceHookSemantics{4, Register::Edx, false};
+    case FramerateHookId::EffectCadence16A:
+        return GameplayCadenceHookSemantics{16, Register::Edx, true};
+    case FramerateHookId::EffectCadence16B:
+        return GameplayCadenceHookSemantics{16, Register::Ecx, true};
+    case FramerateHookId::EffectCadence8:
+        return GameplayCadenceHookSemantics{8, Register::Eax, true};
+    default:
+        return std::nullopt;
+    }
+}
+
+audio::diagnostics::GameplaySongClockCursorSource
+GameplaySongClockDiagnosticSource(
+    const GameplaySongClockStepSelection& selection) noexcept {
+    auto cursor_source =
+        audio::diagnostics::GameplaySongClockCursorSource::Failed;
+    if (selection.observation_rejected) {
+        cursor_source =
+            audio::diagnostics::GameplaySongClockCursorSource::Invalid;
+    } else {
+        switch (selection.input.state) {
+        case GameplaySongClockInputState::Exact:
+            cursor_source =
+                audio::diagnostics::
+                    GameplaySongClockCursorSource::Exact;
+            break;
+        case GameplaySongClockInputState::Rounded:
+            cursor_source =
+                audio::diagnostics::
+                    GameplaySongClockCursorSource::Rounded;
+            break;
+        case GameplaySongClockInputState::Inactive:
+            cursor_source =
+                audio::diagnostics::
+                    GameplaySongClockCursorSource::Inactive;
+            break;
+        case GameplaySongClockInputState::Failed:
+            cursor_source =
+                audio::diagnostics::
+                    GameplaySongClockCursorSource::Failed;
+            break;
+        }
+    }
+    return cursor_source;
+}
+
+void PublishGameplaySongClockDiagnostic(
+    std::uint32_t current_tick,
+    const GameplaySongClockStepSelection& selection,
+    std::uint32_t crossed_authored_ticks) noexcept {
+    if (audio::diagnostics::active_sink.load(
+            std::memory_order_acquire) == nullptr) {
+        return;
+    }
+
+    const auto cursor_source =
+        GameplaySongClockDiagnosticSource(selection);
+
+    std::uint64_t generation{};
+    std::uint64_t source_frame{};
+    if (selection.input.observation.has_value() &&
+        selection.input.observation->kind ==
+            SongClockObservationKind::ExactSourceFrame) {
+        generation =
+            selection.input.observation->playback_generation;
+        source_frame = selection.input.observation->position;
+    }
+    const auto remaining_backlog =
+        selection.decision.has_value()
+        ? selection.decision->remaining_backlog
+        : 0U;
+    const auto desired_tick =
+        selection.decision.has_value()
+        ? std::bit_cast<std::uint64_t>(
+              selection.decision->desired_tick)
+        : 0U;
+    const auto flags = static_cast<std::uint16_t>(
+        (selection.decision.has_value() &&
+                 selection.decision->new_generation
+             ? 0x1U
+             : 0U) |
+        (selection.observation_rejected ? 0x2U : 0U));
+
+    audio::diagnostics::PublishActiveAudioDiagnosticEvent({
+        .kind = audio::diagnostics::AudioDiagnosticEventKind::
+            GameplaySongClock,
+        .decision = static_cast<std::uint8_t>(cursor_source),
+        .flags = flags,
+        .qpc_ticks =
+            audio::diagnostics::CaptureAudioDiagnosticQpcTicks(),
+        .generation = generation,
+        .output_frame_begin = selection.input.output_frame,
+        .source_frame_begin = source_frame,
+        .value0 = current_tick,
+        .value1 = desired_tick,
+        .value2 =
+            (static_cast<std::uint64_t>(selection.step) << 32U) |
+            remaining_backlog,
+        .value3 = crossed_authored_ticks,
+    });
+}
+
 void PublishAudioResyncDiagnostic(
     std::int32_t drift_ms,
     std::int32_t margin_ms,
@@ -147,6 +301,7 @@ constexpr std::size_t kMaximumMovieClipInstanceNameBytes = 32;
 constexpr std::uintptr_t kGetSoundManagerRva = 0x00210400;
 constexpr std::uintptr_t kGetGroupPlayCursorMsRva = 0x002122B0;
 constexpr std::uintptr_t kGetConfigRva = 0x000011E0;
+constexpr std::uintptr_t kAdvanceGameplayEffectRva = 0x001F08A0;
 constexpr int kGameplaySoundGroup = 2;
 constexpr std::uintptr_t kTuneCurrentTickOffset = 0x10;
 constexpr std::uintptr_t kTuneStepOffset = 0x14;
@@ -155,6 +310,7 @@ constexpr std::uintptr_t kGameTimeOffsetOffset = 0x2C;
 using GetSoundManager = void* (__cdecl*)();
 using GetGroupPlayCursorMs = int (__thiscall*)(void*, int);
 using GetConfig = void* (__cdecl*)();
+using AdvanceGameplayEffect = void (__thiscall*)(void*);
 
 struct FramerateHookStorage {
     safetyhook::InlineHook movieclip_goto{};
@@ -229,6 +385,16 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t countdown_compare_hits{0};
     std::atomic_uint64_t audio_skip_margin_clamps{0};
     std::atomic_uint64_t audio_skip_interval_conversions{0};
+    std::atomic_uint64_t song_clock_exact{0};
+    std::atomic_uint64_t song_clock_rounded{0};
+    std::atomic_uint64_t song_clock_inactive{0};
+    std::atomic_uint64_t song_clock_failed{0};
+    std::atomic_uint64_t song_clock_invalid{0};
+    std::atomic_uint64_t song_clock_step_zero{0};
+    std::atomic_uint64_t song_clock_step_one{0};
+    std::atomic_uint64_t song_clock_step_multi{0};
+    std::atomic_uint64_t song_clock_maximum_absolute_tick_error{0};
+    std::atomic_uint64_t song_clock_maximum_remaining_backlog{0};
     std::atomic_uint64_t gameplay_effect_advances{0};
     std::atomic_uint64_t gameplay_effect_skips{0};
     std::atomic_uint64_t effect_cadence_runs{0};
@@ -315,6 +481,73 @@ struct FramerateHookOperationPlan {
 std::optional<FramerateRuntimeState> g_runtime;
 thread_local int g_movieclip_goto_depth = 0;
 thread_local MovieClipPreprocessDepth g_movieclip_preprocess_depth;
+
+void UpdateMaximum(
+    std::atomic_uint64_t& destination,
+    std::uint64_t candidate) noexcept {
+    auto observed = destination.load(std::memory_order_relaxed);
+    while (observed < candidate &&
+           !destination.compare_exchange_weak(
+               observed,
+               candidate,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+}
+
+std::uint64_t AbsoluteMagnitude(std::int64_t value) noexcept {
+    return value >= 0
+        ? static_cast<std::uint64_t>(value)
+        : static_cast<std::uint64_t>(-(value + 1)) + 1;
+}
+
+void RecordGameplaySongClockSelection(
+    std::uint32_t current_tick,
+    const detail::GameplaySongClockStepSelection& selection,
+    std::uint32_t crossed_authored_ticks) noexcept {
+    auto& counters = g_runtime->counters;
+    switch (detail::GameplaySongClockDiagnosticSource(selection)) {
+    case audio::diagnostics::GameplaySongClockCursorSource::Exact:
+        counters.song_clock_exact.fetch_add(
+            1, std::memory_order_relaxed);
+        break;
+    case audio::diagnostics::GameplaySongClockCursorSource::Rounded:
+        counters.song_clock_rounded.fetch_add(
+            1, std::memory_order_relaxed);
+        break;
+    case audio::diagnostics::GameplaySongClockCursorSource::Inactive:
+        counters.song_clock_inactive.fetch_add(
+            1, std::memory_order_relaxed);
+        break;
+    case audio::diagnostics::GameplaySongClockCursorSource::Failed:
+        counters.song_clock_failed.fetch_add(
+            1, std::memory_order_relaxed);
+        break;
+    case audio::diagnostics::GameplaySongClockCursorSource::Invalid:
+        counters.song_clock_invalid.fetch_add(
+            1, std::memory_order_relaxed);
+        break;
+    }
+
+    if (selection.decision.has_value()) {
+        auto& step_counter = selection.step == 0
+            ? counters.song_clock_step_zero
+            : selection.step == 1
+                ? counters.song_clock_step_one
+                : counters.song_clock_step_multi;
+        step_counter.fetch_add(1, std::memory_order_relaxed);
+        UpdateMaximum(
+            counters.song_clock_maximum_absolute_tick_error,
+            AbsoluteMagnitude(selection.decision->delta_ticks));
+        UpdateMaximum(
+            counters.song_clock_maximum_remaining_backlog,
+            selection.decision->remaining_backlog);
+    }
+
+    detail::PublishGameplaySongClockDiagnostic(
+        current_tick, selection, crossed_authored_ticks);
+}
+
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
 void __fastcall HookMovieClipPreprocessVisit(void*, void*, int);
@@ -1058,13 +1291,31 @@ IdentifyUnlockRewardPromptHold(
         tune != 0 && ReadU32Safe(tune + 0x10, frame);
 }
 
+[[nodiscard]] bool ReadTuneFrameAndStep(
+    const safetyhook::Context& context,
+    std::intptr_t tune_stack_offset,
+    std::uint32_t& frame,
+    std::uint32_t& step) noexcept {
+    std::uint32_t tune{};
+    return ReadU32Safe(context.ebp + tune_stack_offset, tune) &&
+        tune != 0 &&
+        ReadU32Safe(tune + kTuneCurrentTickOffset, frame) &&
+        ReadU32Safe(tune + kTuneStepOffset, step);
+}
+
 [[nodiscard]] bool ResolveCadenceTestValue(
     std::uint32_t frame,
+    std::uint32_t step,
     std::int32_t phase,
     std::uint32_t period,
     std::uint32_t& test_value) noexcept {
-    const auto run = ShouldRunAuthored60Cadence(
-        g_runtime->profile, frame, phase, period);
+    const auto run = detail::ShouldRunGameplayCadence(
+        g_runtime->profile,
+        g_runtime->audio_clock_plan,
+        frame,
+        step,
+        phase,
+        period);
     if (!run) {
         FatalRuntimeConversion("authored gameplay cadence");
         return false;
@@ -1075,26 +1326,57 @@ IdentifyUnlockRewardPromptHold(
 
 void ApplyEffectCadence(
     safetyhook::Context& context,
-    std::uint32_t& test_register,
-    std::uint32_t period,
-    bool has_phase) noexcept {
+    FramerateHookId hook_id) noexcept {
+    const auto semantics =
+        detail::GetGameplayCadenceHookSemantics(hook_id);
+    if (!semantics.has_value()) {
+        FatalRuntimeConversion("effect cadence hook semantics");
+        return;
+    }
+
+    std::uint32_t* test_register{};
+    switch (semantics->test_register) {
+    case detail::GameplayCadenceTestRegister::Eax:
+        test_register = &context.eax;
+        break;
+    case detail::GameplayCadenceTestRegister::Ecx:
+        test_register = &context.ecx;
+        break;
+    case detail::GameplayCadenceTestRegister::Edx:
+        test_register = &context.edx;
+        break;
+    }
+
     std::uint32_t frame{};
-    if (!ReadTuneFrame(context, -0x32C, frame)) {
+    std::uint32_t step{1};
+    const bool readable =
+        g_runtime->audio_clock_plan ==
+            GameplayAudioClockPlan::WasapiSharedSongClock
+        ? ReadTuneFrameAndStep(
+              context, -0x32C, frame, step)
+        : ReadTuneFrame(context, -0x32C, frame);
+    if (!readable) {
         FatalRuntimeConversion("effect cadence tune-frame read");
         return;
     }
 
     std::int32_t phase{};
-    if (has_phase && !ReadI32StackSafe(context, -0x1FC, phase)) {
+    if (semantics->has_signed_phase &&
+        !ReadI32StackSafe(context, -0x1FC, phase)) {
         FatalRuntimeConversion("effect cadence phase read");
         return;
     }
 
     std::uint32_t test_value{};
-    if (!ResolveCadenceTestValue(frame, phase, period, test_value)) {
+    if (!ResolveCadenceTestValue(
+            frame,
+            step,
+            phase,
+            semantics->authored_period,
+            test_value)) {
         return;
     }
-    test_register = test_value;
+    *test_register = test_value;
     if (test_value == 0) {
         g_runtime->counters.effect_cadence_runs.fetch_add(
             1, std::memory_order_relaxed);
@@ -1114,7 +1396,7 @@ void ApplyRemoteCadence(safetyhook::Context& context) noexcept {
 
     std::uint32_t test_value{};
     if (!ResolveCadenceTestValue(
-            frame.value(), 0, 4, test_value)) {
+            frame.value(), 1, 0, 4, test_value)) {
         return;
     }
     context.edx = test_value;
@@ -1463,12 +1745,32 @@ void HookGameplaySongClock(safetyhook::Context& context) {
         return;
     }
 
-    const auto selection = detail::ResolveGameplaySongClockStep(
+    auto selection = detail::ResolveGameplaySongClockStep(
         g_runtime->gameplay_song_clock.value(),
         current_tick,
         static_cast<std::int32_t>(game_time_offset_raw),
         group_cursor_ms,
         cursor_observation);
+    std::uint32_t crossed_authored_ticks{};
+    if (selection.decision.has_value()) {
+        const auto crossed = CountCrossedAuthored60Ticks(
+            g_runtime->profile,
+            current_tick,
+            selection.step);
+        if (!crossed) {
+            selection.decision.reset();
+            selection.step = 1;
+            selection.observation_rejected = true;
+            RecordGameplaySongClockSelection(
+                current_tick, selection, 0);
+            FatalRuntimeConversion(
+                "shared song-clock authored crossing");
+            return;
+        }
+        crossed_authored_ticks = crossed.value();
+    }
+    RecordGameplaySongClockSelection(
+        current_tick, selection, crossed_authored_ticks);
     if (!selection.decision.has_value()) {
         return;
     }
@@ -1480,50 +1782,81 @@ void HookGameplaySongClock(safetyhook::Context& context) {
 
 void HookGameplayEffectAdvance(safetyhook::Context& context) {
     std::uint32_t frame{};
-    if (!ReadTuneFrame(context, -0x2B4, frame)) {
+    std::uint32_t step{1};
+    const bool shared_clock =
+        g_runtime->audio_clock_plan ==
+        GameplayAudioClockPlan::WasapiSharedSongClock;
+    const bool readable = shared_clock
+        ? ReadTuneFrameAndStep(
+              context, -0x2B4, frame, step)
+        : ReadTuneFrame(context, -0x2B4, frame);
+    if (!readable) {
         FatalRuntimeConversion("gameplay effect tune-frame read");
         return;
     }
 
-    const auto boundary =
-        IsAuthored60FrameBoundary(g_runtime->profile, frame);
-    if (!boundary) {
+    if (shared_clock && step > frame) {
+        FatalRuntimeConversion("gameplay effect tune-frame underflow");
+        return;
+    }
+    const auto old_tick = shared_clock ? frame - step : frame;
+    const auto advance_count =
+        detail::CountGameplayEffectAdvances(
+            g_runtime->profile,
+            g_runtime->audio_clock_plan,
+            old_tick,
+            step);
+    if (!advance_count) {
         FatalRuntimeConversion("gameplay effect authored-frame mapping");
         return;
     }
-    if (boundary.value()) {
-        g_runtime->counters.gameplay_effect_advances.fetch_add(
+
+    if (advance_count.value() == 0) {
+        g_runtime->counters.gameplay_effect_skips.fetch_add(
             1, std::memory_order_relaxed);
+        context.eip += 5;
         return;
     }
 
-    g_runtime->counters.gameplay_effect_skips.fetch_add(
-        1, std::memory_order_relaxed);
-    context.eip += 5;
+    g_runtime->counters.gameplay_effect_advances.fetch_add(
+        advance_count.value(), std::memory_order_relaxed);
+    if (advance_count.value() > 1) {
+        const auto advance_gameplay_effect =
+            reinterpret_cast<AdvanceGameplayEffect>(
+                ExecutableBase() +
+                kAdvanceGameplayEffectRva);
+        for (std::uint32_t index = 1;
+             index < advance_count.value();
+             ++index) {
+            advance_gameplay_effect(
+                reinterpret_cast<void*>(
+                    static_cast<std::uintptr_t>(context.ecx)));
+        }
+    }
 }
 
 void HookEffectCadence6(safetyhook::Context& context) {
-    ApplyEffectCadence(context, context.edx, 6, false);
+    ApplyEffectCadence(context, FramerateHookId::EffectCadence6);
 }
 
 void HookEffectCadence5(safetyhook::Context& context) {
-    ApplyEffectCadence(context, context.edx, 5, false);
+    ApplyEffectCadence(context, FramerateHookId::EffectCadence5);
 }
 
 void HookEffectCadence4(safetyhook::Context& context) {
-    ApplyEffectCadence(context, context.edx, 4, false);
+    ApplyEffectCadence(context, FramerateHookId::EffectCadence4);
 }
 
 void HookEffectCadence16A(safetyhook::Context& context) {
-    ApplyEffectCadence(context, context.edx, 16, true);
+    ApplyEffectCadence(context, FramerateHookId::EffectCadence16A);
 }
 
 void HookEffectCadence16B(safetyhook::Context& context) {
-    ApplyEffectCadence(context, context.ecx, 16, true);
+    ApplyEffectCadence(context, FramerateHookId::EffectCadence16B);
 }
 
 void HookEffectCadence8(safetyhook::Context& context) {
-    ApplyEffectCadence(context, context.eax, 8, true);
+    ApplyEffectCadence(context, FramerateHookId::EffectCadence8);
 }
 
 void HookRemoteCadenceA(safetyhook::Context& context) {
@@ -1782,6 +2115,36 @@ void MaybeLogRuntimeStats(std::int64_t now) {
               << "/interval_conversions="
               << counters.audio_skip_interval_conversions.load(
                      std::memory_order_relaxed)
+              << " song_clock=exact="
+              << counters.song_clock_exact.load(
+                     std::memory_order_relaxed)
+              << "/rounded="
+              << counters.song_clock_rounded.load(
+                     std::memory_order_relaxed)
+              << "/inactive="
+              << counters.song_clock_inactive.load(
+                     std::memory_order_relaxed)
+              << "/failed="
+              << counters.song_clock_failed.load(
+                     std::memory_order_relaxed)
+              << "/invalid="
+              << counters.song_clock_invalid.load(
+                     std::memory_order_relaxed)
+              << "/step0="
+              << counters.song_clock_step_zero.load(
+                     std::memory_order_relaxed)
+              << "/step1="
+              << counters.song_clock_step_one.load(
+                     std::memory_order_relaxed)
+              << "/step_multi="
+              << counters.song_clock_step_multi.load(
+                     std::memory_order_relaxed)
+              << "/max_tick_error="
+              << counters.song_clock_maximum_absolute_tick_error.load(
+                     std::memory_order_relaxed)
+              << "/max_backlog="
+              << counters.song_clock_maximum_remaining_backlog.load(
+                     std::memory_order_relaxed)
               << " gameplay_effect="
               << counters.gameplay_effect_advances.load(
                      std::memory_order_relaxed)
@@ -1854,10 +2217,9 @@ void HookOuterFrame(safetyhook::Context&) {
 
     g_runtime->counters.outer_calls.fetch_add(
         1, std::memory_order_relaxed);
-    if (g_runtime->profile.native_timing()) {
-        return;
+    if (!g_runtime->profile.native_timing()) {
+        UpdateAuthored60HzTick();
     }
-    UpdateAuthored60HzTick();
     MaybeLogRuntimeStats(now.QuadPart);
 }
 

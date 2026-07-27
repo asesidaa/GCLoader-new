@@ -11,6 +11,7 @@ from tools.analysis.audio_replay_analyzer import (
     Pcm16Wave,
     ReplayCandidate,
     SessionAnalysis,
+    analyze_shared_song_clock,
     analyze_session,
     read_checkpointed_pcm16,
     read_timeline,
@@ -321,6 +322,118 @@ class ReplayDetectionTests(unittest.TestCase):
         self.assertIn("audio_resync", kinds)
 
 
+class SharedSongClockTests(unittest.TestCase):
+    def test_decodes_signed_desired_tick_bits(self) -> None:
+        summary = analyze_shared_song_clock(
+            (
+                {
+                    "kind": "gameplay_song_clock",
+                    "cursor_source": "rounded",
+                    "value0": 0,
+                    "value1": (-3) & ((1 << 64) - 1),
+                    "value2": 0,
+                },
+            )
+        )
+        self.assertEqual(summary.maximum_absolute_tick_error, 3)
+
+    def test_summarizes_fractional_corrections_and_anomalies(self) -> None:
+        def clock_event(
+            source: str,
+            current: int,
+            desired: int,
+            step: int,
+            *,
+            backlog: int = 0,
+            generation: int = 0,
+            output: int = 0,
+            source_frame: int = 0,
+            flags: int = 0,
+        ) -> dict[str, object]:
+            return {
+                "kind": "gameplay_song_clock",
+                "cursor_source": source,
+                "flags": flags,
+                "generation": generation,
+                "output_frame_begin": output,
+                "source_frame_begin": source_frame,
+                "value0": current,
+                "value1": desired & ((1 << 64) - 1),
+                "value2": (step << 32) | backlog,
+                "value3": step,
+            }
+
+        timeline = (
+            clock_event(
+                "exact",
+                100,
+                102,
+                2,
+                generation=1,
+                output=1_000,
+                source_frame=10_000,
+                flags=0x1,
+            ),
+            clock_event("rounded", 200, 200, 0, output=1_050),
+            clock_event("rounded", 200, 201, 1, output=1_100),
+            clock_event(
+                "rounded", 201, 203, 2, backlog=3, output=1_150
+            ),
+            clock_event(
+                "invalid",
+                203,
+                0,
+                1,
+                generation=1,
+                output=1_200,
+                source_frame=9_000,
+                flags=0x2,
+            ),
+            {
+                "kind": "seek_applied",
+                "output_frame_begin": 1_225,
+                "source_frame_begin": 20_000,
+                "source_frame_end": 16_957,
+            },
+            clock_event(
+                "exact",
+                203,
+                204,
+                1,
+                generation=2,
+                output=1_300,
+                source_frame=10_500,
+                flags=0x1,
+            ),
+        )
+        replay = ReplayCandidate(
+            start_frame=1_225,
+            lag_frames=3_312,
+            window_frames=2_400,
+            correlation=0.999,
+            normalized_error=0.01,
+            causal_events=(),
+        )
+
+        summary = analyze_shared_song_clock(
+            timeline, (replay,), SAMPLE_RATE
+        )
+
+        self.assertEqual(summary.total_observations, 6)
+        self.assertEqual(summary.exact, 2)
+        self.assertEqual(summary.rounded, 3)
+        self.assertEqual(summary.invalid, 1)
+        self.assertEqual(summary.step_zero, 1)
+        self.assertEqual(summary.step_one, 2)
+        self.assertEqual(summary.step_multi, 2)
+        self.assertEqual(summary.maximum_absolute_tick_error, 2)
+        self.assertEqual(summary.maximum_remaining_backlog, 3)
+        self.assertEqual(len(summary.generation_transitions), 1)
+        self.assertEqual(len(summary.same_generation_backwards), 1)
+        self.assertEqual(len(summary.watchdog_backward_seeks), 1)
+        self.assertEqual(len(summary.signature_replay_candidates), 1)
+
+
 class ReportTests(unittest.TestCase):
     def test_writes_ranked_report_and_bounded_candidate_wavs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -348,6 +461,24 @@ class ReportTests(unittest.TestCase):
                 incomplete_ranges=(),
                 candidates=candidates,
                 causal_findings=("converter reset: seek",),
+                shared_song_clock=analyze_shared_song_clock(
+                    (
+                        {
+                            "kind": "gameplay_song_clock",
+                            "cursor_source": "exact",
+                            "flags": 0x1,
+                            "generation": 7,
+                            "output_frame_begin": sample_rate,
+                            "source_frame_begin": sample_rate,
+                            "value0": 60,
+                            "value1": 62,
+                            "value2": 2 << 32,
+                            "value3": 2,
+                        },
+                    ),
+                    candidates,
+                    sample_rate,
+                ),
             )
             candidate_directory = session / "candidates"
             candidate_directory.mkdir()
@@ -363,6 +494,9 @@ class ReportTests(unittest.TestCase):
             report = (session / "report.md").read_text(encoding="utf-8")
             self.assertIn("## Causal findings", report)
             self.assertIn("## Ranked replay candidates", report)
+            self.assertIn("## Shared song clock", report)
+            self.assertIn("Exact: 1 (100.00%)", report)
+            self.assertIn("Step zero/one/multi: 0 / 0 / 1", report)
             self.assertIn("## Diagnostic verdict matrix", report)
             self.assertIn(
                 "only after the user confirms the live artifact occurred",

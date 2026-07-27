@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -514,6 +515,70 @@ int TestRecorderWritesStableSessionAndTimelineSchema() {
     return failures;
 }
 
+int TestGameplaySongClockEventsRoundTrip() {
+    TemporaryRoot root;
+    auto recorder =
+        diagnostics::AudioFlightRecorder::Create(
+            TestOptions(root.path()));
+
+    int failures = 0;
+    failures += Expect(
+        recorder != nullptr && recorder->StartSession(TestSession()),
+        "the shared-clock schema recorder to start");
+
+    constexpr std::array sources{
+        diagnostics::GameplaySongClockCursorSource::Exact,
+        diagnostics::GameplaySongClockCursorSource::Rounded,
+        diagnostics::GameplaySongClockCursorSource::Inactive,
+        diagnostics::GameplaySongClockCursorSource::Failed,
+        diagnostics::GameplaySongClockCursorSource::Invalid,
+    };
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        diagnostics::AudioDiagnosticEvent event{};
+        event.kind =
+            diagnostics::AudioDiagnosticEventKind::GameplaySongClock;
+        event.decision =
+            static_cast<std::uint8_t>(sources[index]);
+        event.flags = static_cast<std::uint16_t>(index);
+        event.generation = 100 + index;
+        event.output_frame_begin = 1'000 + index;
+        event.source_frame_begin = 2'000 + index;
+        event.value0 = 300 + index;
+        event.value1 = std::bit_cast<std::uint64_t>(
+            -123 - static_cast<std::int64_t>(index));
+        event.value2 =
+            (static_cast<std::uint64_t>(index) << 32U) |
+            (10U + index);
+        event.value3 = index;
+        recorder->PublishEvent(event);
+    }
+
+    const auto session_directory =
+        recorder->status().session_directory;
+    recorder->StopAndJoin();
+    const auto timeline =
+        ReadText(session_directory / "timeline.jsonl");
+    for (const std::string_view name : {
+             "exact", "rounded", "inactive", "failed", "invalid"}) {
+        failures += Expect(
+            timeline.contains(
+                "\"cursor_source\":\"" +
+                std::string{name} + "\""),
+            "every shared-clock cursor source to round-trip");
+    }
+    failures += Expect(
+        timeline.contains("\"kind\":\"gameplay_song_clock\"") &&
+            timeline.contains(
+                "\"value1\":" +
+                std::to_string(std::bit_cast<std::uint64_t>(
+                    std::int64_t{-123}))) &&
+            timeline.contains("\"generation\":100") &&
+            timeline.contains("\"output_frame_begin\":1000") &&
+            timeline.contains("\"source_frame_begin\":2000"),
+        "shared-clock JSONL preserves signed bits and cursor diagnostics");
+    return failures;
+}
+
 int TestCheckpointHeaderExcludesUncheckpointedTail() {
     TemporaryRoot root;
     auto options = TestOptions(root.path());
@@ -734,6 +799,7 @@ int main() {
     failures += TestEventRecordStaysFixedAndTriviallyCopyable();
     failures += TestRecorderWritesExactPcm16Wave();
     failures += TestRecorderWritesStableSessionAndTimelineSchema();
+    failures += TestGameplaySongClockEventsRoundTrip();
     failures += TestCheckpointHeaderExcludesUncheckpointedTail();
     failures += TestPcmGapInsertsMarkedSilenceAndInvalidatesRange();
     failures += TestCaptureLimitStopsRecorderWithoutBlockingPublisher();
