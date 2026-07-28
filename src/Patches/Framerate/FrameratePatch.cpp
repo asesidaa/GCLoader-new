@@ -39,6 +39,14 @@ GameplaySongClockInputSelection SelectGameplaySongClockInput(
     int group_cursor_ms,
     std::optional<audio::GameplayAudioCursorObservation>
         cursor_observation) noexcept {
+    if (cursor_observation.has_value() &&
+        cursor_observation->state ==
+            audio::GameplayAudioCursorState::Inactive) {
+        return {
+            .state = GameplaySongClockInputState::Inactive,
+        };
+    }
+
     if (group_cursor_ms >= 0) {
         if (cursor_observation.has_value() &&
             cursor_observation->state ==
@@ -69,13 +77,6 @@ GameplaySongClockInputSelection SelectGameplaySongClockInput(
         };
     }
 
-    if (cursor_observation.has_value() &&
-        cursor_observation->state ==
-            audio::GameplayAudioCursorState::Inactive) {
-        return {
-            .state = GameplaySongClockInputState::Inactive,
-        };
-    }
     return {
         .state = GameplaySongClockInputState::Failed,
     };

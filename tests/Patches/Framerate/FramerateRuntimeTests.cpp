@@ -154,6 +154,14 @@ const auto inactive_resolution =
 const auto failed_resolution =
     gc::framerate::detail::ResolveGameplaySongClockStep(
         fallback_clock, 120, 0, -1, std::nullopt);
+auto ended_buffer_clock = GameplaySongClock::Create(240, 1).value();
+const auto ended_buffer_resolution =
+    gc::framerate::detail::ResolveGameplaySongClockStep(
+        ended_buffer_clock,
+        32'654,
+        0,
+        136'062,
+        inactive_cursor);
 const GameplayAudioCursorObservation invalid_exact_cursor{
     .query_serial = 19,
     .state = GameplayAudioCursorState::Exact,
@@ -176,6 +184,13 @@ failures += Expect(
         !invalid_resolution.decision &&
         invalid_resolution.observation_rejected,
     "inactive failed and invalid observations preserve initialized step one");
+failures += Expect(
+    ended_buffer_resolution.input.state ==
+            GameplaySongClockInputState::Inactive &&
+        ended_buffer_resolution.step == 1 &&
+        !ended_buffer_resolution.decision &&
+        !ended_buffer_resolution.observation_rejected,
+    "inactive publication overrides a nonnegative final group cursor");
 
 FixedAudioDiagnosticSink audio_diagnostics;
 gc::audio::diagnostics::ActivateAudioDiagnosticSink(&audio_diagnostics);
