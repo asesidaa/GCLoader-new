@@ -346,11 +346,47 @@ Removal verification:
 - The stripped x86 production target linked successfully.
 - The complete post-removal suite passed `59/59` CTests in 10.65 seconds.
 
-Accepted capture directories scheduled for explicit cleanup after this record
-is committed:
+Production identity:
+
+- Last code-affecting commit:
+  `9bb61b46786bb87e8d89e3ff938525e249c4091f`
+- Candidate:
+  `H:\gc\artifacts\GCLoader\.worktrees\audio-replay-diagnostics-stage-a\build-msvc32-release\dist\iDmacDrv32.dll`
+- PE identity:
+  `14C machine (x86)`
+- Length:
+  `5636096` bytes
+- Candidate/archive/runtime SHA-256:
+  `D5728147B61554F3F2047A1476BFD8EFE2F6B47CCE17B672C3CEEC8486F05CB5`
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\wasapi-shared-clock\production\D5728147B61554F3F2047A1476BFD8EFE2F6B47CCE17B672C3CEEC8486F05CB5\iDmacDrv32.dll`
+- Runtime destination:
+  `H:\gc\iDmacDrv32.dll`
+- Rollback copy:
+  `H:\gc\deploy-backups\wasapi-shared-clock-production-20260729-052242\iDmacDrv32.pre-production.dll`
+- Rollback SHA-256:
+  `970A76157950F556446EE0FBF70CE7961062615C2ED23D49CEDCEEF1DF5F161B`
+
+Deployment occurred while `game471.exe` was not running. Candidate, archive,
+and runtime hashes matched exactly. No configuration file was altered.
+Binary-string verification found no recorder session, submitted-WAV,
+timeline, or shared-clock telemetry marker in the production DLL.
+
+The accepted capture directories removed explicitly after preserving their
+numeric evidence were:
 
 - `H:\gc\audio-diagnostics\20260727-213445`
 - `H:\gc\audio-diagnostics\20260728-205539`
 - `H:\gc\audio-diagnostics\20260729-025330`
 - `H:\gc\audio-diagnostics\20260729-044429`
 - `H:\gc\audio-diagnostics\20260729-045806`
+
+These five directories occupied `386924951` bytes in total and were removed
+permanently. `H:\gc\audio-diagnostics` remains as an empty root with zero
+children.
+
+The user directed immediate stage closeout and cleanup after accepting the
+60, 165, and corrected 240 FPS runs. No additional diagnostic capture or
+separate post-removal gameplay capture is part of this closeout; production
+identity is instead tied to the tested code commit and the mechanical removal
+proof above.
