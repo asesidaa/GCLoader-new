@@ -141,9 +141,81 @@ Built and deployed on 2026-07-28:
 - Rollback copy:
   `H:\gc\deploy-backups\wasapi-shared-clock-diagnostic-20260728-044207\iDmacDrv32.pre-shared-clock.dll`
 
+### End-of-song correction build
+
+The first 240 FPS run exposed an end-of-buffer selection error. An explicit
+inactive cursor publication was classified as rounded whenever the game getter
+also returned the buffer's final nonnegative millisecond cursor. That selected
+step zero indefinitely and prevented the post-song state transition.
+
+The corrected diagnostic build makes the explicit inactive publication
+authoritative and therefore preserves the binary's initialized step of one:
+
+- Source commit:
+  `5b7f5c04b922b3b5aab4b61b4491a6285d06554c`
+- Verification:
+  x86 `iDmacDrv32` build passed, 60/60 CTests passed, 11/11 audio replay
+  analyzer tests passed, and the post-commit focused suite passed 4/4
+- PE identity:
+  `14C machine (x86)`
+- Candidate:
+  `H:\gc\artifacts\GCLoader\.worktrees\audio-replay-diagnostics-stage-a\build-msvc32-release\dist\iDmacDrv32.dll`
+- Candidate length:
+  `5672960` bytes
+- Candidate last-write time:
+  `2026-07-28T21:19:13.5731397+08:00`
+- Candidate/archive/runtime SHA-256:
+  `970A76157950F556446EE0FBF70CE7961062615C2ED23D49CEDCEEF1DF5F161B`
+- Immutable archive:
+  `H:\gc\artifacts\runtime-builds\wasapi-shared-clock\diagnostic\970A76157950F556446EE0FBF70CE7961062615C2ED23D49CEDCEEF1DF5F161B\iDmacDrv32.dll`
+- Runtime destination:
+  `H:\gc\iDmacDrv32.dll`
+- Rollback copy:
+  `H:\gc\deploy-backups\wasapi-shared-clock-end-state-fix-20260728-212023\iDmacDrv32.pre-end-state-fix.dll`
+- Rollback SHA-256:
+  `E18F09A3FC8A9A001CDEB53D7C94A9B92EAA605ECB2109EFFC8AC7B3CACE2331`
+
 ## Shared-clock runtime matrix
 
-Not exercised yet.
+### Target 240, initial diagnostic build
+
+- Configured target:
+  `240`
+- Measured external rate:
+  `240.113 FPS`
+- Session:
+  `H:\gc\audio-diagnostics\20260728-205539`
+- Conclusive capture:
+  `203.740 seconds`
+- Shared-clock observations:
+  exact `32626`, rounded `3204`, inactive `0`, failed `0`, invalid `0`
+- Step counts:
+  zero `3361`, one `32287`, multi `182`
+- Maximum absolute tick error/backlog:
+  `4 / 0`
+- Audio evidence:
+  the BGM begins at capture `47.840 seconds`; whole-song low-band normalized
+  correlation is `0.967`; every tested ten-second window retains the same
+  alignment; there are no PCM gaps, confirmed replay candidates, or
+  same-generation BGM cursor rewinds
+- `_SHOT` qualification:
+  the analyzer's 69 possible-watchdog labels are short rotating one-shot
+  buffer resets, not BGM rewinds
+- User audio verdict:
+  audio feels fine
+- Gameplay verdict:
+  rejected because the chart remained active instead of proceeding to the
+  result scene
+- Failure boundary:
+  the last exact event advances current tick `32653` toward desired tick
+  `32654`; the next and all remaining rounded events hold both at `32654` with
+  step zero
+- Root cause:
+  an inactive observation lost precedence to the nonnegative final
+  whole-millisecond cursor
+- Follow-up:
+  repeat target 240 with corrected diagnostic SHA-256
+  `970A76157950F556446EE0FBF70CE7961062615C2ED23D49CEDCEEF1DF5F161B`
 
 ## Diagnostic removal and production build
 
