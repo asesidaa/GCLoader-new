@@ -85,17 +85,6 @@ CountGameplayEffectAdvances(
 GetGameplayCadenceHookSemantics(
     FramerateHookId id) noexcept;
 
-void PublishGameplaySongClockDiagnostic(
-    std::uint32_t current_tick,
-    const GameplaySongClockStepSelection& selection,
-    std::uint32_t crossed_authored_ticks) noexcept;
-
-void PublishAudioResyncDiagnostic(
-    std::int32_t drift_ms,
-    std::int32_t margin_ms,
-    bool readable,
-    bool suppressed) noexcept;
-
 } // namespace detail
 
 } // namespace gc::framerate

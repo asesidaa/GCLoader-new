@@ -1,5 +1,4 @@
 set(GC_AUDIO_TESTS
-        AudioFlightRecorderTests
         AudioCursorTimelineTests
         AudioFormatTests
         AudioSnapshotTests

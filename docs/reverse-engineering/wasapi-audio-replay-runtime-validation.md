@@ -217,18 +217,102 @@ authoritative and therefore preserves the binary's initialized step of one:
   repeat target 240 with corrected diagnostic SHA-256
   `970A76157950F556446EE0FBF70CE7961062615C2ED23D49CEDCEEF1DF5F161B`
 
+### Target 240, corrected end-state build
+
+- Measured external rate:
+  `240.108 FPS`
+- Session:
+  `H:\gc\audio-diagnostics\20260729-025330`
+- Conclusive capture:
+  `229.910 seconds`, with no incomplete ranges
+- Shared-clock observations:
+  exact `32628`, rounded `3`, inactive `694`, failed `0`, invalid `0`
+- Active-cursor step counts:
+  zero `85`, one `32437`, multi `109`
+- Maximum absolute tick error/backlog:
+  `2 / 0`
+- End-state boundary:
+  all `694` inactive observations advanced by exactly one tick before the
+  result transition
+- Audio evidence:
+  no same-generation BGM cursor rewind and no confirmed replay candidate;
+  whole-song correlation `0.9676` at capture offset `56.370 seconds`, with
+  zero relative drift in all 13 sampled windows
+- User verdict:
+  audio remained clean and the song completed normally into results
+
+### Target 60, native path
+
+- Measured external rate:
+  `60.0035 FPS`
+- Startup plan:
+  native bypass, direct writes `0`, hooks `9`
+- Session:
+  `H:\gc\audio-diagnostics\20260729-044429`
+- Conclusive capture:
+  `234.060 seconds`, with no incomplete ranges
+- Shared-clock observations:
+  exact `8164`, rounded `0`, inactive `175`, failed `0`, invalid `0`
+- Active-cursor step counts:
+  zero `1`, one `8163`, multi `0`
+- Maximum absolute tick error/backlog:
+  `1 / 0`
+- End-state boundary:
+  all `175` inactive observations advanced by exactly one tick
+- Audio evidence:
+  no same-generation BGM cursor rewind and no confirmed replay candidate;
+  whole-song correlation `0.974154` at capture offset `59.850 seconds`, with
+  zero relative drift in all 13 sampled windows
+- Qualification:
+  one generic 250 ms waveform candidate overlapped dense rotating `_SHOT`
+  activity and did not reproduce the accepted defect signature
+- User verdict:
+  the full run, audio, and result transition were normal
+
+### Target 165, transformed path
+
+- Measured external rate:
+  `165.202 FPS`
+- Startup plan:
+  transformed deterministic phase, direct writes `17`, hooks `50`
+- Session:
+  `H:\gc\audio-diagnostics\20260729-045806`
+- Conclusive capture:
+  `246.950 seconds`, with no incomplete ranges
+- Shared-clock observations:
+  exact `22442`, rounded `2`, inactive `479`, failed `0`, invalid `0`
+- Active-cursor step counts:
+  zero `45`, one `22349`, multi `50`
+- Maximum absolute tick error/backlog:
+  `2 / 0`
+- End-state boundary:
+  all `479` inactive observations advanced by exactly one tick
+- Audio evidence:
+  no same-generation BGM cursor rewind and no ranked or confirmed replay
+  candidate; whole-song correlation `0.974110` at capture offset
+  `53.320 seconds`, with zero relative drift in all 13 sampled windows
+- User verdict:
+  the full run was normal
+
+### Matrix closeout
+
+The user accepted the 60, 165, and corrected 240 FPS runs and directed this
+stage to finish and clean up. A separately exact 59.94 FPS limiter case and a
+separate 144 FPS capture are not required for this stage; normal limiter drift
+around each configured target is expected.
+
+Across all accepted captures, the WASAPI endpoint reported zero late wakes,
+confirmed gaps, skipped output frames, chronic pacing failures, and endpoint
+HRESULT failures.
+
 ## Diagnostic removal and production build
 
-Not started. Removal is gated on user acceptance of the corrected diagnostic
-run.
+The temporary source path was removed after runtime acceptance. The permanent
+unwrapped cursor resolution, scoped gameplay cursor publication, rational
+shared clock, root hook, mode-specific hook plans, range-aware consumers, and
+end-of-song inactive-cursor behavior remain.
 
-## Mandatory future cleanup
-
-The recorder, event publications, analyzer, temporary tests, capture
-directories, and diagnostic log lines must remain through the corrected
-diagnostic run and be removed from the final production DLL.
-
-The mechanical Stage C source-removal manifest is:
+The Stage C source-removal manifest is:
 
 - `src/Audio/CMakeLists.txt`
 - `src/Audio/Diagnostics/AudioFlightRecorder.cpp`
@@ -251,3 +335,22 @@ The mechanical Stage C source-removal manifest is:
 - `tests/Patches/Framerate/FramerateRuntimeTests.cpp`
 - `tools/analysis/audio_replay_analyzer.py`
 - `tools/analysis/tests/test_audio_replay_analyzer.py`
+
+Removal verification:
+
+- `rg` found no remaining `AudioFlightRecorder`, `AudioDiagnostic`,
+  `audio-diagnostics`, `GameplaySongClockCursorSource`,
+  `PublishAudioResyncDiagnostic`, diagnostic sink, or diagnostic voice-ID
+  reference under `src`, `tests`, or `tools`.
+- `git diff --check` passed.
+- The stripped x86 production target linked successfully.
+- The complete post-removal suite passed `59/59` CTests in 10.65 seconds.
+
+Accepted capture directories scheduled for explicit cleanup after this record
+is committed:
+
+- `H:\gc\audio-diagnostics\20260727-213445`
+- `H:\gc\audio-diagnostics\20260728-205539`
+- `H:\gc\audio-diagnostics\20260729-025330`
+- `H:\gc\audio-diagnostics\20260729-044429`
+- `H:\gc\audio-diagnostics\20260729-045806`

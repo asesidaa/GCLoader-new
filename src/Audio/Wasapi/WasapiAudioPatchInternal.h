@@ -57,9 +57,6 @@ void ReportAudioRuntimeFailure(
 void ReportAudioStartupFailure(
     const AudioStartupFailure&,
     AudioPatchPlatformActions) noexcept;
-void ReportAudioDiagnosticStatus(
-    const diagnostics::AudioFlightRecorderStatus&,
-    AudioPatchPlatformActions) noexcept;
 
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn,
@@ -67,7 +64,6 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     REFERENCE_TIME configured_duration,
     AudioPatchPlatformActions,
     std::shared_ptr<IAudioEngineObserver>,
-    diagnostics::IAudioDiagnosticSink*,
     AudioStartupFailure*) noexcept;
 
 class IExclusiveEngineStartup {

@@ -1,6 +1,5 @@
 #include "Patches/Framerate/FrameratePatch.h"
 
-#include "Audio/Diagnostics/AudioFlightRecorder.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Config/config.h"
 #include "Patches/Countdown/CountdownTimerFreeze.h"
@@ -21,7 +20,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <bit>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -174,124 +172,6 @@ GetGameplayCadenceHookSemantics(
     }
 }
 
-audio::diagnostics::GameplaySongClockCursorSource
-GameplaySongClockDiagnosticSource(
-    const GameplaySongClockStepSelection& selection) noexcept {
-    auto cursor_source =
-        audio::diagnostics::GameplaySongClockCursorSource::Failed;
-    if (selection.observation_rejected) {
-        cursor_source =
-            audio::diagnostics::GameplaySongClockCursorSource::Invalid;
-    } else {
-        switch (selection.input.state) {
-        case GameplaySongClockInputState::Exact:
-            cursor_source =
-                audio::diagnostics::
-                    GameplaySongClockCursorSource::Exact;
-            break;
-        case GameplaySongClockInputState::Rounded:
-            cursor_source =
-                audio::diagnostics::
-                    GameplaySongClockCursorSource::Rounded;
-            break;
-        case GameplaySongClockInputState::Inactive:
-            cursor_source =
-                audio::diagnostics::
-                    GameplaySongClockCursorSource::Inactive;
-            break;
-        case GameplaySongClockInputState::Failed:
-            cursor_source =
-                audio::diagnostics::
-                    GameplaySongClockCursorSource::Failed;
-            break;
-        }
-    }
-    return cursor_source;
-}
-
-void PublishGameplaySongClockDiagnostic(
-    std::uint32_t current_tick,
-    const GameplaySongClockStepSelection& selection,
-    std::uint32_t crossed_authored_ticks) noexcept {
-    if (audio::diagnostics::active_sink.load(
-            std::memory_order_acquire) == nullptr) {
-        return;
-    }
-
-    const auto cursor_source =
-        GameplaySongClockDiagnosticSource(selection);
-
-    std::uint64_t generation{};
-    std::uint64_t source_frame{};
-    if (selection.input.observation.has_value() &&
-        selection.input.observation->kind ==
-            SongClockObservationKind::ExactSourceFrame) {
-        generation =
-            selection.input.observation->playback_generation;
-        source_frame = selection.input.observation->position;
-    }
-    const auto remaining_backlog =
-        selection.decision.has_value()
-        ? selection.decision->remaining_backlog
-        : 0U;
-    const auto desired_tick =
-        selection.decision.has_value()
-        ? std::bit_cast<std::uint64_t>(
-              selection.decision->desired_tick)
-        : 0U;
-    const auto flags = static_cast<std::uint16_t>(
-        (selection.decision.has_value() &&
-                 selection.decision->new_generation
-             ? 0x1U
-             : 0U) |
-        (selection.observation_rejected ? 0x2U : 0U));
-
-    audio::diagnostics::PublishActiveAudioDiagnosticEvent({
-        .kind = audio::diagnostics::AudioDiagnosticEventKind::
-            GameplaySongClock,
-        .decision = static_cast<std::uint8_t>(cursor_source),
-        .flags = flags,
-        .qpc_ticks =
-            audio::diagnostics::CaptureAudioDiagnosticQpcTicks(),
-        .generation = generation,
-        .output_frame_begin = selection.input.output_frame,
-        .source_frame_begin = source_frame,
-        .value0 = current_tick,
-        .value1 = desired_tick,
-        .value2 =
-            (static_cast<std::uint64_t>(selection.step) << 32U) |
-            remaining_backlog,
-        .value3 = crossed_authored_ticks,
-    });
-}
-
-void PublishAudioResyncDiagnostic(
-    std::int32_t drift_ms,
-    std::int32_t margin_ms,
-    bool readable,
-    bool suppressed) noexcept {
-    LARGE_INTEGER ticks{};
-    const auto qpc_ticks =
-        QueryPerformanceCounter(&ticks) && ticks.QuadPart >= 0
-        ? static_cast<std::uint64_t>(ticks.QuadPart)
-        : 0;
-    const auto decision = !readable
-        ? audio::diagnostics::AudioResyncDecision::Unreadable
-        : suppressed
-            ? audio::diagnostics::AudioResyncDecision::
-                SuppressedInMargin
-            : audio::diagnostics::AudioResyncDecision::
-                AllowedOutOfMargin;
-    audio::diagnostics::PublishActiveAudioDiagnosticEvent({
-        .kind =
-            audio::diagnostics::AudioDiagnosticEventKind::AudioResync,
-        .decision = static_cast<std::uint8_t>(decision),
-        .signed_value0 = std::bit_cast<std::uint32_t>(drift_ms),
-        .signed_value1 = std::bit_cast<std::uint32_t>(margin_ms),
-        .qpc_ticks = qpc_ticks,
-    });
-}
-
 } // namespace detail
 
 namespace {
@@ -386,16 +266,6 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t countdown_compare_hits{0};
     std::atomic_uint64_t audio_skip_margin_clamps{0};
     std::atomic_uint64_t audio_skip_interval_conversions{0};
-    std::atomic_uint64_t song_clock_exact{0};
-    std::atomic_uint64_t song_clock_rounded{0};
-    std::atomic_uint64_t song_clock_inactive{0};
-    std::atomic_uint64_t song_clock_failed{0};
-    std::atomic_uint64_t song_clock_invalid{0};
-    std::atomic_uint64_t song_clock_step_zero{0};
-    std::atomic_uint64_t song_clock_step_one{0};
-    std::atomic_uint64_t song_clock_step_multi{0};
-    std::atomic_uint64_t song_clock_maximum_absolute_tick_error{0};
-    std::atomic_uint64_t song_clock_maximum_remaining_backlog{0};
     std::atomic_uint64_t gameplay_effect_advances{0};
     std::atomic_uint64_t gameplay_effect_skips{0};
     std::atomic_uint64_t effect_cadence_runs{0};
@@ -482,72 +352,6 @@ struct FramerateHookOperationPlan {
 std::optional<FramerateRuntimeState> g_runtime;
 thread_local int g_movieclip_goto_depth = 0;
 thread_local MovieClipPreprocessDepth g_movieclip_preprocess_depth;
-
-void UpdateMaximum(
-    std::atomic_uint64_t& destination,
-    std::uint64_t candidate) noexcept {
-    auto observed = destination.load(std::memory_order_relaxed);
-    while (observed < candidate &&
-           !destination.compare_exchange_weak(
-               observed,
-               candidate,
-               std::memory_order_relaxed,
-               std::memory_order_relaxed)) {
-    }
-}
-
-std::uint64_t AbsoluteMagnitude(std::int64_t value) noexcept {
-    return value >= 0
-        ? static_cast<std::uint64_t>(value)
-        : static_cast<std::uint64_t>(-(value + 1)) + 1;
-}
-
-void RecordGameplaySongClockSelection(
-    std::uint32_t current_tick,
-    const detail::GameplaySongClockStepSelection& selection,
-    std::uint32_t crossed_authored_ticks) noexcept {
-    auto& counters = g_runtime->counters;
-    switch (detail::GameplaySongClockDiagnosticSource(selection)) {
-    case audio::diagnostics::GameplaySongClockCursorSource::Exact:
-        counters.song_clock_exact.fetch_add(
-            1, std::memory_order_relaxed);
-        break;
-    case audio::diagnostics::GameplaySongClockCursorSource::Rounded:
-        counters.song_clock_rounded.fetch_add(
-            1, std::memory_order_relaxed);
-        break;
-    case audio::diagnostics::GameplaySongClockCursorSource::Inactive:
-        counters.song_clock_inactive.fetch_add(
-            1, std::memory_order_relaxed);
-        break;
-    case audio::diagnostics::GameplaySongClockCursorSource::Failed:
-        counters.song_clock_failed.fetch_add(
-            1, std::memory_order_relaxed);
-        break;
-    case audio::diagnostics::GameplaySongClockCursorSource::Invalid:
-        counters.song_clock_invalid.fetch_add(
-            1, std::memory_order_relaxed);
-        break;
-    }
-
-    if (selection.decision.has_value()) {
-        auto& step_counter = selection.step == 0
-            ? counters.song_clock_step_zero
-            : selection.step == 1
-                ? counters.song_clock_step_one
-                : counters.song_clock_step_multi;
-        step_counter.fetch_add(1, std::memory_order_relaxed);
-        UpdateMaximum(
-            counters.song_clock_maximum_absolute_tick_error,
-            AbsoluteMagnitude(selection.decision->delta_ticks));
-        UpdateMaximum(
-            counters.song_clock_maximum_remaining_backlog,
-            selection.decision->remaining_backlog);
-    }
-
-    detail::PublishGameplaySongClockDiagnostic(
-        current_tick, selection, crossed_authored_ticks);
-}
 
 char __fastcall HookMovieClipGoto(void*, void*, int, int);
 char __fastcall HookMovieClipAdvance(void*, void*, char, char);
@@ -1677,8 +1481,6 @@ void HookAudioResyncPolicy(safetyhook::Context& context) {
     if (!ReadI32StackSafe(context, -0x0C, drift_ms) ||
         !ReadI32StackSafe(context, -0x24, margin_ms) ||
         margin_ms < 0) {
-        detail::PublishAudioResyncDiagnostic(
-            drift_ms, margin_ms, false, false);
         return;
     }
 
@@ -1687,8 +1489,6 @@ void HookAudioResyncPolicy(safetyhook::Context& context) {
         : static_cast<std::int64_t>(drift_ms);
     const bool suppressed =
         abs_drift_ms <= static_cast<std::int64_t>(margin_ms);
-    detail::PublishAudioResyncDiagnostic(
-        drift_ms, margin_ms, true, suppressed);
     if (suppressed) {
         context.eip = static_cast<std::uint32_t>(
             ExecutableBase() + kAudioResyncEpilogueRva);
@@ -1752,26 +1552,6 @@ void HookGameplaySongClock(safetyhook::Context& context) {
         static_cast<std::int32_t>(game_time_offset_raw),
         group_cursor_ms,
         cursor_observation);
-    std::uint32_t crossed_authored_ticks{};
-    if (selection.decision.has_value()) {
-        const auto crossed = CountCrossedAuthored60Ticks(
-            g_runtime->profile,
-            current_tick,
-            selection.step);
-        if (!crossed) {
-            selection.decision.reset();
-            selection.step = 1;
-            selection.observation_rejected = true;
-            RecordGameplaySongClockSelection(
-                current_tick, selection, 0);
-            FatalRuntimeConversion(
-                "shared song-clock authored crossing");
-            return;
-        }
-        crossed_authored_ticks = crossed.value();
-    }
-    RecordGameplaySongClockSelection(
-        current_tick, selection, crossed_authored_ticks);
     if (!selection.decision.has_value()) {
         return;
     }
@@ -2115,36 +1895,6 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << "/interval_conversions="
               << counters.audio_skip_interval_conversions.load(
-                     std::memory_order_relaxed)
-              << " song_clock=exact="
-              << counters.song_clock_exact.load(
-                     std::memory_order_relaxed)
-              << "/rounded="
-              << counters.song_clock_rounded.load(
-                     std::memory_order_relaxed)
-              << "/inactive="
-              << counters.song_clock_inactive.load(
-                     std::memory_order_relaxed)
-              << "/failed="
-              << counters.song_clock_failed.load(
-                     std::memory_order_relaxed)
-              << "/invalid="
-              << counters.song_clock_invalid.load(
-                     std::memory_order_relaxed)
-              << "/step0="
-              << counters.song_clock_step_zero.load(
-                     std::memory_order_relaxed)
-              << "/step1="
-              << counters.song_clock_step_one.load(
-                     std::memory_order_relaxed)
-              << "/step_multi="
-              << counters.song_clock_step_multi.load(
-                     std::memory_order_relaxed)
-              << "/max_tick_error="
-              << counters.song_clock_maximum_absolute_tick_error.load(
-                     std::memory_order_relaxed)
-              << "/max_backlog="
-              << counters.song_clock_maximum_remaining_backlog.load(
                      std::memory_order_relaxed)
               << " gameplay_effect="
               << counters.gameplay_effect_advances.load(

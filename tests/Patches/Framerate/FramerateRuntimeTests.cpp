@@ -1,5 +1,4 @@
 #include "Patches/Framerate/FrameratePatch.h"
-#include "Audio/Diagnostics/AudioFlightRecorder.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateHookTransforms.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
@@ -7,13 +6,10 @@
 #include "Patches/Framerate/FramerateProfile.h"
 
 #include <array>
-#include <atomic>
-#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
-#include <span>
 
 using namespace gc::framerate;
 
@@ -41,37 +37,6 @@ bool ReadTransformValue(
     value = g_read_value;
     return true;
 }
-
-class FixedAudioDiagnosticSink final
-    : public gc::audio::diagnostics::IAudioDiagnosticSink {
-public:
-    bool StartSession(
-        const gc::audio::diagnostics::AudioFlightRecorderSession&)
-        noexcept override {
-        return true;
-    }
-
-    void PublishEvent(
-        gc::audio::diagnostics::AudioDiagnosticEvent event)
-        noexcept override {
-        const auto index =
-            count.fetch_add(1, std::memory_order_relaxed);
-        if (index < events.size()) {
-            events[index] = event;
-        }
-    }
-
-    gc::audio::diagnostics::PcmPublishResult PublishSubmittedPcm(
-        const gc::audio::diagnostics::SubmittedPcmMetadata&,
-        std::span<const std::int16_t>) noexcept override {
-        return {};
-    }
-
-    std::array<
-        gc::audio::diagnostics::AudioDiagnosticEvent,
-        3> events{};
-    std::atomic_size_t count{};
-};
 
 } // namespace
 
@@ -191,102 +156,6 @@ failures += Expect(
         !ended_buffer_resolution.decision &&
         !ended_buffer_resolution.observation_rejected,
     "inactive publication overrides a nonnegative final group cursor");
-
-FixedAudioDiagnosticSink audio_diagnostics;
-gc::audio::diagnostics::ActivateAudioDiagnosticSink(&audio_diagnostics);
-gc::framerate::detail::PublishAudioResyncDiagnostic(
-    -17, 48, true, true);
-gc::framerate::detail::PublishAudioResyncDiagnostic(
-    63, 48, true, false);
-gc::framerate::detail::PublishAudioResyncDiagnostic(
-    0, 0, false, false);
-gc::audio::diagnostics::DeactivateAudioDiagnosticSink(&audio_diagnostics);
-failures += Expect(
-    audio_diagnostics.count.load(std::memory_order_relaxed) == 3,
-    "audio resync diagnostic publishes every policy observation");
-using ResyncDecision =
-    gc::audio::diagnostics::AudioResyncDecision;
-failures += Expect(
-    audio_diagnostics.events[0].kind ==
-            gc::audio::diagnostics::AudioDiagnosticEventKind::AudioResync &&
-        std::bit_cast<std::int32_t>(
-            audio_diagnostics.events[0].signed_value0) == -17 &&
-        std::bit_cast<std::int32_t>(
-            audio_diagnostics.events[0].signed_value1) == 48 &&
-        audio_diagnostics.events[0].decision ==
-            static_cast<std::uint8_t>(
-                ResyncDecision::SuppressedInMargin) &&
-        audio_diagnostics.events[0].qpc_ticks != 0,
-    "in-margin resync diagnostic preserves signed values");
-failures += Expect(
-    std::bit_cast<std::int32_t>(
-        audio_diagnostics.events[1].signed_value0) == 63 &&
-        std::bit_cast<std::int32_t>(
-            audio_diagnostics.events[1].signed_value1) == 48 &&
-        audio_diagnostics.events[1].decision ==
-            static_cast<std::uint8_t>(
-                ResyncDecision::AllowedOutOfMargin) &&
-        audio_diagnostics.events[1].qpc_ticks != 0,
-    "out-of-margin resync diagnostic preserves policy decision");
-failures += Expect(
-    std::bit_cast<std::int32_t>(
-        audio_diagnostics.events[2].signed_value0) == 0 &&
-        std::bit_cast<std::int32_t>(
-            audio_diagnostics.events[2].signed_value1) == 0 &&
-        audio_diagnostics.events[2].decision ==
-            static_cast<std::uint8_t>(ResyncDecision::Unreadable) &&
-        audio_diagnostics.events[2].qpc_ticks != 0,
-    "unreadable resync diagnostic remains distinct");
-
-FixedAudioDiagnosticSink song_clock_diagnostics;
-gc::audio::diagnostics::ActivateAudioDiagnosticSink(
-    &song_clock_diagnostics);
-gc::framerate::detail::PublishGameplaySongClockDiagnostic(
-    119, exact_resolution, 1);
-gc::framerate::detail::PublishGameplaySongClockDiagnostic(
-    120, invalid_resolution, 0);
-gc::audio::diagnostics::DeactivateAudioDiagnosticSink(
-    &song_clock_diagnostics);
-using CursorSource =
-    gc::audio::diagnostics::GameplaySongClockCursorSource;
-failures += Expect(
-    song_clock_diagnostics.count.load(
-        std::memory_order_relaxed) == 2,
-    "shared song-clock diagnostic publishes every resolution");
-failures += Expect(
-    song_clock_diagnostics.events[0].kind ==
-            gc::audio::diagnostics::AudioDiagnosticEventKind::
-                GameplaySongClock &&
-        song_clock_diagnostics.events[0].decision ==
-            static_cast<std::uint8_t>(CursorSource::Exact) &&
-        song_clock_diagnostics.events[0].flags == 0x1 &&
-        song_clock_diagnostics.events[0].generation == 23 &&
-        song_clock_diagnostics.events[0].output_frame_begin ==
-            96'000 &&
-        song_clock_diagnostics.events[0].source_frame_begin ==
-            88'200 &&
-        song_clock_diagnostics.events[0].value0 == 119 &&
-        std::bit_cast<std::int64_t>(
-            song_clock_diagnostics.events[0].value1) == 120 &&
-        song_clock_diagnostics.events[0].value2 ==
-            (std::uint64_t{1} << 32U) &&
-        song_clock_diagnostics.events[0].value3 == 1 &&
-        song_clock_diagnostics.events[0].qpc_ticks != 0,
-    "exact clock event preserves generation cursor decision and crossings");
-failures += Expect(
-    song_clock_diagnostics.events[1].decision ==
-            static_cast<std::uint8_t>(CursorSource::Invalid) &&
-        song_clock_diagnostics.events[1].flags == 0x2 &&
-        song_clock_diagnostics.events[1].generation == 24 &&
-        song_clock_diagnostics.events[1].output_frame_begin ==
-            96'001 &&
-        song_clock_diagnostics.events[1].source_frame_begin ==
-            88'200 &&
-        song_clock_diagnostics.events[1].value0 == 120 &&
-        song_clock_diagnostics.events[1].value1 == 0 &&
-        song_clock_diagnostics.events[1].value2 ==
-            (std::uint64_t{1} << 32U),
-    "invalid exact clock event retains rejected cursor evidence");
 
 AuthoredFrameOperand authored_operand{};
 safetyhook::Context redirected{};

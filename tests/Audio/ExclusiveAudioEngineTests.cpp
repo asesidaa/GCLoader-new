@@ -1,6 +1,5 @@
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
 #include "Audio/Wasapi/ExclusiveAudioEngineInternal.h"
-#include "Audio/Diagnostics/AudioFlightRecorder.h"
 
 #include <audioclient.h>
 
@@ -49,9 +48,6 @@ static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
 
 constexpr std::uint32_t kFrames = 8;
 constexpr std::size_t kSamples = kFrames * gc::audio::kOutputChannels;
-constexpr std::uint32_t kDiagnosticFrames = 480;
-constexpr std::size_t kDiagnosticSamples =
-    kDiagnosticFrames * gc::audio::kOutputChannels;
 constexpr std::uint64_t kClockFrequency = 10'000'000;
 constexpr std::uint64_t kInitialClock = 1'000;
 constexpr auto kPeriod = static_cast<REFERENCE_TIME>(1'814);
@@ -276,11 +272,9 @@ struct FakeWasapiState {
     std::array<ClockAction, 64> clocks{};
     std::size_t clock_read{};
     std::size_t clock_write{};
-    std::array<std::array<std::int16_t, kDiagnosticSamples>, 32> submissions{};
+    std::array<std::array<std::int16_t, kSamples>, 32> submissions{};
     std::atomic_size_t submission_count{};
-    std::array<
-        std::byte,
-        kDiagnosticSamples * sizeof(std::int16_t)> render_bytes{};
+    std::array<std::byte, kSamples * sizeof(std::int16_t)> render_bytes{};
     std::mutex mutex;
     std::condition_variable condition;
     std::atomic_bool block_initialize{};
@@ -302,7 +296,6 @@ struct FakeWasapiState {
     std::wstring endpoint_id{L"fake-endpoint-id"};
     std::uint32_t supported_output_rate{
         gc::audio::kGamePrimarySampleRate};
-    std::uint32_t buffer_frames{kFrames};
     EndpointFormatKind supported_format_kind{
         EndpointFormatKind::LegacyPcm};
     std::array<EndpointPcmFormat, 4> probed_formats{};
@@ -369,64 +362,6 @@ struct FakeWasapiState {
         }
         return calls.size();
     }
-};
-
-class FakeAudioDiagnosticSink final
-    : public gc::audio::diagnostics::IAudioDiagnosticSink {
-public:
-    explicit FakeAudioDiagnosticSink(
-        std::shared_ptr<FakeWasapiState> api) noexcept
-        : api_(std::move(api)) {}
-
-    bool StartSession(
-        const gc::audio::diagnostics::AudioFlightRecorderSession& session)
-        noexcept override {
-        last_session = session;
-        start_before_endpoint.store(
-            !api_->started.load(std::memory_order_acquire) &&
-                api_->First(ApiCall::Start) == api_->calls.size(),
-            std::memory_order_relaxed);
-        start_seen.store(true, std::memory_order_release);
-        return start_result;
-    }
-
-    void PublishEvent(
-        gc::audio::diagnostics::AudioDiagnosticEvent) noexcept override {}
-
-    gc::audio::diagnostics::PcmPublishResult PublishSubmittedPcm(
-        const gc::audio::diagnostics::SubmittedPcmMetadata& metadata,
-        std::span<const std::int16_t> samples) noexcept override {
-        last_metadata = metadata;
-        sample_count = std::min(samples.size(), last_samples.size());
-        std::copy_n(samples.begin(), sample_count, last_samples.begin());
-        release_count_at_publish = api_->Count(ApiCall::ReleaseRenderBuffer);
-        publish_inside_render_probe.store(
-            api_->render_probe.load(std::memory_order_acquire),
-            std::memory_order_relaxed);
-        allocation_callbacks_at_publish =
-            api_->allocations == nullptr
-            ? 0
-            : api_->allocations->active_callbacks.load(
-                  std::memory_order_relaxed);
-        const auto call =
-            pcm_calls.fetch_add(1, std::memory_order_release) + 1;
-        return {call, true};
-    }
-
-    std::array<std::int16_t, kDiagnosticSamples> last_samples{};
-    gc::audio::diagnostics::AudioFlightRecorderSession last_session{};
-    gc::audio::diagnostics::SubmittedPcmMetadata last_metadata{};
-    std::size_t sample_count{};
-    std::size_t release_count_at_publish{};
-    std::uint64_t allocation_callbacks_at_publish{};
-    std::atomic_uint32_t pcm_calls{};
-    std::atomic_bool start_seen{};
-    std::atomic_bool start_before_endpoint{};
-    std::atomic_bool publish_inside_render_probe{};
-    bool start_result{true};
-
-private:
-    std::shared_ptr<FakeWasapiState> api_;
 };
 
 class FakeWasapiApi final : public IWasapiApi {
@@ -503,7 +438,9 @@ public:
 
     HRESULT GetBufferSize(std::uint32_t* frames) noexcept override {
         state_->Record(ApiCall::GetBufferSize);
-        *frames = state_->buffer_frames;
+        *frames = static_cast<std::uint32_t>(
+            gc::audio::ReferenceTimeToFramesCeil(
+                kPeriod, gc::audio::kGamePrimarySampleRate));
         return state_->MaybeFail(ApiCall::GetBufferSize);
     }
 
@@ -553,7 +490,7 @@ public:
         if (FAILED(failure)) {
             return failure;
         }
-        if (frames != state_->buffer_frames) {
+        if (frames != kFrames) {
             return E_INVALIDARG;
         }
         *buffer = reinterpret_cast<BYTE*>(state_->render_bytes.data());
@@ -567,7 +504,7 @@ public:
         if (FAILED(failure)) {
             return failure;
         }
-        if (frames != state_->buffer_frames) {
+        if (frames != kFrames) {
             return E_INVALIDARG;
         }
         if (state_->started.load() && flags == 0) {
@@ -577,9 +514,7 @@ public:
                 std::memcpy(
                     state_->submissions[index].data(),
                     state_->render_bytes.data(),
-                    static_cast<std::size_t>(frames) *
-                        gc::audio::kOutputChannels *
-                        sizeof(std::int16_t));
+                    state_->render_bytes.size());
                 state_->submission_count.store(
                     index + 1, std::memory_order_release);
             }
@@ -776,9 +711,7 @@ struct EngineFixture {
     std::unique_ptr<ExclusiveAudioEngine> Start(
         AudioStartupFailure* failure = nullptr,
         DWORD timeout_ms = 2'000,
-        REFERENCE_TIME configured_duration = kPeriod,
-        gc::audio::diagnostics::IAudioDiagnosticSink* diagnostic_sink =
-            nullptr) {
+        REFERENCE_TIME configured_duration = kPeriod) {
         return gc::audio::detail::StartExclusiveAudioEngineAndWait(
             std::make_unique<FakeWasapiApi>(api),
             observer,
@@ -786,7 +719,6 @@ struct EngineFixture {
             configured_duration,
             callbacks,
             timing,
-            diagnostic_sink,
             failure);
     }
 };
@@ -874,190 +806,6 @@ int ExpectOwnerThreadCleanup(
     failures += Expect(
         audio != GetCurrentThreadId(),
         "caller never owns endpoint shutdown");
-    return failures;
-}
-
-int TestRecorderStartsBeforeEndpointRendering() {
-    int failures = 0;
-    EngineFixture fixture;
-    fixture.api->supported_output_rate = 48'000;
-    fixture.api->buffer_frames = kDiagnosticFrames;
-    FakeAudioDiagnosticSink sink(fixture.api);
-
-    auto engine = fixture.Start(nullptr, 2'000, 100'000, &sink);
-    failures += Expect(engine != nullptr, "diagnostic engine startup");
-    failures += Expect(
-        sink.start_seen.load(std::memory_order_acquire) &&
-            sink.start_before_endpoint.load(std::memory_order_relaxed),
-        "diagnostic session starts before endpoint rendering");
-    failures += Expect(
-        sink.last_session.sample_rate == 48'000 &&
-            sink.last_session.channels == gc::audio::kOutputChannels &&
-            sink.last_session.bits_per_sample ==
-                gc::audio::kOutputBitsPerSample &&
-            sink.last_session.frames_per_block == kDiagnosticFrames &&
-            sink.last_session.qpc_frequency != 0,
-        "diagnostic session uses negotiated endpoint geometry");
-
-    engine.reset();
-    failures += ExpectOwnerThreadCleanup(
-        fixture, "diagnostic startup audio thread");
-    return failures;
-}
-
-int TestRecorderStartFailureDoesNotFailAudioEngine() {
-    int failures = 0;
-    EngineFixture fixture;
-    FakeAudioDiagnosticSink sink(fixture.api);
-    sink.start_result = false;
-    AudioStartupFailure startup_failure{};
-
-    auto engine = fixture.Start(
-        &startup_failure, 2'000, kPeriod, &sink);
-    failures += Expect(
-        engine != nullptr &&
-            sink.start_seen.load(std::memory_order_acquire) &&
-            fixture.api->started.load(std::memory_order_acquire),
-        "diagnostic startup failure leaves audio engine active");
-    failures += Expect(
-        startup_failure.failure.stage == AudioFailureStage::None,
-        "diagnostic startup failure does not publish audio failure");
-
-    engine.reset();
-    failures += ExpectOwnerThreadCleanup(
-        fixture, "diagnostic failure audio thread");
-    return failures;
-}
-
-int TestSuccessfulSubmissionPublishesExactPcmAndTimeline() {
-    int failures = 0;
-    EngineFixture fixture;
-    fixture.api->supported_output_rate = 48'000;
-    fixture.api->buffer_frames = kDiagnosticFrames;
-    FakeAudioDiagnosticSink sink(fixture.api);
-    auto engine = fixture.Start(nullptr, 2'000, 100'000, &sink);
-    failures += Expect(engine != nullptr, "captured render engine startup");
-
-    auto source = MakeConstantSource(failures);
-    ma_result voice_result = MA_ERROR;
-    auto voice = engine->CreateVoice(
-        source.format,
-        source.snapshot,
-        source.timeline,
-        VoiceUsage::GameplayNativeCandidate,
-        &voice_result);
-    failures += Expect(
-        voice != nullptr && voice_result == MA_SUCCESS &&
-            voice->Play(true, 1) == DS_OK,
-        "captured render voice starts");
-
-    constexpr std::uint64_t qpc_100ns = 987'654;
-    const auto clock_position =
-        ClockPositionForOutputFrame(kDiagnosticFrames, 48'000);
-    fixture.allocation_owner->probe.Begin();
-    fixture.api->render_probe.store(true, std::memory_order_release);
-    fixture.api->PushClock(clock_position, qpc_100ns);
-    fixture.api->PushWait();
-    failures += Expect(
-        WaitUntil([&] {
-            return sink.pcm_calls.load(std::memory_order_acquire) == 1;
-        }),
-        "one submitted endpoint block reaches diagnostic sink");
-    fixture.api->render_probe.store(false, std::memory_order_release);
-    const auto allocation_callbacks =
-        fixture.allocation_owner->probe.End();
-
-    failures += Expect(
-        sink.sample_count == kDiagnosticSamples &&
-            fixture.api->submission_count.load(std::memory_order_acquire) ==
-                1 &&
-            std::equal(
-                sink.last_samples.begin(),
-                sink.last_samples.end(),
-                fixture.api->submissions[0].begin()),
-        "diagnostic sink receives byte-identical 960-sample PCM");
-    failures += Expect(
-        sink.last_metadata.endpoint_clock_position == clock_position &&
-            sink.last_metadata.endpoint_qpc_100ns == qpc_100ns &&
-            sink.last_metadata.presented_output_frame ==
-                kDiagnosticFrames &&
-            sink.last_metadata.output_frame_begin == kDiagnosticFrames &&
-            sink.last_metadata.submitted_tail ==
-                2 * kDiagnosticFrames &&
-            sink.last_metadata.discontinuity_frames == 0 &&
-            sink.last_metadata.mixer_frames_read == kDiagnosticFrames &&
-            sink.last_metadata.mixer_result == MA_SUCCESS &&
-            sink.last_metadata.pacing_kind == static_cast<std::uint8_t>(
-                gc::audio::OutputPacingDecisionKind::Sequential),
-        "diagnostic metadata preserves endpoint and pacing timeline");
-    failures += Expect(
-        sink.release_count_at_publish == 2,
-        "successful ReleaseRenderBuffer precedes diagnostic publication");
-    failures += Expect(
-        sink.publish_inside_render_probe.load(std::memory_order_relaxed) &&
-            sink.allocation_callbacks_at_publish == 0 &&
-            allocation_callbacks == 0,
-        "diagnostic publication performs no mixer allocation callback");
-
-    voice->Stop();
-    engine.reset();
-    voice.reset();
-    failures += ExpectOwnerThreadCleanup(
-        fixture, "captured render audio thread");
-    return failures;
-}
-
-int TestReleaseBufferFailurePublishesNoSubmittedPcm() {
-    int failures = 0;
-    EngineFixture fixture;
-    FakeAudioDiagnosticSink sink(fixture.api);
-    fixture.api->failure_call = ApiCall::ReleaseRenderBuffer;
-    fixture.api->failure_occurrence = 2;
-    fixture.api->failure_result = E_HANDLE;
-    auto engine = fixture.Start(nullptr, 2'000, kPeriod, &sink);
-    failures += Expect(engine != nullptr, "failed-release engine startup");
-
-    fixture.api->PushClock(
-        ClockPositionForOutputFrame(kFrames),
-        kInitialClock + kPeriod);
-    fixture.api->PushWait();
-    failures += Expect(
-        WaitForFatal(fixture) &&
-            fixture.observer_state->fatal_failure.stage ==
-                AudioFailureStage::ReleaseRenderBuffer,
-        "failed endpoint release reaches runtime failure");
-    failures += Expect(
-        sink.pcm_calls.load(std::memory_order_acquire) == 0,
-        "failed endpoint release publishes no diagnostic PCM");
-
-    engine.reset();
-    failures += ExpectOwnerThreadCleanup(
-        fixture, "failed-release diagnostic audio thread");
-    return failures;
-}
-
-int TestNullDiagnosticSinkPreservesEngineBehavior() {
-    int failures = 0;
-    EngineFixture fixture;
-    auto engine = fixture.Start(nullptr, 2'000, kPeriod, nullptr);
-    failures += Expect(
-        engine != nullptr && fixture.api->started.load(),
-        "null diagnostic sink preserves successful startup");
-
-    fixture.api->PushClock(
-        ClockPositionForOutputFrame(kFrames),
-        kInitialClock + kPeriod);
-    fixture.api->PushWait();
-    failures += Expect(
-        WaitUntil([&] {
-            return fixture.api->submission_count.load(
-                       std::memory_order_acquire) == 1;
-        }),
-        "null diagnostic sink preserves endpoint submission");
-
-    engine.reset();
-    failures += ExpectOwnerThreadCleanup(
-        fixture, "null diagnostic sink audio thread");
     return failures;
 }
 
@@ -1906,11 +1654,6 @@ int TestConfiguredDurationPropagation() {
 int main() {
     int failures = 0;
     failures += TestProductionRenderFinalizationAndStartupTimeoutClamp();
-    failures += TestRecorderStartsBeforeEndpointRendering();
-    failures += TestRecorderStartFailureDoesNotFailAudioEngine();
-    failures += TestSuccessfulSubmissionPublishesExactPcmAndTimeline();
-    failures += TestReleaseBufferFailurePublishesNoSubmittedPcm();
-    failures += TestNullDiagnosticSinkPreservesEngineBehavior();
     failures += TestBoundedInitializationTimeout();
     failures += TestAllocatorOwnerOutlivesEngineThroughVoiceDestruction();
     failures += TestStartupFailuresAndStartOrdering();

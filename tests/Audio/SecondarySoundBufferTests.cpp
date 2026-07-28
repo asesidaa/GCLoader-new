@@ -1,13 +1,11 @@
 #include "Audio/DirectSound/DirectSoundFacade.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
-#include "Audio/Diagnostics/AudioFlightRecorder.h"
 
 #include <ks.h>
 #include <ksmedia.h>
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -101,18 +99,12 @@ class MixerEngineServices final : public IAudioEngineServices {
 public:
     explicit MixerEngineServices(
         std::uint32_t output_sample_rate = kGamePrimarySampleRate,
-        std::uint32_t endpoint_frames = 4,
-        gc::audio::diagnostics::IAudioDiagnosticSink* diagnostic_sink =
-            nullptr)
+        std::uint32_t endpoint_frames = 4)
         : output_sample_rate_(output_sample_rate),
           endpoint_frames_(endpoint_frames) {
         ma_result result = MA_ERROR;
         mixer_ = MiniaudioMixer::Create(
-            endpoint_frames_,
-            output_sample_rate_,
-            nullptr,
-            &result,
-            diagnostic_sink);
+            endpoint_frames_, output_sample_rate_, nullptr, &result);
         initialized = result == MA_SUCCESS && mixer_ != nullptr;
     }
 
@@ -219,37 +211,6 @@ private:
     bool block_next_output_frame_read_{};
     bool output_frame_read_entered_{};
     bool release_output_frame_read_{};
-};
-
-class FixedAudioDiagnosticSink final
-    : public gc::audio::diagnostics::IAudioDiagnosticSink {
-public:
-    bool StartSession(
-        const gc::audio::diagnostics::AudioFlightRecorderSession&)
-        noexcept override {
-        return true;
-    }
-
-    void PublishEvent(
-        gc::audio::diagnostics::AudioDiagnosticEvent event)
-        noexcept override {
-        const auto index =
-            event_count.fetch_add(1, std::memory_order_relaxed);
-        if (index < events.size()) {
-            events[index] = event;
-        }
-    }
-
-    gc::audio::diagnostics::PcmPublishResult PublishSubmittedPcm(
-        const gc::audio::diagnostics::SubmittedPcmMetadata&,
-        std::span<const std::int16_t>) noexcept override {
-        return {};
-    }
-
-    std::array<
-        gc::audio::diagnostics::AudioDiagnosticEvent,
-        32> events{};
-    std::atomic_size_t event_count{};
 };
 
 HRESULT CreateBuffer(
@@ -1162,69 +1123,6 @@ int TestConcurrentPlayAndSeekShareFacadeTransactionOrder() {
     return failures;
 }
 
-int TestSetCurrentPositionPublishesExactSeekContext() {
-    FixedAudioDiagnosticSink sink;
-    MixerEngineServices engine(
-        kGamePrimarySampleRate,
-        4,
-        &sink);
-    auto wave = PcmFormat();
-    auto descriptor = BufferDescription(&wave, 32);
-    IDirectSoundBuffer8* buffer{};
-    int failures = Expect(
-        CreateBuffer(engine, descriptor, &buffer) == DS_OK,
-        "diagnostic seek-context buffer creation");
-    if (buffer == nullptr) {
-        return failures + 1;
-    }
-
-    const std::array<std::int16_t, 16> samples{
-        1'000, 1'000, 2'000, 2'000,
-        3'000, 3'000, 4'000, 4'000,
-        5'000, 5'000, 6'000, 6'000,
-        7'000, 7'000, 8'000, 8'000,
-    };
-    std::array<float, 8> output{};
-    failures += Expect(
-        FillBuffer(buffer, samples) == DS_OK &&
-            buffer->Play(0, 0, DSBPLAY_LOOPING) == DS_OK &&
-            engine.Render(100, output).result == MA_SUCCESS,
-        "diagnostic seek-context playback");
-    engine.output_frame = 103;
-    DWORD before{};
-    failures += Expect(
-        buffer->GetCurrentPosition(&before, nullptr) == DS_OK &&
-            before == 12,
-        "diagnostic seek context captures pre-seek reported cursor");
-    failures += Expect(
-        buffer->SetCurrentPosition(8) == DS_OK,
-        "diagnostic seek context preserves DS_OK behavior");
-
-    using Kind = gc::audio::diagnostics::AudioDiagnosticEventKind;
-    const gc::audio::diagnostics::AudioDiagnosticEvent* requested{};
-    const auto count = std::min(
-        sink.event_count.load(std::memory_order_relaxed),
-        sink.events.size());
-    for (std::size_t index = 0; index < count; ++index) {
-        if (sink.events[index].kind == Kind::SeekRequested) {
-            requested = &sink.events[index];
-        }
-    }
-    failures += Expect(
-        requested != nullptr &&
-            requested->voice_id != 0 &&
-            requested->epoch == 2 &&
-            requested->source_frame_begin == 4 &&
-            requested->source_frame_end == 2 &&
-            requested->value0 == 8 &&
-            requested->value1 == 3 &&
-            requested->qpc_ticks != 0,
-        "SetCurrentPosition forwards byte and reported-source seek context");
-
-    buffer->Release();
-    return failures;
-}
-
 int TestGameplayCursorObservationFollowsFacadeResolution() {
     MixerEngineServices engine;
     auto wave = PcmFormat();
@@ -1369,7 +1267,6 @@ int main() {
     failures += TestSeekRestoreUnsupportedAndLifetime();
     failures += TestConcurrentSeeksAreOneFacadeTransactionAtATime();
     failures += TestConcurrentPlayAndSeekShareFacadeTransactionOrder();
-    failures += TestSetCurrentPositionPublishesExactSeekContext();
     failures += TestGameplayCursorObservationFollowsFacadeResolution();
     return failures == 0 ? 0 : 1;
 }

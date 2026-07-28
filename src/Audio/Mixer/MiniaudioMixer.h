@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Audio/Diagnostics/AudioFlightRecorder.h"
 #include "Audio/Mixer/AudioCursorTimeline.h"
 #include "Audio/Mixer/AudioSnapshot.h"
 #include "Audio/Wasapi/WasapiAudioTypes.h"
@@ -83,11 +82,6 @@ enum class VoiceUsage : std::uint8_t {
     GameplayNativeCandidate,
 };
 
-struct MixerSeekDiagnosticContext {
-    std::uint64_t requested_byte_position{};
-    std::uint64_t previous_reported_source_frame{};
-};
-
 struct MixerVoiceState;
 struct MiniaudioMixerState;
 
@@ -102,10 +96,7 @@ public:
 
     HRESULT Play(bool looping, std::uint64_t epoch) noexcept;
     void Stop() noexcept;
-    HRESULT Seek(
-        std::uint64_t source_frame,
-        std::uint64_t epoch,
-        MixerSeekDiagnosticContext = {}) noexcept;
+    HRESULT Seek(std::uint64_t source_frame, std::uint64_t epoch) noexcept;
     void SetGain(float gain) noexcept;
     bool playing() const noexcept;
     bool looping() const noexcept;
@@ -134,16 +125,12 @@ public:
         std::uint32_t period_frames,
         std::uint32_t output_sample_rate,
         const ma_allocation_callbacks* callbacks,
-        ma_result* result,
-        diagnostics::IAudioDiagnosticSink* diagnostic_sink = nullptr)
-        noexcept;
+        ma_result* result) noexcept;
     static std::unique_ptr<MiniaudioMixer> Create(
         std::uint32_t period_frames,
         std::uint32_t output_sample_rate,
         std::shared_ptr<const ma_allocation_callbacks> callbacks,
-        ma_result* result,
-        diagnostics::IAudioDiagnosticSink* diagnostic_sink = nullptr)
-        noexcept;
+        ma_result* result) noexcept;
     std::unique_ptr<MixerVoice> CreateVoice(
         const NormalizedSourceFormat& format,
         std::shared_ptr<AudioSnapshot> snapshot,
@@ -161,8 +148,7 @@ private:
         std::uint32_t output_sample_rate,
         const ma_allocation_callbacks* callbacks,
         std::shared_ptr<const ma_allocation_callbacks> callback_owner,
-        ma_result* result,
-        diagnostics::IAudioDiagnosticSink*) noexcept;
+        ma_result* result) noexcept;
     explicit MiniaudioMixer(
         std::shared_ptr<MiniaudioMixerState>) noexcept;
 
