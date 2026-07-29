@@ -13,6 +13,11 @@ configure_file(
         "${GC_DIST_DIR}/config.toml"
         COPYONLY
 )
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/card.txt"
+        "${GC_DIST_DIR}/card.txt"
+        COPYONLY
+)
 
 enable_testing()
 add_subdirectory(src)

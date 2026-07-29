@@ -1,14 +1,21 @@
+#include "Rfid/CardData.h"
 #include "Rfid/Jvs/Device.h"
 #include "Rfid/TaitoCommands.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <numeric>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -17,6 +24,77 @@ using gc::rfid::jvs::Acknowledgement;
 using gc::rfid::jvs::Address;
 using gc::rfid::jvs::DecodedPacket;
 using gc::rfid::jvs::DeviceResponse;
+
+class TemporaryDirectory {
+public:
+    TemporaryDirectory()
+    {
+        const auto suffix = std::chrono::steady_clock::now()
+                                .time_since_epoch()
+                                .count();
+        path_ = std::filesystem::temp_directory_path() /
+            (L"GCLoader-CardData-" + std::to_wstring(suffix));
+        std::filesystem::create_directories(path_);
+    }
+
+    ~TemporaryDirectory()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    [[nodiscard]] const std::filesystem::path& path() const noexcept
+    {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+class ScopedCurrentDirectory {
+public:
+    explicit ScopedCurrentDirectory(const std::filesystem::path& path)
+        : original_{std::filesystem::current_path()}
+    {
+        std::filesystem::current_path(path);
+    }
+
+    ~ScopedCurrentDirectory()
+    {
+        std::error_code error;
+        std::filesystem::current_path(original_, error);
+    }
+
+private:
+    std::filesystem::path original_;
+};
+
+void WriteText(
+    const std::filesystem::path& path,
+    std::string_view text)
+{
+    std::ofstream output{
+        path, std::ios::binary | std::ios::trunc};
+    if (!output) {
+        throw std::runtime_error{"could not create card test file"};
+    }
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!output) {
+        throw std::runtime_error{"could not write card test file"};
+    }
+}
+
+std::array<std::uint8_t, 24> ExpectedCardData(
+    std::string_view number)
+{
+    std::array<std::uint8_t, 24> result{
+        0x04, 0xC2, 0x3D, 0xDA, 0x6F, 0x52, 0x80, 0x00};
+    std::ranges::transform(
+        number, result.begin() + 8,
+        [](char value) { return static_cast<std::uint8_t>(value); });
+    return result;
+}
 
 DecodedPacket packet(
     Address address,
@@ -298,14 +376,22 @@ int test_card_output_and_overflow()
     using namespace gc::rfid::jvs;
 
     int failures = 0;
+    TemporaryDirectory temporary;
+    const auto unicode_directory =
+        temporary.path() / L"\u6d4b\u8bd5-\u30ab\u30fc\u30c9";
+    std::filesystem::create_directories(unicode_directory);
+    ScopedCurrentDirectory current_directory{unicode_directory};
+    WriteText(L"card.txt", "1234567890123456\n");
+
     State state;
     state.assigned_address = Address{0x01};
     Device device{state};
 
     state.card_scan.Arm();
     std::vector<std::uint8_t> expected_card{0x01, 0x01};
+    const auto first_card = ExpectedCardData("1234567890123456");
     expected_card.insert(
-        expected_card.end(), kCardData.begin(), kCardData.end());
+        expected_card.end(), first_card.begin(), first_card.end());
     expected_card.push_back(0x01);
     failures += expect_acknowledgement(
         device.HandlePacket(packet(Address{0x01}, {0x32, 0x01, 0x00})),
@@ -314,8 +400,22 @@ int test_card_output_and_overflow()
     failures += expect(!state.card_scan.IsPresent(),
                        "card payload consumes card");
 
+    WriteText(L"card.txt", "6543210987654321\n");
+    state.card_scan.Arm();
+    std::vector<std::uint8_t> expected_second{0x01, 0x01};
+    const auto second_card = ExpectedCardData("6543210987654321");
+    expected_second.insert(
+        expected_second.end(), second_card.begin(), second_card.end());
+    expected_second.push_back(0x01);
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(Address{0x01}, {0x32, 0x01, 0x00})),
+        expected_second,
+        "card payload reload");
+    failures += expect(!state.card_scan.IsPresent(),
+                       "reloaded card payload consumes card");
+
     std::vector<std::uint8_t> expected_empty{0x01, 0x01};
-    expected_empty.resize(expected_empty.size() + kCardData.size(), 0x00);
+    expected_empty.resize(expected_empty.size() + 24, 0x00);
     expected_empty.push_back(0x01);
     failures += expect_acknowledgement(
         device.HandlePacket(packet(Address{0x01}, {0x32, 0x01, 0x00})),
@@ -332,6 +432,68 @@ int test_card_output_and_overflow()
             {0x32, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})),
         {status::acknowledgement_overflow.value},
         "oversized card reply");
+    return failures;
+}
+
+int test_card_data_file_loading()
+{
+    using namespace gc::rfid;
+
+    int failures = 0;
+    const auto default_card = ExpectedCardData("7020392010281502");
+    TemporaryDirectory temporary;
+    const auto root = temporary.path();
+    const auto card_file = root / L"card.txt";
+
+    failures += expect(
+        LoadCardData(root / L"missing.txt") == default_card,
+        "missing card file uses default");
+
+    WriteText(card_file, " \t1234567890123456\r\n");
+    failures += expect(
+        LoadCardData(card_file) ==
+            ExpectedCardData("1234567890123456"),
+        "card number trims surrounding ASCII whitespace");
+
+    WriteText(card_file, "");
+    failures += expect(
+        LoadCardData(card_file) == default_card,
+        "empty card number uses default");
+
+    WriteText(card_file, "123456789012345");
+    failures += expect(
+        LoadCardData(card_file) == default_card,
+        "short card number uses default");
+
+    WriteText(card_file, "12345678901234567");
+    failures += expect(
+        LoadCardData(card_file) == default_card,
+        "long card number uses default");
+
+    WriteText(card_file, "123456789012345X");
+    failures += expect(
+        LoadCardData(card_file) == default_card,
+        "non-decimal card number uses default");
+
+    const auto unicode_directory =
+        root / L"\u6d4b\u8bd5-\u30ab\u30fc\u30c9";
+    std::filesystem::create_directories(unicode_directory);
+    {
+        ScopedCurrentDirectory current_directory{unicode_directory};
+
+        WriteText(L"card.txt", "1111222233334444\n");
+        failures += expect(
+            LoadCurrentDirectoryCardData() ==
+                ExpectedCardData("1111222233334444"),
+            "Unicode current directory first card load");
+
+        WriteText(L"card.txt", "9999888877776666\n");
+        failures += expect(
+            LoadCurrentDirectoryCardData() ==
+                ExpectedCardData("9999888877776666"),
+            "Unicode current directory reloads card");
+    }
+
     return failures;
 }
 
@@ -474,6 +636,7 @@ int main()
         test_identity_and_capabilities() +
         test_inputs_and_coins() +
         test_card_output_and_overflow() +
+        test_card_data_file_loading() +
         test_errors_and_retransmission() +
         test_taito_commands();
     return failures == 0 ? 0 : 1;

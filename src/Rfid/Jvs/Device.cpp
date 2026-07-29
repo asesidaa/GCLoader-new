@@ -1,4 +1,5 @@
 #include "Rfid/Jvs/Device.h"
+#include "Rfid/CardData.h"
 #include "Rfid/TaitoCommands.h"
 
 #include <algorithm>
@@ -404,12 +405,14 @@ std::optional<DeviceResponse> Device::HandlePacket(
 
             const bool card_present = state_.card_scan.IsPresent();
             if (card_present) {
-                if (!AppendOrOverflow(writer, kCardData)) {
+                const auto card_data = LoadCurrentDirectoryCardData();
+                if (!AppendOrOverflow(writer, card_data)) {
                     return DeviceResponse{acknowledgement};
                 }
             } else {
                 const auto response_size =
-                    static_cast<std::size_t>(byte_count) * kCardData.size();
+                    static_cast<std::size_t>(byte_count) *
+                    kDefaultCardData.size();
                 for (std::size_t i = 0; i < response_size; ++i) {
                     if (!AppendOrOverflow(writer, 0x00)) {
                         return DeviceResponse{acknowledgement};

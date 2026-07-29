@@ -1,4 +1,5 @@
 add_library(gc_rfid_core STATIC
+        CardData.cpp
         ComPortState.cpp
         Runtime.cpp
         State.cpp
