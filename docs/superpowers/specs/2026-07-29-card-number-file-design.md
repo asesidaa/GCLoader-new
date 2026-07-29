@@ -26,6 +26,9 @@ deployment tree.
 - Preserve `7020392010281502` as the built-in fallback card number.
 - Ship a default `card.txt` in the repository and in every generated `dist`
   directory.
+- Use standard-library filesystem paths end to end so process current
+  directories containing Chinese, Japanese, or other non-ASCII characters
+  work on Windows.
 - Keep malformed or unavailable operator input from breaking RFID emulation.
 
 ## Non-Goals
@@ -88,7 +91,9 @@ Add a focused RFID card-data unit under `src/Rfid`:
 
 The loader performs no persistent caching. All file and allocation failures
 are contained inside the non-throwing load entry point and produce the
-default payload.
+default payload. File access uses `std::filesystem::path` and the
+standard-library stream overload that consumes that path directly; it does
+not narrow the path through `.string()` or call an ANSI Win32 file API.
 
 The repository-root `card.txt` contains the default number. Top-level CMake
 copies it into `${GC_DIST_DIR}/card.txt` alongside `config.toml`.
@@ -102,6 +107,8 @@ Test coverage will establish:
 - missing, empty, short, long, and non-decimal content use the current default;
 - changing the file between two load calls returns the two different card
   numbers, proving there is no cache;
+- a current directory containing Chinese and Japanese path components can
+  load and reload `card.txt`;
 - two armed JVS card transfers can observe two file versions while preserving
   the fixed prefix and existing one-shot card consumption; and
 - CMake stages the repository default file into `dist`.
