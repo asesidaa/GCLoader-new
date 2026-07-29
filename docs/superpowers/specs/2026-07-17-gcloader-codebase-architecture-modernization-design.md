@@ -37,7 +37,7 @@ This design supersedes those documents only for physical source paths, CMake own
 
 The source tree uses `iDmac`, matching `iDmacDrv32.dll` and the user's requested repository convention. The vendor spells the product [iDMAC and expands it as Intelligent DMA Controller](https://www.oki-oids.jp/solution/products/fpga/idmac.html). `Dmac` is not used as the driver or source-package name.
 
-Project-specific terms are defined in the repository root `CONTEXT.md`.
+Project-specific terms are defined in the repository root `AGENTS.md`.
 
 ## Goals
 
@@ -86,7 +86,7 @@ One approved tool-only behavior change is explicit: ConfigGUI may begin with the
 ```text
 GCLoader/
   CMakeLists.txt
-  CONTEXT.md
+  AGENTS.md
   config.toml
   cmake/
     Dependencies.cmake
