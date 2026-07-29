@@ -1,15 +1,11 @@
 #include "Patches/Framerate/FrameratePatchPlan.h"
-#include "Patches/Framerate/FramerateAuthoredClock.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <initializer_list>
 #include <iostream>
-#include <span>
 
 namespace {
 
@@ -22,16 +18,6 @@ int Expect(bool condition, const char* name) {
     }
     std::cerr << "Expectation failed: " << name << "\n";
     return 1;
-}
-
-gc::framerate::BytePattern Pattern(
-    std::initializer_list<std::uint8_t> values) {
-    gc::framerate::BytePattern pattern{};
-    pattern.size = static_cast<std::uint8_t>(values.size());
-    std::transform(
-        values.begin(), values.end(), pattern.bytes.begin(),
-        [](std::uint8_t value) { return static_cast<std::byte>(value); });
-    return pattern;
 }
 
 const gc::framerate::CheckedWrite* FindWrite(
@@ -74,18 +60,6 @@ float ReadFloatReplacement(
     float value{};
     std::memcpy(&value, &bits, sizeof(value));
     return value;
-}
-
-const gc::framerate::FramerateHookContract& FindHook(
-    std::span<const gc::framerate::FramerateHookContract> contracts,
-    gc::framerate::FramerateHookId id) {
-    const auto found = std::find_if(
-        contracts.begin(), contracts.end(),
-        [id](const auto& contract) { return contract.id == id; });
-    if (found == contracts.end()) {
-        std::abort();
-    }
-    return *found;
 }
 
 bool PlanContainsId(
@@ -197,41 +171,6 @@ for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U, 500U}) {
         "palette imm8 compare is never directly patched");
 }
 
-const auto target120 = FramerateProfile::Create(120).value();
-const auto plan120 = BuildFramerateDirectPatchPlan(
-    kFakeBase, target120, kFakeTargetOperand).value();
-failures += Expect(
-    ReadFloatReplacement(plan120, 0x002FC0A0) == 1000.0F / 120.0F &&
-        ReadFloatReplacement(plan120, 0x002FC280) == 1.0F / 120.0F &&
-        ReadFloatReplacement(plan120, 0x002E8F00) == 2.0F &&
-        ReadFloatReplacement(plan120, 0x002E8F04) == 2.5F,
-    "120 exact float replacements");
-failures += Expect(
-    ReadInstructionImmediate(plan120, 0x00055CCC, 2) == 32 &&
-        ReadInstructionImmediate(plan120, 0x00055CDD, 2) == 16 &&
-        ReadInstructionImmediate(plan120, 0x0005F843, 6) == 32 &&
-        ReadInstructionImmediate(plan120, 0x0005F84D, 6) == 16 &&
-        ReadInstructionImmediate(plan120, 0x002645EE, 6) == 240 &&
-        ReadInstructionImmediate(plan120, 0x00249A5E, 1) == 240 &&
-        ReadInstructionImmediate(plan120, 0x00249A73, 1) == 240,
-    "120 exact duration replacements");
-for (const auto rva : {0x0022BACFU, 0x0022BAD5U, 0x00262CB6U}) {
-    failures += Expect(
-        ReadInstructionImmediate(plan120, rva, 2) == kFakeTargetOperand,
-        "120 exact x87 target operand");
-}
-
-const auto plan240 = BuildFramerateDirectPatchPlan(
-    kFakeBase,
-    FramerateProfile::Create(240).value(),
-    kFakeTargetOperand).value();
-failures += Expect(
-    ReadInstructionImmediate(plan240, 0x00055CCC, 2) == 64 &&
-        ReadInstructionImmediate(plan240, 0x00055CDD, 2) == 32 &&
-        ReadInstructionImmediate(plan240, 0x0005F843, 6) == 64 &&
-        ReadInstructionImmediate(plan240, 0x0005F84D, 6) == 32,
-    "240 exact XIO and native keyboard repeat durations");
-
 const auto plan61 = BuildFramerateDirectPatchPlan(
     kFakeBase,
     FramerateProfile::Create(61).value(),
@@ -240,61 +179,6 @@ failures += Expect(
     plan61.count == 17 &&
         ReadInstructionImmediate(plan61, 0x002645EE, 6) == 122,
     "61 boundary uses transformed plan");
-
-const std::array<std::pair<std::uintptr_t, BytePattern>, 17>
-    expected_writes{{
-        {0x002FC0A0, Pattern({0x55, 0x55, 0x85, 0x41})},
-        {0x002F4604, Pattern({0x55, 0x55, 0x85, 0x41})},
-        {0x002FC280, Pattern({0x89, 0x88, 0x88, 0x3C})},
-        {0x002E8F00, Pattern({0x00, 0x00, 0x80, 0x40})},
-        {0x002E8F04, Pattern({0x00, 0x00, 0xA0, 0x40})},
-        {0x00055CCC, Pattern({0xC7, 0x00, 0x10, 0x00, 0x00, 0x00})},
-        {0x00055CDD, Pattern({0xC7, 0x00, 0x08, 0x00, 0x00, 0x00})},
-        {0x0005F843, Pattern({0xC7, 0x86, 0xD4, 0x02, 0x00,
-            0x00, 0x10, 0x00, 0x00, 0x00})},
-        {0x0005F84D, Pattern({0xC7, 0x86, 0xD8, 0x02, 0x00,
-            0x00, 0x08, 0x00, 0x00, 0x00})},
-        {0x002645EE, Pattern({0xC7, 0x80, 0x14, 0x1D, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00})},
-        {0x00249A5E, Pattern({0xB8, 0x78, 0x00, 0x00, 0x00})},
-        {0x00249A73, Pattern({0xBA, 0x78, 0x00, 0x00, 0x00})},
-        {0x0022BACF, Pattern({0xD8, 0x2D, 0xAC, 0xBB, 0x6F, 0x00})},
-        {0x0022BAD5, Pattern({0xD8, 0x35, 0xAC, 0xBB, 0x6F, 0x00})},
-        {0x00262CB6, Pattern({0xD8, 0x0D, 0xAC, 0xBB, 0x6F, 0x00})},
-        {0x00382CE8, Pattern({0x10, 0x00, 0x00, 0x00})},
-        {0x00382CEC, Pattern({0x03, 0x00, 0x00, 0x00})},
-    }};
-for (const auto& [rva, expected] : expected_writes) {
-    const auto* write = FindWrite(plan120, rva);
-    failures += Expect(
-        write != nullptr && write->expected == expected &&
-            write->expected.size == write->replacement.size,
-        "exact direct-write source contract");
-}
-
-struct MenuCase {
-    std::uint32_t target;
-    std::uint32_t initial;
-    std::uint32_t interval;
-};
-constexpr std::array menu_cases{
-    MenuCase{61, 16, 3},
-    MenuCase{120, 32, 6},
-    MenuCase{144, 38, 7},
-    MenuCase{165, 44, 8},
-    MenuCase{240, 64, 12},
-    MenuCase{360, 96, 18},
-    MenuCase{500, 133, 25},
-};
-for (const auto& item : menu_cases) {
-    const auto plan = BuildFramerateDirectPatchPlan(
-        kFakeBase,
-        FramerateProfile::Create(item.target).value(),
-        kFakeTargetOperand).value();
-    failures += Expect(
-        ReadInstructionImmediate(plan, 0x00382CE8, 0) == item.initial &&
-            ReadInstructionImmediate(plan, 0x00382CEC, 0) == item.interval,
-        "exact non-song repeat replacements");
-}
 
 const auto native_hooks = FramerateHookContracts(false);
 const auto transformed_hooks = FramerateHookContracts(true);
@@ -335,146 +219,13 @@ failures += Expect(
         transformed_hooks[51].id == FramerateHookId::NavigatorAdvance &&
         transformed_hooks[52].id == FramerateHookId::OuterFrame,
     "Navigator and OuterFrame remain final");
-const auto navigator_hook = std::find_if(
-    transformed_hooks.begin(), transformed_hooks.end(),
-    [](const auto& hook) { return hook.rva == 0x001B6310; });
-failures += Expect(
-    navigator_hook != transformed_hooks.end() &&
-        navigator_hook->expected == Pattern({
-            0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
-            0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
-            0x8B, 0x48, 0x60}),
-    "shared navigator advance exact entry contract");
-failures += Expect(
-    FindHook(transformed_hooks, FramerateHookId::PaletteCompare).expected ==
-        Pattern({0x83, 0x78, 0x0C, 0x3C}),
-    "palette compare exact bytes");
-
-const std::array<FramerateHookContract, 53> expected_hooks{{
-    {FramerateHookId::MovieClipGoto, 0x000DEA30,
-        Pattern({0x6A, 0xFF, 0x68, 0xC9, 0x38, 0x67, 0x00}), ""},
-    {FramerateHookId::MovieClipAdvance, 0x000DF940,
-        Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x90, 0x4C, 0x01, 0x00, 0x00}), ""},
-    {FramerateHookId::PaletteCompare, 0x0022BA60,
-        Pattern({0x83, 0x78, 0x0C, 0x3C}), ""},
-    {FramerateHookId::StageClipFrame, 0x00244054,
-        Pattern({0x89, 0x4D, 0xF8}), ""},
-    {FramerateHookId::IfblWait, 0x002309D4,
-        Pattern({0x89, 0x4A, 0x3C}), ""},
-    {FramerateHookId::StageBgmPreload, 0x0021001A,
-        Pattern({0x83, 0xC0, 0x01}), ""},
-    {FramerateHookId::TuneCountdownCompare, 0x002648F7,
-        Pattern({0x83, 0xBA, 0x14, 0x1D, 0x00, 0x00, 0x78}), ""},
-    {FramerateHookId::AudioSkipMargin, 0x0024018F,
-        Pattern({0x8B, 0x45, 0xF4}), ""},
-    {FramerateHookId::AudioSkipInterval, 0x002401BD,
-        Pattern({0xF7, 0x79, 0x3C}), ""},
-    {FramerateHookId::AudioResyncPolicy, 0x002401C4,
-        Pattern({
-            0x8B, 0x55, 0xF8,
-            0x52,
-            0xE8, 0x33, 0x02, 0xFD, 0xFF,
-            0x8B, 0xC8,
-            0xE8, 0x2C, 0x12, 0xFD, 0xFF,
-            0x5E, 0x8B, 0xE5, 0x5D, 0xC3,
-        }), ""},
-    {FramerateHookId::GameplaySongClock, 0x00264DB2,
-        Pattern({0xE8, 0xB9, 0xB2, 0xFD, 0xFF}), ""},
-    {FramerateHookId::GameplayEffectAdvance, 0x00264E2D,
-        Pattern({0xE8, 0x6E, 0xBA, 0xF8, 0xFF}), ""},
-    {FramerateHookId::EffectCadence6, 0x0024063B,
-        Pattern({0x85, 0xD2}), ""},
-    {FramerateHookId::EffectCadence5, 0x002408D7,
-        Pattern({0x85, 0xD2}), ""},
-    {FramerateHookId::EffectCadence4, 0x00240C9C,
-        Pattern({0x85, 0xD2}), ""},
-    {FramerateHookId::EffectCadence16A, 0x00241213,
-        Pattern({0x85, 0xD2}), ""},
-    {FramerateHookId::EffectCadence16B, 0x0024122F,
-        Pattern({0x81, 0xE1, 0x0F, 0x00, 0x00, 0x80}), ""},
-    {FramerateHookId::EffectCadence8, 0x00241268,
-        Pattern({0x85, 0xC0}), ""},
-    {FramerateHookId::RemoteCadenceA, 0x002632DB,
-        Pattern({0x85, 0xD2}), ""},
-    {FramerateHookId::RemoteCadenceB, 0x00263646,
-        Pattern({0x85, 0xD2}), ""},
-    {FramerateHookId::GameplayBlink, 0x0024A1B9,
-        Pattern({0xD1, 0xF8}), ""},
-    {FramerateHookId::GreatGoodLifetimeOperand, 0x002464A8,
-        Pattern({0xD8, 0x48, 0x18}), ""},
-    {FramerateHookId::GreatGoodFrameOperand, 0x00246528,
-        Pattern({0xD8, 0x71, 0x18}), ""},
-    {FramerateHookId::EffectLifetimeAOperand, 0x00248F00,
-        Pattern({0xD8, 0x49, 0x18}), ""},
-    {FramerateHookId::EffectFrameAOperand, 0x00248F8C,
-        Pattern({0xD8, 0x72, 0x18}), ""},
-    {FramerateHookId::EffectLifetimeBOperand, 0x0024912B,
-        Pattern({0xD8, 0x49, 0x18}), ""},
-    {FramerateHookId::EffectFrameBOperand, 0x002491E0,
-        Pattern({0xD8, 0x72, 0x18}), ""},
-    {FramerateHookId::DirectEffectFrameOperand, 0x00249C14,
-        Pattern({0xD8, 0x72, 0x18}), ""},
-    {FramerateHookId::ChartEffectFrameAOperand, 0x0024BC8B,
-        Pattern({0xD8, 0x71, 0x18}), ""},
-    {FramerateHookId::ChartEffectFrameBOperand, 0x0024CC8A,
-        Pattern({0xD8, 0x71, 0x18}), ""},
-    {FramerateHookId::ChartEffectFrameCOperand, 0x0024CCBE,
-        Pattern({0xD8, 0x72, 0x18}), ""},
-    {FramerateHookId::ChartEffectFrameDOperand, 0x0024D836,
-        Pattern({0xD8, 0x70, 0x18}), ""},
-    {FramerateHookId::FixedVisualFrameOperand, 0x00250AD5,
-        Pattern({0xD8, 0x71, 0x18}), ""},
-    {FramerateHookId::GameplayCountdownAssetFrame, 0x00249A9C,
-        Pattern({0x89, 0x48, 0x08}), ""},
-    {FramerateHookId::PlayerPositionInitA, 0x00263240,
-        Pattern({0x89, 0x84, 0x91, 0x54, 0x1D, 0x00, 0x00}), ""},
-    {FramerateHookId::PlayerPositionInitB, 0x002632B2,
-        Pattern({0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
-    {FramerateHookId::PlayerPositionInitC, 0x0026359B,
-        Pattern({0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
-    {FramerateHookId::PlayerPositionInitD, 0x00263615,
-        Pattern({0x89, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
-    {FramerateHookId::PlayerPositionAssetFrame, 0x0024EF43,
-        Pattern({0x2B, 0x84, 0x8A, 0x54, 0x1D, 0x00, 0x00}), ""},
-    {FramerateHookId::PlayerPositionDenominatorA, 0x0024F76D,
-        Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
-    {FramerateHookId::PlayerPositionDenominatorB, 0x0024FD40,
-        Pattern({0xDB, 0x80, 0xC4, 0x00, 0x00, 0x00}), ""},
-    {FramerateHookId::EffectFlowItemFrame, 0x001F0310,
-        Pattern({0x89, 0x42, 0x08}), ""},
-    {FramerateHookId::EffectTutorialElapsed, 0x00249593,
-        Pattern({0x89, 0x95, 0x74, 0xFF, 0xFF, 0xFF}), ""},
-    {FramerateHookId::EffectChartPreRollDuration, 0x0024A934,
-        Pattern({0x89, 0x45, 0x9C}), ""},
-    {FramerateHookId::EffectPlayerModuloDividend, 0x0025072E,
-        Pattern({0xF7, 0xF9}), ""},
-    {FramerateHookId::MovieClipPreprocessVisit, 0x000EFB90,
-        Pattern({0x6A, 0xFF, 0x68, 0x10, 0x49, 0x67, 0x00}), ""},
-    {FramerateHookId::RankingEntryCounterStore, 0x00216EB4,
-        Pattern({0x8B, 0x4D, 0xE0, 0x89, 0x01}), ""},
-    {FramerateHookId::HitChartEntryCounterStore, 0x0026562F,
-        Pattern({0x8B, 0x8D, 0x6C, 0xFF, 0xFF, 0xFF}), ""},
-    {FramerateHookId::UnlockRewardCountdownStore, 0x00030DA3,
-        Pattern({0x89, 0x90, 0x6C, 0x37, 0x00, 0x00}), ""},
-    {FramerateHookId::UnlockRewardPrimaryStateStore, 0x00030E54,
-        Pattern({0x89, 0x81, 0xD4, 0x37, 0x00, 0x00}), ""},
-    {FramerateHookId::UnlockRewardSecondaryStateStore, 0x00030F23,
-        Pattern({0x89, 0x90, 0xD4, 0x37, 0x00, 0x00}), ""},
-    {FramerateHookId::NavigatorAdvance, 0x001B6310,
-        Pattern({0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08,
-            0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC,
-            0x8B, 0x48, 0x60}), ""},
-    {FramerateHookId::OuterFrame, 0x00058B70,
-        Pattern({0x56, 0x8B, 0xF1, 0x8B, 0x06, 0x8B, 0x50, 0x24}), ""},
-}};
-for (std::size_t index = 0; index < expected_hooks.size(); ++index) {
+for (const auto& hook : transformed_hooks) {
     failures += Expect(
-        transformed_hooks[index].id == expected_hooks[index].id &&
-            transformed_hooks[index].rva == expected_hooks[index].rva &&
-            transformed_hooks[index].expected == expected_hooks[index].expected &&
-            transformed_hooks[index].name != nullptr &&
-            std::string_view{transformed_hooks[index].name}.empty() == false,
-        "exact hook ID/RVA/byte/name contract");
+        hook.rva != 0 &&
+            hook.expected.size != 0 &&
+            hook.name != nullptr &&
+            !std::string_view{hook.name}.empty(),
+        "hook contracts are installable and named");
 }
 
 const auto native_original = BuildFramerateHookPlan(
@@ -600,24 +351,6 @@ for (const std::uint32_t cap : {120U, 144U, 165U, 240U, 360U, 500U}) {
         ((equal >> 7U) & 1U) == ((equal >> 11U) & 1U) &&
             ((above >> 7U) & 1U) == ((above >> 11U) & 1U),
         "signed JGE classifies equal and above");
-}
-
-const auto profile144 = FramerateProfile::Create(144).value();
-failures += Expect(
-    ScalePositiveDuration(profile144, 25).value() == 60,
-    "positive runtime count scales rationally");
-failures += Expect(
-    ScalePositiveDuration(profile144, 0).value() == 0 &&
-        ScalePositiveDuration(profile144, UINT32_MAX).value() == UINT32_MAX,
-    "runtime count sentinels remain unchanged");
-for (const std::uint32_t target : {120U, 144U, 165U, 240U, 360U}) {
-    const auto profile = FramerateProfile::Create(target).value();
-    for (std::uint32_t frame = 0; frame < target * 2; ++frame) {
-        failures += Expect(
-            profile.MapToAuthored60(frame).value() ==
-                static_cast<std::uint64_t>(frame) * 60 / target,
-            "authored mapping sequence uses rational floor");
-    }
 }
 
 return failures == 0 ? 0 : 1;

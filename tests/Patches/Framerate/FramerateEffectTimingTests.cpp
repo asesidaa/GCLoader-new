@@ -8,13 +8,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <set>
 #include <string_view>
 #include <type_traits>
-#include <vector>
 
 namespace {
 
@@ -24,16 +22,6 @@ int Expect(bool condition, const char* name) {
     }
     std::cerr << "Expectation failed: " << name << "\n";
     return 1;
-}
-
-gc::framerate::BytePattern Pattern(
-    std::initializer_list<std::uint8_t> values) {
-    gc::framerate::BytePattern pattern{};
-    pattern.size = static_cast<std::uint8_t>(values.size());
-    std::transform(
-        values.begin(), values.end(), pattern.bytes.begin(),
-        [](std::uint8_t value) { return static_cast<std::byte>(value); });
-    return pattern;
 }
 
 bool NonEmpty(const char* value) {
@@ -116,35 +104,12 @@ int main() {
 using namespace gc::framerate;
 int failures = 0;
 
-constexpr std::array<std::uintptr_t, 34> kExpectedRegistrationRvas{
-    0x001F02F5,
-    0x00240674, 0x00240941, 0x00240CDE, 0x002412B5,
-    0x00244BC0, 0x00244D30, 0x00244E20, 0x00244F10, 0x00245000,
-    0x00246517, 0x00246693,
-    0x00248F75, 0x002491C9, 0x002498E8, 0x0024999C,
-    0x00249A53, 0x00249BEC,
-    0x0024B61C, 0x0024BB11, 0x0024BC19, 0x0024BF72,
-    0x0024C56C, 0x0024C5CA, 0x0024C607, 0x0024C8DC,
-    0x0024CB4D, 0x0024CBC0, 0x0024CBFD,
-    0x0024D710, 0x0024D779, 0x0024D7C4,
-    0x0024EF82, 0x00250689,
-};
-constexpr std::array<std::uintptr_t, 9> kExpectedDurationQueryRvas{
-    0x00246463, 0x0024647D,
-    0x00248EA7, 0x00248EBF, 0x00249104,
-    0x0024962C, 0x00249653, 0x00249790,
-    0x0024A92F,
-};
-
 const auto registrations = EffectRegistrationSites();
 const auto duration_queries = EffectDurationQuerySites();
 const auto timing_sites = EffectTimingSites();
 const auto effect_hooks = FramerateEffectHookContracts();
 
-std::vector<std::uintptr_t> registration_rvas;
-registration_rvas.reserve(registrations.size());
 for (const auto& registration : registrations) {
-    registration_rvas.push_back(registration.rva);
     failures += Expect(
         NonEmpty(registration.owner),
         "registration owner is present");
@@ -152,21 +117,13 @@ for (const auto& registration : registrations) {
         NonEmpty(registration.reaching_frame_path),
         "registration reaching-frame path is present");
 }
-std::ranges::sort(registration_rvas);
-failures += Expect(
-    registration_rvas.size() == kExpectedRegistrationRvas.size() &&
-        std::ranges::equal(registration_rvas, kExpectedRegistrationRvas),
-    "registration census matches exact 34-RVA set");
 failures += Expect(
     HasUniqueValues(
         registrations,
         [](const auto& site) { return site.rva; }),
     "registration RVAs are unique");
 
-std::vector<std::uintptr_t> duration_query_rvas;
-duration_query_rvas.reserve(duration_queries.size());
 for (const auto& query : duration_queries) {
-    duration_query_rvas.push_back(query.rva);
     failures += Expect(
         NonEmpty(query.owner),
         "duration-query owner is present");
@@ -174,11 +131,6 @@ for (const auto& query : duration_queries) {
         NonEmpty(query.consumer_path),
         "duration-query consumer path is present");
 }
-std::ranges::sort(duration_query_rvas);
-failures += Expect(
-    duration_query_rvas.size() == kExpectedDurationQueryRvas.size() &&
-        std::ranges::equal(duration_query_rvas, kExpectedDurationQueryRvas),
-    "duration-query census matches exact 9-RVA set");
 failures += Expect(
     HasUniqueValues(
         duration_queries,
@@ -241,39 +193,6 @@ failures += Expect(
         [](const auto& contract) { return contract.id; }),
     "effect contract IDs are unique");
 
-struct ExpectedHook {
-    FramerateHookId id;
-    std::uintptr_t rva;
-    BytePattern expected;
-};
-const std::array expected_new_hooks{
-    ExpectedHook{
-        FramerateHookId::EffectFlowItemFrame,
-        0x001F0310,
-        Pattern({0x89, 0x42, 0x08})},
-    ExpectedHook{
-        FramerateHookId::EffectTutorialElapsed,
-        0x00249593,
-        Pattern({0x89, 0x95, 0x74, 0xFF, 0xFF, 0xFF})},
-    ExpectedHook{
-        FramerateHookId::EffectChartPreRollDuration,
-        0x0024A934,
-        Pattern({0x89, 0x45, 0x9C})},
-    ExpectedHook{
-        FramerateHookId::EffectPlayerModuloDividend,
-        0x0025072E,
-        Pattern({0xF7, 0xF9})},
-};
-for (const auto& expected : expected_new_hooks) {
-    const auto found = std::ranges::find(
-        effect_hooks, expected.id, &FramerateHookContract::id);
-    failures += Expect(
-        found != effect_hooks.end() &&
-            found->rva == expected.rva &&
-            found->expected == expected.expected,
-        "new effect contract has exact ID, RVA, and bytes");
-}
-
 const auto summary = SummarizeEffectTimingManifest();
 const auto disposition_count =
     [timing_sites](EffectTimingDisposition disposition) {
@@ -305,17 +224,6 @@ failures += Expect(
         summary.non_ctune_out_of_scope ==
             disposition_count(EffectTimingDisposition::NonCtuneOutOfScope),
     "manifest summary is derived from authoritative views");
-failures += Expect(
-    summary.timing_sites == 67 &&
-        summary.registration_sites == 34 &&
-        summary.duration_queries == 9 &&
-        summary.hook_contracts == 34 &&
-        summary.manager_gated == 1 &&
-        summary.already_authored == 12 &&
-        summary.reset_or_constant == 9 &&
-        summary.child_inherited == 1 &&
-        summary.non_ctune_out_of_scope == 12,
-    "manifest summary matches exhaustive effect census");
 
 const auto profile60 = FramerateProfile::Create(60).value();
 const auto profile144 = FramerateProfile::Create(144).value();

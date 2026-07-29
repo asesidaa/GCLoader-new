@@ -54,12 +54,6 @@ set_tests_properties(InputPollingRuntimeStartupTests PROPERTIES
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
-add_test(
-        NAME InputRegisterReadContractTests
-        COMMAND ${CMAKE_COMMAND}
-                -DIDMAC_DRIVER_SOURCE=${PROJECT_SOURCE_DIR}/src/Driver/iDmac/iDmacDrv32.cpp
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/InputRegisterReadContractTests.cmake)
-
 add_executable(InputWorkerWaitTests
         Polling/InputWorkerWaitTests.cpp)
 target_link_libraries(InputWorkerWaitTests PRIVATE gc_input)

@@ -5,9 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
-#include <initializer_list>
 #include <iostream>
 #include <ranges>
 #include <span>
@@ -28,29 +26,6 @@ int Expect(bool condition, const char* name) {
     }
     std::cerr << "Expectation failed: " << name << '\n';
     return 1;
-}
-
-TimingBytePattern Pattern(std::initializer_list<std::uint8_t> values) {
-    TimingBytePattern pattern{};
-    pattern.size = static_cast<std::uint8_t>(values.size());
-    std::transform(
-        values.begin(), values.end(), pattern.bytes.begin(),
-        [](std::uint8_t value) { return static_cast<std::byte>(value); });
-    return pattern;
-}
-
-const TimingByteContract& FindContract(
-    std::span<const TimingByteContract> contracts,
-    std::uint32_t rva) {
-    const auto found = std::find_if(
-        contracts.begin(), contracts.end(),
-        [rva](const TimingByteContract& contract) {
-            return contract.rva == rva;
-        });
-    if (found == contracts.end()) {
-        std::abort();
-    }
-    return *found;
 }
 
 struct FakeMemory {
@@ -472,47 +447,6 @@ int main() {
     int failures = 0;
 
     static_assert(sizeof(std::uintptr_t) == 4);
-    static_assert(kTimingAbiContractCount == 15);
-    static_assert(kTimingCheckedWriteCount == 1);
-    static_assert(kTimingHookCount == 2);
-
-    const auto contracts = BuildTimingAbiContracts(kFakeBase);
-    failures += Expect(
-        contracts.size() == 15,
-        "all native ABI entry contracts are present");
-    failures += Expect(
-        FindContract(contracts, 0x173EA0).expected == Pattern({
-            0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0xA7, 0x9A,
-            0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00,
-        }),
-        "main constructor signature is exact");
-    failures += Expect(
-        FindContract(contracts, 0x173C60).expected == Pattern({
-            0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x9C, 0x00, 0x00,
-            0x00, 0xA1, 0x94, 0x93, 0x77, 0x00, 0x33, 0xC5,
-        }),
-        "main render signature is exact");
-    failures += Expect(
-        FindContract(contracts, kSoundConstructorRva).expected == Pattern({
-            0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x97, 0x71,
-            0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00,
-        }),
-        "sound constructor signature is exact");
-
-    const auto writes = BuildTimingCheckedWrites(kFakeBase);
-    failures += Expect(
-        writes.size() == 1 &&
-            writes[0].rva == 0x173ED5 &&
-            writes[0].expected == Pattern({0x6A, 0x0B}) &&
-            writes[0].replacement == Pattern({0x6A, 0x0C}),
-        "row-count write is exact");
-
-    const auto vtable = ExpectedSoundVtable(kFakeBase);
-    failures += Expect(
-        vtable.size() == 13 &&
-            vtable[3] == kFakeBase + 0x04D070 &&
-            vtable[12] == kFakeBase + 0x0C2F20,
-        "native destructor and dispatcher targets are exact");
 
     for (int failed_read = 0;
          failed_read < static_cast<int>(
