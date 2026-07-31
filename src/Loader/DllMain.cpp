@@ -7,6 +7,7 @@
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
 #include "Patches/Framerate/FrameratePatch.h"
+#include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
 #include "Nesys/NesysServicePatch.h"
 #include "Nesys/NesysServiceProcess.h"
@@ -96,6 +97,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 }
                 PLOG_DEBUG
                     << "Test-mode timing settings initialization complete!";
+
+                if (!gc::renderer_device_loss::RendererDeviceLossPatchInit()) {
+                    PLOG_ERROR
+                        << "RendererDeviceLossPatch: fail-closed DLL attach";
+                    return FALSE;
+                }
+                PLOG_DEBUG
+                    << "Renderer device-loss retry initialization complete!";
 
                 if (!gc::audio::WasapiAudioPatchInit()) {
                     PLOG_ERROR
