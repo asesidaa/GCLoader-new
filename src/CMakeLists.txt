@@ -45,6 +45,7 @@ target_include_directories(iDmacDrv32 PRIVATE
 target_link_libraries(iDmacDrv32 PRIVATE
         gc_audio
         gc_config
+        gc_crash_dump
         gc_input
         gc_logging
         gc_nesys

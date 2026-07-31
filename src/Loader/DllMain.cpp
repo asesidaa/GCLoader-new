@@ -13,6 +13,7 @@
 #include "Logging/SessionLog.h"
 #include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/Wasapi/WasapiAudioPatch.h"
+#include "Diagnostics/CrashDumpHandler.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -62,6 +63,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             const auto role =
                 gc::nesys_service::DetectCurrentProcessRole();
             InitProcessLog(role);
+
+            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
+                const auto crash_dump_status =
+                    gc::crash_dump::InstallGameCrashDumpHandler();
+                PLOG_INFO
+                    << "Game crash dump handler="
+                    << gc::crash_dump::InstallStatusName(
+                        crash_dump_status);
+            }
+
             ApplyConfiguredLogLevel();
 
             PLOG_DEBUG << "DLL attach!" << std::endl;
