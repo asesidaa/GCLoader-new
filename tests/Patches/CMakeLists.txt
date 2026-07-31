@@ -38,6 +38,13 @@ add_executable(GameplaySongClockTests
 target_link_libraries(GameplaySongClockTests PRIVATE gc_runtime_patches)
 add_test(NAME GameplaySongClockTests COMMAND GameplaySongClockTests)
 
+add_executable(RendererDeviceLossPatchTests
+        RendererDeviceLossPatchTests.cpp)
+target_link_libraries(RendererDeviceLossPatchTests PRIVATE
+        gc_runtime_patches)
+add_test(NAME RendererDeviceLossPatchTests
+        COMMAND RendererDeviceLossPatchTests)
+
 add_executable(FramerateEffectTimingTests
         Framerate/FramerateEffectTimingTests.cpp)
 target_link_libraries(FramerateEffectTimingTests PRIVATE gc_runtime_patches)
