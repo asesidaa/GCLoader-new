@@ -1,5 +1,6 @@
 add_subdirectory(Audio)
 add_subdirectory(Config)
+add_subdirectory(Diagnostics)
 add_subdirectory(Input)
 add_subdirectory(Logging)
 add_subdirectory(Nesys)
