@@ -1,0 +1,3 @@
+add_executable(SystemRootTests SystemRootTests.cpp)
+target_link_libraries(SystemRootTests PRIVATE gc_system_path)
+add_test(NAME SystemRootTests COMMAND SystemRootTests)

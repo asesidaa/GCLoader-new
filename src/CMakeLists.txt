@@ -1,3 +1,4 @@
+add_subdirectory(SystemPath)
 add_subdirectory(Nesys/Network)
 add_subdirectory(Input/Types)
 add_subdirectory(Config)
