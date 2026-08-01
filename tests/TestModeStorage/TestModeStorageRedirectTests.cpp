@@ -1,6 +1,8 @@
 #include "TestModeStorage/Hooks.h"
+#include "TestModeStorage/NativeStorageProbe.h"
 #include "TestModeStorage/Redirector.h"
 
+#include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -174,6 +176,37 @@ int main() {
         "disabled disk-space query to preserve directory");
     failures += expect(enabled.enabled() && !disabled.enabled(),
                        "storage policy enabled state");
+
+    const auto writable_probe =
+        gc::testmode_storage::ProbeNativeStorage(
+            std::filesystem::current_path());
+    failures += expect(
+        writable_probe.available &&
+            writable_probe.failed_stage ==
+                gc::testmode_storage::NativeStorageProbeStage::none &&
+            writable_probe.win32_error == ERROR_SUCCESS &&
+            writable_probe.cleanup_error == ERROR_SUCCESS &&
+            !writable_probe.probe_path.empty() &&
+            !std::filesystem::exists(writable_probe.probe_path),
+        "writable native storage probe succeeds and cleans up");
+
+    const auto missing_root =
+        std::filesystem::current_path() /
+        (L"missing-native-storage-root-" +
+         std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(GetTickCount64()));
+    failures += expect(
+        !std::filesystem::exists(missing_root),
+        "native storage missing-root fixture starts absent");
+    const auto unavailable_probe =
+        gc::testmode_storage::ProbeNativeStorage(missing_root);
+    failures += expect(
+        !unavailable_probe.available &&
+            unavailable_probe.failed_stage ==
+                gc::testmode_storage::NativeStorageProbeStage::create_file &&
+            unavailable_probe.win32_error != ERROR_SUCCESS &&
+            !std::filesystem::exists(missing_root),
+        "unavailable native storage probe fails without creating its root");
 
     return failures == 0 ? 0 : 1;
 }
