@@ -73,30 +73,60 @@ std::expected<InputConfig, std::string> ParseAndValidateInputConfig(
 
 ConfigManager::ConfigManager()
 {
-    const auto configPath = std::filesystem::current_path() / "config.toml";
-    if (!std::filesystem::exists(configPath))
+    config_path_ = std::filesystem::current_path() / "config.toml";
+    if (!std::filesystem::exists(config_path_))
     {
-        PLOG_ERROR << "Config file not found: " << configPath.c_str() << std::endl;
+        PLOG_ERROR << "Config file not found: " << config_path_.c_str() << std::endl;
         throw std::runtime_error("Config file not found");
     }
 
-    std::ifstream configFile(configPath);
+    std::ifstream configFile(config_path_);
     if (!configFile.is_open())
     {
-        PLOG_ERROR << "Failed to open config file: " << configPath.c_str() << std::endl;
+        PLOG_ERROR << "Failed to open config file: " << config_path_.c_str() << std::endl;
         throw std::runtime_error("Failed to open config file");
     }
 
     const std::string text{
         std::istreambuf_iterator<char>{configFile},
         std::istreambuf_iterator<char>{}};
-    auto result = gc::config::ParseAndValidateInputConfig(text);
+    auto result = gc::config::ParseAndValidateInputConfigDocument(text);
     if (!result) {
         PLOG_ERROR << result.error() << std::endl;
         throw std::runtime_error(result.error());
     }
 
-    config = std::move(result.value());
+    registry_schema_migrated_ = result->registry_paths_migrated;
+    config = std::move(result->config);
     PLOG_DEBUG << "Config file parsed successfully" << std::endl;
+    PLOG_DEBUG
+        << "Registry path schema migrated="
+        << registry_schema_migrated_;
     PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
+}
+
+std::expected<gc::system_path::RuntimeRoot, std::string>
+ConfigManager::PrepareGameSystemPath() noexcept
+{
+    try {
+        auto prepared =
+            gc::config::PrepareAndPersistGameSystemPathConfiguration(
+                config,
+                registry_schema_migrated_,
+                config_path_);
+        if (!prepared) {
+            return std::unexpected(prepared.error());
+        }
+
+        config = std::move(prepared->config);
+        registry_schema_migrated_ = false;
+        return std::move(prepared->runtime);
+    } catch (const std::exception& error) {
+        return std::unexpected(
+            "ConfigManager system path preparation failed: " +
+            std::string{error.what()});
+    } catch (...) {
+        return std::unexpected(
+            "ConfigManager system path preparation failed unexpectedly");
+    }
 }

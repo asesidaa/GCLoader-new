@@ -12,6 +12,7 @@ target_include_directories(gc_config PUBLIC
 target_link_libraries(gc_config PUBLIC
         gc_input_types
         gc_nesys_network_config
+        gc_system_path
         tomlplusplus::tomlplusplus
         reflectcpp
 )

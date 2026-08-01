@@ -1,7 +1,11 @@
 #include <WinSock2.h>
 #include <windows.h>
+#include <atomic>
 #include <filesystem>
+#include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 #include "Config/config.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
@@ -15,6 +19,7 @@
 #include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/Wasapi/WasapiAudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
+#include "SystemPath/StartupFatal.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -48,10 +53,64 @@ plog::Severity ToPlogSeverity(gc::config::LoaderLogLevel level) {
     return plog::info;
 }
 
-void ApplyConfiguredLogLevel() {
-    const auto level = ConfigManager::instance().GetLoaderLogLevel();
+void ApplyConfiguredLogLevel(const ConfigManager& config) {
+    const auto level = config.GetLoaderLogLevel();
     plog::get()->setMaxSeverity(ToPlogSeverity(level));
     PLOG_INFO << "Loader log level=" << LoaderLogLevelName(level);
+}
+
+std::wstring Utf8ToWideOrFallback(std::string_view value) {
+    constexpr std::wstring_view fallback =
+        L"System path preparation failed. Check the loader log for details.";
+    try {
+        if (value.empty() ||
+            value.size() > static_cast<std::size_t>(
+                std::numeric_limits<int>::max())) {
+            return std::wstring{fallback};
+        }
+        const auto source_size = static_cast<int>(value.size());
+        const int required = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            value.data(),
+            source_size,
+            nullptr,
+            0);
+        if (required <= 0) {
+            return std::wstring{fallback};
+        }
+        std::wstring converted(static_cast<std::size_t>(required), L'\0');
+        if (MultiByteToWideChar(
+                CP_UTF8,
+                MB_ERR_INVALID_CHARS,
+                value.data(),
+                source_size,
+                converted.data(),
+                required) != required) {
+            return std::wstring{fallback};
+        }
+        return converted;
+    } catch (...) {
+        return std::wstring{fallback};
+    }
+}
+
+void PublishSystemPathPreparationFatal(std::string_view error) noexcept {
+    static std::atomic_bool published{false};
+    try {
+        const auto modal = Utf8ToWideOrFallback(error);
+        gc::system_path::PublishStartupFatal(
+            published,
+            error,
+            modal,
+            21);
+    } catch (...) {
+        gc::system_path::PublishStartupFatal(
+            published,
+            error,
+            L"System path preparation failed. Check the loader log for details.",
+            21);
+    }
 }
 
 }
@@ -74,12 +133,28 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                         crash_dump_status);
             }
 
-            ApplyConfiguredLogLevel();
+            auto& config = ConfigManager::instance();
+            ApplyConfiguredLogLevel(config);
 
             PLOG_DEBUG << "DLL attach!" << std::endl;
             PLOG_INFO
                 << "NesysServicePatch: process role="
                 << gc::nesys_service::ProcessRoleName(role);
+
+            std::optional<gc::system_path::RuntimeRoot> system_root;
+            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
+                auto prepared = config.PrepareGameSystemPath();
+                if (!prepared) {
+                    PublishSystemPathPreparationFatal(prepared.error());
+                    return FALSE;
+                }
+                system_root = std::move(*prepared);
+                PLOG_INFO
+                    << "System path prepared configured="
+                    << system_root->configured_path
+                    << " redirect="
+                    << system_root->redirect_enabled;
+            }
 
             if (!gc::nesys_service::NesysServicePatchInit(
                     hModule,

@@ -312,6 +312,46 @@ std::string PathForDiagnostic(const std::filesystem::path& path) {
     };
 }
 
+const char* RootPrepareStageName(
+    gc::system_path::RootPrepareStage stage) noexcept {
+    using enum gc::system_path::RootPrepareStage;
+    switch (stage) {
+    case invalid_configured_path:
+        return "invalid_configured_path";
+    case configured_tree:
+        return "configured_tree";
+    case fallback_tree:
+        return "fallback_tree";
+    }
+    return "unknown";
+}
+
+std::string FormatRootPrepareError(
+    const gc::system_path::RootPrepareError& error,
+    std::string_view configured_path) {
+    std::ostringstream message;
+    message
+        << "System path preparation failed"
+        << " stage=" << RootPrepareStageName(error.stage)
+        << " configured_path='" << configured_path << "'"
+        << " failed_path='" << PathForDiagnostic(error.path) << "'"
+        << " error=" << error.error.value()
+        << " system_message='" << error.error.message() << "'"
+        << " fix=";
+    if (!error.registry_enabled) {
+        message
+            << "create a writable D:\\system or enable registry overrides";
+    } else if (
+        error.stage == gc::system_path::RootPrepareStage::fallback_tree) {
+        message
+            << "make the config directory writable or set .\\system manually";
+    } else {
+        message
+            << "correct [registry].system_path or permissions";
+    }
+    return message.str();
+}
+
 std::filesystem::path MakeTemporaryPath(
     const std::filesystem::path& config_path) {
     static std::atomic_uint64_t sequence{};
@@ -497,6 +537,69 @@ std::expected<void, std::string> WriteInputConfigAtomically(
             actions.remove(actions.context, temporary);
         }
         return std::unexpected("Config persistence failed unexpectedly");
+    }
+}
+
+GameSystemPathPreparationActions
+ProductionGameSystemPathPreparationActions() noexcept {
+    return {
+        .directories = gc::system_path::ProductionDirectoryActions(),
+        .config_write = ProductionAtomicConfigWriteActions(),
+    };
+}
+
+std::expected<PreparedGameSystemPathConfig, std::string>
+PrepareAndPersistGameSystemPathConfiguration(
+    InputConfig config,
+    bool registry_schema_migrated,
+    const std::filesystem::path& config_path,
+    GameSystemPathPreparationActions actions) noexcept {
+    try {
+        auto prepared = gc::system_path::PrepareGameSystemRoot(
+            {
+                .registry_enabled = config.registry().enabled(),
+                .configured_path = config.registry().system_path(),
+                .config_directory = config_path.parent_path(),
+            },
+            actions.directories);
+        if (!prepared) {
+            return std::unexpected(FormatRootPrepareError(
+                prepared.error(),
+                config.registry().system_path()));
+        }
+
+        if (prepared->configured_path_changed) {
+            config.registry().system_path =
+                prepared->runtime.configured_path;
+        }
+        const bool must_persist =
+            config.registry().enabled() &&
+            (registry_schema_migrated ||
+             prepared->configured_path_changed);
+        if (must_persist) {
+            auto persisted = WriteInputConfigAtomically(
+                config_path,
+                config,
+                actions.config_write);
+            if (!persisted) {
+                return std::unexpected(
+                    "System path configuration persistence failed: " +
+                    persisted.error());
+            }
+        }
+
+        return PreparedGameSystemPathConfig{
+            .config = std::move(config),
+            .runtime = std::move(prepared->runtime),
+            .persisted = must_persist,
+        };
+    } catch (const std::exception& error) {
+        return std::unexpected(
+            "System path preparation transaction failed: " +
+            std::string{error.what()});
+    } catch (...) {
+        return std::unexpected(
+            "System path preparation transaction failed unexpectedly");
     }
 }
 

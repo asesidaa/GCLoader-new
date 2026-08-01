@@ -10,6 +10,10 @@ target_compile_definitions(ConfigDocumentTests PRIVATE
 target_link_libraries(ConfigDocumentTests PRIVATE gc_config)
 add_test(NAME ConfigDocumentTests COMMAND ConfigDocumentTests)
 
+add_executable(SystemPathConfigTests SystemPathConfigTests.cpp)
+target_link_libraries(SystemPathConfigTests PRIVATE gc_config)
+add_test(NAME SystemPathConfigTests COMMAND SystemPathConfigTests)
+
 add_executable(NativeInputConfigTests NativeInputConfigTests.cpp)
 target_link_libraries(NativeInputConfigTests PRIVATE gc_config)
 add_test(NAME NativeInputConfigTests COMMAND NativeInputConfigTests)

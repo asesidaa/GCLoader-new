@@ -3,11 +3,13 @@
 #include "Config/NativeInputConfig.h"
 #include "Config/RegistryConfig.h"
 #include "Config/TargetFps.h"
+#include "SystemPath/SystemRoot.h"
 
 #include <Windows.h>
 
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -217,6 +219,9 @@ public:
         return config.logging().level();
     }
 
+    [[nodiscard]] std::expected<gc::system_path::RuntimeRoot, std::string>
+    PrepareGameSystemPath() noexcept;
+
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;
 
@@ -224,5 +229,7 @@ private:
     ConfigManager();
     ~ConfigManager() = default;
 
+    std::filesystem::path config_path_;
+    bool registry_schema_migrated_{};
     InputConfig config;
 };

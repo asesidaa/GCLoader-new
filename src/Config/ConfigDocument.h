@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Config/config.h"
+#include "SystemPath/SystemRoot.h"
 
 #include <expected>
 #include <filesystem>
@@ -41,5 +42,27 @@ WriteInputConfigAtomically(
     const InputConfig& config,
     AtomicConfigWriteActions actions =
         ProductionAtomicConfigWriteActions()) noexcept;
+
+struct GameSystemPathPreparationActions {
+    gc::system_path::DirectoryActions directories;
+    AtomicConfigWriteActions config_write;
+};
+
+[[nodiscard]] GameSystemPathPreparationActions
+ProductionGameSystemPathPreparationActions() noexcept;
+
+struct PreparedGameSystemPathConfig {
+    InputConfig config;
+    gc::system_path::RuntimeRoot runtime;
+    bool persisted{};
+};
+
+[[nodiscard]] std::expected<PreparedGameSystemPathConfig, std::string>
+PrepareAndPersistGameSystemPathConfiguration(
+    InputConfig config,
+    bool registry_schema_migrated,
+    const std::filesystem::path& config_path,
+    GameSystemPathPreparationActions actions =
+        ProductionGameSystemPathPreparationActions()) noexcept;
 
 } // namespace gc::config

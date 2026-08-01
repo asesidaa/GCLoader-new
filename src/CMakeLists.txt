@@ -52,6 +52,7 @@ target_link_libraries(iDmacDrv32 PRIVATE
         gc_nesys
         gc_rfid_feature
         gc_runtime_patches
+        gc_system_path
         gc_test_mode_timing
         dsound
         dxguid
