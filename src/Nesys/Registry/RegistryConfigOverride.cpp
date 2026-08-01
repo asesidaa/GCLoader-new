@@ -230,10 +230,18 @@ LSTATUS WINAPI reg_close_key_detour(HKEY key) {
 
 std::optional<RegistryOverrideValues> CreateRegistryOverrideValues(
     const RegistryConfig& config) {
-    if (!gc::registry_config::ValidateRegistryConfig(config).valid()) {
+    const auto& nesys = config.nesys();
+    if (!gc::registry_config::IsRegistryDword(nesys.game_kind()) ||
+        !gc::registry_config::IsRegistryDword(nesys.event_next_time()) ||
+        !gc::registry_config::IsRegistryDword(nesys.condition_time()) ||
+        !gc::registry_config::IsRegistryLogLevel(nesys.log_level())) {
         return std::nullopt;
     }
-    const auto& nesys = config.nesys();
+    auto paths = gc::registry_config::DeriveNesysPaths(
+        config.system_path());
+    if (!paths) {
+        return std::nullopt;
+    }
     return RegistryOverrideValues{
         static_cast<DWORD>(
             gc::registry_config::GameCountryRegistryDword(
@@ -243,9 +251,9 @@ std::optional<RegistryOverrideValues> CreateRegistryOverrideValues(
         static_cast<DWORD>(nesys.condition_time()),
         kServiceTrafficCount,
         static_cast<DWORD>(nesys.log_level()),
-        nesys.news_path(),
-        nesys.event_path(),
-        nesys.log_path(),
+        std::move(paths->news),
+        std::move(paths->event),
+        std::move(paths->log),
     };
 }
 

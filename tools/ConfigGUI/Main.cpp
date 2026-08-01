@@ -1045,32 +1045,19 @@ void DrawRegistry(InputConfig& config, bool& dirty)
         gc::registry_config::IsRegistryLogLevel(log_level),
         "Enter an integer from 0 through 3.");
 
-    auto& news_path = nesys.news_path();
-    if (ImGui::InputText("Registry NewsPath", &news_path))
+    auto& system_path = registry.system_path();
+    if (ImGui::InputText("Registry system path", &system_path))
     {
         dirty = true;
     }
-    DrawInlineValidationError(
-        gc::registry_config::IsRegistryPath(news_path),
-        "Path must contain 1-259 encoded bytes before the terminating NUL.");
-
-    auto& event_path = nesys.event_path();
-    if (ImGui::InputText("Registry EventPath", &event_path))
+    const auto derived =
+        gc::registry_config::DeriveNesysPaths(system_path);
+    if (!derived)
     {
-        dirty = true;
+        DrawInlineValidationError(false, derived.error().c_str());
     }
-    DrawInlineValidationError(
-        gc::registry_config::IsRegistryPath(event_path),
-        "Path must contain 1-259 encoded bytes before the terminating NUL.");
-
-    auto& log_path = nesys.log_path();
-    if (ImGui::InputText("Registry LogPath", &log_path))
-    {
-        dirty = true;
-    }
-    DrawInlineValidationError(
-        gc::registry_config::IsRegistryPath(log_path),
-        "Path must contain 1-259 encoded bytes before the terminating NUL.");
+    ImGui::TextDisabled(
+        "NewsPath, EventPath, and LogPath are derived from this root.");
 }
 
 void DrawExperimental(InputConfig& config, bool& dirty)

@@ -397,9 +397,7 @@ int main() {
     config.nesys().event_next_time = 0;
     config.nesys().condition_time = 1;
     config.nesys().log_level = 2;
-    config.nesys().news_path = "N:\\news";
-    config.nesys().event_path = "E:\\event";
-    config.nesys().log_path = "L:\\log";
+    config.system_path = "R:\\cabinet";
 
     const auto values = CreateRegistryOverrideValues(config);
     failures += expect(values.has_value(), "valid immutable override values");
@@ -517,9 +515,9 @@ int main() {
         std::string_view value;
     };
     constexpr std::array<StringCase, 3> string_cases{{
-        {"NewsPath", "N:\\news"},
-        {"EventPath", "E:\\event"},
-        {"LogPath", "L:\\log"},
+        {"NewsPath", "R:\\cabinet\\DUA\\news"},
+        {"EventPath", "R:\\cabinet\\DUA\\event"},
+        {"LogPath", "R:\\cabinet\\CmdFile\\log"},
     }};
     for (const auto& test : string_cases) {
         failures += expect_string_override(
@@ -995,8 +993,18 @@ int main() {
         "allocation failure clears caller handle");
     g_allocation_failure = nullptr;
 
+    RegistryConfig relative = config;
+    relative.system_path = ".\\system";
+    const auto relative_values = CreateRegistryOverrideValues(relative);
+    failures += expect(
+        relative_values.has_value() &&
+            relative_values->news_path == ".\\system\\DUA\\news" &&
+            relative_values->event_path == ".\\system\\DUA\\event" &&
+            relative_values->log_path == ".\\system\\CmdFile\\log",
+        "immutable override values preserve an explicit relative system root");
+
     RegistryConfig invalid = config;
-    invalid.nesys().log_path = std::string(260, 'x');
+    invalid.system_path = std::string(250, 'x');
     failures += expect(
         !CreateRegistryOverrideValues(invalid).has_value(),
         "invalid config cannot become immutable override state");

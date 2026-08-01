@@ -247,9 +247,7 @@ int main() {
         "event_next_time",
         "condition_time",
         "log_level",
-        "news_path",
-        "event_path",
-        "log_path",
+        "system_path",
         "level",
         "target_fps",
         "enable_testmode_storage_redirect",
@@ -263,6 +261,20 @@ int main() {
             RemoveAssignment(distributed, key),
             std::string{"missing required assignment: "} +
                 std::string{key});
+    }
+
+    constexpr std::array legacy_registry_paths{
+        "news_path = 'D:\\system\\DUA\\news'",
+        "event_path = 'D:\\system\\DUA\\event'",
+        "log_path = 'D:\\system\\CmdFile\\log'",
+    };
+    for (const std::string_view assignment : legacy_registry_paths) {
+        failures += ExpectParseFailure(
+            InsertAfterLine(
+                distributed,
+                "[registry.nesys]",
+                assignment),
+            "system_path plus legacy registry leaf is rejected");
     }
     failures += ExpectParseFailure(
         RemoveArrayAssignment(distributed, "bindings"),
@@ -468,6 +480,54 @@ int main() {
             "game country maps to the expected registry DWORD");
     }
 
+    const auto relative_paths =
+        gc::registry_config::DeriveNesysPaths(".\\system");
+    failures += Expect(
+        relative_paths.has_value(),
+        "relative registry system path is accepted");
+    if (relative_paths) {
+        failures += Expect(
+            relative_paths->news == ".\\system\\DUA\\news" &&
+                relative_paths->event == ".\\system\\DUA\\event" &&
+                relative_paths->log == ".\\system\\CmdFile\\log",
+            "relative registry system path remains explicitly relative");
+    }
+
+    const auto absolute_paths =
+        gc::registry_config::DeriveNesysPaths("R:\\cabinet");
+    failures += Expect(
+        absolute_paths.has_value(),
+        "absolute registry system path is accepted");
+    if (absolute_paths) {
+        failures += Expect(
+            absolute_paths->news == "R:\\cabinet\\DUA\\news" &&
+                absolute_paths->event == "R:\\cabinet\\DUA\\event" &&
+                absolute_paths->log == "R:\\cabinet\\CmdFile\\log",
+            "absolute registry service paths are derived from one root");
+    }
+
+    const auto empty_paths = gc::registry_config::DeriveNesysPaths("");
+    failures += Expect(
+        !empty_paths,
+        "empty registry system path is rejected");
+
+    const auto ansi_incompatible_paths =
+        gc::registry_config::DeriveNesysPaths(
+            std::string{"C:\\"} + "\xF0\x9F\x98\x80");
+    failures += Expect(
+        !ansi_incompatible_paths &&
+            ansi_incompatible_paths.error().find("ANSI") !=
+                std::string::npos &&
+            ansi_incompatible_paths.error().find(".\\system") !=
+                std::string::npos,
+        "ANSI-incompatible registry system path explains the service limit");
+
+    const auto overlong_derived_paths =
+        gc::registry_config::DeriveNesysPaths(std::string(250, 'x'));
+    failures += Expect(
+        !overlong_derived_paths,
+        "registry system root is rejected when a derived path is too long");
+
     auto invalid_registry = canonical;
     invalid_registry.registry().nesys().game_kind = -1;
     failures += Expect(
@@ -479,16 +539,22 @@ int main() {
         !gc::config::ValidateInputConfig(invalid_registry),
         "registry log level above three is rejected");
     invalid_registry = canonical;
-    invalid_registry.registry().nesys().log_path = "";
+    invalid_registry.registry().system_path = "";
     failures += Expect(
         !gc::config::ValidateInputConfig(invalid_registry),
-        "empty registry path is rejected");
+        "empty registry system path is rejected");
     invalid_registry = canonical;
-    invalid_registry.registry().nesys().log_path =
-        std::string(260, 'x');
+    invalid_registry.registry().system_path =
+        std::string{"C:\\"} + "\xF0\x9F\x98\x80";
+    const auto invalid_system_path =
+        gc::config::ValidateInputConfig(invalid_registry);
     failures += Expect(
-        !gc::config::ValidateInputConfig(invalid_registry),
-        "registry path above 259 bytes is rejected");
+        !invalid_system_path &&
+            invalid_system_path.error().find("ANSI") !=
+                std::string::npos &&
+            invalid_system_path.error().find(".\\system") !=
+                std::string::npos,
+        "config validation reports the ANSI service path limitation");
 
     return failures == 0 ? 0 : 1;
 }

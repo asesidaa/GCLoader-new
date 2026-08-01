@@ -78,6 +78,13 @@ std::expected<void, std::string> ValidateInputConfig(
     const auto registry_validation =
         gc::registry_config::ValidateRegistryConfig(value.registry());
     if (!registry_validation.valid()) {
+        if (!registry_validation.system_path) {
+            const auto derived = gc::registry_config::DeriveNesysPaths(
+                value.registry().system_path());
+            if (!derived) {
+                return std::unexpected(derived.error());
+            }
+        }
         return std::unexpected(
             gc::registry_config::FirstRegistryValidationError(
                 registry_validation));
@@ -116,6 +123,19 @@ std::expected<InputConfig, std::string> ParseAndValidateInputConfig(
         return std::unexpected(
             "Obsolete [experimental].enable_120fps_"
             "timer_patches is not supported; replace it with target_fps = 60 through 500");
+    }
+
+    if (const auto* registry = syntax["registry"].as_table();
+        registry != nullptr) {
+        if (const auto* nesys = (*registry)["nesys"].as_table();
+            nesys != nullptr &&
+            (nesys->contains("news_path") ||
+             nesys->contains("event_path") ||
+             nesys->contains("log_path"))) {
+            return std::unexpected(
+                "Legacy [registry.nesys] path fields are not valid with "
+                "[registry].system_path");
+        }
     }
 
     auto parsed = rfl::toml::read<InputConfig>(std::string{text});
