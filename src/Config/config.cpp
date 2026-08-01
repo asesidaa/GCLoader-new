@@ -106,14 +106,16 @@ ConfigManager::ConfigManager()
 }
 
 std::expected<gc::system_path::RuntimeRoot, std::string>
-ConfigManager::PrepareGameSystemPath() noexcept
+ConfigManager::PrepareGameSystemPath(
+    bool native_testmode_storage_available) noexcept
 {
     try {
         auto prepared =
             gc::config::PrepareAndPersistGameSystemPathConfiguration(
                 config,
                 registry_schema_migrated_,
-                config_path_);
+                config_path_,
+                native_testmode_storage_available);
         if (!prepared) {
             return std::unexpected(prepared.error());
         }

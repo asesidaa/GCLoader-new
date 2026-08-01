@@ -62,6 +62,7 @@ PrepareAndPersistGameSystemPathConfiguration(
     InputConfig config,
     bool registry_schema_migrated,
     const std::filesystem::path& config_path,
+    bool native_testmode_storage_available,
     GameSystemPathPreparationActions actions =
         ProductionGameSystemPathPreparationActions()) noexcept;
 

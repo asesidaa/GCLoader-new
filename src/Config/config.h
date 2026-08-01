@@ -220,7 +220,8 @@ public:
     }
 
     [[nodiscard]] std::expected<gc::system_path::RuntimeRoot, std::string>
-    PrepareGameSystemPath() noexcept;
+    PrepareGameSystemPath(
+        bool native_testmode_storage_available) noexcept;
 
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;

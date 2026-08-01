@@ -184,6 +184,7 @@ int main() {
             MakeInputConfig(true, "D:\\system"),
             true,
             config_path,
+            true,
             MakePreparationActions(
                 migration_directories,
                 migration_writer));
@@ -204,6 +205,7 @@ int main() {
             MakeInputConfig(false, ".\\legacy"),
             true,
             config_path,
+            true,
             MakePreparationActions(
                 disabled_directories,
                 disabled_writer));
@@ -227,6 +229,7 @@ int main() {
         MakeInputConfig(true, "D:\\system"),
         false,
         config_path,
+        false,
         MakePreparationActions(
             fallback_directories,
             fallback_writer));
@@ -238,11 +241,16 @@ int main() {
             fallback->runtime.configured_path == ".\\system" &&
             fallback->runtime.resolved_path == L"H:\\game\\system" &&
             fallback->runtime.redirect_enabled &&
+            fallback->config.experimental()
+                .enable_testmode_storage_redirect() &&
             fallback_writer.serialized.find("system_path") !=
                 std::string::npos &&
             fallback_writer.serialized.find(".\\system") !=
+                std::string::npos &&
+            fallback_writer.serialized.find(
+                "enable_testmode_storage_redirect = true") !=
                 std::string::npos,
-        "enabled fallback persists explicit relative spelling before return");
+        "fallback and unavailable storage persist together before return");
 
     DirectoryFake unchanged_directories{};
     WriterFake unchanged_writer{};
@@ -250,14 +258,63 @@ int main() {
         MakeInputConfig(true, ".\\custom"),
         false,
         config_path,
+        true,
         MakePreparationActions(
             unchanged_directories,
             unchanged_writer));
     failures += Expect(
         unchanged && !unchanged->persisted &&
             unchanged_writer.writes == 0 &&
-            unchanged_writer.replaces == 0,
+            unchanged_writer.replaces == 0 &&
+            !unchanged->config.experimental()
+                 .enable_testmode_storage_redirect(),
         "enabled unchanged custom root does not rewrite config");
+
+    DirectoryFake unavailable_storage_directories{};
+    WriterFake unavailable_storage_writer{};
+    const auto unavailable_storage =
+        PrepareAndPersistGameSystemPathConfiguration(
+            MakeInputConfig(true, ".\\custom"),
+            false,
+            config_path,
+            false,
+            MakePreparationActions(
+                unavailable_storage_directories,
+                unavailable_storage_writer));
+    failures += Expect(
+        unavailable_storage && unavailable_storage->persisted &&
+            unavailable_storage_writer.writes == 1 &&
+            unavailable_storage_writer.replaces == 1 &&
+            unavailable_storage->runtime.configured_path == ".\\custom" &&
+            unavailable_storage->config.experimental()
+                .enable_testmode_storage_redirect() &&
+            unavailable_storage_writer.serialized.find(
+                "enable_testmode_storage_redirect = true") !=
+                std::string::npos,
+        "unavailable native storage persists redirect for custom system path");
+
+    InputConfig already_enabled_input =
+        MakeInputConfig(true, ".\\custom");
+    already_enabled_input.experimental().enable_testmode_storage_redirect =
+        true;
+    DirectoryFake already_enabled_directories{};
+    WriterFake already_enabled_writer{};
+    const auto already_enabled =
+        PrepareAndPersistGameSystemPathConfiguration(
+            std::move(already_enabled_input),
+            false,
+            config_path,
+            false,
+            MakePreparationActions(
+                already_enabled_directories,
+                already_enabled_writer));
+    failures += Expect(
+        already_enabled && !already_enabled->persisted &&
+            already_enabled_writer.writes == 0 &&
+            already_enabled_writer.replaces == 0 &&
+            already_enabled->config.experimental()
+                .enable_testmode_storage_redirect(),
+        "unavailable native storage does not rewrite an enabled redirect");
 
     DirectoryFake replace_failure_directories{.failing_calls = {0}};
     WriterFake replace_failure_writer{.fail_replace = true};
@@ -268,6 +325,7 @@ int main() {
             replacement_input,
             false,
             config_path,
+            true,
             MakePreparationActions(
                 replace_failure_directories,
                 replace_failure_writer));
@@ -293,6 +351,7 @@ int main() {
             MakeInputConfig(true, "R:\\cabinet"),
             false,
             config_path,
+            true,
             MakePreparationActions(
                 custom_failure_directories,
                 custom_failure_writer));
@@ -320,6 +379,7 @@ int main() {
             MakeInputConfig(false, ".\\ignored"),
             false,
             config_path,
+            true,
             MakePreparationActions(
                 disabled_failure_directories,
                 disabled_failure_writer));
@@ -342,6 +402,7 @@ int main() {
             MakeInputConfig(true, "D:\\system"),
             false,
             config_path,
+            true,
             MakePreparationActions(
                 fallback_failure_directories,
                 fallback_failure_writer));

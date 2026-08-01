@@ -22,6 +22,7 @@
 #include "Diagnostics/CrashDumpHandler.h"
 #include "SystemPath/StartupFatal.h"
 #include "SystemPath/TtxInitGuard.h"
+#include "TestModeStorage/NativeStorageProbe.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -225,7 +226,30 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
             std::optional<gc::system_path::RuntimeRoot> system_root;
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
-                auto prepared = config.PrepareGameSystemPath();
+                const auto native_testmode_storage =
+                    gc::testmode_storage::ProbeNativeStorage();
+                if (native_testmode_storage.available) {
+                    PLOG_INFO
+                        << "Native test-mode storage: available";
+                } else {
+                    PLOG_WARNING
+                        << "Native test-mode storage: unavailable stage="
+                        << gc::testmode_storage::NativeStorageProbeStageName(
+                               native_testmode_storage.failed_stage)
+                        << " win32_error="
+                        << native_testmode_storage.win32_error
+                        << "; enabling persisted redirect";
+                }
+                if (native_testmode_storage.cleanup_error !=
+                    ERROR_SUCCESS) {
+                    PLOG_WARNING
+                        << "Native test-mode storage: probe cleanup failed "
+                           "win32_error="
+                        << native_testmode_storage.cleanup_error;
+                }
+
+                auto prepared = config.PrepareGameSystemPath(
+                    native_testmode_storage.available);
                 if (!prepared) {
                     PublishSystemPathPreparationFatal(prepared.error());
                     return FALSE;

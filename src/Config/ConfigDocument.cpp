@@ -553,6 +553,7 @@ PrepareAndPersistGameSystemPathConfiguration(
     InputConfig config,
     bool registry_schema_migrated,
     const std::filesystem::path& config_path,
+    bool native_testmode_storage_available,
     GameSystemPathPreparationActions actions) noexcept {
     try {
         auto prepared = gc::system_path::PrepareGameSystemRoot(
@@ -572,10 +573,17 @@ PrepareAndPersistGameSystemPathConfiguration(
             config.registry().system_path =
                 prepared->runtime.configured_path;
         }
+        const bool testmode_redirect_changed =
+            !native_testmode_storage_available &&
+            !config.experimental().enable_testmode_storage_redirect();
+        if (testmode_redirect_changed) {
+            config.experimental().enable_testmode_storage_redirect = true;
+        }
         const bool must_persist =
-            config.registry().enabled() &&
-            (registry_schema_migrated ||
-             prepared->configured_path_changed);
+            testmode_redirect_changed ||
+            (config.registry().enabled() &&
+             (registry_schema_migrated ||
+              prepared->configured_path_changed));
         if (must_persist) {
             auto persisted = WriteInputConfigAtomically(
                 config_path,

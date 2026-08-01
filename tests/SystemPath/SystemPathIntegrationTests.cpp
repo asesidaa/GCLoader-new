@@ -233,6 +233,7 @@ int TestEnabledFallbackFlow()
             parsed->config,
             parsed->registry_paths_migrated,
             config_path,
+            true,
             PreparationActions(directories, persisted));
     failures += Expect(
         prepared && prepared->persisted && persisted.writes == 1 &&
@@ -286,6 +287,7 @@ int TestRegistryDisabledFlow()
             parsed->config,
             parsed->registry_paths_migrated,
             L"H:\\遊戲\\config.toml",
+            true,
             PreparationActions(directories, writer));
     failures += Expect(
         prepared && !prepared->persisted && writer.writes == 0 &&
