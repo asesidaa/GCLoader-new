@@ -187,7 +187,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     return FALSE;
                 }
 
-                const auto rfid_result = gc::rfid::InitializeFeature();
+                if (!system_root) {
+                    PLOG_ERROR
+                        << "System path: prepared game root unavailable";
+                    return FALSE;
+                }
+                const auto rfid_result =
+                    gc::rfid::InitializeFeature(*system_root);
                 if (!rfid_result) {
                     PLOG_ERROR
                         << "RFID/JVS feature initialization failed at stage "

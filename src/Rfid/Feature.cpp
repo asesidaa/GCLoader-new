@@ -1,6 +1,7 @@
 #include "Rfid/Feature.h"
 
 #include "Rfid/Runtime.h"
+#include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
 #include "Win32Hooks/Kernel32Hooks.h"
 #include "Config/config.h"
@@ -18,15 +19,20 @@ namespace gc::rfid {
 namespace {
 
 struct FeatureState {
-    FeatureState(int virtual_key, bool storage_enabled) noexcept
+    FeatureState(
+        int virtual_key,
+        bool storage_enabled,
+        const gc::system_path::RuntimeRoot& system_root)
         : rfid{virtual_key},
           storage{storage_enabled},
-          kernel32{rfid, storage}
+          system{system_root},
+          kernel32{rfid, storage, system}
     {
     }
 
     Runtime rfid;
     gc::testmode_storage::Hooks storage;
+    gc::system_path::SystemPathRouter system;
     gc::win32_hooks::Kernel32Hooks kernel32;
     gc::win32_hooks::MinHookTransaction transaction;
 };
@@ -67,7 +73,8 @@ std::string WideToUtf8(std::wstring_view value)
 
 } // namespace
 
-std::expected<void, FeatureError> InitializeFeature() noexcept
+std::expected<void, FeatureError> InitializeFeature(
+    const gc::system_path::RuntimeRoot& system_root) noexcept
 {
     if (g_feature_state != nullptr) {
         return {};
@@ -121,7 +128,7 @@ std::expected<void, FeatureError> InitializeFeature() noexcept
     std::unique_ptr<FeatureState> state;
     try {
         state = std::make_unique<FeatureState>(
-            card_virtual_key, storage_enabled);
+            card_virtual_key, storage_enabled, system_root);
     } catch (const std::bad_alloc&) {
         return std::unexpected(FeatureError{
             .stage = FeatureFailureStage::allocation,
@@ -135,13 +142,15 @@ std::expected<void, FeatureError> InitializeFeature() noexcept
     }
 
     state->kernel32.Activate();
-    const auto requests =
-        state->kernel32.BuildRequests(storage_enabled);
+    const auto requests = state->kernel32.BuildRequests();
     const auto installed = state->transaction.Install(requests.requests());
     if (!installed) {
         const auto& error = installed.error();
         PLOG_ERROR
-            << "RFID hooks: installation failed stage="
+            << "Game Kernel32 hooks: installation failed rfid=true storage="
+            << storage_enabled
+            << " system=" << state->system.enabled()
+            << " stage="
             << gc::win32_hooks::HookInstallStageName(error.stage)
             << " export="
             << (error.export_name == nullptr ? "<none>" : error.export_name)

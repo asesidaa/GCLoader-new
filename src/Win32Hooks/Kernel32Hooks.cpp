@@ -4,6 +4,7 @@
 #include "plog/Log.h"
 
 #include <cstddef>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <span>
@@ -31,6 +32,19 @@ template <typename Function>
     return reinterpret_cast<LPVOID>(function);
 }
 
+template <typename Result, typename Callback>
+[[nodiscard]] Result GuardDetour(
+    Result failure,
+    Callback&& callback) noexcept
+{
+    try {
+        return std::invoke(std::forward<Callback>(callback));
+    } catch (...) {
+        SetLastError(ERROR_UNHANDLED_EXCEPTION);
+        return failure;
+    }
+}
+
 } // namespace
 
 Kernel32Hooks* Kernel32Hooks::active_{};
@@ -38,9 +52,11 @@ Kernel32Hooks* Kernel32Hooks::active_{};
 Kernel32Hooks::Kernel32Hooks(
     gc::rfid::Runtime& rfid,
     gc::testmode_storage::Hooks& storage,
+    gc::system_path::SystemPathRouter& system,
     OriginalKernel32Api originals) noexcept
     : rfid_{rfid},
       storage_{storage},
+      system_{system},
       originals_{originals}
 {
 }
@@ -57,7 +73,7 @@ void Kernel32Hooks::Deactivate() noexcept
     }
 }
 
-HookRequestSet Kernel32Hooks::BuildRequests(bool storage_enabled) noexcept
+HookRequestSet Kernel32Hooks::BuildRequests() noexcept
 {
     HookRequestSet result;
     bool valid = true;
@@ -76,6 +92,15 @@ HookRequestSet Kernel32Hooks::BuildRequests(bool storage_enabled) noexcept
             .detour = DetourAddress(detour),
             .original = OriginalSlot(original),
         };
+    };
+    const auto append_if = [&]<typename Function>(
+                               bool condition,
+                               LPCSTR export_name,
+                               Function detour,
+                               Function* original) {
+        if (condition) {
+            append(export_name, detour, original);
+        }
     };
 
     append("CreateFileA", CreateFileADetour, &originals_.create_file_a);
@@ -98,28 +123,32 @@ HookRequestSet Kernel32Hooks::BuildRequests(bool storage_enabled) noexcept
     append("GetCommTimeouts", GetCommTimeoutsDetour,
            &originals_.get_comm_timeouts);
 
-    if (storage_enabled) {
-        append("FindFirstFileA", FindFirstFileADetour,
-               &originals_.find_first_file_a);
-        append("FindFirstFileW", FindFirstFileWDetour,
-               &originals_.find_first_file_w);
-        append("CreateDirectoryA", CreateDirectoryADetour,
-               &originals_.create_directory_a);
-        append("CreateDirectoryW", CreateDirectoryWDetour,
-               &originals_.create_directory_w);
-        append("DeleteFileA", DeleteFileADetour,
-               &originals_.delete_file_a);
-        append("DeleteFileW", DeleteFileWDetour,
-               &originals_.delete_file_w);
-        append("GetFileAttributesA", GetFileAttributesADetour,
-               &originals_.get_file_attributes_a);
-        append("GetFileAttributesW", GetFileAttributesWDetour,
-               &originals_.get_file_attributes_w);
-        append("GetDiskFreeSpaceExA", GetDiskFreeSpaceExADetour,
-               &originals_.get_disk_free_space_ex_a);
-        append("GetDiskFreeSpaceExW", GetDiskFreeSpaceExWDetour,
-               &originals_.get_disk_free_space_ex_w);
-    }
+    const bool storage = storage_.enabled();
+    const bool system = system_.enabled();
+    append_if(storage, "FindFirstFileA", FindFirstFileADetour,
+              &originals_.find_first_file_a);
+    append_if(storage || system, "FindFirstFileW", FindFirstFileWDetour,
+              &originals_.find_first_file_w);
+    append_if(storage, "CreateDirectoryA", CreateDirectoryADetour,
+              &originals_.create_directory_a);
+    append_if(storage || system, "CreateDirectoryW", CreateDirectoryWDetour,
+              &originals_.create_directory_w);
+    append_if(storage || system, "DeleteFileA", DeleteFileADetour,
+              &originals_.delete_file_a);
+    append_if(storage || system, "DeleteFileW", DeleteFileWDetour,
+              &originals_.delete_file_w);
+    append_if(storage || system, "GetFileAttributesA",
+              GetFileAttributesADetour, &originals_.get_file_attributes_a);
+    append_if(storage || system, "GetFileAttributesW",
+              GetFileAttributesWDetour, &originals_.get_file_attributes_w);
+    append_if(storage, "GetDiskFreeSpaceExA", GetDiskFreeSpaceExADetour,
+              &originals_.get_disk_free_space_ex_a);
+    append_if(storage, "GetDiskFreeSpaceExW", GetDiskFreeSpaceExWDetour,
+              &originals_.get_disk_free_space_ex_w);
+    append_if(system, "MoveFileA", MoveFileADetour,
+              &originals_.move_file_a);
+    append_if(system, "MoveFileW", MoveFileWDetour,
+              &originals_.move_file_w);
     return result;
 }
 
@@ -144,7 +173,22 @@ HANDLE Kernel32Hooks::CreateFileA(
         return *opened;
     }
 
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathA(file_name);
+    if (!system) {
+        SetLastError(system.error());
+        return INVALID_HANDLE_VALUE;
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.create_file_w(
+            system->path.c_str(), desired_access, share_mode,
+            security_attributes, creation_disposition,
+            flags_and_attributes, template_file);
+    }
+
     const auto routed = storage_.RoutePathA(file_name);
+    SetLastError(incoming_last_error);
     return originals_.create_file_a(
         routed.get(), desired_access, share_mode, security_attributes,
         creation_disposition, flags_and_attributes, template_file);
@@ -171,7 +215,22 @@ HANDLE Kernel32Hooks::CreateFileW(
         return *opened;
     }
 
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathW(file_name);
+    if (!system) {
+        SetLastError(system.error());
+        return INVALID_HANDLE_VALUE;
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.create_file_w(
+            system->path.c_str(), desired_access, share_mode,
+            security_attributes, creation_disposition,
+            flags_and_attributes, template_file);
+    }
+
     const auto routed = storage_.RoutePathW(file_name);
+    SetLastError(incoming_last_error);
     return originals_.create_file_w(
         routed.get(), desired_access, share_mode, security_attributes,
         creation_disposition, flags_and_attributes, template_file);
@@ -465,7 +524,9 @@ HANDLE Kernel32Hooks::FindFirstFileA(
     LPCSTR file_name,
     LPWIN32_FIND_DATAA find_data) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
     const auto routed = storage_.RoutePathA(file_name);
+    SetLastError(incoming_last_error);
     return originals_.find_first_file_a(routed.get(), find_data);
 }
 
@@ -473,7 +534,19 @@ HANDLE Kernel32Hooks::FindFirstFileW(
     LPCWSTR file_name,
     LPWIN32_FIND_DATAW find_data) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathW(file_name);
+    if (!system) {
+        SetLastError(system.error());
+        return INVALID_HANDLE_VALUE;
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.find_first_file_w(
+            system->path.c_str(), find_data);
+    }
     const auto routed = storage_.RoutePathW(file_name);
+    SetLastError(incoming_last_error);
     return originals_.find_first_file_w(routed.get(), find_data);
 }
 
@@ -481,7 +554,9 @@ BOOL Kernel32Hooks::CreateDirectoryA(
     LPCSTR path,
     LPSECURITY_ATTRIBUTES security_attributes) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
     const auto routed = storage_.RoutePathA(path);
+    SetLastError(incoming_last_error);
     return originals_.create_directory_a(routed.get(), security_attributes);
 }
 
@@ -489,31 +564,84 @@ BOOL Kernel32Hooks::CreateDirectoryW(
     LPCWSTR path,
     LPSECURITY_ATTRIBUTES security_attributes) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathW(path);
+    if (!system) {
+        return Fail(system.error());
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.create_directory_w(
+            system->path.c_str(), security_attributes);
+    }
     const auto routed = storage_.RoutePathW(path);
+    SetLastError(incoming_last_error);
     return originals_.create_directory_w(routed.get(), security_attributes);
 }
 
 BOOL Kernel32Hooks::DeleteFileA(LPCSTR file_name) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathA(file_name);
+    if (!system) {
+        return Fail(system.error());
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.delete_file_w(system->path.c_str());
+    }
     const auto routed = storage_.RoutePathA(file_name);
+    SetLastError(incoming_last_error);
     return originals_.delete_file_a(routed.get());
 }
 
 BOOL Kernel32Hooks::DeleteFileW(LPCWSTR file_name) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathW(file_name);
+    if (!system) {
+        return Fail(system.error());
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.delete_file_w(system->path.c_str());
+    }
     const auto routed = storage_.RoutePathW(file_name);
+    SetLastError(incoming_last_error);
     return originals_.delete_file_w(routed.get());
 }
 
 DWORD Kernel32Hooks::GetFileAttributesA(LPCSTR file_name) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathA(file_name);
+    if (!system) {
+        SetLastError(system.error());
+        return INVALID_FILE_ATTRIBUTES;
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.get_file_attributes_w(system->path.c_str());
+    }
     const auto routed = storage_.RoutePathA(file_name);
+    SetLastError(incoming_last_error);
     return originals_.get_file_attributes_a(routed.get());
 }
 
 DWORD Kernel32Hooks::GetFileAttributesW(LPCWSTR file_name) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto system = system_.RoutePathW(file_name);
+    if (!system) {
+        SetLastError(system.error());
+        return INVALID_FILE_ATTRIBUTES;
+    }
+    if (system->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.get_file_attributes_w(system->path.c_str());
+    }
     const auto routed = storage_.RoutePathW(file_name);
+    SetLastError(incoming_last_error);
     return originals_.get_file_attributes_w(routed.get());
 }
 
@@ -523,8 +651,11 @@ BOOL Kernel32Hooks::GetDiskFreeSpaceExA(
     PULARGE_INTEGER total,
     PULARGE_INTEGER free) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto* routed = storage_.DiskSpaceDirectoryA(directory);
+    SetLastError(incoming_last_error);
     return originals_.get_disk_free_space_ex_a(
-        storage_.DiskSpaceDirectoryA(directory), available, total, free);
+        routed, available, total, free);
 }
 
 BOOL Kernel32Hooks::GetDiskFreeSpaceExW(
@@ -533,152 +664,292 @@ BOOL Kernel32Hooks::GetDiskFreeSpaceExW(
     PULARGE_INTEGER total,
     PULARGE_INTEGER free) noexcept
 {
+    const DWORD incoming_last_error = GetLastError();
+    const auto* routed = storage_.DiskSpaceDirectoryW(directory);
+    SetLastError(incoming_last_error);
     return originals_.get_disk_free_space_ex_w(
-        storage_.DiskSpaceDirectoryW(directory), available, total, free);
+        routed, available, total, free);
+}
+
+BOOL Kernel32Hooks::MoveFileA(
+    LPCSTR existing_path,
+    LPCSTR new_path) noexcept
+{
+    const DWORD incoming_last_error = GetLastError();
+    const auto existing = system_.RoutePathA(existing_path);
+    if (!existing) {
+        return Fail(existing.error());
+    }
+    const auto destination = system_.RoutePathA(new_path);
+    if (!destination) {
+        return Fail(destination.error());
+    }
+
+    if (!existing->matched && !destination->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.move_file_a(existing_path, new_path);
+    }
+
+    std::filesystem::path converted_existing;
+    std::filesystem::path converted_destination;
+    LPCWSTR existing_w{};
+    LPCWSTR destination_w{};
+
+    if (existing->matched) {
+        existing_w = existing->path.c_str();
+    } else if (existing_path != nullptr) {
+        auto converted = system_.ConvertAnsiPath(existing_path);
+        if (!converted) {
+            return Fail(converted.error());
+        }
+        converted_existing = std::move(*converted);
+        existing_w = converted_existing.c_str();
+    }
+
+    if (destination->matched) {
+        destination_w = destination->path.c_str();
+    } else if (new_path != nullptr) {
+        auto converted = system_.ConvertAnsiPath(new_path);
+        if (!converted) {
+            return Fail(converted.error());
+        }
+        converted_destination = std::move(*converted);
+        destination_w = converted_destination.c_str();
+    }
+
+    SetLastError(incoming_last_error);
+    return originals_.move_file_w(existing_w, destination_w);
+}
+
+BOOL Kernel32Hooks::MoveFileW(
+    LPCWSTR existing_path,
+    LPCWSTR new_path) noexcept
+{
+    const DWORD incoming_last_error = GetLastError();
+    const auto existing = system_.RoutePathW(existing_path);
+    if (!existing) {
+        return Fail(existing.error());
+    }
+    const auto destination = system_.RoutePathW(new_path);
+    if (!destination) {
+        return Fail(destination.error());
+    }
+
+    if (!existing->matched && !destination->matched) {
+        SetLastError(incoming_last_error);
+        return originals_.move_file_w(existing_path, new_path);
+    }
+
+    SetLastError(incoming_last_error);
+    return originals_.move_file_w(
+        existing->matched ? existing->path.c_str() : existing_path,
+        destination->matched ? destination->path.c_str() : new_path);
 }
 
 HANDLE WINAPI Kernel32Hooks::CreateFileADetour(
     LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
     DWORD disposition, DWORD flags, HANDLE template_file)
 {
-    return active_->CreateFileA(
-        name, access, share, security, disposition, flags, template_file);
+    return GuardDetour(INVALID_HANDLE_VALUE, [&] {
+        return active_->CreateFileA(
+            name, access, share, security, disposition, flags, template_file);
+    });
 }
 
 HANDLE WINAPI Kernel32Hooks::CreateFileWDetour(
     LPCWSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
     DWORD disposition, DWORD flags, HANDLE template_file)
 {
-    return active_->CreateFileW(
-        name, access, share, security, disposition, flags, template_file);
+    return GuardDetour(INVALID_HANDLE_VALUE, [&] {
+        return active_->CreateFileW(
+            name, access, share, security, disposition, flags, template_file);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::WriteFileDetour(
     HANDLE file, LPCVOID buffer, DWORD size, LPDWORD count,
     LPOVERLAPPED overlapped)
 {
-    return active_->WriteFile(file, buffer, size, count, overlapped);
+    return GuardDetour(FALSE, [&] {
+        return active_->WriteFile(file, buffer, size, count, overlapped);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::ReadFileDetour(
     HANDLE file, LPVOID buffer, DWORD size, LPDWORD count,
     LPOVERLAPPED overlapped)
 {
-    return active_->ReadFile(file, buffer, size, count, overlapped);
+    return GuardDetour(FALSE, [&] {
+        return active_->ReadFile(file, buffer, size, count, overlapped);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::CloseHandleDetour(HANDLE object)
 {
-    return active_->CloseHandle(object);
+    return GuardDetour(FALSE, [&] { return active_->CloseHandle(object); });
 }
 
 BOOL WINAPI Kernel32Hooks::GetCommModemStatusDetour(
     HANDLE file, LPDWORD status)
 {
-    return active_->GetCommModemStatus(file, status);
+    return GuardDetour(FALSE, [&] {
+        return active_->GetCommModemStatus(file, status);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::EscapeCommFunctionDetour(
     HANDLE file, DWORD function)
 {
-    return active_->EscapeCommFunction(file, function);
+    return GuardDetour(FALSE, [&] {
+        return active_->EscapeCommFunction(file, function);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::ClearCommErrorDetour(
     HANDLE file, LPDWORD errors, LPCOMSTAT status)
 {
-    return active_->ClearCommError(file, errors, status);
+    return GuardDetour(FALSE, [&] {
+        return active_->ClearCommError(file, errors, status);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::SetCommMaskDetour(HANDLE file, DWORD mask)
 {
-    return active_->SetCommMask(file, mask);
+    return GuardDetour(FALSE, [&] {
+        return active_->SetCommMask(file, mask);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::SetupCommDetour(
     HANDLE file, DWORD input, DWORD output)
 {
-    return active_->SetupComm(file, input, output);
+    return GuardDetour(FALSE, [&] {
+        return active_->SetupComm(file, input, output);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::GetCommStateDetour(HANDLE file, LPDCB dcb)
 {
-    return active_->GetCommState(file, dcb);
+    return GuardDetour(FALSE, [&] {
+        return active_->GetCommState(file, dcb);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::SetCommStateDetour(HANDLE file, LPDCB dcb)
 {
-    return active_->SetCommState(file, dcb);
+    return GuardDetour(FALSE, [&] {
+        return active_->SetCommState(file, dcb);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::SetCommTimeoutsDetour(
     HANDLE file, LPCOMMTIMEOUTS timeouts)
 {
-    return active_->SetCommTimeouts(file, timeouts);
+    return GuardDetour(FALSE, [&] {
+        return active_->SetCommTimeouts(file, timeouts);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::GetCommTimeoutsDetour(
     HANDLE file, LPCOMMTIMEOUTS timeouts)
 {
-    return active_->GetCommTimeouts(file, timeouts);
+    return GuardDetour(FALSE, [&] {
+        return active_->GetCommTimeouts(file, timeouts);
+    });
 }
 
 HANDLE WINAPI Kernel32Hooks::FindFirstFileADetour(
     LPCSTR name, LPWIN32_FIND_DATAA data)
 {
-    return active_->FindFirstFileA(name, data);
+    return GuardDetour(INVALID_HANDLE_VALUE, [&] {
+        return active_->FindFirstFileA(name, data);
+    });
 }
 
 HANDLE WINAPI Kernel32Hooks::FindFirstFileWDetour(
     LPCWSTR name, LPWIN32_FIND_DATAW data)
 {
-    return active_->FindFirstFileW(name, data);
+    return GuardDetour(INVALID_HANDLE_VALUE, [&] {
+        return active_->FindFirstFileW(name, data);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::CreateDirectoryADetour(
     LPCSTR path, LPSECURITY_ATTRIBUTES security)
 {
-    return active_->CreateDirectoryA(path, security);
+    return GuardDetour(FALSE, [&] {
+        return active_->CreateDirectoryA(path, security);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::CreateDirectoryWDetour(
     LPCWSTR path, LPSECURITY_ATTRIBUTES security)
 {
-    return active_->CreateDirectoryW(path, security);
+    return GuardDetour(FALSE, [&] {
+        return active_->CreateDirectoryW(path, security);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::DeleteFileADetour(LPCSTR name)
 {
-    return active_->DeleteFileA(name);
+    return GuardDetour(FALSE, [&] { return active_->DeleteFileA(name); });
 }
 
 BOOL WINAPI Kernel32Hooks::DeleteFileWDetour(LPCWSTR name)
 {
-    return active_->DeleteFileW(name);
+    return GuardDetour(FALSE, [&] { return active_->DeleteFileW(name); });
 }
 
 DWORD WINAPI Kernel32Hooks::GetFileAttributesADetour(LPCSTR name)
 {
-    return active_->GetFileAttributesA(name);
+    return GuardDetour(INVALID_FILE_ATTRIBUTES, [&] {
+        return active_->GetFileAttributesA(name);
+    });
 }
 
 DWORD WINAPI Kernel32Hooks::GetFileAttributesWDetour(LPCWSTR name)
 {
-    return active_->GetFileAttributesW(name);
+    return GuardDetour(INVALID_FILE_ATTRIBUTES, [&] {
+        return active_->GetFileAttributesW(name);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::GetDiskFreeSpaceExADetour(
     LPCSTR directory, PULARGE_INTEGER available, PULARGE_INTEGER total,
     PULARGE_INTEGER free)
 {
-    return active_->GetDiskFreeSpaceExA(directory, available, total, free);
+    return GuardDetour(FALSE, [&] {
+        return active_->GetDiskFreeSpaceExA(
+            directory, available, total, free);
+    });
 }
 
 BOOL WINAPI Kernel32Hooks::GetDiskFreeSpaceExWDetour(
     LPCWSTR directory, PULARGE_INTEGER available, PULARGE_INTEGER total,
     PULARGE_INTEGER free)
 {
-    return active_->GetDiskFreeSpaceExW(directory, available, total, free);
+    return GuardDetour(FALSE, [&] {
+        return active_->GetDiskFreeSpaceExW(
+            directory, available, total, free);
+    });
+}
+
+BOOL WINAPI Kernel32Hooks::MoveFileADetour(
+    LPCSTR existing_path,
+    LPCSTR new_path)
+{
+    return GuardDetour(FALSE, [&] {
+        return active_->MoveFileA(existing_path, new_path);
+    });
+}
+
+BOOL WINAPI Kernel32Hooks::MoveFileWDetour(
+    LPCWSTR existing_path,
+    LPCWSTR new_path)
+{
+    return GuardDetour(FALSE, [&] {
+        return active_->MoveFileW(existing_path, new_path);
+    });
 }
 
 } // namespace gc::win32_hooks

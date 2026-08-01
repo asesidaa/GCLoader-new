@@ -10,7 +10,7 @@
 
 namespace gc::win32_hooks {
 
-inline constexpr std::size_t kMaxOwnedKernel32Hooks = 24;
+inline constexpr std::size_t kMaxOwnedKernel32Hooks = 32;
 
 struct HookRequest {
     LPCWSTR module_name{};

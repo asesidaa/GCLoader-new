@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Platform/Win32/Hooking/MinHookTransaction.h"
+#include "SystemPath/SystemRoot.h"
 
 #include <Windows.h>
 
@@ -21,6 +22,7 @@ struct FeatureError {
 };
 
 [[nodiscard]] std::expected<void, FeatureError>
-InitializeFeature() noexcept;
+InitializeFeature(
+    const gc::system_path::RuntimeRoot& system_root) noexcept;
 
 } // namespace gc::rfid

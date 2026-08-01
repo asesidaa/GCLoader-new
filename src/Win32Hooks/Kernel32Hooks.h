@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Rfid/Runtime.h"
+#include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
 #include "Platform/Win32/Hooking/MinHookTransaction.h"
 
@@ -37,6 +38,8 @@ struct OriginalKernel32Api {
     decltype(&::GetFileAttributesW) get_file_attributes_w{};
     decltype(&::GetDiskFreeSpaceExA) get_disk_free_space_ex_a{};
     decltype(&::GetDiskFreeSpaceExW) get_disk_free_space_ex_w{};
+    decltype(&::MoveFileA) move_file_a{};
+    decltype(&::MoveFileW) move_file_w{};
 };
 
 struct HookRequestSet {
@@ -54,12 +57,12 @@ public:
     Kernel32Hooks(
         gc::rfid::Runtime& rfid,
         gc::testmode_storage::Hooks& storage,
+        gc::system_path::SystemPathRouter& system,
         OriginalKernel32Api originals = {}) noexcept;
 
     void Activate() noexcept;
     void Deactivate() noexcept;
-    [[nodiscard]] HookRequestSet BuildRequests(
-        bool storage_enabled) noexcept;
+    [[nodiscard]] HookRequestSet BuildRequests() noexcept;
 
     HANDLE CreateFileA(
         LPCSTR file_name, DWORD desired_access, DWORD share_mode,
@@ -110,6 +113,8 @@ public:
     BOOL GetDiskFreeSpaceExW(
         LPCWSTR directory, PULARGE_INTEGER available,
         PULARGE_INTEGER total, PULARGE_INTEGER free) noexcept;
+    BOOL MoveFileA(LPCSTR existing_path, LPCSTR new_path) noexcept;
+    BOOL MoveFileW(LPCWSTR existing_path, LPCWSTR new_path) noexcept;
 
 private:
     static HANDLE WINAPI CreateFileADetour(
@@ -146,11 +151,14 @@ private:
         LPCSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
     static BOOL WINAPI GetDiskFreeSpaceExWDetour(
         LPCWSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
+    static BOOL WINAPI MoveFileADetour(LPCSTR, LPCSTR);
+    static BOOL WINAPI MoveFileWDetour(LPCWSTR, LPCWSTR);
 
     static Kernel32Hooks* active_;
 
     gc::rfid::Runtime& rfid_;
     gc::testmode_storage::Hooks& storage_;
+    gc::system_path::SystemPathRouter& system_;
     OriginalKernel32Api originals_{};
 };
 

@@ -1,6 +1,7 @@
 #include "Rfid/Jvs/Encoder.h"
 #include "Rfid/Runtime.h"
 #include "Rfid/Trace.h"
+#include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
 #include "TestModeStorage/Redirector.h"
 #include "Win32Hooks/Kernel32Hooks.h"
@@ -311,6 +312,8 @@ enum class OriginalCall : std::size_t {
     get_file_attributes_w,
     get_disk_free_space_ex_a,
     get_disk_free_space_ex_w,
+    move_file_a,
+    move_file_w,
     count,
 };
 
@@ -331,8 +334,15 @@ struct OriginalFake {
     LPVOID second_pointer{};
     bool path_a_null{};
     bool path_w_null{};
+    bool second_path_a_null{};
+    bool second_path_w_null{};
+    bool set_last_error{true};
+    const void* path_pointer{};
+    const void* second_path_pointer{};
     std::string path_a;
     std::wstring path_w;
+    std::string second_path_a;
+    std::wstring second_path_w;
 };
 
 OriginalFake* g_original{};
@@ -345,19 +355,39 @@ std::size_t call_index(OriginalCall call)
 void record_call(OriginalCall call)
 {
     ++g_original->calls[call_index(call)];
-    SetLastError(kOriginalErrorBase + static_cast<DWORD>(call_index(call)));
+    if (g_original->set_last_error) {
+        SetLastError(kOriginalErrorBase + static_cast<DWORD>(call_index(call)));
+    }
 }
 
 void record_path(LPCSTR path)
 {
+    g_original->path_pointer = path;
     g_original->path_a_null = path == nullptr;
     g_original->path_a = path == nullptr ? std::string{} : std::string{path};
 }
 
 void record_path(LPCWSTR path)
 {
+    g_original->path_pointer = path;
     g_original->path_w_null = path == nullptr;
     g_original->path_w = path == nullptr ? std::wstring{} : std::wstring{path};
+}
+
+void record_second_path(LPCSTR path)
+{
+    g_original->second_path_pointer = path;
+    g_original->second_path_a_null = path == nullptr;
+    g_original->second_path_a =
+        path == nullptr ? std::string{} : std::string{path};
+}
+
+void record_second_path(LPCWSTR path)
+{
+    g_original->second_path_pointer = path;
+    g_original->second_path_w_null = path == nullptr;
+    g_original->second_path_w =
+        path == nullptr ? std::wstring{} : std::wstring{path};
 }
 
 HANDLE WINAPI OriginalCreateFileA(
@@ -594,6 +624,22 @@ BOOL WINAPI OriginalGetDiskFreeSpaceExW(
     return FALSE;
 }
 
+BOOL WINAPI OriginalMoveFileA(LPCSTR existing_path, LPCSTR new_path)
+{
+    record_path(existing_path);
+    record_second_path(new_path);
+    record_call(OriginalCall::move_file_a);
+    return FALSE;
+}
+
+BOOL WINAPI OriginalMoveFileW(LPCWSTR existing_path, LPCWSTR new_path)
+{
+    record_path(existing_path);
+    record_second_path(new_path);
+    record_call(OriginalCall::move_file_w);
+    return FALSE;
+}
+
 gc::win32_hooks::OriginalKernel32Api OriginalApi()
 {
     return {
@@ -621,7 +667,29 @@ gc::win32_hooks::OriginalKernel32Api OriginalApi()
         .get_file_attributes_w = OriginalGetFileAttributesW,
         .get_disk_free_space_ex_a = OriginalGetDiskFreeSpaceExA,
         .get_disk_free_space_ex_w = OriginalGetDiskFreeSpaceExW,
+        .move_file_a = OriginalMoveFileA,
+        .move_file_w = OriginalMoveFileW,
     };
+}
+
+gc::system_path::SystemPathRouter DisabledSystemRouter()
+{
+    return gc::system_path::SystemPathRouter{
+        gc::system_path::RuntimeRoot{
+            .configured_path = "D:\\system",
+            .resolved_path = L"D:\\system",
+            .redirect_enabled = false,
+        }};
+}
+
+gc::system_path::SystemPathRouter EnabledSystemRouter()
+{
+    return gc::system_path::SystemPathRouter{
+        gc::system_path::RuntimeRoot{
+            .configured_path = "H:\\system",
+            .resolved_path = L"H:\\遊戲\\system",
+            .redirect_enabled = true,
+        }};
 }
 
 struct WorkerFake {
@@ -856,7 +924,7 @@ int test_enable_failures()
 
 int test_kernel32_request_sets()
 {
-    constexpr std::array<std::string_view, 24> expected_names{
+    constexpr std::array<std::string_view, 26> expected_names{
         "CreateFileA", "CreateFileW", "WriteFile", "ReadFile",
         "CloseHandle", "GetCommModemStatus", "EscapeCommFunction",
         "ClearCommError", "SetCommMask", "SetupComm", "GetCommState",
@@ -865,42 +933,91 @@ int test_kernel32_request_sets()
         "CreateDirectoryW", "DeleteFileA", "DeleteFileW",
         "GetFileAttributesA", "GetFileAttributesW",
         "GetDiskFreeSpaceExA", "GetDiskFreeSpaceExW",
+        "MoveFileA", "MoveFileW",
     };
 
     int failures = 0;
     WorkerFake worker;
     gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
-    gc::testmode_storage::Hooks storage{false};
+    gc::testmode_storage::Hooks storage_disabled{false};
+    gc::testmode_storage::Hooks storage_enabled{true};
+    auto system_disabled = DisabledSystemRouter();
+    auto system_enabled = EnabledSystemRouter();
     OriginalFake original;
     g_original = &original;
-    gc::win32_hooks::Kernel32Hooks hooks{
-        runtime, storage, OriginalApi()};
+    gc::win32_hooks::Kernel32Hooks no_paths{
+        runtime, storage_disabled, system_disabled, OriginalApi()};
+    gc::win32_hooks::Kernel32Hooks storage_only{
+        runtime, storage_enabled, system_disabled, OriginalApi()};
+    gc::win32_hooks::Kernel32Hooks system_only{
+        runtime, storage_disabled, system_enabled, OriginalApi()};
+    gc::win32_hooks::Kernel32Hooks both{
+        runtime, storage_enabled, system_enabled, OriginalApi()};
 
-    const auto com_only_set = hooks.BuildRequests(false);
-    const auto com_only = com_only_set.requests();
-    failures += expect(com_only.size() == 14,
-                       "disabled storage builds fourteen requests");
-    const auto all_set = hooks.BuildRequests(true);
-    const auto all = all_set.requests();
-    failures += expect(all.size() == expected_names.size(),
-                       "enabled storage builds twenty-four requests");
+    const auto no_paths_set = no_paths.BuildRequests();
+    const auto storage_only_set = storage_only.BuildRequests();
+    const auto system_only_set = system_only.BuildRequests();
+    const auto both_set = both.BuildRequests();
+    const auto no_paths_requests = no_paths_set.requests();
+    const auto storage_requests = storage_only_set.requests();
+    const auto system_requests = system_only_set.requests();
+    const auto both_requests = both_set.requests();
 
-    for (std::size_t index = 0; index < all.size(); ++index) {
+    failures += expect(no_paths_requests.size() == 14,
+                       "RFID-only request count");
+    failures += expect(storage_requests.size() == 24,
+                       "test-mode storage request count");
+    failures += expect(system_requests.size() == 22,
+                       "system-routing request count");
+    failures += expect(both_requests.size() == 26,
+                       "combined request union count");
+    failures += expect(gc::win32_hooks::kMaxOwnedKernel32Hooks == 32,
+                       "Kernel32 request capacity is thirty-two");
+
+    const auto exports_are_unique = [](std::span<const HookRequest> requests) {
+        return std::ranges::all_of(
+            requests,
+            [requests](const HookRequest& candidate) {
+                return candidate.export_name != nullptr &&
+                    std::ranges::count_if(
+                        requests,
+                        [name = std::string_view{candidate.export_name}](
+                            const HookRequest& request) {
+                            return request.export_name != nullptr &&
+                                std::string_view{request.export_name} == name;
+                        }) == 1;
+            });
+    };
+    failures += expect(exports_are_unique(no_paths_requests),
+                       "RFID-only exports are unique");
+    failures += expect(exports_are_unique(storage_requests),
+                       "storage exports are unique");
+    failures += expect(exports_are_unique(system_requests),
+                       "system exports are unique");
+    failures += expect(exports_are_unique(both_requests),
+                       "combined exports are unique");
+
+    failures += expect(
+        std::ranges::count_if(
+            both_requests,
+            [](const HookRequest& request) {
+                return request.export_name != nullptr &&
+                    (std::string_view{request.export_name} == "MoveFileA" ||
+                     std::string_view{request.export_name} == "MoveFileW");
+            }) == 2,
+        "combined union contains both move exports once");
+
+    for (std::size_t index = 0; index < both_requests.size(); ++index) {
         failures += expect(
-            all[index].module_name != nullptr &&
-                std::wstring_view{all[index].module_name} == L"kernel32.dll" &&
-                all[index].export_name != nullptr &&
-                std::string_view{all[index].export_name} == expected_names[index] &&
-                all[index].detour != nullptr && all[index].original != nullptr,
+            both_requests[index].module_name != nullptr &&
+                std::wstring_view{both_requests[index].module_name} ==
+                    L"kernel32.dll" &&
+                both_requests[index].export_name != nullptr &&
+                std::string_view{both_requests[index].export_name} ==
+                    expected_names[index] &&
+                both_requests[index].detour != nullptr &&
+                both_requests[index].original != nullptr,
             "request identity and slots");
-        failures += expect(
-            std::ranges::count_if(
-                all,
-                [name = expected_names[index]](const HookRequest& request) {
-                    return request.export_name != nullptr &&
-                        std::string_view{request.export_name} == name;
-                }) == 1,
-            "request exports are unique");
     }
     return failures;
 }
@@ -915,7 +1032,8 @@ int test_create_file_and_storage_routing()
     WorkerFake worker;
     gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
     gc::testmode_storage::Hooks enabled{true};
-    Kernel32Hooks hooks{runtime, enabled, OriginalApi()};
+    auto system_enabled = EnabledSystemRouter();
+    Kernel32Hooks hooks{runtime, enabled, system_enabled, OriginalApi()};
 
     const auto com_a = hooks.CreateFileA(
         "COM2", 1, 2, reinterpret_cast<LPSECURITY_ATTRIBUTES>(0x3000),
@@ -1006,7 +1124,9 @@ int test_create_file_and_storage_routing()
     OriginalFake disabled_original;
     g_original = &disabled_original;
     gc::testmode_storage::Hooks disabled{false};
-    Kernel32Hooks disabled_hooks{runtime, disabled, OriginalApi()};
+    auto system_disabled = DisabledSystemRouter();
+    Kernel32Hooks disabled_hooks{
+        runtime, disabled, system_disabled, OriginalApi()};
     static_cast<void>(disabled_hooks.CreateFileA(
         path, 0, 0, nullptr, OPEN_EXISTING, 0, nullptr));
     static_cast<void>(disabled_hooks.GetDiskFreeSpaceExA(
@@ -1022,7 +1142,8 @@ int test_create_file_and_storage_routing()
         .error = ERROR_NOT_ENOUGH_MEMORY,
     };
     gc::rfid::Runtime failed_runtime{VK_F4, WorkerApi(failed_worker)};
-    Kernel32Hooks failed_hooks{failed_runtime, disabled, OriginalApi()};
+    Kernel32Hooks failed_hooks{
+        failed_runtime, disabled, system_disabled, OriginalApi()};
     SetLastError(ERROR_SUCCESS);
     const auto failure = failed_hooks.CreateFileA(
         "COM2", 0, 0, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -1032,6 +1153,254 @@ int test_create_file_and_storage_routing()
             failed_worker.start_calls == 1 &&
             failure_original.calls[call_index(OriginalCall::create_file_a)] == 0,
         "worker failure publishes CreateFile error");
+    return failures;
+}
+
+int test_system_path_routing()
+{
+    using gc::win32_hooks::Kernel32Hooks;
+
+    int failures = 0;
+    OriginalFake original;
+    g_original = &original;
+    WorkerFake worker;
+    gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
+    gc::testmode_storage::Hooks storage{false};
+    auto system = EnabledSystemRouter();
+    Kernel32Hooks hooks{runtime, storage, system, OriginalApi()};
+
+    const auto com = hooks.CreateFileA(
+        "COM2", GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    failures += expect(
+        com == gc::rfid::EmulatedComHandle() && worker.start_calls == 1 &&
+            original.calls[call_index(OriginalCall::create_file_a)] == 0 &&
+            original.calls[call_index(OriginalCall::create_file_w)] == 0,
+        "COM2 interception precedes system routing");
+
+    constexpr auto logical_a = "D:\\system\\DUA\\data\\state.bin";
+    constexpr auto logical_w = L"d:\\SYSTEM\\DUA\\news\\entry.bin";
+    constexpr auto routed_a = L"H:\\遊戲\\system\\DUA\\data\\state.bin";
+    constexpr auto routed_w = L"H:\\遊戲\\system\\DUA\\news\\entry.bin";
+
+    SetLastError(0x7111);
+    const auto created_a = hooks.CreateFileA(
+        logical_a, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    failures += expect(
+        created_a == reinterpret_cast<HANDLE>(0x8102) &&
+            original.calls[call_index(OriginalCall::create_file_a)] == 0 &&
+            original.calls[call_index(OriginalCall::create_file_w)] == 1 &&
+            original.path_w == routed_a &&
+            original.first_dword == GENERIC_WRITE &&
+            original.second_dword == FILE_SHARE_READ &&
+            GetLastError() == kOriginalErrorBase +
+                call_index(OriginalCall::create_file_w),
+        "matching CreateFileA uses Unicode original trampoline");
+
+    const auto created_w = hooks.CreateFileW(
+        logical_w, GENERIC_READ, FILE_SHARE_WRITE, nullptr,
+        OPEN_EXISTING, 0, nullptr);
+    failures += expect(
+        created_w == reinterpret_cast<HANDLE>(0x8102) &&
+            original.path_w == routed_w &&
+            original.calls[call_index(OriginalCall::create_file_w)] == 2 &&
+            GetLastError() == kOriginalErrorBase +
+                call_index(OriginalCall::create_file_w),
+        "matching CreateFileW routes through Unicode trampoline");
+
+    WIN32_FIND_DATAW find_data{};
+    static_cast<void>(hooks.FindFirstFileW(logical_w, &find_data));
+    failures += expect(
+        original.path_w == routed_w && original.first_pointer == &find_data &&
+            GetLastError() == kOriginalErrorBase +
+                call_index(OriginalCall::find_first_file_w),
+        "FindFirstFileW routes the system tree");
+    static_cast<void>(hooks.CreateDirectoryW(logical_w, nullptr));
+    failures += expect(
+        original.path_w == routed_w &&
+            GetLastError() == kOriginalErrorBase +
+                call_index(OriginalCall::create_directory_w),
+        "CreateDirectoryW routes the system tree");
+
+    static_cast<void>(hooks.DeleteFileA(logical_a));
+    failures += expect(
+        original.calls[call_index(OriginalCall::delete_file_a)] == 0 &&
+            original.calls[call_index(OriginalCall::delete_file_w)] == 1 &&
+            original.path_w == routed_a &&
+            GetLastError() == kOriginalErrorBase +
+                call_index(OriginalCall::delete_file_w),
+        "matching DeleteFileA uses Unicode original trampoline");
+    static_cast<void>(hooks.DeleteFileW(logical_w));
+    failures += expect(
+        original.calls[call_index(OriginalCall::delete_file_w)] == 2 &&
+            original.path_w == routed_w,
+        "matching DeleteFileW routes through Unicode trampoline");
+
+    const auto attributes_a = hooks.GetFileAttributesA(logical_a);
+    failures += expect(
+        attributes_a == 0x23456789 &&
+            original.calls[call_index(OriginalCall::get_file_attributes_a)] ==
+                0 &&
+            original.calls[call_index(OriginalCall::get_file_attributes_w)] ==
+                1 &&
+            original.path_w == routed_a &&
+            GetLastError() == kOriginalErrorBase +
+                call_index(OriginalCall::get_file_attributes_w),
+        "matching GetFileAttributesA uses Unicode original trampoline");
+    const auto attributes_w = hooks.GetFileAttributesW(logical_w);
+    failures += expect(
+        attributes_w == 0x23456789 && original.path_w == routed_w,
+        "matching GetFileAttributesW routes through Unicode trampoline");
+
+    OriginalFake passthrough{
+        .set_last_error = false,
+    };
+    g_original = &passthrough;
+    constexpr char system2[] = "D:\\system2\\state.bin";
+    constexpr DWORD incoming_error = 0x72A5;
+    SetLastError(incoming_error);
+    const auto passthrough_created = hooks.CreateFileA(
+        system2, GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    failures += expect(
+        passthrough_created == reinterpret_cast<HANDLE>(0x8101) &&
+            passthrough.calls[call_index(OriginalCall::create_file_a)] == 1 &&
+            passthrough.calls[call_index(OriginalCall::create_file_w)] == 0 &&
+            passthrough.path_pointer == system2 &&
+            GetLastError() == incoming_error,
+        "D system2 passes through exact pointer and incoming last error");
+
+    SetLastError(incoming_error + 1);
+    const auto null_attributes = hooks.GetFileAttributesA(nullptr);
+    failures += expect(
+        null_attributes == 0x12345678 && passthrough.path_a_null &&
+            GetLastError() == incoming_error + 1,
+        "null path passes through and preserves incoming last error");
+
+    const char invalid_ansi[]{
+        'D', ':', '\\', 's', 'y', 's', 't', 'e', 'm', '\\',
+        static_cast<char>(0x81), '\0'};
+    const auto invalid_probe = system.RoutePathA(invalid_ansi);
+    failures += expect(!invalid_probe,
+                       "invalid ANSI path exercises conversion failure");
+    const DWORD conversion_error =
+        invalid_probe ? ERROR_SUCCESS : invalid_probe.error();
+    const auto calls_before_conversion = passthrough.calls;
+
+    SetLastError(ERROR_SUCCESS);
+    failures += expect(
+        hooks.CreateFileA(
+            invalid_ansi, 0, 0, nullptr, OPEN_EXISTING, 0, nullptr) ==
+                INVALID_HANDLE_VALUE &&
+            GetLastError() == conversion_error,
+        "CreateFileA conversion failure returns native sentinel");
+    SetLastError(ERROR_SUCCESS);
+    failures += expect(
+        !hooks.DeleteFileA(invalid_ansi) &&
+            GetLastError() == conversion_error,
+        "DeleteFileA conversion failure returns native sentinel");
+    SetLastError(ERROR_SUCCESS);
+    failures += expect(
+        hooks.GetFileAttributesA(invalid_ansi) == INVALID_FILE_ATTRIBUTES &&
+            GetLastError() == conversion_error,
+        "GetFileAttributesA conversion failure returns native sentinel");
+    failures += expect(
+        passthrough.calls == calls_before_conversion,
+        "conversion failures never reach an original trampoline");
+
+    OriginalFake moves;
+    g_original = &moves;
+    constexpr char ordinary_source_a[] = "C:\\source.bin";
+    constexpr char ordinary_destination_a[] = "C:\\destination.bin";
+    constexpr char logical_source_a[] = "D:\\system\\DUA\\data\\source.bin";
+    constexpr char logical_destination_a[] =
+        "D:\\system\\DUA\\data\\destination.bin";
+    constexpr wchar_t ordinary_source_w[] = L"C:\\source.bin";
+    constexpr wchar_t ordinary_destination_w[] = L"C:\\destination.bin";
+    constexpr wchar_t logical_source_w[] =
+        L"D:\\system\\DUA\\data\\source.bin";
+    constexpr wchar_t logical_destination_w[] =
+        L"D:\\system\\DUA\\data\\destination.bin";
+    constexpr auto routed_source_w =
+        L"H:\\遊戲\\system\\DUA\\data\\source.bin";
+    constexpr auto routed_destination_w =
+        L"H:\\遊戲\\system\\DUA\\data\\destination.bin";
+
+    static_cast<void>(hooks.MoveFileA(
+        ordinary_source_a, ordinary_destination_a));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_a)] == 1 &&
+            moves.calls[call_index(OriginalCall::move_file_w)] == 0 &&
+            moves.path_pointer == ordinary_source_a &&
+            moves.second_path_pointer == ordinary_destination_a,
+        "unmatched MoveFileA preserves both original pointers");
+    static_cast<void>(hooks.MoveFileA(
+        logical_source_a, ordinary_destination_a));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 1 &&
+            moves.path_w == routed_source_w &&
+            moves.second_path_w == ordinary_destination_w,
+        "source-only MoveFileA converts and routes through W");
+    static_cast<void>(hooks.MoveFileA(
+        ordinary_source_a, logical_destination_a));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 2 &&
+            moves.path_w == ordinary_source_w &&
+            moves.second_path_w == routed_destination_w,
+        "destination-only MoveFileA converts and routes through W");
+    static_cast<void>(hooks.MoveFileA(
+        logical_source_a, logical_destination_a));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 3 &&
+            moves.path_w == routed_source_w &&
+            moves.second_path_w == routed_destination_w,
+        "fully matching MoveFileA routes both operands");
+    static_cast<void>(hooks.MoveFileA(logical_source_a, nullptr));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 4 &&
+            moves.path_w == routed_source_w && moves.second_path_w_null,
+        "matching MoveFileA preserves null peer operand");
+
+    static_cast<void>(hooks.MoveFileW(
+        ordinary_source_w, ordinary_destination_w));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 5 &&
+            moves.path_pointer == ordinary_source_w &&
+            moves.second_path_pointer == ordinary_destination_w,
+        "unmatched MoveFileW preserves both original pointers");
+    static_cast<void>(hooks.MoveFileW(
+        logical_source_w, ordinary_destination_w));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 6 &&
+            moves.path_w == routed_source_w &&
+            moves.second_path_w == ordinary_destination_w,
+        "source-only MoveFileW routes source");
+    static_cast<void>(hooks.MoveFileW(
+        ordinary_source_w, logical_destination_w));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 7 &&
+            moves.path_w == ordinary_source_w &&
+            moves.second_path_w == routed_destination_w,
+        "destination-only MoveFileW routes destination");
+    static_cast<void>(hooks.MoveFileW(
+        logical_source_w, logical_destination_w));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 8 &&
+            moves.path_w == routed_source_w &&
+            moves.second_path_w == routed_destination_w,
+        "fully matching MoveFileW routes both operands");
+    static_cast<void>(hooks.MoveFileW(logical_source_w, nullptr));
+    failures += expect(
+        moves.calls[call_index(OriginalCall::move_file_w)] == 9 &&
+            moves.path_w == routed_source_w && moves.second_path_w_null,
+        "matching MoveFileW preserves null peer operand");
+
+    const auto move_calls_before_failure = moves.calls;
+    SetLastError(ERROR_SUCCESS);
+    failures += expect(
+        !hooks.MoveFileA(invalid_ansi, logical_destination_a) &&
+            GetLastError() == conversion_error &&
+            moves.calls == move_calls_before_failure,
+        "MoveFileA conversion failure returns native sentinel");
     return failures;
 }
 
@@ -1059,7 +1428,8 @@ int test_emulated_com_contract()
     WorkerFake worker;
     gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
     gc::testmode_storage::Hooks storage{false};
-    Kernel32Hooks hooks{runtime, storage, OriginalApi()};
+    auto system = DisabledSystemRouter();
+    Kernel32Hooks hooks{runtime, storage, system, OriginalApi()};
     const auto handle = hooks.CreateFileA(
         "COM2", 0, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 
@@ -1235,7 +1605,8 @@ int test_non_emulated_forwarding()
     WorkerFake worker;
     gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
     gc::testmode_storage::Hooks storage{false};
-    Kernel32Hooks hooks{runtime, storage, OriginalApi()};
+    auto system = DisabledSystemRouter();
+    Kernel32Hooks hooks{runtime, storage, system, OriginalApi()};
 
     const auto handle = reinterpret_cast<HANDLE>(0x7777);
     std::array<std::byte, 4> buffer{};
@@ -1339,7 +1710,8 @@ int test_successful_operations_are_not_traced()
     WorkerFake worker;
     gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
     gc::testmode_storage::Hooks storage{false};
-    Kernel32Hooks hooks{runtime, storage, OriginalApi()};
+    auto system = DisabledSystemRouter();
+    Kernel32Hooks hooks{runtime, storage, system, OriginalApi()};
     const auto handle = hooks.CreateFileA(
         "COM2", GENERIC_READ | GENERIC_WRITE, 0, nullptr,
         OPEN_EXISTING, 0, nullptr);
@@ -1385,12 +1757,15 @@ int test_successful_operations_are_not_traced()
         "quiet reply read and close succeed");
 
     failures += expect(
-        !g_capture_appender.Contains("RFID hooks: transaction") &&
-            !g_capture_appender.Contains("RFID hooks: resolved export=") &&
-            !g_capture_appender.Contains("RFID hooks: created export=") &&
-            !g_capture_appender.Contains("RFID hooks: enabled export=") &&
+        !g_capture_appender.Contains("MinHookTransaction: transaction") &&
             !g_capture_appender.Contains(
-                "RFID hooks: MinHook initialization") &&
+                "MinHookTransaction: resolved export=") &&
+            !g_capture_appender.Contains(
+                "MinHookTransaction: created export=") &&
+            !g_capture_appender.Contains(
+                "MinHookTransaction: enabled export=") &&
+            !g_capture_appender.Contains(
+                "MinHookTransaction: initialization") &&
             !g_capture_appender.Contains("RFID COM2 trace api=") &&
             !g_capture_appender.Contains("RFID JVS decoded") &&
             !g_capture_appender.Contains("RFID JVS no reply") &&
@@ -1413,6 +1788,7 @@ int main()
         test_enable_failures() +
         test_kernel32_request_sets() +
         test_create_file_and_storage_routing() +
+        test_system_path_routing() +
         test_emulated_com_contract() +
         test_non_emulated_forwarding() +
         test_diagnostic_formatting() +

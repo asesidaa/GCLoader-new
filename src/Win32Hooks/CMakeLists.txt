@@ -7,5 +7,6 @@ target_include_directories(gc_win32_hooks PUBLIC
 target_link_libraries(gc_win32_hooks PUBLIC
         gc_hooking
         gc_rfid_core
+        gc_system_path
         gc_test_mode_storage
 )

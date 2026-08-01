@@ -23,6 +23,7 @@ target_link_libraries(gc_rfid_feature PUBLIC
         gc_hooking
         gc_input_win32
         gc_rfid_core
+        gc_system_path
         gc_test_mode_storage
         gc_win32_hooks
 )
