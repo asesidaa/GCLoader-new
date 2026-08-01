@@ -1,4 +1,5 @@
 add_library(gc_config STATIC
+        ConfigDocument.cpp
         config.cpp
         NativeInputConfig.cpp
         RegistryConfig.cpp
