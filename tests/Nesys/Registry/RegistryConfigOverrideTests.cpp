@@ -637,9 +637,9 @@ int main() {
         state.query_calls == before_wrong_root + 1,
         "wrong-root handle calls original query");
 
-    state.open_status = ERROR_ACCESS_DENIED;
-    state.next_handle = reinterpret_cast<HKEY>(0x4001);
-    HKEY failed_open = nullptr;
+    state.open_status = ERROR_FILE_NOT_FOUND;
+    HKEY synthetic_game_handle = nullptr;
+    const int before_synthetic_game_open = state.open_calls;
     failures += expect_status(
         game.Open(
             fake_open,
@@ -647,24 +647,27 @@ int main() {
             "SOFTWARE\\taito\\typex",
             0,
             KEY_ALL_ACCESS,
-            &failed_open),
-        ERROR_ACCESS_DENIED,
-        "physical Type X open failure preserved");
-    const int before_failed_handle = state.query_calls;
-    failures += expect_status(
-        game.Query(
-            fake_query,
-            reinterpret_cast<HKEY>(0x4001),
-            "Country",
-            nullptr,
-            nullptr,
-            nullptr,
-            nullptr),
-        ERROR_FILE_NOT_FOUND,
-        "failed open never tracked");
+            &synthetic_game_handle),
+        ERROR_SUCCESS,
+        "missing physical game key uses synthetic handle");
     failures += expect(
-        state.query_calls == before_failed_handle + 1,
-        "failed-open handle passes through");
+        state.open_calls == before_synthetic_game_open + 1 &&
+            synthetic_game_handle != nullptr,
+        "synthetic game open preserves original-first probe");
+    failures += expect_dword_override(
+        game,
+        state,
+        synthetic_game_handle,
+        "Country",
+        2);
+    const int before_synthetic_game_close = state.close_calls;
+    failures += expect_status(
+        game.Close(fake_close, synthetic_game_handle),
+        ERROR_SUCCESS,
+        "synthetic game handle close");
+    failures += expect(
+        state.close_calls == before_synthetic_game_close,
+        "synthetic game close does not reach native registry");
 
     state.open_status = ERROR_FILE_NOT_FOUND;
     HKEY synthetic_service_handle = nullptr;

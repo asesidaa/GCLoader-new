@@ -283,7 +283,8 @@ void RegistryConfigOverride::LogFirstSyntheticOpen(
     }
     try {
         PLOG_INFO
-            << "RegistryConfigOverride: synthetic service Type X key"
+            << "RegistryConfigOverride: synthetic Type X key"
+            << " role=" << ProcessRoleName(role_)
             << " physical_status=" << physical_status;
     } catch (...) {
     }
@@ -320,8 +321,7 @@ LSTATUS RegistryConfigOverride::Open(
         original(root, subkey, options, access, result);
     const bool type_x_open = is_type_x_open(root, subkey);
     if (status != ERROR_SUCCESS) {
-        if (role_ != ProcessRole::Service ||
-            !type_x_open ||
+        if (!type_x_open ||
             result == nullptr) {
             return status;
         }
