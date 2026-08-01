@@ -1,3 +1,7 @@
 add_executable(SystemRootTests SystemRootTests.cpp)
 target_link_libraries(SystemRootTests PRIVATE gc_system_path)
 add_test(NAME SystemRootTests COMMAND SystemRootTests)
+
+add_executable(SystemPathRouterTests SystemPathRouterTests.cpp)
+target_link_libraries(SystemPathRouterTests PRIVATE gc_system_path)
+add_test(NAME SystemPathRouterTests COMMAND SystemPathRouterTests)
