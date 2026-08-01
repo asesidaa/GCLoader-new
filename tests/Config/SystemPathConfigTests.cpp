@@ -382,5 +382,23 @@ int main() {
             fatal_fake.title == L"GCLoader startup error",
         "startup fatal is one-shot and exhausts termination fallbacks");
 
+    FatalFake titled_fatal{};
+    std::atomic_bool titled_latch{false};
+    gc::system_path::PublishStartupFatal(
+        titled_latch,
+        "Ttx initialization failed",
+        L"Ttx initialization failed",
+        L"TtxUpdateDownloader initialization error",
+        22,
+        FatalActions(titled_fatal));
+    failures += Expect(
+        titled_fatal.logs == 1 && titled_fatal.modals == 1 &&
+            titled_fatal.terminations == 1 &&
+            titled_fatal.fail_fast_calls == 1 &&
+            titled_fatal.exit_code == 22 &&
+            titled_fatal.title ==
+                L"TtxUpdateDownloader initialization error",
+        "startup fatal supports a feature-specific title");
+
     return failures == 0 ? 0 : 1;
 }

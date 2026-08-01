@@ -59,6 +59,22 @@ void PublishStartupFatal(
     std::wstring_view modal,
     DWORD exit_code,
     StartupFatalActions actions) noexcept {
+    PublishStartupFatal(
+        latch,
+        log,
+        modal,
+        kFatalTitle,
+        exit_code,
+        actions);
+}
+
+void PublishStartupFatal(
+    std::atomic_bool& latch,
+    std::string_view log,
+    std::wstring_view modal,
+    std::wstring_view title,
+    DWORD exit_code,
+    StartupFatalActions actions) noexcept {
     if (latch.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
@@ -68,6 +84,14 @@ void PublishStartupFatal(
     try {
         log_storage.assign(log);
         log_text = log_storage.c_str();
+    } catch (...) {
+    }
+
+    const wchar_t* title_text = kFatalTitle;
+    std::wstring title_storage;
+    try {
+        title_storage.assign(title);
+        title_text = title_storage.c_str();
     } catch (...) {
     }
 
@@ -86,7 +110,7 @@ void PublishStartupFatal(
         actions.show_error(
             actions.context,
             modal_text,
-            kFatalTitle);
+            title_text);
     }
     if (actions.terminate_process != nullptr) {
         actions.terminate_process(actions.context, exit_code);

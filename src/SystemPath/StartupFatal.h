@@ -29,4 +29,13 @@ void PublishStartupFatal(
     StartupFatalActions actions =
         ProductionStartupFatalActions()) noexcept;
 
+void PublishStartupFatal(
+    std::atomic_bool& latch,
+    std::string_view log,
+    std::wstring_view modal,
+    std::wstring_view title,
+    DWORD exit_code,
+    StartupFatalActions actions =
+        ProductionStartupFatalActions()) noexcept;
+
 } // namespace gc::system_path

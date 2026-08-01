@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include "Config/config.h"
@@ -20,6 +21,7 @@
 #include "Audio/Wasapi/WasapiAudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
 #include "SystemPath/StartupFatal.h"
+#include "SystemPath/TtxInitGuard.h"
 
 #ifndef _M_IX86
  #error "Only Win32 version is supported!"
@@ -113,6 +115,86 @@ void PublishSystemPathPreparationFatal(std::string_view error) noexcept {
     }
 }
 
+void PublishFeatureInitializationFatal(
+    const gc::rfid::FeatureError& error) noexcept {
+    static std::atomic_bool published{false};
+    constexpr DWORD exit_code = 23;
+    constexpr std::wstring_view title = L"GCLoader hook setup error";
+
+    try {
+        std::ostringstream log;
+        std::wostringstream modal;
+        if (error.stage ==
+            gc::rfid::FeatureFailureStage::ttx_guard_installation) {
+            const auto stage =
+                gc::system_path::TtxGuardInstallStageName(error.ttx.stage);
+            log << "Ttx guard setup failed module=TtxUpdateDownloader.dll "
+                << "export=?TtxUDLInit@@YAHKKKK@Z"
+                << " stage=" << stage
+                << " win32_error=" << error.ttx.win32_error
+                << " safetyhook_error=" << error.ttx.safetyhook_error;
+            modal
+                << L"The supported TtxUpdateDownloader initialization guard "
+                   L"could not be installed.\n\n"
+                << L"Module: TtxUpdateDownloader.dll\n"
+                << L"Export: ?TtxUDLInit@@YAHKKKK@Z\n"
+                << L"Stage: " << Utf8ToWideOrFallback(stage) << L"\n"
+                << L"Windows error: " << error.ttx.win32_error << L"\n"
+                << L"SafetyHook error: " << error.ttx.safetyhook_error
+                << L"\n\nVerify that the game uses the supported downloader "
+                   L"binary and that security software is not blocking hooks.";
+        } else if (error.stage ==
+                   gc::rfid::FeatureFailureStage::hook_installation) {
+            const auto stage = gc::win32_hooks::HookInstallStageName(
+                error.hook.stage);
+            const std::string_view export_name =
+                error.hook.export_name == nullptr
+                    ? std::string_view{"<none>"}
+                    : std::string_view{error.hook.export_name};
+            log << "Game Kernel32 hook setup failed stage=" << stage
+                << " export=" << export_name
+                << " win32_error=" << error.hook.win32_error
+                << " minhook_status="
+                << static_cast<int>(error.hook.minhook_status);
+            modal
+                << L"The game Kernel32 hook layer could not be installed.\n\n"
+                << L"Stage: " << Utf8ToWideOrFallback(stage) << L"\n"
+                << L"Export: " << Utf8ToWideOrFallback(export_name) << L"\n"
+                << L"Windows error: " << error.hook.win32_error << L"\n"
+                << L"MinHook status: "
+                << static_cast<int>(error.hook.minhook_status)
+                << L"\n\nCheck the loader log and verify that security software "
+                   L"is not blocking hooks.";
+        } else {
+            log << "Game feature initialization failed stage="
+                << static_cast<int>(error.stage)
+                << " win32_error=" << error.win32_error;
+            modal
+                << L"GCLoader could not initialize the game feature layer.\n\n"
+                << L"Stage: " << static_cast<int>(error.stage) << L"\n"
+                << L"Windows error: " << error.win32_error
+                << L"\n\nCheck the loader log for details.";
+        }
+
+        gc::system_path::PublishStartupFatal(
+            published,
+            log.str(),
+            modal.str(),
+            title,
+            exit_code);
+        return;
+    } catch (...) {
+    }
+
+    gc::system_path::PublishStartupFatal(
+        published,
+        "GCLoader game hook setup failed",
+        L"GCLoader could not install the required game hooks. Check the "
+        L"loader log for details.",
+        title,
+        exit_code);
+}
+
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -195,9 +277,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 const auto rfid_result =
                     gc::rfid::InitializeFeature(*system_root);
                 if (!rfid_result) {
-                    PLOG_ERROR
-                        << "RFID/JVS feature initialization failed at stage "
-                        << static_cast<int>(rfid_result.error().stage);
+                    PublishFeatureInitializationFatal(
+                        rfid_result.error());
                     return FALSE;
                 }
                 PLOG_DEBUG << "RFID/JVS feature init complete!";

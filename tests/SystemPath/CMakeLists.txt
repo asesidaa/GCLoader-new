@@ -5,3 +5,7 @@ add_test(NAME SystemRootTests COMMAND SystemRootTests)
 add_executable(SystemPathRouterTests SystemPathRouterTests.cpp)
 target_link_libraries(SystemPathRouterTests PRIVATE gc_system_path)
 add_test(NAME SystemPathRouterTests COMMAND SystemPathRouterTests)
+
+add_executable(TtxInitGuardTests TtxInitGuardTests.cpp)
+target_link_libraries(TtxInitGuardTests PRIVATE gc_system_path)
+add_test(NAME TtxInitGuardTests COMMAND TtxInitGuardTests)
