@@ -54,7 +54,7 @@ game471+0x19e51f
 
 Daemon-backed IDA analysis establishes the contract failure:
 
-- `TtxUDLInit` at `0x100010F0` creates the required `D:\system` directory tree before calling `InitializeCriticalSection` on the global at `0x10020984`.
+- `TtxUDLInit` at `0x100010F0` is exported as `?TtxUDLInit@@YAHKKKK@Z` with type `int __cdecl(unsigned int, unsigned int, unsigned int, unsigned int)`. It creates the required `D:\system` directory tree before calling `InitializeCriticalSection` on the global at `0x10020984`.
 - A `CreateDirectoryW` failure other than `ERROR_ALREADY_EXISTS` returns zero before critical-section initialization.
 - `TtxUDLGetStatus` at `0x100015E0` unconditionally calls `EnterCriticalSection` on that global.
 - `game471.exe` calls `TtxUDLInit` at `0x59E38B` and discards its return value.
@@ -331,7 +331,7 @@ Every detour is `noexcept`. Allocation or conversion failures are caught, logged
 
 ## Downloader Initialization Guard
 
-After filesystem routing is installed, locate `TtxUpdateDownloader.dll` and resolve exported `TtxUDLInit` by name. Install a SafetyHook inline hook using the calling convention and signature verified from the analyzed binary. The hook starts disabled and is enabled only after successful construction.
+After filesystem routing is installed, locate `TtxUpdateDownloader.dll` and resolve the observed decorated export `?TtxUDLInit@@YAHKKKK@Z`, which demangles to `TtxUDLInit`. Install a SafetyHook inline hook with the verified `int __cdecl(unsigned int, unsigned int, unsigned int, unsigned int)` ABI. The hook starts disabled and is enabled only after successful construction. A binary that lacks this exact supported export fails with the explicit unsupported-downloader diagnostic rather than falling back to an RVA or ordinal guess.
 
 The detour:
 
