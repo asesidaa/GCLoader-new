@@ -3,11 +3,14 @@ foreach(test_target IN ITEMS
         JvsCodecTests
         JvsDeviceTests
         ComPortStateTests
+        CardReaderInterfaceTests
 )
     add_executable(${test_target} ${test_target}.cpp)
     target_link_libraries(${test_target} PRIVATE gc_rfid_core)
     add_test(NAME ${test_target} COMMAND ${test_target})
 endforeach()
+
+set_tests_properties(CardReaderInterfaceTests PROPERTIES TIMEOUT 15)
 
 add_executable(FeatureHookLayerTests FeatureHookLayerTests.cpp)
 target_link_libraries(FeatureHookLayerTests PRIVATE gc_rfid_feature)
