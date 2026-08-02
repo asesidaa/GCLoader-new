@@ -38,6 +38,18 @@ CardData AssembleCardData(std::string_view number) noexcept
 
 } // namespace
 
+std::optional<CardData> ParseCardNumber(
+    std::string_view number) noexcept
+{
+    if (number.size() != 16 ||
+        !std::ranges::all_of(number, [](char value) {
+            return value >= '0' && value <= '9';
+        })) {
+        return std::nullopt;
+    }
+    return AssembleCardData(number);
+}
+
 CardData LoadCardData(const std::filesystem::path& path) noexcept
 {
     try {
@@ -53,14 +65,11 @@ CardData LoadCardData(const std::filesystem::path& path) noexcept
             return kDefaultCardData;
         }
 
-        const auto number = TrimAsciiWhitespace(contents);
-        if (number.size() != 16 ||
-            !std::ranges::all_of(number, [](char value) {
-                return value >= '0' && value <= '9';
-            })) {
-            return kDefaultCardData;
+        if (const auto parsed = ParseCardNumber(
+                TrimAsciiWhitespace(contents))) {
+            return *parsed;
         }
-        return AssembleCardData(number);
+        return kDefaultCardData;
     } catch (...) {
         return kDefaultCardData;
     }

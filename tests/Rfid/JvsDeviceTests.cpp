@@ -440,6 +440,29 @@ int test_card_data_file_loading()
     using namespace gc::rfid;
 
     int failures = 0;
+    const auto parsed = ParseCardNumber("1234567890123456");
+    failures += expect(
+        parsed && *parsed == ExpectedCardData("1234567890123456"),
+        "exact decimal card number parses");
+    failures += expect(
+        !ParseCardNumber(""),
+        "exact parser rejects empty card number");
+    failures += expect(
+        !ParseCardNumber("123456789012345"),
+        "exact parser rejects short card number");
+    failures += expect(
+        !ParseCardNumber("12345678901234567"),
+        "exact parser rejects long card number");
+    failures += expect(
+        !ParseCardNumber("123456789012345X"),
+        "exact parser rejects non-decimal card number");
+    failures += expect(
+        !ParseCardNumber(" 1234567890123456"),
+        "exact parser rejects leading whitespace");
+    failures += expect(
+        !ParseCardNumber("1234567890123456\n"),
+        "exact parser rejects trailing newline");
+
     const auto default_card = ExpectedCardData("7020392010281502");
     TemporaryDirectory temporary;
     const auto root = temporary.path();
