@@ -1,18 +1,23 @@
 #include "Rfid/Runtime.h"
 #include "Rfid/State.h"
 
+#include <array>
 #include <chrono>
 #include <expected>
 #include <iostream>
 
 namespace {
 
-struct FakeCardWorker {
-    int start_calls{};
-    bool fail_start{};
-    DWORD error{ERROR_NOT_ENOUGH_MEMORY};
+struct WorkerLaunch {
     gc::rfid::CardWorkerEntry entry{};
     void* context{};
+};
+
+struct FakeCardWorker {
+    int start_calls{};
+    int fail_on_call{};
+    DWORD error{ERROR_NOT_ENOUGH_MEMORY};
+    std::array<WorkerLaunch, 4> launches{};
 };
 
 FakeCardWorker* g_fake_worker{};
@@ -22,9 +27,16 @@ std::expected<void, DWORD> StartFakeWorker(
     void* context) noexcept
 {
     ++g_fake_worker->start_calls;
-    g_fake_worker->entry = entry;
-    g_fake_worker->context = context;
-    if (g_fake_worker->fail_start) {
+    const auto index = static_cast<std::size_t>(
+        g_fake_worker->start_calls - 1);
+    if (index < g_fake_worker->launches.size()) {
+        g_fake_worker->launches[index] = {
+            .entry = entry,
+            .context = context,
+        };
+    }
+    if (g_fake_worker->start_calls ==
+        g_fake_worker->fail_on_call) {
         return std::unexpected(g_fake_worker->error);
     }
     return {};
@@ -77,21 +89,27 @@ int main()
         first && *first == gc::rfid::EmulatedComHandle(),
         true,
         "stable emulated handle");
-    failures += expect(worker.start_calls == 1, true,
-                       "worker starts exactly once");
-    failures += expect(worker.entry != nullptr && worker.context != nullptr,
-                       true, "worker launch receives entry and context");
+    failures += expect(worker.start_calls == 2, true,
+                       "keyboard and listener workers start exactly once");
+    failures += expect(
+        worker.launches[0].entry != nullptr &&
+            worker.launches[1].entry != nullptr &&
+            worker.launches[0].entry != worker.launches[1].entry &&
+            worker.launches[0].context != nullptr &&
+            worker.launches[0].context == worker.launches[1].context,
+        true,
+        "runtime launches independent workers with shared context");
     failures += expect(runtime.port().IsOpen(), true, "port is open");
 
     runtime.CloseCom2();
     failures += expect(runtime.port().IsOpen(), false, "port closes");
     const auto reopened = runtime.OpenCom2();
     failures += expect(reopened.has_value(), true, "COM2 reopens");
-    failures += expect(worker.start_calls == 1, true,
-                       "worker remains process-lifetime");
+    failures += expect(worker.start_calls == 2, true,
+                       "both workers remain process-lifetime");
 
     FakeCardWorker failed_worker{
-        .fail_start = true,
+        .fail_on_call = 1,
         .error = ERROR_NOT_ENOUGH_MEMORY,
     };
     gc::rfid::Runtime failed_runtime{VK_F4, FakeWorkerApi(failed_worker)};
@@ -111,6 +129,25 @@ int main()
                        "failed worker launches only once");
     failures += expect(failed_runtime.port().IsOpen(), false,
                        "port stays closed after worker failure");
+
+    FakeCardWorker failed_listener{
+        .fail_on_call = 2,
+        .error = ERROR_NOT_ENOUGH_MEMORY,
+    };
+    gc::rfid::Runtime listener_failure_runtime{
+        VK_F4, FakeWorkerApi(failed_listener)};
+    const auto listener_failure_first =
+        listener_failure_runtime.OpenCom2();
+    listener_failure_runtime.CloseCom2();
+    const auto listener_failure_reopen =
+        listener_failure_runtime.OpenCom2();
+    failures += expect(
+        listener_failure_first.has_value() &&
+            listener_failure_reopen.has_value() &&
+            failed_listener.start_calls == 2 &&
+            listener_failure_runtime.port().IsOpen(),
+        true,
+        "optional listener failure does not fail or retry COM2 open");
 
     const auto production_api = gc::rfid::ProductionCardWorkerApi();
     failures += expect(

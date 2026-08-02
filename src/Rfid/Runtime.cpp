@@ -1,5 +1,10 @@
 #include "Rfid/Runtime.h"
 
+#include "Rfid/CardReaderInterface.h"
+#include "Rfid/CardReaderProtocol.h"
+
+#include "plog/Log.h"
+
 #include <chrono>
 #include <cstdint>
 #include <system_error>
@@ -74,6 +79,19 @@ std::expected<HANDLE, DWORD> Runtime::OpenCom2() noexcept
             error == ERROR_SUCCESS ? ERROR_NOT_ENOUGH_MEMORY : error);
     }
 
+    std::call_once(card_reader_worker_once_, [this] {
+        const auto started = worker_api_.start_detached(
+            CardReaderWorkerMain, this);
+        if (!started) {
+            try {
+                PLOG_WARNING
+                    << "RFID card-reader listener thread unavailable error="
+                    << started.error();
+            } catch (...) {
+            }
+        }
+    });
+
     port_.Open();
     return EmulatedComHandle();
 }
@@ -93,6 +111,11 @@ void Runtime::CardWorkerMain(void* context) noexcept
     static_cast<Runtime*>(context)->RunCardWorker();
 }
 
+void Runtime::CardReaderWorkerMain(void* context) noexcept
+{
+    static_cast<Runtime*>(context)->RunCardReaderWorker();
+}
+
 void Runtime::RunCardWorker() noexcept
 {
     bool key_was_down = false;
@@ -105,6 +128,32 @@ void Runtime::RunCardWorker() noexcept
         }
         key_was_down = key_is_down;
         worker_api_.sleep_for(std::chrono::milliseconds{100});
+    }
+}
+
+void Runtime::RunCardReaderWorker() noexcept
+{
+    bool infrastructure_error_logged = false;
+    for (;;) {
+        const auto served =
+            card_reader::ServeOneCardReaderConnection(
+                card_reader::kPipeName,
+                port_.device_state().card_scan);
+        if (served) {
+            infrastructure_error_logged = false;
+            continue;
+        }
+
+        if (!infrastructure_error_logged) {
+            try {
+                PLOG_WARNING
+                    << "RFID card-reader pipe unavailable error="
+                    << served.error();
+            } catch (...) {
+            }
+            infrastructure_error_logged = true;
+        }
+        worker_api_.sleep_for(std::chrono::seconds{1});
     }
 }
 

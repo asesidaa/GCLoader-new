@@ -35,12 +35,15 @@ public:
 
 private:
     static void CardWorkerMain(void* context) noexcept;
+    static void CardReaderWorkerMain(void* context) noexcept;
     void RunCardWorker() noexcept;
+    void RunCardReaderWorker() noexcept;
 
     int card_virtual_key_{};
     CardWorkerApi worker_api_{};
     ComPortState port_{};
     std::once_flag worker_once_;
+    std::once_flag card_reader_worker_once_;
     std::atomic_bool worker_started_{};
     std::atomic<DWORD> worker_error_{ERROR_SUCCESS};
 };

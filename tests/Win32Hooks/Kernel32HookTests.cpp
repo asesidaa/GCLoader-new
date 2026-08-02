@@ -1044,7 +1044,7 @@ int test_create_file_and_storage_routing()
     failures += expect(
         com_a == gc::rfid::EmulatedComHandle() &&
             com_w == gc::rfid::EmulatedComHandle() &&
-            worker.start_calls == 1 &&
+            worker.start_calls == 2 &&
             original.calls[call_index(OriginalCall::create_file_a)] == 0 &&
             original.calls[call_index(OriginalCall::create_file_w)] == 0,
         "COM2 routing precedes storage and original APIs");
@@ -1172,7 +1172,7 @@ int test_system_path_routing()
     const auto com = hooks.CreateFileA(
         "COM2", GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     failures += expect(
-        com == gc::rfid::EmulatedComHandle() && worker.start_calls == 1 &&
+        com == gc::rfid::EmulatedComHandle() && worker.start_calls == 2 &&
             original.calls[call_index(OriginalCall::create_file_a)] == 0 &&
             original.calls[call_index(OriginalCall::create_file_w)] == 0,
         "COM2 interception precedes system routing");
