@@ -21,6 +21,8 @@ struct RendererDeviceLossRuntime {
     safetyhook::MidHook vertex_buffer_result_hook{};
     safetyhook::MidHook index_buffer_result_hook{};
     safetyhook::MidHook vertex_buffer_lock_guard_hook{};
+    safetyhook::MidHook direct_lock_result_hook{};
+    safetyhook::MidHook buffered_unlock_result_hook{};
 };
 
 std::unique_ptr<RendererDeviceLossRuntime> g_runtime_owner;
@@ -115,6 +117,19 @@ bool ProductionReadPointer(
     }
 }
 
+bool ApplyNegativeResultRedirect(
+    safetyhook::Context& context,
+    std::uintptr_t image_base,
+    std::uint32_t target_rva) noexcept {
+    if (image_base != kPreferredImageBase ||
+        static_cast<std::int32_t>(context.eax) >= 0) {
+        return false;
+    }
+
+    context.eip = static_cast<std::uint32_t>(image_base + target_rva);
+    return true;
+}
+
 void OnDeviceLostTail(safetyhook::Context& context) noexcept {
     try {
         static_cast<void>(ApplyRendererDeviceLostCleanup(
@@ -167,6 +182,24 @@ void OnVertexBufferLockGuard(
     }
 }
 
+void OnDirectLockResult(safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossDirectLockSkip(
+            context,
+            kPreferredImageBase));
+    } catch (...) {
+    }
+}
+
+void OnBufferedUnlockResult(safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossUnlockCompletion(
+            context,
+            kPreferredImageBase));
+    } catch (...) {
+    }
+}
+
 bool ProductionInstallHook(
     void* opaque,
     RendererContractSite site,
@@ -200,9 +233,21 @@ bool ProductionInstallHook(
                 OnVertexBufferLockGuard);
             return static_cast<bool>(
                 runtime.vertex_buffer_lock_guard_hook);
+        case RendererContractSite::DirectLockResult:
+            runtime.direct_lock_result_hook = safetyhook::create_mid(
+                reinterpret_cast<void*>(address),
+                OnDirectLockResult);
+            return static_cast<bool>(runtime.direct_lock_result_hook);
+        case RendererContractSite::BufferedUnlockResult:
+            runtime.buffered_unlock_result_hook = safetyhook::create_mid(
+                reinterpret_cast<void*>(address),
+                OnBufferedUnlockResult);
+            return static_cast<bool>(runtime.buffered_unlock_result_hook);
         case RendererContractSite::None:
         case RendererContractSite::InitializerEpilogue:
         case RendererContractSite::VertexBufferLockFailure:
+        case RendererContractSite::DirectBatchCleanup:
+        case RendererContractSite::BufferedUnlockContinuation:
             return false;
         }
     } catch (...) {
@@ -219,6 +264,8 @@ void ProductionResetHook(void* opaque) noexcept {
     try {
         auto& runtime =
             *static_cast<RendererDeviceLossRuntime*>(opaque);
+        runtime.buffered_unlock_result_hook.reset();
+        runtime.direct_lock_result_hook.reset();
         runtime.vertex_buffer_lock_guard_hook.reset();
         runtime.index_buffer_result_hook.reset();
         runtime.vertex_buffer_result_hook.reset();
@@ -256,6 +303,14 @@ const char* ContractSiteName(RendererContractSite site) noexcept {
         return "vertex_buffer_lock_guard";
     case RendererContractSite::VertexBufferLockFailure:
         return "vertex_buffer_lock_failure";
+    case RendererContractSite::DirectLockResult:
+        return "direct_lock_result";
+    case RendererContractSite::DirectBatchCleanup:
+        return "direct_batch_cleanup";
+    case RendererContractSite::BufferedUnlockResult:
+        return "buffered_unlock_result";
+    case RendererContractSite::BufferedUnlockContinuation:
+        return "buffered_unlock_continuation";
     }
     return "unknown";
 }
@@ -348,6 +403,24 @@ bool ApplyRendererDeviceLossDrawSkip(
     return true;
 }
 
+bool ApplyRendererDeviceLossDirectLockSkip(
+    safetyhook::Context& context,
+    std::uintptr_t image_base) noexcept {
+    return ApplyNegativeResultRedirect(
+        context,
+        image_base,
+        kDirectBatchCleanupRva);
+}
+
+bool ApplyRendererDeviceLossUnlockCompletion(
+    safetyhook::Context& context,
+    std::uintptr_t image_base) noexcept {
+    return ApplyNegativeResultRedirect(
+        context,
+        image_base,
+        kBufferedUnlockContinuationRva);
+}
+
 std::expected<void, RendererInstallError>
 InstallRendererDeviceLossPatch(
     std::uintptr_t image_base,
@@ -438,6 +511,38 @@ InstallRendererDeviceLossPatch(
         return lock_failure;
     }
 
+    auto direct_lock_result = preflight(
+        RendererContractSite::DirectLockResult,
+        kDirectLockResultRva,
+        kDirectLockResultPattern);
+    if (!direct_lock_result) {
+        return direct_lock_result;
+    }
+
+    auto direct_batch_cleanup = preflight(
+        RendererContractSite::DirectBatchCleanup,
+        kDirectBatchCleanupRva,
+        kDirectBatchCleanupPattern);
+    if (!direct_batch_cleanup) {
+        return direct_batch_cleanup;
+    }
+
+    auto buffered_unlock_result = preflight(
+        RendererContractSite::BufferedUnlockResult,
+        kBufferedUnlockResultRva,
+        kBufferedUnlockResultPattern);
+    if (!buffered_unlock_result) {
+        return buffered_unlock_result;
+    }
+
+    auto buffered_unlock_continuation = preflight(
+        RendererContractSite::BufferedUnlockContinuation,
+        kBufferedUnlockContinuationRva,
+        kBufferedUnlockContinuationPattern);
+    if (!buffered_unlock_continuation) {
+        return buffered_unlock_continuation;
+    }
+
     if (!actions.install_hook(
             actions.context,
             RendererContractSite::DeviceLostTail,
@@ -477,6 +582,26 @@ InstallRendererDeviceLossPatch(
         return std::unexpected(RendererInstallError{
             .stage = RendererInstallStage::HookInstall,
             .site = RendererContractSite::VertexBufferLockGuard,
+        });
+    }
+    if (!actions.install_hook(
+            actions.context,
+            RendererContractSite::DirectLockResult,
+            image_base + kDirectLockResultRva)) {
+        actions.reset_hook(actions.context);
+        return std::unexpected(RendererInstallError{
+            .stage = RendererInstallStage::HookInstall,
+            .site = RendererContractSite::DirectLockResult,
+        });
+    }
+    if (!actions.install_hook(
+            actions.context,
+            RendererContractSite::BufferedUnlockResult,
+            image_base + kBufferedUnlockResultRva)) {
+        actions.reset_hook(actions.context);
+        return std::unexpected(RendererInstallError{
+            .stage = RendererInstallStage::HookInstall,
+            .site = RendererContractSite::BufferedUnlockResult,
         });
     }
     return {};
@@ -523,7 +648,15 @@ bool RendererDeviceLossPatchInit() noexcept {
                       << " lock_guard_rva=0x"
                       << kVertexBufferLockGuardRva
                       << " lock_failure_rva=0x"
-                      << kVertexBufferLockFailureRva << std::dec;
+                      << kVertexBufferLockFailureRva
+                      << " direct_lock_result_rva=0x"
+                      << kDirectLockResultRva
+                      << " direct_batch_cleanup_rva=0x"
+                      << kDirectBatchCleanupRva
+                      << " buffered_unlock_result_rva=0x"
+                      << kBufferedUnlockResultRva
+                      << " buffered_unlock_continuation_rva=0x"
+                      << kBufferedUnlockContinuationRva << std::dec;
         } catch (...) {
         }
         return true;

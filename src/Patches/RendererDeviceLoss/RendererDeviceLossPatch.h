@@ -20,6 +20,11 @@ inline constexpr std::uint32_t kVertexBufferLockGuardRva =
     0x000E5578U;
 inline constexpr std::uint32_t kVertexBufferLockFailureRva =
     0x000E55E2U;
+inline constexpr std::uint32_t kDirectLockResultRva = 0x000E691EU;
+inline constexpr std::uint32_t kDirectBatchCleanupRva = 0x000E6AD6U;
+inline constexpr std::uint32_t kBufferedUnlockResultRva = 0x000E5662U;
+inline constexpr std::uint32_t kBufferedUnlockContinuationRva =
+    0x000E5679U;
 inline constexpr std::size_t kRendererInitializedOffset = 0x484U;
 inline constexpr std::size_t kRendererIndexBufferHolderOffset = 0x778U;
 inline constexpr std::size_t kVertexBufferLockOutputStackOffset = 0x14U;
@@ -101,6 +106,63 @@ kVertexBufferLockFailurePattern{
     std::byte{0x00},
 };
 
+inline constexpr std::array<std::byte, 11> kDirectLockResultPattern{
+    std::byte{0x8B},
+    std::byte{0x4C},
+    std::byte{0x24},
+    std::byte{0x14},
+    std::byte{0x51},
+    std::byte{0x8B},
+    std::byte{0x8E},
+    std::byte{0xE4},
+    std::byte{0x01},
+    std::byte{0x00},
+    std::byte{0x00},
+};
+
+inline constexpr std::array<std::byte, 12> kDirectBatchCleanupPattern{
+    std::byte{0x8B},
+    std::byte{0xB6},
+    std::byte{0xE4},
+    std::byte{0x01},
+    std::byte{0x00},
+    std::byte{0x00},
+    std::byte{0x8B},
+    std::byte{0x5E},
+    std::byte{0x10},
+    std::byte{0x39},
+    std::byte{0x5E},
+    std::byte{0x0C},
+};
+
+inline constexpr std::array<std::byte, 9> kBufferedUnlockResultPattern{
+    std::byte{0x85},
+    std::byte{0xC0},
+    std::byte{0x7D},
+    std::byte{0x13},
+    std::byte{0x68},
+    std::byte{0xE4},
+    std::byte{0xA5},
+    std::byte{0x71},
+    std::byte{0x00},
+};
+
+inline constexpr std::array<std::byte, 12>
+kBufferedUnlockContinuationPattern{
+    std::byte{0x8B},
+    std::byte{0x86},
+    std::byte{0x80},
+    std::byte{0x04},
+    std::byte{0x00},
+    std::byte{0x00},
+    std::byte{0x8B},
+    std::byte{0x8E},
+    std::byte{0x44},
+    std::byte{0x07},
+    std::byte{0x00},
+    std::byte{0x00},
+};
+
 struct RendererInitializedWriter {
     void* context{};
     bool (*clear_initialized)(
@@ -147,6 +209,14 @@ struct RendererStackPointerReader {
     std::uintptr_t image_base,
     RendererStackPointerReader reader) noexcept;
 
+[[nodiscard]] bool ApplyRendererDeviceLossDirectLockSkip(
+    safetyhook::Context& context,
+    std::uintptr_t image_base) noexcept;
+
+[[nodiscard]] bool ApplyRendererDeviceLossUnlockCompletion(
+    safetyhook::Context& context,
+    std::uintptr_t image_base) noexcept;
+
 enum class RendererContractSite {
     None,
     DeviceLostTail,
@@ -155,6 +225,10 @@ enum class RendererContractSite {
     InitializerEpilogue,
     VertexBufferLockGuard,
     VertexBufferLockFailure,
+    DirectLockResult,
+    DirectBatchCleanup,
+    BufferedUnlockResult,
+    BufferedUnlockContinuation,
 };
 
 enum class RendererInstallStage {

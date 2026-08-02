@@ -166,26 +166,14 @@ using gc::renderer_device_loss::RendererInstallActions;
 struct FakeInstallState {
     std::uintptr_t image_base{
         gc::renderer_device_loss::kPreferredImageBase};
-    std::array<std::byte, 12> device_lost_bytes{
-        gc::renderer_device_loss::kDeviceLostTailPattern};
-    std::array<std::byte, 7> result_bytes{
-        gc::renderer_device_loss::kVertexBufferResultPattern};
-    std::array<std::byte, 9> index_result_bytes{
-        gc::renderer_device_loss::kIndexBufferResultPattern};
-    std::array<std::byte, 7> epilogue_bytes{
-        gc::renderer_device_loss::kRendererEpiloguePattern};
-    std::array<std::byte, 9> lock_guard_bytes{
-        gc::renderer_device_loss::kVertexBufferLockGuardPattern};
-    std::array<std::byte, 12> lock_failure_bytes{
-        gc::renderer_device_loss::kVertexBufferLockFailurePattern};
     RendererContractSite read_failure{RendererContractSite::None};
     RendererContractSite mismatch{RendererContractSite::None};
     RendererContractSite hook_failure{RendererContractSite::None};
     int reads{};
     int install_calls{};
     int reset_calls{};
-    std::array<RendererContractSite, 4> hook_sites{};
-    std::array<std::uintptr_t, 4> hook_addresses{};
+    std::array<RendererContractSite, 6> hook_sites{};
+    std::array<std::uintptr_t, 6> hook_addresses{};
 };
 
 RendererContractSite SiteForAddress(
@@ -211,7 +199,50 @@ RendererContractSite SiteForAddress(
     if (address == state.image_base + kVertexBufferLockFailureRva) {
         return RendererContractSite::VertexBufferLockFailure;
     }
+    if (address == state.image_base + kDirectLockResultRva) {
+        return RendererContractSite::DirectLockResult;
+    }
+    if (address == state.image_base + kDirectBatchCleanupRva) {
+        return RendererContractSite::DirectBatchCleanup;
+    }
+    if (address == state.image_base + kBufferedUnlockResultRva) {
+        return RendererContractSite::BufferedUnlockResult;
+    }
+    if (address ==
+        state.image_base + kBufferedUnlockContinuationRva) {
+        return RendererContractSite::BufferedUnlockContinuation;
+    }
     return RendererContractSite::None;
+}
+
+std::span<const std::byte> ExpectedContractBytes(
+    RendererContractSite site) noexcept {
+    using namespace gc::renderer_device_loss;
+    switch (site) {
+    case RendererContractSite::DeviceLostTail:
+        return kDeviceLostTailPattern;
+    case RendererContractSite::VertexBufferResult:
+        return kVertexBufferResultPattern;
+    case RendererContractSite::IndexBufferResult:
+        return kIndexBufferResultPattern;
+    case RendererContractSite::InitializerEpilogue:
+        return kRendererEpiloguePattern;
+    case RendererContractSite::VertexBufferLockGuard:
+        return kVertexBufferLockGuardPattern;
+    case RendererContractSite::VertexBufferLockFailure:
+        return kVertexBufferLockFailurePattern;
+    case RendererContractSite::DirectLockResult:
+        return kDirectLockResultPattern;
+    case RendererContractSite::DirectBatchCleanup:
+        return kDirectBatchCleanupPattern;
+    case RendererContractSite::BufferedUnlockResult:
+        return kBufferedUnlockResultPattern;
+    case RendererContractSite::BufferedUnlockContinuation:
+        return kBufferedUnlockContinuationPattern;
+    case RendererContractSite::None:
+        return {};
+    }
+    return {};
 }
 
 bool ReadInstallMemory(
@@ -226,35 +257,13 @@ bool ReadInstallMemory(
         return false;
     }
 
-    std::span<const std::byte> source;
-    switch (site) {
-    case RendererContractSite::DeviceLostTail:
-        source = state.device_lost_bytes;
-        break;
-    case RendererContractSite::VertexBufferResult:
-        source = state.result_bytes;
-        break;
-    case RendererContractSite::IndexBufferResult:
-        source = state.index_result_bytes;
-        break;
-    case RendererContractSite::InitializerEpilogue:
-        source = state.epilogue_bytes;
-        break;
-    case RendererContractSite::VertexBufferLockGuard:
-        source = state.lock_guard_bytes;
-        break;
-    case RendererContractSite::VertexBufferLockFailure:
-        source = state.lock_failure_bytes;
-        break;
-    case RendererContractSite::None:
-        return false;
-    }
-    if (output.size() != source.size()) {
+    const auto source = ExpectedContractBytes(site);
+    if (source.empty() || output.size() != source.size()) {
         return false;
     }
     std::copy(source.begin(), source.end(), output.begin());
     if (site == state.mismatch) {
-        output.front() ^= std::byte{0x01};
+        output.front() ^= std::byte{0xFF};
     }
     return true;
 }
@@ -565,13 +574,86 @@ int main() {
             ContextEquals(missing_renderer, missing_renderer_before),
         "missing renderer preserves native path");
 
+    constexpr std::uint32_t kExpectedDirectBatchCleanup =
+        0x004E6AD6U;
+    constexpr std::uint32_t kExpectedBufferedUnlockContinuation =
+        0x004E5679U;
+
+    auto direct_lock_failure = CanaryContext();
+    direct_lock_failure.eax = 0x88760868U;
+    const auto direct_before = direct_lock_failure;
+    failures += Expect(
+        ApplyRendererDeviceLossDirectLockSkip(
+            direct_lock_failure,
+            kPreferredImageBase) &&
+            ContextEqualsExceptEip(
+                direct_lock_failure,
+                direct_before,
+                kExpectedDirectBatchCleanup),
+        "failed direct Lock skips unchecked geometry copy");
+
+    auto unlock_failure = CanaryContext();
+    unlock_failure.eax = 0x88760868U;
+    const auto unlock_before = unlock_failure;
+    failures += Expect(
+        ApplyRendererDeviceLossUnlockCompletion(
+            unlock_failure,
+            kPreferredImageBase) &&
+            ContextEqualsExceptEip(
+                unlock_failure,
+                unlock_before,
+                kExpectedBufferedUnlockContinuation),
+        "failed buffered Unlock completes native batch state");
+
+    for (const auto result : nonnegative_results) {
+        auto direct_success = CanaryContext();
+        direct_success.eax = result;
+        const auto direct_success_before = direct_success;
+        failures += Expect(
+            !ApplyRendererDeviceLossDirectLockSkip(
+                direct_success,
+                kPreferredImageBase) &&
+                ContextEquals(
+                    direct_success,
+                    direct_success_before),
+            "nonnegative direct Lock preserves native context");
+
+        auto unlock_success = CanaryContext();
+        unlock_success.eax = result;
+        const auto unlock_success_before = unlock_success;
+        failures += Expect(
+            !ApplyRendererDeviceLossUnlockCompletion(
+                unlock_success,
+                kPreferredImageBase) &&
+                ContextEquals(
+                    unlock_success,
+                    unlock_success_before),
+            "nonnegative buffered Unlock preserves native context");
+    }
+
+    auto wrong_base_direct = direct_before;
+    failures += Expect(
+        !ApplyRendererDeviceLossDirectLockSkip(
+            wrong_base_direct,
+            kPreferredImageBase + 0x1000U) &&
+            ContextEquals(wrong_base_direct, direct_before),
+        "direct Lock redirect rejects an unexpected image base");
+
+    auto wrong_base_unlock = unlock_before;
+    failures += Expect(
+        !ApplyRendererDeviceLossUnlockCompletion(
+            wrong_base_unlock,
+            kPreferredImageBase + 0x1000U) &&
+            ContextEquals(wrong_base_unlock, unlock_before),
+        "buffered Unlock redirect rejects an unexpected image base");
+
     FakeInstallState valid{};
     const auto installed = InstallRendererDeviceLossPatch(
         kPreferredImageBase,
         InstallActions(valid));
     failures += Expect(
-        installed.has_value() && valid.reads == 6 &&
-            valid.install_calls == 4 && valid.reset_calls == 0 &&
+        installed.has_value() && valid.reads == 10 &&
+            valid.install_calls == 6 && valid.reset_calls == 0 &&
             valid.hook_sites[0] ==
                 RendererContractSite::DeviceLostTail &&
             valid.hook_addresses[0] ==
@@ -587,8 +669,14 @@ int main() {
             valid.hook_sites[3] ==
                 RendererContractSite::VertexBufferLockGuard &&
             valid.hook_addresses[3] ==
-                kPreferredImageBase + kVertexBufferLockGuardRva,
-        "matching contracts install OnLost, creation, and draw-lock hooks");
+                kPreferredImageBase + kVertexBufferLockGuardRva &&
+            valid.hook_sites[4] ==
+                RendererContractSite::DirectLockResult &&
+            valid.hook_addresses[4] == 0x004E691EU &&
+            valid.hook_sites[5] ==
+                RendererContractSite::BufferedUnlockResult &&
+            valid.hook_addresses[5] == 0x004E5662U,
+        "matching contracts install all six recovery hooks");
 
     FakeInstallState wrong_base{};
     const auto unsupported = InstallRendererDeviceLossPatch(
@@ -636,6 +724,10 @@ int main() {
         RendererContractSite::InitializerEpilogue,
         RendererContractSite::VertexBufferLockGuard,
         RendererContractSite::VertexBufferLockFailure,
+        RendererContractSite::DirectLockResult,
+        RendererContractSite::DirectBatchCleanup,
+        RendererContractSite::BufferedUnlockResult,
+        RendererContractSite::BufferedUnlockContinuation,
     };
     for (const auto site : contract_sites) {
         FakeInstallState unreadable{.read_failure = site};
@@ -670,27 +762,26 @@ int main() {
         RendererContractSite::VertexBufferResult,
         RendererContractSite::IndexBufferResult,
         RendererContractSite::VertexBufferLockGuard,
+        RendererContractSite::DirectLockResult,
+        RendererContractSite::BufferedUnlockResult,
     };
-    for (const auto site : hook_sites) {
+    for (std::size_t index = 0; index < hook_sites.size(); ++index) {
+        const auto site = hook_sites[index];
         FakeInstallState failed_hook{.hook_failure = site};
         const auto hook_failure = InstallRendererDeviceLossPatch(
             kPreferredImageBase,
             InstallActions(failed_hook));
-        const int expected_install_calls =
-            site == RendererContractSite::DeviceLostTail
-            ? 1
-            : site == RendererContractSite::VertexBufferResult
-            ? 2
-            : site == RendererContractSite::IndexBufferResult ? 3 : 4;
+        const auto expected_install_calls =
+            static_cast<int>(index + 1);
         failures += Expect(
             !hook_failure &&
                 hook_failure.error().stage ==
                     RendererInstallStage::HookInstall &&
                 hook_failure.error().site == site &&
-                failed_hook.reads == 6 &&
+                failed_hook.reads == 10 &&
                 failed_hook.install_calls == expected_install_calls &&
                 failed_hook.reset_calls == 1,
-            "hook creation failure resets the four-hook transaction");
+            "hook creation failure resets the six-hook transaction");
     }
 
     return failures == 0 ? 0 : 1;
