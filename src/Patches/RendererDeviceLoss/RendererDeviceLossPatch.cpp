@@ -17,6 +17,7 @@ namespace {
 
 struct RendererDeviceLossRuntime {
     safetyhook::MidHook vertex_buffer_result_hook{};
+    safetyhook::MidHook vertex_buffer_lock_guard_hook{};
 };
 
 std::unique_ptr<RendererDeviceLossRuntime> g_runtime_owner;
@@ -57,6 +58,18 @@ bool ProductionClearInitialized(
     }
 }
 
+bool ProductionReadPointer(
+    void*,
+    std::uintptr_t address,
+    std::uintptr_t& value) noexcept {
+    __try {
+        value = *reinterpret_cast<const std::uintptr_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void OnVertexBufferCreateResult(
     safetyhook::Context& context) noexcept {
     try {
@@ -70,8 +83,22 @@ void OnVertexBufferCreateResult(
     }
 }
 
+void OnVertexBufferLockGuard(
+    safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossDrawSkip(
+            context,
+            kPreferredImageBase,
+            {
+                .read_pointer = ProductionReadPointer,
+            }));
+    } catch (...) {
+    }
+}
+
 bool ProductionInstallHook(
     void* opaque,
+    RendererContractSite site,
     std::uintptr_t address) noexcept {
     if (opaque == nullptr || address == 0) {
         return false;
@@ -80,13 +107,27 @@ bool ProductionInstallHook(
     try {
         auto& runtime =
             *static_cast<RendererDeviceLossRuntime*>(opaque);
-        runtime.vertex_buffer_result_hook = safetyhook::create_mid(
-            reinterpret_cast<void*>(address),
-            OnVertexBufferCreateResult);
-        return static_cast<bool>(runtime.vertex_buffer_result_hook);
+        switch (site) {
+        case RendererContractSite::VertexBufferResult:
+            runtime.vertex_buffer_result_hook = safetyhook::create_mid(
+                reinterpret_cast<void*>(address),
+                OnVertexBufferCreateResult);
+            return static_cast<bool>(runtime.vertex_buffer_result_hook);
+        case RendererContractSite::VertexBufferLockGuard:
+            runtime.vertex_buffer_lock_guard_hook = safetyhook::create_mid(
+                reinterpret_cast<void*>(address),
+                OnVertexBufferLockGuard);
+            return static_cast<bool>(
+                runtime.vertex_buffer_lock_guard_hook);
+        case RendererContractSite::None:
+        case RendererContractSite::InitializerEpilogue:
+        case RendererContractSite::VertexBufferLockFailure:
+            return false;
+        }
     } catch (...) {
         return false;
     }
+    return false;
 }
 
 void ProductionResetHook(void* opaque) noexcept {
@@ -95,8 +136,10 @@ void ProductionResetHook(void* opaque) noexcept {
     }
 
     try {
-        static_cast<RendererDeviceLossRuntime*>(opaque)
-            ->vertex_buffer_result_hook.reset();
+        auto& runtime =
+            *static_cast<RendererDeviceLossRuntime*>(opaque);
+        runtime.vertex_buffer_lock_guard_hook.reset();
+        runtime.vertex_buffer_result_hook.reset();
     } catch (...) {
     }
 }
@@ -122,6 +165,10 @@ const char* ContractSiteName(RendererContractSite site) noexcept {
         return "vertex_buffer_result";
     case RendererContractSite::InitializerEpilogue:
         return "initializer_epilogue";
+    case RendererContractSite::VertexBufferLockGuard:
+        return "vertex_buffer_lock_guard";
+    case RendererContractSite::VertexBufferLockFailure:
+        return "vertex_buffer_lock_failure";
     }
     return "unknown";
 }
@@ -158,6 +205,35 @@ bool ApplyRendererDeviceLossRetry(
     return true;
 }
 
+bool ApplyRendererDeviceLossDrawSkip(
+    safetyhook::Context& context,
+    std::uintptr_t image_base,
+    RendererStackPointerReader reader) noexcept {
+    if (image_base != kPreferredImageBase || context.ecx != 0 ||
+        context.edi != 0 || context.ebx != 0 ||
+        reader.read_pointer == nullptr ||
+        context.esp > std::numeric_limits<std::uint32_t>::max() -
+                          kVertexBufferLockOutputStackOffset) {
+        return false;
+    }
+
+    std::uintptr_t output_pair = 0;
+    if (!reader.read_pointer(
+            reader.context,
+            static_cast<std::uintptr_t>(context.esp) +
+                kVertexBufferLockOutputStackOffset,
+            output_pair) ||
+        output_pair == 0 ||
+        output_pair > std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+    }
+
+    context.eax = static_cast<std::uint32_t>(output_pair);
+    context.eip = static_cast<std::uint32_t>(
+        image_base + kVertexBufferLockFailureRva);
+    return true;
+}
+
 std::expected<void, RendererInstallError>
 InstallRendererDeviceLossPatch(
     std::uintptr_t image_base,
@@ -178,18 +254,20 @@ InstallRendererDeviceLossPatch(
                                std::uint32_t rva,
                                std::span<const std::byte> expected)
         -> std::expected<void, RendererInstallError> {
-        std::array<std::byte, 7> actual{};
-        if (expected.size() != actual.size() ||
+        std::array<std::byte, 12> actual{};
+        if (expected.empty() || expected.size() > actual.size() ||
             !actions.read(
                 actions.context,
                 image_base + rva,
-                actual)) {
+                std::span{actual}.first(expected.size()))) {
             return std::unexpected(RendererInstallError{
                 .stage = RendererInstallStage::PreflightRead,
                 .site = site,
             });
         }
-        if (!std::ranges::equal(actual, expected)) {
+        if (!std::ranges::equal(
+                std::span{actual}.first(expected.size()),
+                expected)) {
             return std::unexpected(RendererInstallError{
                 .stage = RendererInstallStage::PreflightMismatch,
                 .site = site,
@@ -214,13 +292,40 @@ InstallRendererDeviceLossPatch(
         return epilogue;
     }
 
+    auto lock_guard = preflight(
+        RendererContractSite::VertexBufferLockGuard,
+        kVertexBufferLockGuardRva,
+        kVertexBufferLockGuardPattern);
+    if (!lock_guard) {
+        return lock_guard;
+    }
+
+    auto lock_failure = preflight(
+        RendererContractSite::VertexBufferLockFailure,
+        kVertexBufferLockFailureRva,
+        kVertexBufferLockFailurePattern);
+    if (!lock_failure) {
+        return lock_failure;
+    }
+
     if (!actions.install_hook(
             actions.context,
+            RendererContractSite::VertexBufferResult,
             image_base + kVertexBufferResultRva)) {
         actions.reset_hook(actions.context);
         return std::unexpected(RendererInstallError{
             .stage = RendererInstallStage::HookInstall,
             .site = RendererContractSite::VertexBufferResult,
+        });
+    }
+    if (!actions.install_hook(
+            actions.context,
+            RendererContractSite::VertexBufferLockGuard,
+            image_base + kVertexBufferLockGuardRva)) {
+        actions.reset_hook(actions.context);
+        return std::unexpected(RendererInstallError{
+            .stage = RendererInstallStage::HookInstall,
+            .site = RendererContractSite::VertexBufferLockGuard,
         });
     }
     return {};
@@ -259,7 +364,11 @@ bool RendererDeviceLossPatchInit() noexcept {
                       << " result_rva=0x" << std::hex
                       << kVertexBufferResultRva
                       << " retry_rva=0x"
-                      << kRendererInitializerEpilogueRva << std::dec;
+                      << kRendererInitializerEpilogueRva
+                      << " lock_guard_rva=0x"
+                      << kVertexBufferLockGuardRva
+                      << " lock_failure_rva=0x"
+                      << kVertexBufferLockFailureRva << std::dec;
         } catch (...) {
         }
         return true;
