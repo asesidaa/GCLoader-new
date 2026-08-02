@@ -1,1 +1,2 @@
 add_subdirectory(ConfigGUI)
+add_subdirectory(CardReaderTestClient)
