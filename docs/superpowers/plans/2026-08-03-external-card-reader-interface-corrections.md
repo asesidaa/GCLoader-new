@@ -299,4 +299,3 @@ Stage only feature-owned documentation changes. Do not stage or edit the unrelat
 - [ ] **Step 6: Hand off runtime acceptance**
 
 Ask the user to start the elevated game, wait for COM2, then run either the build-tree GUI or the Python example unelevated. Record client `OK` separately from the game's one-shot card-flow observation.
-
