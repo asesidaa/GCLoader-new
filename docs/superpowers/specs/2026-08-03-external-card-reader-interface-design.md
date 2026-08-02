@@ -15,6 +15,11 @@ does not need to understand those readers or their protocols. Reader-specific
 adapter software only needs a small local interface through which it can
 submit the final card number and trigger the existing RFID scan path.
 
+The distribution also needs a deliberately small test client for in-game
+acceptance. It gives the operator one button that submits GCLoader's built-in
+default card number through the same public interface an external adapter will
+use.
+
 The source repository is `H:\gc\artifacts\GCLoader`. `H:\gc` remains the
 runtime and deployment tree and is outside this implementation's mutation
 scope.
@@ -28,12 +33,16 @@ scope.
 - Keep reader discovery, reader protocols, and card-reading logic outside
   GCLoader.
 - Require no new configuration or ConfigGUI controls.
+- Ship a one-button client that exercises the real named-pipe contract during
+  runtime testing.
 
 ## Non-Goals
 
 - Detecting, opening, configuring, or polling physical card readers.
 - Shipping adapters for specific readers or other games.
 - Loading third-party reader plugins into the game process.
+- Turning the runtime test client into a reader SDK, configurable adapter, or
+  general-purpose card editor.
 - Queueing scans, deduplicating cards, debouncing readers, or interpreting
   card contents.
 - Supporting remote clients, configurable endpoints, authentication, or
@@ -78,6 +87,35 @@ The displayed newline is not part of the request message.
 This narrow framing makes every successful request one explicit scan,
 including consecutive scans of the same card number.
 
+## Binary-Backed Identifier Conditions
+
+The card path was checked in the current `H:\gc\game471.exe.i64` database
+against `game471.exe` with SHA-256
+`FEAD3BD4D0E0985F101965EDC417DD2B96522F8716FF789D84618FEB0D7A2522`.
+The image base is `0x400000`.
+
+The game imposes no local digit, prefix, checksum, or numeric-range condition
+on the 16-byte card identifier:
+
+- `sub_4B3BE0` at RVA `0xB3BE0` handles the NESiCA reader response and copies
+  eight prefix bytes followed by sixteen identifier bytes without inspecting
+  their contents.
+- `sub_634DD0` at RVA `0x234DD0` exposes exactly those sixteen identifier
+  bytes. It has two callers in this build.
+- The gameplay caller `sub_5A4A20` at RVA `0x1A4A20` passes the bytes through
+  `sub_6284D0` at RVA `0x2284D0`; neither function validates the identifier's
+  characters or calculates a checksum.
+- `sub_59E6F0` at RVA `0x19E6F0` copies the sixteen bytes into a zero-terminated
+  NESYS card-ID field without further validation.
+- The other caller, the test-mode display path `sub_569CA0` at RVA `0x169CA0`,
+  only checks that the resulting displayed string has length sixteen.
+
+Therefore sixteen decimal digits are sufficient for the game, and there is no
+additional game-side check-digit rule. A NESYS server may still impose its own
+semantic policy, which is outside this interface. GCLoader deliberately keeps
+the existing digits-only contract because it is the established `card.txt`
+format and leaves any physical-reader UID mapping to the external adapter.
+
 ## Card-Scan Behavior
 
 A valid pipe request assembles the existing 24-byte RFID payload: the fixed
@@ -115,6 +153,11 @@ the same digit validation after its existing ASCII-whitespace trimming. This
 is the shared production seam for file and pipe input; payload assembly and
 the fixed prefix remain owned by the card-data unit.
 
+The unit also exposes the built-in number once as
+`kDefaultCardNumber = "7020392010281502"`. The default payload and runtime
+test client both derive from that constant so the test tool cannot drift from
+the loader's code default.
+
 ### Pending scan state
 
 `CardScanState` owns the single pending scan under synchronization. A snapshot
@@ -147,6 +190,35 @@ encounters a transient pipe-creation failure waits before retrying so it cannot
 spin. Exceptions and Win32 failures remain contained inside the worker
 boundary.
 
+## Runtime Test Client
+
+Implementation adds `CardReaderTestClient.exe` under a focused
+`tools/CardReaderTestClient` target. CMake places the executable directly in
+`${GC_DIST_DIR}` with the other operator-facing artifacts.
+
+The client is a native Win32 GUI executable linked only to the Windows APIs it
+uses. It does not reuse ConfigGUI's ImGui or Direct3D host and does not read
+configuration or `card.txt`.
+
+Its fixed window contains:
+
+- a label showing `Test card: 7020392010281502`, sourced from
+  `kDefaultCardNumber`;
+- one `Send Test Card` button; and
+- one status label initially showing `Not sent`.
+
+Clicking the button connects to `\\.\pipe\GCLoader.CardReader`, sends the
+sixteen default-number bytes as one message, reads the server response, and
+updates the status label. `OK`, `INVALID`, unavailable/busy pipe, short I/O,
+and other Win32 failures are visibly distinguishable. The client sends no
+keyboard input and does not modify files, so an accepted in-game scan proves
+that the external interface armed the RFID state.
+
+The operation may run synchronously on the button click because this is a
+single-purpose manual test tool with a short connection attempt, not a
+long-running reader adapter. It does not retry automatically; the displayed
+error lets the operator click again after the game has opened COM2.
+
 ## Error and Concurrency Rules
 
 - Empty, short, long, non-decimal, truncated, and oversized requests return
@@ -168,7 +240,9 @@ boundary.
 Implementation adds `docs/card-reader-interface.md` as the adapter-facing
 reference. It records the stable pipe name, exact request and response bytes,
 availability and retry behavior, last-trigger-wins semantics, and a minimal
-client example. The document does not prescribe any physical reader logic.
+client example. It also identifies `CardReaderTestClient.exe` as a manual
+contract probe, not an adapter template. The document does not prescribe any
+physical reader logic.
 
 ## Testing
 
@@ -185,11 +259,33 @@ Focused behavioral coverage will establish:
 - keyboard-triggered JVS transfers still read `card.txt`, while pipe-triggered
   transfers use the submitted number exactly once;
 - a real uniquely named test pipe accepts the request, returns `OK`, rejects
-  malformed input with `INVALID`, and permits a later connection; and
+  malformed input with `INVALID`, and permits a later connection;
 - listener-start failure does not prevent the emulated COM2 device from
-  opening.
+  opening;
+- the client-side transport reports `OK`, `INVALID`, unavailable pipe, and
+  short or unexpected responses distinctly; and
+- the test client builds as a native GUI target in `${GC_DIST_DIR}` and uses
+  the shared built-in default number.
 
 The affected targets and full CTest suite will run under both x86 Debug and
 Release presets. Automated results establish the protocol and static/runtime
 unit behavior only; actual third-party reader and in-game acceptance remain
 manual runtime checks.
+
+## Runtime Acceptance
+
+After static verification, the operator will run the game and the generated
+`dist/CardReaderTestClient.exe`. Once the game has opened the emulated COM2
+device, the operator clicks `Send Test Card` without pressing the configured
+card-read key.
+
+Acceptance requires both observations:
+
+1. The client displays `OK`, proving the game-process pipe accepted and armed
+   the built-in default number.
+2. The game proceeds through its normal card-read flow exactly once, proving
+   the external trigger reached the existing one-shot JVS path.
+
+This runtime result validates the bundled probe and the named-pipe integration.
+It does not establish compatibility with a specific third-party physical
+reader until that reader's adapter uses the same contract successfully.
