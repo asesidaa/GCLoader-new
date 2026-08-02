@@ -11,6 +11,7 @@
 namespace gc::renderer_device_loss {
 
 inline constexpr std::uintptr_t kPreferredImageBase = 0x00400000U;
+inline constexpr std::uint32_t kDeviceLostTailRva = 0x000E67D8U;
 inline constexpr std::uint32_t kVertexBufferResultRva = 0x000E79F7U;
 inline constexpr std::uint32_t kRendererInitializerEpilogueRva =
     0x000E7EE9U;
@@ -19,7 +20,23 @@ inline constexpr std::uint32_t kVertexBufferLockGuardRva =
 inline constexpr std::uint32_t kVertexBufferLockFailureRva =
     0x000E55E2U;
 inline constexpr std::size_t kRendererInitializedOffset = 0x484U;
+inline constexpr std::size_t kRendererIndexBufferHolderOffset = 0x778U;
 inline constexpr std::size_t kVertexBufferLockOutputStackOffset = 0x14U;
+
+inline constexpr std::array<std::byte, 12> kDeviceLostTailPattern{
+    std::byte{0x89},
+    std::byte{0xBE},
+    std::byte{0x18},
+    std::byte{0x01},
+    std::byte{0x00},
+    std::byte{0x00},
+    std::byte{0x89},
+    std::byte{0xBE},
+    std::byte{0x1C},
+    std::byte{0x01},
+    std::byte{0x00},
+    std::byte{0x00},
+};
 
 inline constexpr std::array<std::byte, 7>
 kVertexBufferResultPattern{
@@ -79,6 +96,26 @@ struct RendererInitializedWriter {
         std::size_t) noexcept{};
 };
 
+struct RendererDeviceLostActions {
+    void* context{};
+    bool (*clear_initialized)(
+        void*,
+        std::uintptr_t,
+        std::size_t) noexcept{};
+    bool (*detach_index_buffer)(
+        void*,
+        std::uintptr_t,
+        std::size_t,
+        std::uintptr_t&) noexcept{};
+    bool (*release_index_buffer)(
+        void*,
+        std::uintptr_t) noexcept{};
+};
+
+[[nodiscard]] bool ApplyRendererDeviceLostCleanup(
+    safetyhook::Context& context,
+    RendererDeviceLostActions actions) noexcept;
+
 [[nodiscard]] bool ApplyRendererDeviceLossRetry(
     safetyhook::Context& context,
     std::uintptr_t image_base,
@@ -99,6 +136,7 @@ struct RendererStackPointerReader {
 
 enum class RendererContractSite {
     None,
+    DeviceLostTail,
     VertexBufferResult,
     InitializerEpilogue,
     VertexBufferLockGuard,

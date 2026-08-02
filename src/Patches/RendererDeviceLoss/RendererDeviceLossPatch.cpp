@@ -1,6 +1,7 @@
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 
 #include <Windows.h>
+#include <Unknwn.h>
 
 #include <plog/Log.h>
 
@@ -16,6 +17,7 @@ namespace gc::renderer_device_loss {
 namespace {
 
 struct RendererDeviceLossRuntime {
+    safetyhook::MidHook device_lost_tail_hook{};
     safetyhook::MidHook vertex_buffer_result_hook{};
     safetyhook::MidHook vertex_buffer_lock_guard_hook{};
 };
@@ -58,6 +60,48 @@ bool ProductionClearInitialized(
     }
 }
 
+bool ProductionDetachIndexBuffer(
+    void*,
+    std::uintptr_t renderer,
+    std::size_t offset,
+    std::uintptr_t& detached) noexcept {
+    detached = 0;
+    if (renderer == 0 || offset != kRendererIndexBufferHolderOffset ||
+        renderer > std::numeric_limits<std::uintptr_t>::max() - offset) {
+        return false;
+    }
+
+    __try {
+        const auto holder =
+            *reinterpret_cast<std::uintptr_t*>(renderer + offset);
+        if (holder == 0) {
+            return false;
+        }
+        auto* const slot = reinterpret_cast<std::uintptr_t*>(holder);
+        detached = *slot;
+        *slot = 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        detached = 0;
+        return false;
+    }
+}
+
+bool ProductionReleaseIndexBuffer(
+    void*,
+    std::uintptr_t buffer) noexcept {
+    if (buffer == 0) {
+        return true;
+    }
+
+    __try {
+        reinterpret_cast<IUnknown*>(buffer)->Release();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool ProductionReadPointer(
     void*,
     std::uintptr_t address,
@@ -67,6 +111,19 @@ bool ProductionReadPointer(
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
+    }
+}
+
+void OnDeviceLostTail(safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLostCleanup(
+            context,
+            {
+                .clear_initialized = ProductionClearInitialized,
+                .detach_index_buffer = ProductionDetachIndexBuffer,
+                .release_index_buffer = ProductionReleaseIndexBuffer,
+            }));
+    } catch (...) {
     }
 }
 
@@ -108,6 +165,11 @@ bool ProductionInstallHook(
         auto& runtime =
             *static_cast<RendererDeviceLossRuntime*>(opaque);
         switch (site) {
+        case RendererContractSite::DeviceLostTail:
+            runtime.device_lost_tail_hook = safetyhook::create_mid(
+                reinterpret_cast<void*>(address),
+                OnDeviceLostTail);
+            return static_cast<bool>(runtime.device_lost_tail_hook);
         case RendererContractSite::VertexBufferResult:
             runtime.vertex_buffer_result_hook = safetyhook::create_mid(
                 reinterpret_cast<void*>(address),
@@ -140,6 +202,7 @@ void ProductionResetHook(void* opaque) noexcept {
             *static_cast<RendererDeviceLossRuntime*>(opaque);
         runtime.vertex_buffer_lock_guard_hook.reset();
         runtime.vertex_buffer_result_hook.reset();
+        runtime.device_lost_tail_hook.reset();
     } catch (...) {
     }
 }
@@ -161,6 +224,8 @@ const char* InstallStageName(RendererInstallStage stage) noexcept {
 const char* ContractSiteName(RendererContractSite site) noexcept {
     switch (site) {
     case RendererContractSite::None: return "none";
+    case RendererContractSite::DeviceLostTail:
+        return "device_lost_tail";
     case RendererContractSite::VertexBufferResult:
         return "vertex_buffer_result";
     case RendererContractSite::InitializerEpilogue:
@@ -183,6 +248,33 @@ void LogInstallFailure(const RendererInstallError& error) noexcept {
 }
 
 } // namespace
+
+bool ApplyRendererDeviceLostCleanup(
+    safetyhook::Context& context,
+    RendererDeviceLostActions actions) noexcept {
+    if (context.esi == 0 || actions.clear_initialized == nullptr ||
+        actions.detach_index_buffer == nullptr ||
+        actions.release_index_buffer == nullptr) {
+        return false;
+    }
+    if (!actions.clear_initialized(
+            actions.context,
+            context.esi,
+            kRendererInitializedOffset)) {
+        return false;
+    }
+
+    std::uintptr_t detached = 0;
+    if (!actions.detach_index_buffer(
+            actions.context,
+            context.esi,
+            kRendererIndexBufferHolderOffset,
+            detached)) {
+        return false;
+    }
+    return detached == 0 ||
+           actions.release_index_buffer(actions.context, detached);
+}
 
 bool ApplyRendererDeviceLossRetry(
     safetyhook::Context& context,
@@ -276,6 +368,14 @@ InstallRendererDeviceLossPatch(
         return {};
     };
 
+    auto device_lost_tail = preflight(
+        RendererContractSite::DeviceLostTail,
+        kDeviceLostTailRva,
+        kDeviceLostTailPattern);
+    if (!device_lost_tail) {
+        return device_lost_tail;
+    }
+
     auto result_site = preflight(
         RendererContractSite::VertexBufferResult,
         kVertexBufferResultRva,
@@ -306,6 +406,17 @@ InstallRendererDeviceLossPatch(
         kVertexBufferLockFailurePattern);
     if (!lock_failure) {
         return lock_failure;
+    }
+
+    if (!actions.install_hook(
+            actions.context,
+            RendererContractSite::DeviceLostTail,
+            image_base + kDeviceLostTailRva)) {
+        actions.reset_hook(actions.context);
+        return std::unexpected(RendererInstallError{
+            .stage = RendererInstallStage::HookInstall,
+            .site = RendererContractSite::DeviceLostTail,
+        });
     }
 
     if (!actions.install_hook(
@@ -361,7 +472,9 @@ bool RendererDeviceLossPatchInit() noexcept {
         stored_result.store(true, std::memory_order_release);
         try {
             PLOG_INFO << "RendererDeviceLossPatch: hook committed"
-                      << " result_rva=0x" << std::hex
+                      << " lost_tail_rva=0x" << std::hex
+                      << kDeviceLostTailRva
+                      << " result_rva=0x"
                       << kVertexBufferResultRva
                       << " retry_rva=0x"
                       << kRendererInitializerEpilogueRva

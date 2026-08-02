@@ -85,6 +85,61 @@ bool ClearInitialized(
     return true;
 }
 
+struct LostResourceState {
+    std::uintptr_t renderer{};
+    std::size_t initialized_offset{};
+    std::size_t holder_offset{};
+    std::uintptr_t detached_buffer{};
+    int phase{};
+    int clear_calls{};
+    int detach_calls{};
+    int release_calls{};
+    bool clear_succeeds{true};
+    bool detach_succeeds{true};
+    bool release_succeeds{true};
+    bool release_saw_detached_state{};
+};
+
+bool ClearLostInitialized(
+    void* opaque,
+    std::uintptr_t renderer,
+    std::size_t offset) noexcept {
+    auto& state = *static_cast<LostResourceState*>(opaque);
+    state.renderer = renderer;
+    state.initialized_offset = offset;
+    ++state.clear_calls;
+    state.phase = 1;
+    return state.clear_succeeds;
+}
+
+bool DetachLostIndexBuffer(
+    void* opaque,
+    std::uintptr_t renderer,
+    std::size_t offset,
+    std::uintptr_t& detached) noexcept {
+    auto& state = *static_cast<LostResourceState*>(opaque);
+    state.renderer = renderer;
+    state.holder_offset = offset;
+    ++state.detach_calls;
+    if (!state.detach_succeeds || state.phase != 1) {
+        return false;
+    }
+    state.phase = 2;
+    detached = state.detached_buffer;
+    return true;
+}
+
+bool ReleaseLostIndexBuffer(
+    void* opaque,
+    std::uintptr_t buffer) noexcept {
+    auto& state = *static_cast<LostResourceState*>(opaque);
+    ++state.release_calls;
+    state.release_saw_detached_state =
+        state.phase == 2 && buffer == state.detached_buffer;
+    state.phase = 3;
+    return state.release_succeeds;
+}
+
 struct StackReaderState {
     std::uintptr_t expected_address{};
     std::uintptr_t output_pair{};
@@ -111,6 +166,8 @@ using gc::renderer_device_loss::RendererInstallActions;
 struct FakeInstallState {
     std::uintptr_t image_base{
         gc::renderer_device_loss::kPreferredImageBase};
+    std::array<std::byte, 12> device_lost_bytes{
+        gc::renderer_device_loss::kDeviceLostTailPattern};
     std::array<std::byte, 7> result_bytes{
         gc::renderer_device_loss::kVertexBufferResultPattern};
     std::array<std::byte, 7> epilogue_bytes{
@@ -125,14 +182,17 @@ struct FakeInstallState {
     int reads{};
     int install_calls{};
     int reset_calls{};
-    std::array<RendererContractSite, 2> hook_sites{};
-    std::array<std::uintptr_t, 2> hook_addresses{};
+    std::array<RendererContractSite, 3> hook_sites{};
+    std::array<std::uintptr_t, 3> hook_addresses{};
 };
 
 RendererContractSite SiteForAddress(
     const FakeInstallState& state,
     std::uintptr_t address) noexcept {
     using namespace gc::renderer_device_loss;
+    if (address == state.image_base + kDeviceLostTailRva) {
+        return RendererContractSite::DeviceLostTail;
+    }
     if (address == state.image_base + kVertexBufferResultRva) {
         return RendererContractSite::VertexBufferResult;
     }
@@ -163,6 +223,9 @@ bool ReadInstallMemory(
 
     std::span<const std::byte> source;
     switch (site) {
+    case RendererContractSite::DeviceLostTail:
+        source = state.device_lost_bytes;
+        break;
     case RendererContractSite::VertexBufferResult:
         source = state.result_bytes;
         break;
@@ -244,6 +307,128 @@ int main() {
                 failed_before,
                 kPreferredImageBase + kRendererInitializerEpilogueRva),
         "failed vertex-buffer creation defers initialization");
+
+    auto lost = CanaryContext();
+    lost.esi = 0x15B61190U;
+    const auto lost_before = lost;
+    LostResourceState resources{.detached_buffer = 0x12345678U};
+    failures += Expect(
+        ApplyRendererDeviceLostCleanup(
+            lost,
+            {
+                .context = &resources,
+                .clear_initialized = ClearLostInitialized,
+                .detach_index_buffer = DetachLostIndexBuffer,
+                .release_index_buffer = ReleaseLostIndexBuffer,
+            }) &&
+            resources.clear_calls == 1 &&
+            resources.detach_calls == 1 &&
+            resources.release_calls == 1 &&
+            resources.renderer == lost.esi &&
+            resources.initialized_offset ==
+                kRendererInitializedOffset &&
+            resources.holder_offset ==
+                kRendererIndexBufferHolderOffset &&
+            resources.release_saw_detached_state &&
+            ContextEquals(lost, lost_before),
+        "OnLost detaches before releasing the default-pool index buffer");
+
+    auto already_empty = lost_before;
+    LostResourceState no_buffer{};
+    failures += Expect(
+        ApplyRendererDeviceLostCleanup(
+            already_empty,
+            {
+                .context = &no_buffer,
+                .clear_initialized = ClearLostInitialized,
+                .detach_index_buffer = DetachLostIndexBuffer,
+                .release_index_buffer = ReleaseLostIndexBuffer,
+            }) &&
+            no_buffer.clear_calls == 1 &&
+            no_buffer.detach_calls == 1 &&
+            no_buffer.release_calls == 0 &&
+            ContextEquals(already_empty, lost_before),
+        "OnLost accepts an already-null index buffer");
+
+    auto clear_rejected = lost_before;
+    LostResourceState failed_clear{
+        .detached_buffer = 0x12345678U,
+        .clear_succeeds = false,
+    };
+    failures += Expect(
+        !ApplyRendererDeviceLostCleanup(
+            clear_rejected,
+            {
+                .context = &failed_clear,
+                .clear_initialized = ClearLostInitialized,
+                .detach_index_buffer = DetachLostIndexBuffer,
+                .release_index_buffer = ReleaseLostIndexBuffer,
+            }) &&
+            failed_clear.clear_calls == 1 &&
+            failed_clear.detach_calls == 0 &&
+            failed_clear.release_calls == 0 &&
+            ContextEquals(clear_rejected, lost_before),
+        "failed initialized-state write prevents unsafe teardown");
+
+    auto detach_rejected = lost_before;
+    LostResourceState failed_detach{
+        .detached_buffer = 0x12345678U,
+        .detach_succeeds = false,
+    };
+    failures += Expect(
+        !ApplyRendererDeviceLostCleanup(
+            detach_rejected,
+            {
+                .context = &failed_detach,
+                .clear_initialized = ClearLostInitialized,
+                .detach_index_buffer = DetachLostIndexBuffer,
+                .release_index_buffer = ReleaseLostIndexBuffer,
+            }) &&
+            failed_detach.clear_calls == 1 &&
+            failed_detach.detach_calls == 1 &&
+            failed_detach.release_calls == 0 &&
+            ContextEquals(detach_rejected, lost_before),
+        "failed holder access never releases an unknown pointer");
+
+    auto release_rejected = lost_before;
+    LostResourceState failed_release{
+        .detached_buffer = 0x12345678U,
+        .release_succeeds = false,
+    };
+    failures += Expect(
+        !ApplyRendererDeviceLostCleanup(
+            release_rejected,
+            {
+                .context = &failed_release,
+                .clear_initialized = ClearLostInitialized,
+                .detach_index_buffer = DetachLostIndexBuffer,
+                .release_index_buffer = ReleaseLostIndexBuffer,
+            }) &&
+            failed_release.clear_calls == 1 &&
+            failed_release.detach_calls == 1 &&
+            failed_release.release_calls == 1 &&
+            failed_release.release_saw_detached_state &&
+            ContextEquals(release_rejected, lost_before),
+        "release failure cannot restore a detached index-buffer pointer");
+
+    auto null_renderer = lost_before;
+    null_renderer.esi = 0;
+    const auto null_renderer_before = null_renderer;
+    LostResourceState untouched_resources{};
+    failures += Expect(
+        !ApplyRendererDeviceLostCleanup(
+            null_renderer,
+            {
+                .context = &untouched_resources,
+                .clear_initialized = ClearLostInitialized,
+                .detach_index_buffer = DetachLostIndexBuffer,
+                .release_index_buffer = ReleaseLostIndexBuffer,
+            }) &&
+            untouched_resources.clear_calls == 0 &&
+            untouched_resources.detach_calls == 0 &&
+            untouched_resources.release_calls == 0 &&
+            ContextEquals(null_renderer, null_renderer_before),
+        "null renderer state is rejected without side effects");
 
     auto empty_draw = CanaryContext();
     empty_draw.ecx = 0;
@@ -377,17 +562,21 @@ int main() {
         kPreferredImageBase,
         InstallActions(valid));
     failures += Expect(
-        installed.has_value() && valid.reads == 4 &&
-            valid.install_calls == 2 && valid.reset_calls == 0 &&
+        installed.has_value() && valid.reads == 5 &&
+            valid.install_calls == 3 && valid.reset_calls == 0 &&
             valid.hook_sites[0] ==
-                RendererContractSite::VertexBufferResult &&
+                RendererContractSite::DeviceLostTail &&
             valid.hook_addresses[0] ==
-                kPreferredImageBase + kVertexBufferResultRva &&
+                kPreferredImageBase + kDeviceLostTailRva &&
             valid.hook_sites[1] ==
-                RendererContractSite::VertexBufferLockGuard &&
+                RendererContractSite::VertexBufferResult &&
             valid.hook_addresses[1] ==
+                kPreferredImageBase + kVertexBufferResultRva &&
+            valid.hook_sites[2] ==
+                RendererContractSite::VertexBufferLockGuard &&
+            valid.hook_addresses[2] ==
                 kPreferredImageBase + kVertexBufferLockGuardRva,
-        "matching contracts install result and draw-lock hooks");
+        "matching contracts install OnLost, result, and draw-lock hooks");
 
     FakeInstallState wrong_base{};
     const auto unsupported = InstallRendererDeviceLossPatch(
@@ -429,6 +618,7 @@ int main() {
     }
 
     constexpr std::array contract_sites{
+        RendererContractSite::DeviceLostTail,
         RendererContractSite::VertexBufferResult,
         RendererContractSite::InitializerEpilogue,
         RendererContractSite::VertexBufferLockGuard,
@@ -463,6 +653,7 @@ int main() {
     }
 
     constexpr std::array hook_sites{
+        RendererContractSite::DeviceLostTail,
         RendererContractSite::VertexBufferResult,
         RendererContractSite::VertexBufferLockGuard,
     };
@@ -472,16 +663,18 @@ int main() {
             kPreferredImageBase,
             InstallActions(failed_hook));
         const int expected_install_calls =
-            site == RendererContractSite::VertexBufferResult ? 1 : 2;
+            site == RendererContractSite::DeviceLostTail
+            ? 1
+            : site == RendererContractSite::VertexBufferResult ? 2 : 3;
         failures += Expect(
             !hook_failure &&
                 hook_failure.error().stage ==
                     RendererInstallStage::HookInstall &&
                 hook_failure.error().site == site &&
-                failed_hook.reads == 4 &&
+                failed_hook.reads == 5 &&
                 failed_hook.install_calls == expected_install_calls &&
                 failed_hook.reset_calls == 1,
-            "hook creation failure resets the two-hook transaction");
+            "hook creation failure resets the three-hook transaction");
     }
 
     return failures == 0 ? 0 : 1;
