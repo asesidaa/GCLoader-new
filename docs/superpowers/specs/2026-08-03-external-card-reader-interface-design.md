@@ -15,14 +15,14 @@ does not need to understand those readers or their protocols. Reader-specific
 adapter software only needs a small local interface through which it can
 submit the final card number and trigger the existing RFID scan path.
 
-The distribution also needs a deliberately small test client for in-game
+Local development also needs a deliberately small test client for in-game
 acceptance. It gives the operator one button that submits GCLoader's built-in
 default card number through the same public interface an external adapter will
-use.
+use. It is a repository-local test tool, not a distribution artifact.
 
 The source repository is `H:\gc\artifacts\GCLoader`. `H:\gc` remains the
-runtime and deployment tree and is outside this implementation's mutation
-scope.
+runtime and deployment tree rather than source; only separately authorized
+deployment and cleanup may modify its deployed artifacts.
 
 ## Goals
 
@@ -33,8 +33,10 @@ scope.
 - Keep reader discovery, reader protocols, and card-reading logic outside
   GCLoader.
 - Require no new configuration or ConfigGUI controls.
-- Ship a one-button client that exercises the real named-pipe contract during
-  runtime testing.
+- Provide a one-button local test client that exercises the real named-pipe
+  contract during runtime testing without placing it in `dist`.
+- Let an unelevated local adapter submit cards even when the game is elevated.
+- Provide both C++ and dependency-free, copyable Python client examples.
 
 ## Non-Goals
 
@@ -43,10 +45,11 @@ scope.
 - Loading third-party reader plugins into the game process.
 - Turning the runtime test client into a reader SDK, configurable adapter, or
   general-purpose card editor.
+- Shipping the runtime test client as part of GCLoader's distribution.
 - Queueing scans, deduplicating cards, debouncing readers, or interpreting
   card contents.
-- Supporting remote clients, configurable endpoints, authentication, or
-  network transports.
+- Supporting remote clients, configurable endpoints, application-level
+  authentication, or network transports.
 - Changing the fixed eight-byte RFID prefix or the JVS protocol.
 - Replacing the keyboard and `card.txt` workflow.
 - Deploying a built DLL or changing files under `H:\gc`.
@@ -63,6 +66,13 @@ The endpoint has these fixed rules:
 
 - It is a local-only, duplex, message-mode named pipe. Remote clients are
   rejected.
+- Authenticated processes on the local machine may connect, including
+  unelevated processes when the game is elevated. The pipe has a low mandatory
+  integrity label so Windows Mandatory Integrity Control does not require the
+  client to match the game process's elevation.
+- There is no application-level authentication. Any authenticated local
+  process can submit a scan; this is an intentional trade-off for reader and
+  reader-service interoperability.
 - The listener becomes available after the game first opens the emulated RFID
   COM2 device. A client that starts earlier must retry its connection.
 - One connection submits one card-read request.
@@ -177,6 +187,14 @@ The listener uses Win32 wide-character APIs and fixed bounded buffers. It does
 not touch the filesystem, configuration, input polling, or reader hardware.
 Successful requests do not add per-scan diagnostic logging.
 
+Each pipe instance is created with an explicit security descriptor. Its DACL
+grants read/write access to authenticated users and full access to LocalSystem
+and administrators, while its mandatory label is low integrity. Combined with
+`PIPE_REJECT_REMOTE_CLIENTS`, this removes the UAC elevation requirement for
+local adapters without exposing the endpoint over the network. Failure to
+construct or apply this descriptor is a listener infrastructure failure; the
+server must not silently fall back to the elevation-sensitive default.
+
 ### Runtime integration
 
 `Runtime::OpenCom2()` starts the listener once, alongside the existing
@@ -193,8 +211,10 @@ boundary.
 ## Runtime Test Client
 
 Implementation adds `CardReaderTestClient.exe` under a focused
-`tools/CardReaderTestClient` target. CMake places the executable directly in
-`${GC_DIST_DIR}` with the other operator-facing artifacts.
+`tools/CardReaderTestClient` target. CMake leaves the executable in that
+target's configuration-specific build-tree directory. It is never copied to
+`${GC_DIST_DIR}` or otherwise staged as an operator-facing distribution
+artifact.
 
 The client is a native Win32 GUI executable linked only to the Windows APIs it
 uses. It does not reuse ConfigGUI's ImGui or Direct3D host and does not read
@@ -239,10 +259,12 @@ error lets the operator click again after the game has opened COM2.
 
 Implementation adds `docs/card-reader-interface.md` as the adapter-facing
 reference. It records the stable pipe name, exact request and response bytes,
-availability and retry behavior, last-trigger-wins semantics, and a minimal
-client example. It also identifies `CardReaderTestClient.exe` as a manual
-contract probe, not an adapter template. The document does not prescribe any
-physical reader logic.
+availability and retry behavior, last-trigger-wins semantics, the local
+security boundary, and minimal C++ and Python client examples. The Python
+example uses only the Windows APIs exposed through Python's standard-library
+`ctypes`; it requires no `pywin32` package. The document also identifies
+`CardReaderTestClient.exe` as a local manual contract probe, not an adapter
+template. It does not prescribe any physical reader logic.
 
 ## Testing
 
@@ -260,12 +282,17 @@ Focused behavioral coverage will establish:
   transfers use the submitted number exactly once;
 - a real uniquely named test pipe accepts the request, returns `OK`, rejects
   malformed input with `INVALID`, and permits a later connection;
+- a lower-integrity authenticated client can connect to the pipe, proving that
+  an elevated game does not force the adapter to run as administrator;
 - listener-start failure does not prevent the emulated COM2 device from
   opening;
 - the client-side transport reports `OK`, `INVALID`, unavailable pipe, and
-  short or unexpected responses distinctly; and
-- the test client builds as a native GUI target in `${GC_DIST_DIR}` and uses
-  the shared built-in default number.
+  short or unexpected responses distinctly;
+- the test client builds as a native GUI target in its local build-tree
+  directory, remains absent from `${GC_DIST_DIR}`, and uses the shared built-in
+  default number; and
+- the dependency-free Python example is syntactically valid and preserves the
+  exact 16-byte request and exact-response contract.
 
 The affected targets and full CTest suite will run under both x86 Debug and
 Release presets. Automated results establish the protocol and static/runtime
@@ -275,9 +302,9 @@ manual runtime checks.
 ## Runtime Acceptance
 
 After static verification, the operator will run the game and the generated
-`dist/CardReaderTestClient.exe`. Once the game has opened the emulated COM2
-device, the operator clicks `Send Test Card` without pressing the configured
-card-read key.
+build-tree `CardReaderTestClient.exe` without elevating the client. Once the
+game has opened the emulated COM2 device, the operator clicks `Send Test Card`
+without pressing the configured card-read key.
 
 Acceptance requires both observations:
 
@@ -286,6 +313,6 @@ Acceptance requires both observations:
 2. The game proceeds through its normal card-read flow exactly once, proving
    the external trigger reached the existing one-shot JVS path.
 
-This runtime result validates the bundled probe and the named-pipe integration.
+This runtime result validates the local probe and the named-pipe integration.
 It does not establish compatibility with a specific third-party physical
 reader until that reader's adapter uses the same contract successfully.
