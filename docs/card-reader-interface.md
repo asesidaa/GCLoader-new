@@ -16,13 +16,25 @@ The fixed Windows named pipe is:
 ```
 
 It is a local-only, duplex, message-mode pipe. Remote clients are rejected.
-There is one server instance and no authentication or request queue.
+There is one server instance and no request queue.
+
+The pipe's Windows security descriptor grants read/write access to
+authenticated local users and uses a low mandatory-integrity label. A normal
+unelevated client can therefore connect when the game runs as administrator.
+No application-level authentication is performed: any authenticated process
+on the local machine can submit a scan. `PIPE_REJECT_REMOTE_CLIENTS` still
+prevents access from another machine.
 
 The listener starts after the game first opens GCLoader's emulated COM2 RFID
 device. `ERROR_FILE_NOT_FOUND` means the listener is not available yet.
 `ERROR_PIPE_BUSY` means its single instance is occupied. An adapter may wait
 and retry by opening a new connection; each connection still carries only one
-request. The bundled test client does not retry automatically.
+request. The local GUI test client does not retry automatically.
+
+`ERROR_ACCESS_DENIED` is not an elevation requirement in GCLoader's contract.
+If it occurs with the current build, check local Windows security policy and
+confirm that the client is authenticated locally rather than attempting a
+remote pipe connection.
 
 ## Request
 
@@ -159,6 +171,23 @@ SubmitResult SubmitCard(std::string_view card_number)
 Callers must ensure `card_number` contains exactly 16 ASCII digits before
 calling this example. Do not pass a C-string terminator in the write length.
 
+## Minimal Python Client
+
+The complete runnable [Python example](../tools/CardReaderTestClient/send_card.py)
+uses only Python's standard-library `ctypes` module; it does not require
+`pywin32` or administrator elevation. From the source repository, submit one
+card with:
+
+```powershell
+python tools/CardReaderTestClient/send_card.py 1234567890123456
+```
+
+The script writes `OK` and exits with status `0` only when the request is
+accepted. A server `INVALID` response exits with status `2`. Local validation,
+transport, short-I/O, and unexpected-response failures are written to stderr
+and exit with status `1`. It performs no retry and sends no trailing newline or
+NUL byte in the pipe message.
+
 ## Local Runtime Probe
 
 `CardReaderTestClient.exe` is a repository-local manual contract probe, not an
@@ -174,7 +203,8 @@ The fixed window shows GCLoader's built-in test card
 `7020392010281502`, a `Send Test Card` button, and a status label. After the
 game has opened emulated COM2:
 
-1. Run the client without pressing the configured `card_read` key.
+1. Run the client unelevated and without pressing the configured `card_read`
+   key.
 2. Click `Send Test Card` once.
 3. Require the status to become `OK`.
 4. Require the game to enter its normal card-read flow exactly once.
