@@ -13,6 +13,7 @@ namespace gc::renderer_device_loss {
 inline constexpr std::uintptr_t kPreferredImageBase = 0x00400000U;
 inline constexpr std::uint32_t kDeviceLostTailRva = 0x000E67D8U;
 inline constexpr std::uint32_t kVertexBufferResultRva = 0x000E79F7U;
+inline constexpr std::uint32_t kIndexBufferResultRva = 0x000E7A84U;
 inline constexpr std::uint32_t kRendererInitializerEpilogueRva =
     0x000E7EE9U;
 inline constexpr std::uint32_t kVertexBufferLockGuardRva =
@@ -47,6 +48,18 @@ kVertexBufferResultPattern{
     std::byte{0x8B},
     std::byte{0x4F},
     std::byte{0x0C},
+};
+
+inline constexpr std::array<std::byte, 9> kIndexBufferResultPattern{
+    std::byte{0x85},
+    std::byte{0xC0},
+    std::byte{0x7D},
+    std::byte{0x13},
+    std::byte{0x68},
+    std::byte{0xE4},
+    std::byte{0xA5},
+    std::byte{0x71},
+    std::byte{0x00},
 };
 
 inline constexpr std::array<std::byte, 7> kRendererEpiloguePattern{
@@ -138,6 +151,7 @@ enum class RendererContractSite {
     None,
     DeviceLostTail,
     VertexBufferResult,
+    IndexBufferResult,
     InitializerEpilogue,
     VertexBufferLockGuard,
     VertexBufferLockFailure,

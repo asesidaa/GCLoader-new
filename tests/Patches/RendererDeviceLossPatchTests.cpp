@@ -170,6 +170,8 @@ struct FakeInstallState {
         gc::renderer_device_loss::kDeviceLostTailPattern};
     std::array<std::byte, 7> result_bytes{
         gc::renderer_device_loss::kVertexBufferResultPattern};
+    std::array<std::byte, 9> index_result_bytes{
+        gc::renderer_device_loss::kIndexBufferResultPattern};
     std::array<std::byte, 7> epilogue_bytes{
         gc::renderer_device_loss::kRendererEpiloguePattern};
     std::array<std::byte, 9> lock_guard_bytes{
@@ -182,8 +184,8 @@ struct FakeInstallState {
     int reads{};
     int install_calls{};
     int reset_calls{};
-    std::array<RendererContractSite, 3> hook_sites{};
-    std::array<std::uintptr_t, 3> hook_addresses{};
+    std::array<RendererContractSite, 4> hook_sites{};
+    std::array<std::uintptr_t, 4> hook_addresses{};
 };
 
 RendererContractSite SiteForAddress(
@@ -195,6 +197,9 @@ RendererContractSite SiteForAddress(
     }
     if (address == state.image_base + kVertexBufferResultRva) {
         return RendererContractSite::VertexBufferResult;
+    }
+    if (address == state.image_base + kIndexBufferResultRva) {
+        return RendererContractSite::IndexBufferResult;
     }
     if (address ==
         state.image_base + kRendererInitializerEpilogueRva) {
@@ -228,6 +233,9 @@ bool ReadInstallMemory(
         break;
     case RendererContractSite::VertexBufferResult:
         source = state.result_bytes;
+        break;
+    case RendererContractSite::IndexBufferResult:
+        source = state.index_result_bytes;
         break;
     case RendererContractSite::InitializerEpilogue:
         source = state.epilogue_bytes;
@@ -562,8 +570,8 @@ int main() {
         kPreferredImageBase,
         InstallActions(valid));
     failures += Expect(
-        installed.has_value() && valid.reads == 5 &&
-            valid.install_calls == 3 && valid.reset_calls == 0 &&
+        installed.has_value() && valid.reads == 6 &&
+            valid.install_calls == 4 && valid.reset_calls == 0 &&
             valid.hook_sites[0] ==
                 RendererContractSite::DeviceLostTail &&
             valid.hook_addresses[0] ==
@@ -573,10 +581,14 @@ int main() {
             valid.hook_addresses[1] ==
                 kPreferredImageBase + kVertexBufferResultRva &&
             valid.hook_sites[2] ==
-                RendererContractSite::VertexBufferLockGuard &&
+                RendererContractSite::IndexBufferResult &&
             valid.hook_addresses[2] ==
+                kPreferredImageBase + kIndexBufferResultRva &&
+            valid.hook_sites[3] ==
+                RendererContractSite::VertexBufferLockGuard &&
+            valid.hook_addresses[3] ==
                 kPreferredImageBase + kVertexBufferLockGuardRva,
-        "matching contracts install OnLost, result, and draw-lock hooks");
+        "matching contracts install OnLost, creation, and draw-lock hooks");
 
     FakeInstallState wrong_base{};
     const auto unsupported = InstallRendererDeviceLossPatch(
@@ -620,6 +632,7 @@ int main() {
     constexpr std::array contract_sites{
         RendererContractSite::DeviceLostTail,
         RendererContractSite::VertexBufferResult,
+        RendererContractSite::IndexBufferResult,
         RendererContractSite::InitializerEpilogue,
         RendererContractSite::VertexBufferLockGuard,
         RendererContractSite::VertexBufferLockFailure,
@@ -655,6 +668,7 @@ int main() {
     constexpr std::array hook_sites{
         RendererContractSite::DeviceLostTail,
         RendererContractSite::VertexBufferResult,
+        RendererContractSite::IndexBufferResult,
         RendererContractSite::VertexBufferLockGuard,
     };
     for (const auto site : hook_sites) {
@@ -665,16 +679,18 @@ int main() {
         const int expected_install_calls =
             site == RendererContractSite::DeviceLostTail
             ? 1
-            : site == RendererContractSite::VertexBufferResult ? 2 : 3;
+            : site == RendererContractSite::VertexBufferResult
+            ? 2
+            : site == RendererContractSite::IndexBufferResult ? 3 : 4;
         failures += Expect(
             !hook_failure &&
                 hook_failure.error().stage ==
                     RendererInstallStage::HookInstall &&
                 hook_failure.error().site == site &&
-                failed_hook.reads == 5 &&
+                failed_hook.reads == 6 &&
                 failed_hook.install_calls == expected_install_calls &&
                 failed_hook.reset_calls == 1,
-            "hook creation failure resets the three-hook transaction");
+            "hook creation failure resets the four-hook transaction");
     }
 
     return failures == 0 ? 0 : 1;

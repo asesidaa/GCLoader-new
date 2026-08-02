@@ -19,6 +19,7 @@ namespace {
 struct RendererDeviceLossRuntime {
     safetyhook::MidHook device_lost_tail_hook{};
     safetyhook::MidHook vertex_buffer_result_hook{};
+    safetyhook::MidHook index_buffer_result_hook{};
     safetyhook::MidHook vertex_buffer_lock_guard_hook{};
 };
 
@@ -140,6 +141,19 @@ void OnVertexBufferCreateResult(
     }
 }
 
+void OnIndexBufferCreateResult(
+    safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossRetry(
+            context,
+            kPreferredImageBase,
+            {
+                .clear_initialized = ProductionClearInitialized,
+            }));
+    } catch (...) {
+    }
+}
+
 void OnVertexBufferLockGuard(
     safetyhook::Context& context) noexcept {
     try {
@@ -175,6 +189,11 @@ bool ProductionInstallHook(
                 reinterpret_cast<void*>(address),
                 OnVertexBufferCreateResult);
             return static_cast<bool>(runtime.vertex_buffer_result_hook);
+        case RendererContractSite::IndexBufferResult:
+            runtime.index_buffer_result_hook = safetyhook::create_mid(
+                reinterpret_cast<void*>(address),
+                OnIndexBufferCreateResult);
+            return static_cast<bool>(runtime.index_buffer_result_hook);
         case RendererContractSite::VertexBufferLockGuard:
             runtime.vertex_buffer_lock_guard_hook = safetyhook::create_mid(
                 reinterpret_cast<void*>(address),
@@ -201,6 +220,7 @@ void ProductionResetHook(void* opaque) noexcept {
         auto& runtime =
             *static_cast<RendererDeviceLossRuntime*>(opaque);
         runtime.vertex_buffer_lock_guard_hook.reset();
+        runtime.index_buffer_result_hook.reset();
         runtime.vertex_buffer_result_hook.reset();
         runtime.device_lost_tail_hook.reset();
     } catch (...) {
@@ -228,6 +248,8 @@ const char* ContractSiteName(RendererContractSite site) noexcept {
         return "device_lost_tail";
     case RendererContractSite::VertexBufferResult:
         return "vertex_buffer_result";
+    case RendererContractSite::IndexBufferResult:
+        return "index_buffer_result";
     case RendererContractSite::InitializerEpilogue:
         return "initializer_epilogue";
     case RendererContractSite::VertexBufferLockGuard:
@@ -384,6 +406,14 @@ InstallRendererDeviceLossPatch(
         return result_site;
     }
 
+    auto index_result_site = preflight(
+        RendererContractSite::IndexBufferResult,
+        kIndexBufferResultRva,
+        kIndexBufferResultPattern);
+    if (!index_result_site) {
+        return index_result_site;
+    }
+
     auto epilogue = preflight(
         RendererContractSite::InitializerEpilogue,
         kRendererInitializerEpilogueRva,
@@ -427,6 +457,16 @@ InstallRendererDeviceLossPatch(
         return std::unexpected(RendererInstallError{
             .stage = RendererInstallStage::HookInstall,
             .site = RendererContractSite::VertexBufferResult,
+        });
+    }
+    if (!actions.install_hook(
+            actions.context,
+            RendererContractSite::IndexBufferResult,
+            image_base + kIndexBufferResultRva)) {
+        actions.reset_hook(actions.context);
+        return std::unexpected(RendererInstallError{
+            .stage = RendererInstallStage::HookInstall,
+            .site = RendererContractSite::IndexBufferResult,
         });
     }
     if (!actions.install_hook(
@@ -476,6 +516,8 @@ bool RendererDeviceLossPatchInit() noexcept {
                       << kDeviceLostTailRva
                       << " result_rva=0x"
                       << kVertexBufferResultRva
+                      << " index_result_rva=0x"
+                      << kIndexBufferResultRva
                       << " retry_rva=0x"
                       << kRendererInitializerEpilogueRva
                       << " lock_guard_rva=0x"
