@@ -3,13 +3,82 @@
 #include "Rfid/CardData.h"
 #include "Rfid/CardReaderProtocol.h"
 
+#include <sddl.h>
+
 #include <array>
 #include <new>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace gc::rfid::card_reader {
 namespace {
+
+constexpr wchar_t kPipeSecuritySddl[] =
+    L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)"
+    L"S:(ML;;NW;;;LW)";
+
+class LocalSecurityDescriptor {
+public:
+    explicit LocalSecurityDescriptor(PSECURITY_DESCRIPTOR value) noexcept
+        : value_{value}
+    {
+    }
+
+    LocalSecurityDescriptor(const LocalSecurityDescriptor&) = delete;
+    LocalSecurityDescriptor& operator=(
+        const LocalSecurityDescriptor&) = delete;
+
+    LocalSecurityDescriptor(LocalSecurityDescriptor&& other) noexcept
+        : value_{std::exchange(other.value_, nullptr)}
+    {
+    }
+
+    LocalSecurityDescriptor& operator=(
+        LocalSecurityDescriptor&& other) noexcept
+    {
+        if (this != &other) {
+            Reset();
+            value_ = std::exchange(other.value_, nullptr);
+        }
+        return *this;
+    }
+
+    ~LocalSecurityDescriptor()
+    {
+        Reset();
+    }
+
+    [[nodiscard]] PSECURITY_DESCRIPTOR Get() const noexcept
+    {
+        return value_;
+    }
+
+private:
+    void Reset() noexcept
+    {
+        if (value_ != nullptr) {
+            LocalFree(value_);
+            value_ = nullptr;
+        }
+    }
+
+    PSECURITY_DESCRIPTOR value_{};
+};
+
+std::expected<LocalSecurityDescriptor, DWORD>
+CreatePipeSecurityDescriptor() noexcept
+{
+    PSECURITY_DESCRIPTOR descriptor{};
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            kPipeSecuritySddl,
+            SDDL_REVISION_1,
+            &descriptor,
+            nullptr)) {
+        return std::unexpected(GetLastError());
+    }
+    return LocalSecurityDescriptor{descriptor};
+}
 
 class PipeHandle {
 public:
@@ -109,6 +178,16 @@ ServeOneCardReaderConnection(
             return std::unexpected(ERROR_INVALID_PARAMETER);
         }
 
+        auto descriptor = CreatePipeSecurityDescriptor();
+        if (!descriptor) {
+            return std::unexpected(descriptor.error());
+        }
+        SECURITY_ATTRIBUTES security_attributes{
+            .nLength = sizeof(SECURITY_ATTRIBUTES),
+            .lpSecurityDescriptor = descriptor->Get(),
+            .bInheritHandle = FALSE,
+        };
+
         PipeHandle pipe{CreateNamedPipeW(
             pipe_name,
             PIPE_ACCESS_DUPLEX,
@@ -120,7 +199,7 @@ ServeOneCardReaderConnection(
             static_cast<DWORD>(kRequestByteCount),
             static_cast<DWORD>(kRequestByteCount + 1),
             0,
-            nullptr)};
+            &security_attributes)};
         if (pipe.Get() == INVALID_HANDLE_VALUE) {
             return std::unexpected(GetLastError());
         }

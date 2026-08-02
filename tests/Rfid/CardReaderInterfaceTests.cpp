@@ -134,10 +134,92 @@ std::expected<UniqueHandle, DWORD> ConnectClient(
     }
 }
 
+std::expected<UniqueHandle, DWORD> CreateLowIntegrityToken() noexcept
+{
+    HANDLE process_token_value{};
+    if (!OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_DUPLICATE | TOKEN_QUERY,
+            &process_token_value)) {
+        return std::unexpected(GetLastError());
+    }
+    UniqueHandle process_token{process_token_value};
+
+    HANDLE low_integrity_token_value{};
+    if (!DuplicateTokenEx(
+            process_token.Get(),
+            TOKEN_ADJUST_DEFAULT | TOKEN_IMPERSONATE | TOKEN_QUERY,
+            nullptr,
+            SecurityImpersonation,
+            TokenImpersonation,
+            &low_integrity_token_value)) {
+        return std::unexpected(GetLastError());
+    }
+    UniqueHandle low_integrity_token{low_integrity_token_value};
+
+    SID_IDENTIFIER_AUTHORITY mandatory_label_authority =
+        SECURITY_MANDATORY_LABEL_AUTHORITY;
+    PSID low_integrity_sid{};
+    if (!AllocateAndInitializeSid(
+            &mandatory_label_authority,
+            1,
+            SECURITY_MANDATORY_LOW_RID,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            &low_integrity_sid)) {
+        return std::unexpected(GetLastError());
+    }
+
+    TOKEN_MANDATORY_LABEL label{};
+    label.Label.Attributes = SE_GROUP_INTEGRITY;
+    label.Label.Sid = low_integrity_sid;
+    const DWORD label_size = static_cast<DWORD>(
+        sizeof(label) + GetLengthSid(low_integrity_sid));
+    const bool changed = SetTokenInformation(
+        low_integrity_token.Get(),
+        TokenIntegrityLevel,
+        &label,
+        label_size) != FALSE;
+    const DWORD change_error = changed
+        ? ERROR_SUCCESS
+        : GetLastError();
+    FreeSid(low_integrity_sid);
+
+    if (!changed) {
+        return std::unexpected(change_error);
+    }
+    return low_integrity_token;
+}
+
+std::expected<UniqueHandle, DWORD> ConnectClientAsToken(
+    const wchar_t* pipe_name,
+    HANDLE token) noexcept
+{
+    if (!SetThreadToken(nullptr, token)) {
+        return std::unexpected(GetLastError());
+    }
+
+    auto connected = ConnectClient(pipe_name);
+    const bool reverted = RevertToSelf() != FALSE;
+    const DWORD revert_error = reverted
+        ? ERROR_SUCCESS
+        : GetLastError();
+    if (!reverted) {
+        return std::unexpected(revert_error);
+    }
+    return std::move(connected);
+}
+
 ExchangeResult Exchange(
     const std::wstring& pipe_name,
     CardScanState& card_scan,
-    std::string_view request)
+    std::string_view request,
+    HANDLE client_token = nullptr)
 {
     ExchangeResult result;
     std::jthread server{[&] {
@@ -146,9 +228,17 @@ ExchangeResult Exchange(
                 pipe_name.c_str(), card_scan);
     }};
 
-    auto connected = ConnectClient(pipe_name.c_str());
+    auto connected = client_token == nullptr
+        ? ConnectClient(pipe_name.c_str())
+        : ConnectClientAsToken(pipe_name.c_str(), client_token);
     if (!connected) {
         result.client_error = connected.error();
+        if (client_token != nullptr) {
+            auto release_server = ConnectClient(pipe_name.c_str());
+            if (release_server) {
+                release_server->Reset();
+            }
+        }
         server.join();
         return result;
     }
@@ -237,6 +327,30 @@ int main()
     failures += Expect(
         card_scan.Consume(first_scan.generation),
         "first valid request can be consumed");
+
+    auto low_integrity_token = CreateLowIntegrityToken();
+    failures += Expect(
+        low_integrity_token.has_value(),
+        "low-integrity test token can be created");
+    if (low_integrity_token) {
+        CardScanState low_integrity_scan;
+        const auto low_integrity_exchange = Exchange(
+            pipe_name,
+            low_integrity_scan,
+            "1234567890123456",
+            low_integrity_token->Get());
+        const auto low_integrity_snapshot =
+            low_integrity_scan.Snapshot();
+        failures += Expect(
+            HasOutcome(
+                low_integrity_exchange,
+                CardReaderConnectionOutcome::accepted) &&
+                low_integrity_exchange.response == "OK" &&
+                low_integrity_snapshot.present &&
+                low_integrity_snapshot.card_data == kSubmittedCard,
+            "lower-integrity authenticated client can submit a card");
+    }
+
     const auto repeated = Exchange(
         pipe_name, card_scan, "1234567890123456");
     const auto repeated_scan = card_scan.Snapshot();
