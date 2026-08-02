@@ -1,33 +1,39 @@
 #pragma once
 
+#include "Rfid/CardData.h"
 #include "Rfid/Jvs/Types.h"
 
+#include <Windows.h>
+
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <optional>
 
 namespace gc::rfid {
 
+struct CardScanSnapshot {
+    bool present{};
+    std::optional<CardData> card_data;
+    std::uint64_t generation{};
+};
+
 class CardScanState {
 public:
-    void Arm() noexcept
-    {
-        present_.store(true, std::memory_order_relaxed);
-    }
+    CardScanState() noexcept = default;
+    CardScanState(const CardScanState&) = delete;
+    CardScanState& operator=(const CardScanState&) = delete;
 
-    [[nodiscard]] bool IsPresent() const noexcept
-    {
-        return present_.load(std::memory_order_relaxed);
-    }
-
-    [[nodiscard]] bool Consume() noexcept
-    {
-        return present_.exchange(false, std::memory_order_relaxed);
-    }
+    void Arm() noexcept;
+    void Arm(CardData card_data) noexcept;
+    [[nodiscard]] CardScanSnapshot Snapshot() const noexcept;
+    [[nodiscard]] bool IsPresent() const noexcept;
+    [[nodiscard]] bool Consume(std::uint64_t generation) noexcept;
 
 private:
-    std::atomic_bool present_{};
+    mutable SRWLOCK lock_ = SRWLOCK_INIT;
+    bool present_{};
+    std::optional<CardData> card_data_;
+    std::uint64_t generation_{};
 };
 
 struct State {

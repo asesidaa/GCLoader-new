@@ -403,9 +403,11 @@ std::optional<DeviceResponse> Device::HandlePacket(
                 return DeviceResponse{acknowledgement};
             }
 
-            const bool card_present = state_.card_scan.IsPresent();
-            if (card_present) {
-                const auto card_data = LoadCurrentDirectoryCardData();
+            const auto scan = state_.card_scan.Snapshot();
+            if (scan.present) {
+                const auto card_data = scan.card_data
+                    ? *scan.card_data
+                    : LoadCurrentDirectoryCardData();
                 if (!AppendOrOverflow(writer, card_data)) {
                     return DeviceResponse{acknowledgement};
                 }
@@ -423,8 +425,9 @@ std::optional<DeviceResponse> Device::HandlePacket(
             if (!append_report(report::ok)) {
                 return DeviceResponse{acknowledgement};
             }
-            if (card_present) {
-                static_cast<void>(state_.card_scan.Consume());
+            if (scan.present) {
+                static_cast<void>(
+                    state_.card_scan.Consume(scan.generation));
             }
             break;
         }

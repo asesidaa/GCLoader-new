@@ -414,6 +414,24 @@ int test_card_output_and_overflow()
     failures += expect(!state.card_scan.IsPresent(),
                        "reloaded card payload consumes card");
 
+    WriteText(L"card.txt", "0000000000000000\n");
+    state.card_scan.Arm(
+        *ParseCardNumber("2468135790246813"));
+    std::vector<std::uint8_t> expected_external{0x01, 0x01};
+    const auto external_card = ExpectedCardData("2468135790246813");
+    expected_external.insert(
+        expected_external.end(),
+        external_card.begin(),
+        external_card.end());
+    expected_external.push_back(0x01);
+    failures += expect_acknowledgement(
+        device.HandlePacket(packet(
+            Address{0x01}, {0x32, 0x01, 0x00})),
+        expected_external,
+        "supplied card payload bypasses card file");
+    failures += expect(!state.card_scan.IsPresent(),
+                       "supplied card payload consumes once");
+
     std::vector<std::uint8_t> expected_empty{0x01, 0x01};
     expected_empty.resize(expected_empty.size() + 24, 0x00);
     expected_empty.push_back(0x01);

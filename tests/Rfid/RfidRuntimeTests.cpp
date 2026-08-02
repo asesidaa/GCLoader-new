@@ -125,30 +125,73 @@ int main()
     failures += expect(state.IsPresent(), false, "initial card state");
 
     state.Arm();
-    failures += expect(state.IsPresent(), true, "armed card state");
+    const auto first_manual = state.Snapshot();
+    failures += expect(
+        first_manual.present && !first_manual.card_data,
+        true,
+        "manual arm publishes no supplied payload");
     failures += expect(
         state.IsPresent(),
         true,
         "status polling preserves armed card");
 
-    failures += expect(state.Consume(), true, "first payload read");
+    failures += expect(
+        state.Consume(first_manual.generation),
+        true,
+        "matching generation consumes payload");
     failures += expect(
         state.IsPresent(),
         false,
         "payload read clears card state");
-    failures += expect(state.Consume(), false, "second payload read");
+    failures += expect(
+        state.Consume(first_manual.generation),
+        false,
+        "consumed generation cannot be consumed twice");
+
+    const auto supplied = *gc::rfid::ParseCardNumber(
+        "1111222233334444");
+    const auto replacement = *gc::rfid::ParseCardNumber(
+        "9999888877776666");
+    state.Arm(supplied);
+    const auto external = state.Snapshot();
+    failures += expect(
+        external.present && external.card_data == supplied,
+        true,
+        "external arm publishes supplied payload");
 
     state.Arm();
-    failures += expect(state.Consume(), true, "later card scan");
+    const auto newer_manual = state.Snapshot();
     failures += expect(
-        state.IsPresent(),
-        false,
-        "later payload read clears card state");
+        newer_manual.present && !newer_manual.card_data &&
+            newer_manual.generation != external.generation,
+        true,
+        "newer manual trigger replaces supplied payload");
+
+    state.Arm(supplied);
+    const auto stale = state.Snapshot();
+    state.Arm(replacement);
+    const auto newest = state.Snapshot();
+    failures += expect(
+        !state.Consume(stale.generation),
+        true,
+        "stale generation cannot consume newer trigger");
+    const auto after_stale_consume = state.Snapshot();
+    failures += expect(
+        after_stale_consume.present &&
+            after_stale_consume.generation == newest.generation &&
+            after_stale_consume.card_data == replacement,
+        true,
+        "stale consume preserves newer payload");
+    failures += expect(
+        state.Consume(newest.generation) && !state.IsPresent(),
+        true,
+        "newest generation consumes exactly once");
 
     gc::rfid::State device_state;
     device_state.assigned_address = gc::rfid::jvs::Address{0x7F};
     device_state.coins = {12, 34};
-    device_state.card_scan.Arm();
+    device_state.card_scan.Arm(supplied);
+    const auto pending_before_reset = device_state.card_scan.Snapshot();
     device_state.ResetBus();
 
     failures += expect(
@@ -163,10 +206,14 @@ int main()
         device_state.coins[1] == 0,
         true,
         "bus reset clears P2 coins");
+    const auto pending_after_reset = device_state.card_scan.Snapshot();
     failures += expect(
-        device_state.card_scan.IsPresent(),
+        pending_after_reset.present &&
+            pending_after_reset.generation ==
+                pending_before_reset.generation &&
+            pending_after_reset.card_data == supplied,
         true,
-        "bus reset preserves physical card presence");
+        "bus reset preserves complete pending card scan");
 
     return failures == 0 ? 0 : 1;
 }
