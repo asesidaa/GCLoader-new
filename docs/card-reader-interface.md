@@ -159,10 +159,16 @@ SubmitResult SubmitCard(std::string_view card_number)
 Callers must ensure `card_number` contains exactly 16 ASCII digits before
 calling this example. Do not pass a C-string terminator in the write length.
 
-## Bundled Runtime Probe
+## Local Runtime Probe
 
-`CardReaderTestClient.exe` is emitted in the CMake preset's `dist` directory.
-It is a manual contract probe, not an adapter template or card editor.
+`CardReaderTestClient.exe` is a repository-local manual contract probe, not an
+adapter template, card editor, or distribution artifact. It is emitted in the
+target's build-tree directory:
+
+```text
+build-msvc32-debug/tools/CardReaderTestClient/CardReaderTestClient.exe
+build-msvc32-release/tools/CardReaderTestClient/CardReaderTestClient.exe
+```
 
 The fixed window shows GCLoader's built-in test card
 `7020392010281502`, a `Send Test Card` button, and a status label. After the

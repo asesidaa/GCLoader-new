@@ -17,7 +17,6 @@ target_link_libraries(CardReaderTestClient PRIVATE
         user32
 )
 set_target_properties(CardReaderTestClient PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${GC_DIST_DIR}"
         PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
 )
 if(MSVC)
