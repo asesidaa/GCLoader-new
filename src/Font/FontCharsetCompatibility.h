@@ -8,6 +8,9 @@ using CreateFontIndirectWApi = HFONT(WINAPI*)(const LOGFONTW*);
 
 namespace detail {
 
+[[nodiscard]] bool IsInfinityFontFace(
+    const LOGFONTW* requested) noexcept;
+
 [[nodiscard]] HFONT InvokeCreateFontIndirectWDetour(
     const LOGFONTW* requested,
     CreateFontIndirectWApi original) noexcept;

@@ -91,10 +91,34 @@ int TestCharsetConversion(
     return failures;
 }
 
+int TestInfinityFontDiagnosticClassification() {
+    auto infinity = CanaryLogFont(DEFAULT_CHARSET);
+    auto other = infinity;
+    constexpr wchar_t other_face[] = L"MS PGothic";
+    std::fill(std::begin(other.lfFaceName), std::end(other.lfFaceName), L'\0');
+    std::copy(
+        std::begin(other_face),
+        std::end(other_face),
+        other.lfFaceName);
+
+    int failures = 0;
+    failures += Expect(
+        gc::font::detail::IsInfinityFontFace(&infinity),
+        "InfinityFont face is selected for diagnostics");
+    failures += Expect(
+        !gc::font::detail::IsInfinityFontFace(&other),
+        "unrelated face is not selected for diagnostics");
+    failures += Expect(
+        !gc::font::detail::IsInfinityFontFace(nullptr),
+        "null font request is not selected for diagnostics");
+    return failures;
+}
+
 } // namespace
 
 int main() {
     int failures = 0;
+    failures += TestInfinityFontDiagnosticClassification();
     failures += TestCharsetConversion(
         ANSI_CHARSET,
         SHIFTJIS_CHARSET,
