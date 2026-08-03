@@ -9,6 +9,7 @@
 #include <string_view>
 #include "Config/config.h"
 #include "Font/FontCharsetCompatibility.h"
+#include "Locale/JapaneseLocaleCompatibility.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
@@ -197,6 +198,56 @@ void PublishFeatureInitializationFatal(
         exit_code);
 }
 
+void PublishJapaneseLocaleCompatibilityFatal(
+    const gc::win32_hooks::HookInstallError& error) noexcept {
+    static std::atomic_bool published{false};
+    constexpr DWORD exit_code = 25;
+    constexpr std::wstring_view title =
+        L"GCLoader Japanese locale setup error";
+
+    try {
+        const auto stage =
+            gc::win32_hooks::HookInstallStageName(error.stage);
+        const std::string_view export_name =
+            error.export_name == nullptr
+                ? std::string_view{"<none>"}
+                : std::string_view{error.export_name};
+        std::ostringstream log;
+        std::wostringstream modal;
+        log << "Japanese locale hook setup failed"
+            << " stage=" << stage
+            << " export=" << export_name
+            << " win32_error=" << error.win32_error
+            << " minhook_status="
+            << static_cast<int>(error.minhook_status);
+        modal
+            << L"The required Japanese locale compatibility hooks could not "
+               L"be installed.\n\n"
+            << L"Stage: " << Utf8ToWideOrFallback(stage) << L"\n"
+            << L"Export: " << Utf8ToWideOrFallback(export_name) << L"\n"
+            << L"Windows error: " << error.win32_error << L"\n"
+            << L"MinHook status: "
+            << static_cast<int>(error.minhook_status)
+            << L"\n\nThe game cannot safely start under the host locale.";
+        gc::system_path::PublishStartupFatal(
+            published,
+            log.str(),
+            modal.str(),
+            title,
+            exit_code);
+        return;
+    } catch (...) {
+    }
+
+    gc::system_path::PublishStartupFatal(
+        published,
+        "Japanese locale hook setup failed",
+        L"The required Japanese locale compatibility hooks could not be "
+        L"installed. Check the loader log for details.",
+        title,
+        exit_code);
+}
+
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -207,6 +258,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             const auto role =
                 gc::nesys_service::DetectCurrentProcessRole();
             InitProcessLog(role);
+
+            const auto locale =
+                gc::locale_compatibility::
+                    InstallJapaneseLocaleCompatibility(role);
+            if (!locale) {
+                PublishJapaneseLocaleCompatibilityFatal(
+                    locale.error());
+                return FALSE;
+            }
 
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
                 const auto crash_dump_status =

@@ -52,6 +52,7 @@ target_link_libraries(iDmacDrv32 PRIVATE
         gc_crash_dump
         gc_font_compatibility
         gc_input
+        gc_japanese_locale_compatibility
         gc_logging
         gc_nesys
         gc_rfid_feature
