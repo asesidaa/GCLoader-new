@@ -282,7 +282,10 @@ failures += Expect(
 SYSTEMTIME local{};
 g_fake_utc = SYSTEMTIME{2025, 12, 0, 31, 23, 0, 0, 0};
 SetLastError(ERROR_INVALID_DATA);
-detail::InvokeGetLocalTime(&local, CaptureGetSystemTime);
+detail::InvokeGetLocalTime(
+    &local,
+    CaptureGetSystemTime,
+    CaptureFallbackGetLocalTime);
 failures += Expect(
     local.wYear == 2026 && local.wMonth == 1 && local.wDay == 1 &&
         local.wHour == 8 && GetLastError() == ERROR_INVALID_DATA,
