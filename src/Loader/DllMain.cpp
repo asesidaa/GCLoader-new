@@ -8,7 +8,6 @@
 #include <string>
 #include <string_view>
 #include "Config/config.h"
-#include "Font/FontCharsetCompatibility.h"
 #include "Locale/JapaneseLocaleCompatibility.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
@@ -332,9 +331,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
 
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
-                static_cast<void>(
-                    gc::font::InstallJapaneseFontCharsetCompatibility());
-
                 if (!gc::test_mode_timing::TimingSettingsPatchInit()) {
                     PLOG_ERROR
                         << "TestModeTiming: fail-closed DLL attach";
