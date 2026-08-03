@@ -2,7 +2,8 @@
 
 Date: 2026-08-03
 
-Status: Approved design contract
+Status: Invalidated by runtime evidence on 2026-08-04. Superseded by
+`2026-08-04-font-selection-diagnostic-design.md`.
 
 ## Context
 
