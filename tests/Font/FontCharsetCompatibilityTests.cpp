@@ -1,6 +1,7 @@
 #include "Font/FontCharsetCompatibility.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -20,10 +21,26 @@ int Expect(bool condition, const char* name) {
 struct CaptureState {
     int calls{};
     bool received_null{};
+    const LOGFONTW* received_pointer{};
     LOGFONTW received{};
 };
 
 CaptureState* g_capture{};
+
+struct FontResourceCapture {
+    int original_calls{};
+    LPCSTR original_file{};
+    DWORD original_flags{};
+    PVOID original_reserved{};
+    int observer_calls{};
+    LPCSTR observed_file{};
+    DWORD observed_flags{};
+    PVOID observed_reserved{};
+    int observed_result{};
+    DWORD observed_last_error{};
+};
+
+FontResourceCapture* g_font_resource_capture{};
 
 HFONT ExpectedHandle() noexcept {
     return reinterpret_cast<HFONT>(std::uintptr_t{0x1234});
@@ -33,10 +50,38 @@ HFONT WINAPI CaptureCreateFontIndirectW(
     const LOGFONTW* requested) noexcept {
     ++g_capture->calls;
     g_capture->received_null = requested == nullptr;
+    g_capture->received_pointer = requested;
     if (requested != nullptr) {
         g_capture->received = *requested;
     }
     return ExpectedHandle();
+}
+
+int WINAPI CaptureAddFontResourceExA(
+    LPCSTR file,
+    DWORD flags,
+    PVOID reserved) noexcept {
+    ++g_font_resource_capture->original_calls;
+    g_font_resource_capture->original_file = file;
+    g_font_resource_capture->original_flags = flags;
+    g_font_resource_capture->original_reserved = reserved;
+    SetLastError(ERROR_ACCESS_DENIED);
+    return 3;
+}
+
+void CaptureFontResourceObservation(
+    LPCSTR file,
+    DWORD flags,
+    PVOID reserved,
+    int result,
+    DWORD last_error) noexcept {
+    ++g_font_resource_capture->observer_calls;
+    g_font_resource_capture->observed_file = file;
+    g_font_resource_capture->observed_flags = flags;
+    g_font_resource_capture->observed_reserved = reserved;
+    g_font_resource_capture->observed_result = result;
+    g_font_resource_capture->observed_last_error = last_error;
+    SetLastError(ERROR_INVALID_DATA);
 }
 
 LOGFONTW CanaryLogFont(BYTE charset) {
@@ -59,14 +104,9 @@ LOGFONTW CanaryLogFont(BYTE charset) {
     return value;
 }
 
-int TestCharsetConversion(
-    BYTE requested_charset,
-    BYTE expected_charset,
-    const char* name) {
-    auto requested = CanaryLogFont(requested_charset);
+int TestFontRequestPassThrough(BYTE charset, const char* name) {
+    auto requested = CanaryLogFont(charset);
     const auto original_request = requested;
-    auto expected = requested;
-    expected.lfCharSet = expected_charset;
 
     CaptureState capture{};
     g_capture = &capture;
@@ -80,8 +120,14 @@ int TestCharsetConversion(
     failures += Expect(capture.calls == 1, "original called once");
     failures += Expect(!capture.received_null, "non-null request forwarded");
     failures += Expect(
-        std::memcmp(&capture.received, &expected, sizeof(expected)) == 0,
-        "only expected charset is changed");
+        capture.received_pointer == &requested,
+        "original request pointer forwarded");
+    failures += Expect(
+        std::memcmp(
+            &capture.received,
+            &original_request,
+            sizeof(original_request)) == 0,
+        "all LOGFONTW fields forwarded unchanged");
     failures += Expect(
         std::memcmp(
             &requested,
@@ -114,23 +160,94 @@ int TestInfinityFontDiagnosticClassification() {
     return failures;
 }
 
+int TestFontResourceObservationPreservesWin32Contract() {
+    constexpr char file[] = "data/font/InfinityFont_midiam_dot.ttf";
+    constexpr DWORD flags = 0x30;
+    const auto reserved = reinterpret_cast<PVOID>(std::uintptr_t{0x5678});
+
+    FontResourceCapture capture{};
+    g_font_resource_capture = &capture;
+    SetLastError(ERROR_SUCCESS);
+    const auto result =
+        gc::font::detail::InvokeAddFontResourceExADetour(
+            file,
+            flags,
+            reserved,
+            CaptureAddFontResourceExA,
+            CaptureFontResourceObservation);
+    const auto returned_last_error = GetLastError();
+
+    int failures = 0;
+    failures += Expect(result == 3, "font resource result preserved");
+    failures += Expect(
+        capture.original_calls == 1,
+        "font resource original called once");
+    failures += Expect(
+        capture.original_file == file &&
+            capture.original_flags == flags &&
+            capture.original_reserved == reserved,
+        "font resource arguments forwarded unchanged");
+    failures += Expect(
+        capture.observer_calls == 1,
+        "font resource observer called once");
+    failures += Expect(
+        capture.observed_file == file &&
+            capture.observed_flags == flags &&
+            capture.observed_reserved == reserved &&
+            capture.observed_result == 3 &&
+            capture.observed_last_error == ERROR_ACCESS_DENIED,
+        "font resource outcome observed exactly");
+    failures += Expect(
+        returned_last_error == ERROR_ACCESS_DENIED,
+        "font resource last error preserved across diagnostics");
+    return failures;
+}
+
+int TestNtGdiEntryByteFormatting() {
+    const std::array<std::byte, 16> bytes{
+        std::byte{0x00},
+        std::byte{0x01},
+        std::byte{0x02},
+        std::byte{0x03},
+        std::byte{0x04},
+        std::byte{0x05},
+        std::byte{0x06},
+        std::byte{0x07},
+        std::byte{0x08},
+        std::byte{0x09},
+        std::byte{0x0A},
+        std::byte{0x0B},
+        std::byte{0x0C},
+        std::byte{0x0D},
+        std::byte{0x0E},
+        std::byte{0x0F},
+    };
+    constexpr char expected[] =
+        "00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f";
+
+    const auto formatted =
+        gc::font::detail::FormatNtGdiEntryBytes(bytes);
+    return Expect(
+        std::strcmp(formatted.data(), expected) == 0,
+        "NtGdi entry bytes use stable lowercase hex formatting");
+}
+
 } // namespace
 
 int main() {
     int failures = 0;
     failures += TestInfinityFontDiagnosticClassification();
-    failures += TestCharsetConversion(
+    failures += TestFontResourceObservationPreservesWin32Contract();
+    failures += TestNtGdiEntryByteFormatting();
+    failures += TestFontRequestPassThrough(
         ANSI_CHARSET,
-        SHIFTJIS_CHARSET,
-        "ANSI charset converts to Shift-JIS");
-    failures += TestCharsetConversion(
+        "ANSI charset is forwarded unchanged");
+    failures += TestFontRequestPassThrough(
         DEFAULT_CHARSET,
-        SHIFTJIS_CHARSET,
-        "default charset converts to Shift-JIS");
-    failures += TestCharsetConversion(
+        "default charset is forwarded unchanged");
+    failures += TestFontRequestPassThrough(
         GB2312_CHARSET,
-        GB2312_CHARSET,
-        "explicit charset is preserved");
+        "explicit charset is forwarded unchanged");
 
     CaptureState null_capture{};
     g_capture = &null_capture;
