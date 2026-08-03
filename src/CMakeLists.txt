@@ -7,6 +7,7 @@ add_subdirectory(Input)
 add_subdirectory(Nesys)
 add_subdirectory(Logging)
 add_subdirectory(Platform)
+add_subdirectory(Font)
 add_subdirectory(Diagnostics)
 add_subdirectory(Rfid)
 add_subdirectory(TestModeStorage)
@@ -48,6 +49,7 @@ target_link_libraries(iDmacDrv32 PRIVATE
         gc_audio
         gc_config
         gc_crash_dump
+        gc_font_compatibility
         gc_input
         gc_logging
         gc_nesys
