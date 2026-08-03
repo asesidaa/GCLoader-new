@@ -183,7 +183,8 @@ NesysFeaturePlan ResolveNesysFeaturePlan(
     bool network_enabled,
     bool registry_enabled) noexcept {
     NesysFeaturePlan plan{};
-    plan.enabled = network_enabled || registry_enabled;
+    plan.enabled = network_enabled || registry_enabled ||
+        role == ProcessRole::Game;
     plan.network_virtualization = network_enabled;
     plan.registry_virtualization = registry_enabled;
 

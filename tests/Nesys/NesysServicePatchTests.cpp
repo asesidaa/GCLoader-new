@@ -281,8 +281,8 @@ int main() {
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Game, false, false),
         NesysFeaturePlan{
-            false, false, false, false, false, false, false, false, 0},
-        "game network-off registry-off");
+            true, false, false, false, false, false, true, false, 1},
+        "game locale-only launcher");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Game, false, true),
         NesysFeaturePlan{
