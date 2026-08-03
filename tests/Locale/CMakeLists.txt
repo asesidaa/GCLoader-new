@@ -11,3 +11,10 @@ target_link_libraries(JapaneseLocaleCompatibilityTests PRIVATE
         gc_japanese_locale_compatibility)
 add_test(NAME JapaneseLocaleCompatibilityTests
         COMMAND JapaneseLocaleCompatibilityTests)
+
+add_executable(FilesystemDiagnosticsTests
+        FilesystemDiagnosticsTests.cpp)
+target_link_libraries(FilesystemDiagnosticsTests PRIVATE
+        gc_locale_filesystem_diagnostics)
+add_test(NAME FilesystemDiagnosticsTests
+        COMMAND FilesystemDiagnosticsTests)
