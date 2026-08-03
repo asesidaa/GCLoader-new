@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Locale/FilesystemDiagnostics.h"
 #include "Rfid/Runtime.h"
 #include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
@@ -40,6 +41,8 @@ struct OriginalKernel32Api {
     decltype(&::GetDiskFreeSpaceExW) get_disk_free_space_ex_w{};
     decltype(&::MoveFileA) move_file_a{};
     decltype(&::MoveFileW) move_file_w{};
+    decltype(&::FindNextFileA) find_next_file_a{};
+    decltype(&::CopyFileA) copy_file_a{};
 };
 
 struct HookRequestSet {
@@ -58,7 +61,9 @@ public:
         gc::rfid::Runtime& rfid,
         gc::testmode_storage::Hooks& storage,
         gc::system_path::SystemPathRouter& system,
-        OriginalKernel32Api originals = {}) noexcept;
+        OriginalKernel32Api originals = {},
+        gc::locale_compatibility::FilesystemDiagnostics*
+            filesystem_diagnostics = nullptr) noexcept;
 
     void Activate() noexcept;
     void Deactivate() noexcept;
@@ -97,6 +102,8 @@ public:
 
     HANDLE FindFirstFileA(
         LPCSTR file_name, LPWIN32_FIND_DATAA find_data) noexcept;
+    BOOL FindNextFileA(
+        HANDLE find, LPWIN32_FIND_DATAA find_data) noexcept;
     HANDLE FindFirstFileW(
         LPCWSTR file_name, LPWIN32_FIND_DATAW find_data) noexcept;
     BOOL CreateDirectoryA(
@@ -115,6 +122,10 @@ public:
         PULARGE_INTEGER total, PULARGE_INTEGER free) noexcept;
     BOOL MoveFileA(LPCSTR existing_path, LPCSTR new_path) noexcept;
     BOOL MoveFileW(LPCWSTR existing_path, LPCWSTR new_path) noexcept;
+    BOOL CopyFileA(
+        LPCSTR existing_path,
+        LPCSTR new_path,
+        BOOL fail_if_exists) noexcept;
 
 private:
     static HANDLE WINAPI CreateFileADetour(
@@ -137,6 +148,8 @@ private:
     static BOOL WINAPI GetCommTimeoutsDetour(HANDLE, LPCOMMTIMEOUTS);
     static HANDLE WINAPI FindFirstFileADetour(
         LPCSTR, LPWIN32_FIND_DATAA);
+    static BOOL WINAPI FindNextFileADetour(
+        HANDLE, LPWIN32_FIND_DATAA);
     static HANDLE WINAPI FindFirstFileWDetour(
         LPCWSTR, LPWIN32_FIND_DATAW);
     static BOOL WINAPI CreateDirectoryADetour(
@@ -153,6 +166,7 @@ private:
         LPCWSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
     static BOOL WINAPI MoveFileADetour(LPCSTR, LPCSTR);
     static BOOL WINAPI MoveFileWDetour(LPCWSTR, LPCWSTR);
+    static BOOL WINAPI CopyFileADetour(LPCSTR, LPCSTR, BOOL);
 
     static Kernel32Hooks* active_;
 
@@ -160,6 +174,8 @@ private:
     gc::testmode_storage::Hooks& storage_;
     gc::system_path::SystemPathRouter& system_;
     OriginalKernel32Api originals_{};
+    gc::locale_compatibility::FilesystemDiagnostics*
+        filesystem_diagnostics_{};
 };
 
 } // namespace gc::win32_hooks
