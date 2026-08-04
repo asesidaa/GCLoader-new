@@ -53,14 +53,11 @@ Kernel32Hooks::Kernel32Hooks(
     gc::rfid::Runtime& rfid,
     gc::testmode_storage::Hooks& storage,
     gc::system_path::SystemPathRouter& system,
-    OriginalKernel32Api originals,
-    gc::locale_compatibility::FilesystemDiagnostics*
-        filesystem_diagnostics) noexcept
+    OriginalKernel32Api originals) noexcept
     : rfid_{rfid},
       storage_{storage},
       system_{system},
-      originals_{originals},
-      filesystem_diagnostics_{filesystem_diagnostics}
+      originals_{originals}
 {
 }
 
@@ -128,24 +125,19 @@ HookRequestSet Kernel32Hooks::BuildRequests() noexcept
 
     const bool storage = storage_.enabled();
     const bool system = system_.enabled();
-    const bool diagnostics = filesystem_diagnostics_ != nullptr;
-    append_if(storage || diagnostics, "FindFirstFileA", FindFirstFileADetour,
+    append_if(storage, "FindFirstFileA", FindFirstFileADetour,
               &originals_.find_first_file_a);
-    append_if(diagnostics, "FindNextFileA", FindNextFileADetour,
-              &originals_.find_next_file_a);
     append_if(storage || system, "FindFirstFileW", FindFirstFileWDetour,
               &originals_.find_first_file_w);
-    append_if(storage || diagnostics, "CreateDirectoryA",
-              CreateDirectoryADetour,
+    append_if(storage, "CreateDirectoryA", CreateDirectoryADetour,
               &originals_.create_directory_a);
     append_if(storage || system, "CreateDirectoryW", CreateDirectoryWDetour,
               &originals_.create_directory_w);
-    append_if(storage || system || diagnostics,
-              "DeleteFileA", DeleteFileADetour,
+    append_if(storage || system, "DeleteFileA", DeleteFileADetour,
               &originals_.delete_file_a);
     append_if(storage || system, "DeleteFileW", DeleteFileWDetour,
               &originals_.delete_file_w);
-    append_if(storage || system || diagnostics, "GetFileAttributesA",
+    append_if(storage || system, "GetFileAttributesA",
               GetFileAttributesADetour, &originals_.get_file_attributes_a);
     append_if(storage || system, "GetFileAttributesW",
               GetFileAttributesWDetour, &originals_.get_file_attributes_w);
@@ -153,12 +145,10 @@ HookRequestSet Kernel32Hooks::BuildRequests() noexcept
               &originals_.get_disk_free_space_ex_a);
     append_if(storage, "GetDiskFreeSpaceExW", GetDiskFreeSpaceExWDetour,
               &originals_.get_disk_free_space_ex_w);
-    append_if(system || diagnostics, "MoveFileA", MoveFileADetour,
+    append_if(system, "MoveFileA", MoveFileADetour,
               &originals_.move_file_a);
     append_if(system, "MoveFileW", MoveFileWDetour,
               &originals_.move_file_w);
-    append_if(diagnostics, "CopyFileA", CopyFileADetour,
-              &originals_.copy_file_a);
     return result;
 }
 
@@ -199,20 +189,9 @@ HANDLE Kernel32Hooks::CreateFileA(
 
     const auto routed = storage_.RoutePathA(file_name);
     SetLastError(incoming_last_error);
-    const auto result = originals_.create_file_a(
+    return originals_.create_file_a(
         routed.get(), desired_access, share_mode, security_attributes,
         creation_disposition, flags_and_attributes, template_file);
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr && !routed.redirected) {
-        filesystem_diagnostics_->Observe({
-            .api = gc::locale_compatibility::AnsiFilesystemApi::create_file,
-            .first_path = file_name,
-            .succeeded = result != INVALID_HANDLE_VALUE,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
 }
 
 HANDLE Kernel32Hooks::CreateFileW(
@@ -548,41 +527,7 @@ HANDLE Kernel32Hooks::FindFirstFileA(
     const DWORD incoming_last_error = GetLastError();
     const auto routed = storage_.RoutePathA(file_name);
     SetLastError(incoming_last_error);
-    const auto result = originals_.find_first_file_a(
-        routed.get(), find_data);
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr && !routed.redirected) {
-        filesystem_diagnostics_->Observe({
-            .api =
-                gc::locale_compatibility::AnsiFilesystemApi::find_first_file,
-            .first_path = file_name,
-            .succeeded = result != INVALID_HANDLE_VALUE,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
-}
-
-BOOL Kernel32Hooks::FindNextFileA(
-    HANDLE find,
-    LPWIN32_FIND_DATAA find_data) noexcept
-{
-    const auto result = originals_.find_next_file_a(find, find_data);
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr) {
-        filesystem_diagnostics_->Observe({
-            .api =
-                gc::locale_compatibility::AnsiFilesystemApi::find_next_file,
-            .first_path = result != FALSE && find_data != nullptr
-                ? find_data->cFileName
-                : nullptr,
-            .succeeded = result != FALSE,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
+    return originals_.find_first_file_a(routed.get(), find_data);
 }
 
 HANDLE Kernel32Hooks::FindFirstFileW(
@@ -612,20 +557,7 @@ BOOL Kernel32Hooks::CreateDirectoryA(
     const DWORD incoming_last_error = GetLastError();
     const auto routed = storage_.RoutePathA(path);
     SetLastError(incoming_last_error);
-    const auto result = originals_.create_directory_a(
-        routed.get(), security_attributes);
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr && !routed.redirected) {
-        filesystem_diagnostics_->Observe({
-            .api = gc::locale_compatibility::AnsiFilesystemApi::
-                create_directory,
-            .first_path = path,
-            .succeeded = result != FALSE,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
+    return originals_.create_directory_a(routed.get(), security_attributes);
 }
 
 BOOL Kernel32Hooks::CreateDirectoryW(
@@ -660,18 +592,7 @@ BOOL Kernel32Hooks::DeleteFileA(LPCSTR file_name) noexcept
     }
     const auto routed = storage_.RoutePathA(file_name);
     SetLastError(incoming_last_error);
-    const auto result = originals_.delete_file_a(routed.get());
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr && !routed.redirected) {
-        filesystem_diagnostics_->Observe({
-            .api = gc::locale_compatibility::AnsiFilesystemApi::delete_file,
-            .first_path = file_name,
-            .succeeded = result != FALSE,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
+    return originals_.delete_file_a(routed.get());
 }
 
 BOOL Kernel32Hooks::DeleteFileW(LPCWSTR file_name) noexcept
@@ -704,19 +625,7 @@ DWORD Kernel32Hooks::GetFileAttributesA(LPCSTR file_name) noexcept
     }
     const auto routed = storage_.RoutePathA(file_name);
     SetLastError(incoming_last_error);
-    const auto result = originals_.get_file_attributes_a(routed.get());
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr && !routed.redirected) {
-        filesystem_diagnostics_->Observe({
-            .api = gc::locale_compatibility::AnsiFilesystemApi::
-                get_file_attributes,
-            .first_path = file_name,
-            .succeeded = result != INVALID_FILE_ATTRIBUTES,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
+    return originals_.get_file_attributes_a(routed.get());
 }
 
 DWORD Kernel32Hooks::GetFileAttributesW(LPCWSTR file_name) noexcept
@@ -778,20 +687,7 @@ BOOL Kernel32Hooks::MoveFileA(
 
     if (!existing->matched && !destination->matched) {
         SetLastError(incoming_last_error);
-        const auto result = originals_.move_file_a(
-            existing_path, new_path);
-        const DWORD error = GetLastError();
-        if (filesystem_diagnostics_ != nullptr) {
-            filesystem_diagnostics_->Observe({
-                .api = gc::locale_compatibility::AnsiFilesystemApi::move_file,
-                .first_path = existing_path,
-                .second_path = new_path,
-                .succeeded = result != FALSE,
-                .last_error = error,
-            });
-        }
-        SetLastError(error);
-        return result;
+        return originals_.move_file_a(existing_path, new_path);
     }
 
     std::filesystem::path converted_existing;
@@ -848,27 +744,6 @@ BOOL Kernel32Hooks::MoveFileW(
     return originals_.move_file_w(
         existing->matched ? existing->path.c_str() : existing_path,
         destination->matched ? destination->path.c_str() : new_path);
-}
-
-BOOL Kernel32Hooks::CopyFileA(
-    LPCSTR existing_path,
-    LPCSTR new_path,
-    BOOL fail_if_exists) noexcept
-{
-    const auto result = originals_.copy_file_a(
-        existing_path, new_path, fail_if_exists);
-    const DWORD error = GetLastError();
-    if (filesystem_diagnostics_ != nullptr) {
-        filesystem_diagnostics_->Observe({
-            .api = gc::locale_compatibility::AnsiFilesystemApi::copy_file,
-            .first_path = existing_path,
-            .second_path = new_path,
-            .succeeded = result != FALSE,
-            .last_error = error,
-        });
-    }
-    SetLastError(error);
-    return result;
 }
 
 HANDLE WINAPI Kernel32Hooks::CreateFileADetour(
@@ -991,14 +866,6 @@ HANDLE WINAPI Kernel32Hooks::FindFirstFileADetour(
     });
 }
 
-BOOL WINAPI Kernel32Hooks::FindNextFileADetour(
-    HANDLE find, LPWIN32_FIND_DATAA data)
-{
-    return GuardDetour(FALSE, [&] {
-        return active_->FindNextFileA(find, data);
-    });
-}
-
 HANDLE WINAPI Kernel32Hooks::FindFirstFileWDetour(
     LPCWSTR name, LPWIN32_FIND_DATAW data)
 {
@@ -1082,17 +949,6 @@ BOOL WINAPI Kernel32Hooks::MoveFileWDetour(
 {
     return GuardDetour(FALSE, [&] {
         return active_->MoveFileW(existing_path, new_path);
-    });
-}
-
-BOOL WINAPI Kernel32Hooks::CopyFileADetour(
-    LPCSTR existing_path,
-    LPCSTR new_path,
-    BOOL fail_if_exists)
-{
-    return GuardDetour(FALSE, [&] {
-        return active_->CopyFileA(
-            existing_path, new_path, fail_if_exists);
     });
 }
 

@@ -1,6 +1,5 @@
 #include "Rfid/Feature.h"
 
-#include "Locale/FilesystemDiagnostics.h"
 #include "Rfid/Runtime.h"
 #include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
@@ -28,16 +27,7 @@ struct FeatureState {
         : rfid{virtual_key},
           storage{storage_enabled},
           system{system_root},
-          filesystem_diagnostics{
-              gc::locale_compatibility::FilesystemDiagnosticRole::game,
-              gc::locale_compatibility::
-                  ProductionFilesystemDiagnosticActions()},
-          kernel32{
-              rfid,
-              storage,
-              system,
-              {},
-              &filesystem_diagnostics},
+          kernel32{rfid, storage, system},
           ttx{system_root}
     {
     }
@@ -45,8 +35,6 @@ struct FeatureState {
     Runtime rfid;
     gc::testmode_storage::Hooks storage;
     gc::system_path::SystemPathRouter system;
-    gc::locale_compatibility::FilesystemDiagnostics
-        filesystem_diagnostics;
     gc::win32_hooks::Kernel32Hooks kernel32;
     gc::win32_hooks::MinHookTransaction transaction;
     gc::system_path::TtxInitGuard ttx;
@@ -261,8 +249,6 @@ std::expected<void, FeatureError> InitializeFeature(
         return std::unexpected(error);
     }
 
-    state->filesystem_diagnostics.Start(
-        gc::locale_compatibility::kObservedAnsiFilesystemApis);
     g_feature_state = state.release();
     PLOG_INFO
         << "RFID/JVS feature active hooks=" << requests.requests().size();

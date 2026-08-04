@@ -1,7 +1,6 @@
 #include "Locale/JapaneseLocaleCompatibility.h"
 
 #include "Locale/JapaneseLocalePolicy.h"
-#include "Locale/ServiceFilesystemHooks.h"
 
 #include <plog/Log.h>
 
@@ -130,24 +129,6 @@ void LogInstallSuccess(
             << " acp=" << kJapaneseCodePage
             << " lcid=0x411"
             << " utc_offset_minutes=540";
-    } catch (...) {
-    }
-}
-
-void LogServiceFilesystemDiagnosticInstallFailure(
-    const gc::win32_hooks::HookInstallError& error) noexcept {
-    try {
-        PLOG_WARNING
-            << "Service filesystem diagnostics: installation failed"
-            << " stage="
-            << gc::win32_hooks::HookInstallStageName(error.stage)
-            << " export="
-            << (error.export_name == nullptr
-                    ? "<none>"
-                    : error.export_name)
-            << " win32_error=" << error.win32_error
-            << " minhook_status="
-            << static_cast<int>(error.minhook_status);
     } catch (...) {
     }
 }
@@ -363,14 +344,6 @@ InstallJapaneseLocaleCompatibility(
 
         g_transaction = std::move(candidate);
         LogInstallSuccess(role);
-        if (role == gc::nesys_service::ProcessRole::Service) {
-            const auto diagnostics =
-                InstallServiceFilesystemDiagnostics();
-            if (!diagnostics) {
-                LogServiceFilesystemDiagnosticInstallFailure(
-                    diagnostics.error());
-            }
-        }
         return {};
     } catch (const std::bad_alloc&) {
         g_originals = {};

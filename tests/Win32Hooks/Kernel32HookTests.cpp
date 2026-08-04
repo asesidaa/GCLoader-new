@@ -1,7 +1,6 @@
 #include "Rfid/Jvs/Encoder.h"
 #include "Rfid/Runtime.h"
 #include "Rfid/Trace.h"
-#include "Locale/FilesystemDiagnostics.h"
 #include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
 #include "TestModeStorage/Redirector.h"
@@ -315,8 +314,6 @@ enum class OriginalCall : std::size_t {
     get_disk_free_space_ex_w,
     move_file_a,
     move_file_w,
-    find_next_file_a,
-    copy_file_a,
     count,
 };
 
@@ -340,18 +337,12 @@ struct OriginalFake {
     bool second_path_a_null{};
     bool second_path_w_null{};
     bool set_last_error{true};
-    std::optional<DWORD> forced_last_error;
-    HANDLE create_file_a_result{reinterpret_cast<HANDLE>(0x8101)};
-    BOOL find_next_file_a_result{TRUE};
-    BOOL copy_file_a_result{FALSE};
-    BOOL fail_if_exists{};
     const void* path_pointer{};
     const void* second_path_pointer{};
     std::string path_a;
     std::wstring path_w;
     std::string second_path_a;
     std::wstring second_path_w;
-    std::string find_next_name;
 };
 
 OriginalFake* g_original{};
@@ -365,8 +356,7 @@ void record_call(OriginalCall call)
 {
     ++g_original->calls[call_index(call)];
     if (g_original->set_last_error) {
-        SetLastError(g_original->forced_last_error.value_or(
-            kOriginalErrorBase + static_cast<DWORD>(call_index(call))));
+        SetLastError(kOriginalErrorBase + static_cast<DWORD>(call_index(call)));
     }
 }
 
@@ -413,7 +403,7 @@ HANDLE WINAPI OriginalCreateFileA(
     g_original->fourth_dword = flags;
     g_original->handle = template_file;
     record_call(OriginalCall::create_file_a);
-    return g_original->create_file_a_result;
+    return reinterpret_cast<HANDLE>(0x8101);
 }
 
 HANDLE WINAPI OriginalCreateFileW(
@@ -564,23 +554,6 @@ HANDLE WINAPI OriginalFindFirstFileW(LPCWSTR path, LPWIN32_FIND_DATAW data)
     return reinterpret_cast<HANDLE>(0x8202);
 }
 
-BOOL WINAPI OriginalFindNextFileA(
-    HANDLE handle,
-    LPWIN32_FIND_DATAA data)
-{
-    g_original->handle = handle;
-    g_original->first_pointer = data;
-    if (g_original->find_next_file_a_result != FALSE &&
-        data != nullptr && !g_original->find_next_name.empty()) {
-        strncpy_s(
-            data->cFileName,
-            g_original->find_next_name.c_str(),
-            _TRUNCATE);
-    }
-    record_call(OriginalCall::find_next_file_a);
-    return g_original->find_next_file_a_result;
-}
-
 BOOL WINAPI OriginalCreateDirectoryA(
     LPCSTR path, LPSECURITY_ATTRIBUTES security)
 {
@@ -667,18 +640,6 @@ BOOL WINAPI OriginalMoveFileW(LPCWSTR existing_path, LPCWSTR new_path)
     return FALSE;
 }
 
-BOOL WINAPI OriginalCopyFileA(
-    LPCSTR existing_path,
-    LPCSTR new_path,
-    BOOL fail_if_exists)
-{
-    record_path(existing_path);
-    record_second_path(new_path);
-    g_original->fail_if_exists = fail_if_exists;
-    record_call(OriginalCall::copy_file_a);
-    return g_original->copy_file_a_result;
-}
-
 gc::win32_hooks::OriginalKernel32Api OriginalApi()
 {
     return {
@@ -708,62 +669,8 @@ gc::win32_hooks::OriginalKernel32Api OriginalApi()
         .get_disk_free_space_ex_w = OriginalGetDiskFreeSpaceExW,
         .move_file_a = OriginalMoveFileA,
         .move_file_w = OriginalMoveFileW,
-        .find_next_file_a = OriginalFindNextFileA,
-        .copy_file_a = OriginalCopyFileA,
     };
 }
-
-struct FilesystemCapture {
-    std::vector<std::string> lines;
-    OriginalCall expected_call{OriginalCall::count};
-    bool callbacks_after_original{true};
-    int probe_calls{};
-    int emit_calls{};
-
-    void CheckOriginalOrder() noexcept
-    {
-        if (expected_call != OriginalCall::count &&
-            (g_original == nullptr ||
-             g_original->calls[call_index(expected_call)] == 0)) {
-            callbacks_after_original = false;
-        }
-    }
-
-    static gc::locale_compatibility::WideProbeOutcome Probe(
-        void* context,
-        gc::locale_compatibility::AnsiFilesystemApi,
-        std::wstring_view,
-        std::wstring_view) noexcept
-    {
-        auto& capture = *static_cast<FilesystemCapture*>(context);
-        capture.CheckOriginalOrder();
-        ++capture.probe_calls;
-        SetLastError(ERROR_BAD_PATHNAME);
-        return gc::locale_compatibility::WideProbeOutcome::exists;
-    }
-
-    static void Emit(void* context, std::string_view line) noexcept
-    {
-        auto& capture = *static_cast<FilesystemCapture*>(context);
-        capture.CheckOriginalOrder();
-        ++capture.emit_calls;
-        try {
-            capture.lines.emplace_back(line);
-        } catch (...) {
-        }
-        SetLastError(ERROR_WRITE_FAULT);
-    }
-
-    [[nodiscard]] gc::locale_compatibility::FilesystemDiagnosticActions
-    Actions() noexcept
-    {
-        return {
-            .context = this,
-            .probe = &Probe,
-            .emit = &Emit,
-        };
-    }
-};
 
 gc::system_path::SystemPathRouter DisabledSystemRouter()
 {
@@ -1046,35 +953,15 @@ int test_kernel32_request_sets()
         runtime, storage_disabled, system_enabled, OriginalApi()};
     gc::win32_hooks::Kernel32Hooks both{
         runtime, storage_enabled, system_enabled, OriginalApi()};
-    FilesystemCapture diagnostic_capture;
-    gc::locale_compatibility::FilesystemDiagnostics diagnostics{
-        gc::locale_compatibility::FilesystemDiagnosticRole::game,
-        diagnostic_capture.Actions()};
-    gc::win32_hooks::Kernel32Hooks diagnostic_only{
-        runtime,
-        storage_disabled,
-        system_disabled,
-        OriginalApi(),
-        &diagnostics};
-    gc::win32_hooks::Kernel32Hooks diagnostic_both{
-        runtime,
-        storage_enabled,
-        system_enabled,
-        OriginalApi(),
-        &diagnostics};
 
     const auto no_paths_set = no_paths.BuildRequests();
     const auto storage_only_set = storage_only.BuildRequests();
     const auto system_only_set = system_only.BuildRequests();
     const auto both_set = both.BuildRequests();
-    const auto diagnostic_only_set = diagnostic_only.BuildRequests();
-    const auto diagnostic_both_set = diagnostic_both.BuildRequests();
     const auto no_paths_requests = no_paths_set.requests();
     const auto storage_requests = storage_only_set.requests();
     const auto system_requests = system_only_set.requests();
     const auto both_requests = both_set.requests();
-    const auto diagnostic_only_requests = diagnostic_only_set.requests();
-    const auto diagnostic_both_requests = diagnostic_both_set.requests();
 
     failures += expect(no_paths_requests.size() == 14,
                        "RFID-only request count");
@@ -1084,10 +971,6 @@ int test_kernel32_request_sets()
                        "system-routing request count");
     failures += expect(both_requests.size() == 26,
                        "combined request union count");
-    failures += expect(diagnostic_only_requests.size() == 21,
-                       "RFID plus diagnostic request count");
-    failures += expect(diagnostic_both_requests.size() == 28,
-                       "combined route and diagnostic union count");
     failures += expect(gc::win32_hooks::kMaxOwnedKernel32Hooks == 32,
                        "Kernel32 request capacity is thirty-two");
 
@@ -1113,38 +996,6 @@ int test_kernel32_request_sets()
                        "system exports are unique");
     failures += expect(exports_are_unique(both_requests),
                        "combined exports are unique");
-    failures += expect(exports_are_unique(diagnostic_only_requests),
-                       "diagnostic-only exports are unique");
-    failures += expect(exports_are_unique(diagnostic_both_requests),
-                       "combined diagnostic exports are unique");
-
-    for (const auto diagnostic_name :
-         std::array<std::string_view, 8>{
-             "CreateFileA",
-             "GetFileAttributesA",
-             "FindFirstFileA",
-             "FindNextFileA",
-             "CreateDirectoryA",
-             "DeleteFileA",
-             "MoveFileA",
-             "CopyFileA"}) {
-        failures += expect(
-            std::ranges::count_if(
-                diagnostic_only_requests,
-                [diagnostic_name](const HookRequest& request) {
-                    return request.export_name != nullptr &&
-                        std::string_view{request.export_name} ==
-                            diagnostic_name;
-                }) == 1 &&
-                std::ranges::count_if(
-                    diagnostic_both_requests,
-                    [diagnostic_name](const HookRequest& request) {
-                        return request.export_name != nullptr &&
-                            std::string_view{request.export_name} ==
-                                diagnostic_name;
-                    }) == 1,
-            "diagnostic ANSI export appears exactly once");
-    }
 
     failures += expect(
         std::ranges::count_if(
@@ -1302,168 +1153,6 @@ int test_create_file_and_storage_routing()
             failed_worker.start_calls == 1 &&
             failure_original.calls[call_index(OriginalCall::create_file_a)] == 0,
         "worker failure publishes CreateFile error");
-    return failures;
-}
-
-int test_filesystem_diagnostic_observation()
-{
-    using gc::win32_hooks::Kernel32Hooks;
-
-    int failures = 0;
-    OriginalFake original{
-        .forced_last_error = ERROR_ACCESS_DENIED,
-        .create_file_a_result = INVALID_HANDLE_VALUE,
-    };
-    g_original = &original;
-    WorkerFake worker;
-    gc::rfid::Runtime runtime{VK_F4, WorkerApi(worker)};
-    gc::testmode_storage::Hooks storage_disabled{false};
-    auto system_disabled = DisabledSystemRouter();
-    FilesystemCapture capture;
-    gc::locale_compatibility::FilesystemDiagnostics diagnostics{
-        gc::locale_compatibility::FilesystemDiagnosticRole::game,
-        capture.Actions()};
-    Kernel32Hooks hooks{
-        runtime,
-        storage_disabled,
-        system_disabled,
-        OriginalApi(),
-        &diagnostics};
-
-    constexpr char missing_path[] = "data\\missing.dat";
-    capture.expected_call = OriginalCall::create_file_a;
-    SetLastError(ERROR_RETRY);
-    const auto missing = hooks.CreateFileA(
-        missing_path,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    failures += expect(
-        missing == INVALID_HANDLE_VALUE &&
-            original.path_pointer == missing_path &&
-            GetLastError() == ERROR_ACCESS_DENIED &&
-            capture.lines.size() == 1 &&
-            capture.callbacks_after_original,
-        "unmatched CreateFileA failure is observed after forwarding");
-    if (!capture.lines.empty()) {
-        failures += expect(
-            capture.lines[0].find("api=create_file") !=
-                    std::string::npos &&
-                capture.lines[0].find("class=failure") !=
-                    std::string::npos &&
-                capture.lines[0].find("succeeded=false") !=
-                    std::string::npos &&
-                capture.lines[0].find("error=5") !=
-                    std::string::npos &&
-                capture.lines[0].find(
-                    "first_raw=\"data\\\\missing.dat\"") !=
-                    std::string::npos,
-            "CreateFileA diagnostic retains raw caller path and error");
-    }
-
-    gc::testmode_storage::Hooks storage_enabled{true};
-    Kernel32Hooks storage_hooks{
-        runtime,
-        storage_enabled,
-        system_disabled,
-        OriginalApi(),
-        &diagnostics};
-    constexpr char storage_path[] =
-        "D:\\0123456789abcdef0123456789abcdef_000"
-        "\\TestModeFile\\file";
-    static_cast<void>(storage_hooks.CreateFileA(
-        storage_path,
-        GENERIC_READ,
-        0,
-        nullptr,
-        OPEN_EXISTING,
-        0,
-        nullptr));
-    failures += expect(capture.lines.size() == 1,
-        "test-mode storage-owned CreateFileA is not observed");
-
-    auto system_enabled = EnabledSystemRouter();
-    Kernel32Hooks system_hooks{
-        runtime,
-        storage_disabled,
-        system_enabled,
-        OriginalApi(),
-        &diagnostics};
-    static_cast<void>(system_hooks.CreateFileA(
-        "D:\\system\\DUA\\data\\owned.bin",
-        GENERIC_READ,
-        0,
-        nullptr,
-        OPEN_EXISTING,
-        0,
-        nullptr));
-    failures += expect(capture.lines.size() == 1,
-        "system-owned CreateFileA is not observed");
-
-    constexpr char japanese_name[] =
-        "\x89\xBC" "_start.dds";
-    original.find_next_file_a_result = TRUE;
-    original.find_next_name = japanese_name;
-    original.forced_last_error = ERROR_CRC;
-    capture.expected_call = OriginalCall::find_next_file_a;
-    WIN32_FIND_DATAA find_data{};
-    const auto find_handle = reinterpret_cast<HANDLE>(0x9911);
-    SetLastError(ERROR_RETRY);
-    const auto found = hooks.FindNextFileA(find_handle, &find_data);
-    failures += expect(
-        found == TRUE && original.handle == find_handle &&
-            original.first_pointer == &find_data &&
-            std::string_view{find_data.cFileName} == japanese_name &&
-            GetLastError() == ERROR_CRC &&
-            capture.lines.size() == 2 &&
-            capture.lines.back().find("api=find_next_file") !=
-                std::string::npos &&
-            capture.lines.back().find("class=non_ascii") !=
-                std::string::npos &&
-            capture.callbacks_after_original,
-        "successful FindNextFileA observes returned CP932 name");
-
-    original.find_next_file_a_result = FALSE;
-    original.find_next_name.clear();
-    original.forced_last_error = ERROR_NO_MORE_FILES;
-    SetLastError(ERROR_RETRY);
-    const auto completed = hooks.FindNextFileA(find_handle, &find_data);
-    failures += expect(
-        completed == FALSE && GetLastError() == ERROR_NO_MORE_FILES &&
-            capture.lines.size() == 2,
-        "FindNextFileA completion is forwarded without an event");
-
-    constexpr char copy_source[] = "data\\source.bin";
-    constexpr char copy_destination[] = "data\\destination.bin";
-    original.copy_file_a_result = FALSE;
-    original.forced_last_error = ERROR_FILE_EXISTS;
-    capture.expected_call = OriginalCall::copy_file_a;
-    SetLastError(ERROR_RETRY);
-    const auto copied = hooks.CopyFileA(
-        copy_source,
-        copy_destination,
-        TRUE);
-    failures += expect(
-        copied == FALSE &&
-            original.path_pointer == copy_source &&
-            original.second_path_pointer == copy_destination &&
-            original.fail_if_exists == TRUE &&
-            GetLastError() == ERROR_FILE_EXISTS &&
-            capture.lines.size() == 3 &&
-            capture.lines.back().find("api=copy_file") !=
-                std::string::npos &&
-            capture.lines.back().find("source.bin") !=
-                std::string::npos &&
-            capture.lines.back().find("destination.bin") !=
-                std::string::npos &&
-            capture.callbacks_after_original,
-        "CopyFileA forwards both paths and flag before observation");
-    failures += expect(
-        capture.probe_calls != 0 && capture.emit_calls == 3,
-        "diagnostic callbacks exercised LastError restoration");
     return failures;
 }
 
@@ -2099,7 +1788,6 @@ int main()
         test_enable_failures() +
         test_kernel32_request_sets() +
         test_create_file_and_storage_routing() +
-        test_filesystem_diagnostic_observation() +
         test_system_path_routing() +
         test_emulated_com_contract() +
         test_non_emulated_forwarding() +
