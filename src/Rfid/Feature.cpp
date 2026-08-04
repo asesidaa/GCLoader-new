@@ -164,16 +164,6 @@ std::expected<void, FeatureError> InitializeFeature(
         });
     }
 
-    if (!CreateDirectoryA("OpenParrot", nullptr)) {
-        const auto error = GetLastError();
-        if (error != ERROR_ALREADY_EXISTS) {
-            PLOG_WARNING
-                << "RFID: could not create legacy OpenParrot directory; "
-                   "continuing, error="
-                << error;
-        }
-    }
-
     std::unique_ptr<FeatureState> state;
     try {
         state = std::make_unique<FeatureState>(
