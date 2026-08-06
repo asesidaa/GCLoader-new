@@ -52,6 +52,13 @@ target_link_libraries(GameBinaryPatchTests PRIVATE
 add_test(NAME GameBinaryPatchTests
         COMMAND GameBinaryPatchTests)
 
+add_executable(GameBinaryPatchDiagnosticsTests
+        GameBinaryPatchDiagnosticsTests.cpp)
+target_link_libraries(GameBinaryPatchDiagnosticsTests PRIVATE
+        gc_runtime_patches)
+add_test(NAME GameBinaryPatchDiagnosticsTests
+        COMMAND GameBinaryPatchDiagnosticsTests)
+
 add_executable(FramerateEffectTimingTests
         Framerate/FramerateEffectTimingTests.cpp)
 target_link_libraries(FramerateEffectTimingTests PRIVATE gc_runtime_patches)

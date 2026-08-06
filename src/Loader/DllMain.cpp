@@ -12,6 +12,8 @@
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
+#include "Patches/GameCompatibility/GameBinaryPatch.h"
+#include "Patches/GameCompatibility/GameBinaryPatchDiagnostics.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
@@ -61,6 +63,34 @@ void ApplyConfiguredLogLevel(const ConfigManager& config) {
     const auto level = config.GetLoaderLogLevel();
     plog::get()->setMaxSeverity(ToPlogSeverity(level));
     PLOG_INFO << "Loader log level=" << LoaderLogLevelName(level);
+}
+
+void PublishGameBinaryPatchFatal(
+    const gc::game_compatibility::GameBinaryPatchError& error) noexcept {
+    static std::atomic_bool published{false};
+    constexpr DWORD exit_code = 26;
+
+    try {
+        const auto diagnostic =
+            gc::game_compatibility::
+                BuildGameBinaryPatchFatalDiagnostic(error);
+        gc::system_path::PublishStartupFatal(
+            published,
+            diagnostic.log,
+            diagnostic.modal,
+            diagnostic.title,
+            diagnostic.exit_code);
+        return;
+    } catch (...) {
+    }
+
+    gc::system_path::PublishStartupFatal(
+        published,
+        "GameBinaryPatch: startup failure formatting failed",
+        L"GCLoader could not validate or patch the game executable. "
+        L"Check loader-log.txt for details.",
+        L"GCLoader game patch setup error",
+        exit_code);
 }
 
 std::wstring Utf8ToWideOrFallback(std::string_view value) {
@@ -257,6 +287,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             const auto role =
                 gc::nesys_service::DetectCurrentProcessRole();
             InitProcessLog(role);
+
+            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role)) {
+                const auto game_binary_patch =
+                    gc::game_compatibility::GameBinaryPatchInit();
+                if (!game_binary_patch) {
+                    PublishGameBinaryPatchFatal(game_binary_patch.error());
+                    return FALSE;
+                }
+                PLOG_INFO
+                    << "GameBinaryPatch: state="
+                    << gc::game_compatibility::GameBinaryImageStateName(
+                           game_binary_patch->state)
+                    << " sites=" << game_binary_patch->site_count;
+            }
 
             const auto locale =
                 gc::locale_compatibility::
