@@ -79,12 +79,15 @@ the game's serial-device initialization path.
 
 - Let the clean `game_decrypted.exe` reach the same intentional compatibility
   baseline as the legacy prepatched image.
-- Continue accepting the exact legacy-patched `game471.exe` state without
-  writing it again.
-- Support only the verified Groove Coaster executable revision.
+- Accept every combination of clean and already-patched sites, including the
+  exact legacy `game471.exe` state, and write only missing patches.
+- Decide compatibility from the four patch-site bytes rather than PE version
+  metadata. The DLL having loaded already establishes a usable x86 process
+  image; timestamp, entry point, image base, and other PE identity fields do
+  not determine whether these four writes are applicable.
 - Validate every site before any mutation.
-- Apply the four changes atomically and roll back newly written bytes if the
-  transaction fails.
+- Abort startup immediately if a required write fails. Earlier successful
+  writes remain only in the process that the fatal path terminates.
 - Show a clear user-facing error when the loaded executable is unsupported.
 - Keep detailed failure evidence in `loader-log.txt`.
 - Run only in the game process and never patch the NESYS process.
@@ -94,8 +97,8 @@ the game's serial-device initialization path.
 - Copying, rewriting, renaming, or deploying either executable.
 - Reproducing the memory dump's resolved IAT.
 - Reproducing any writable `.data` value from `game471.exe`.
-- Supporting another game revision through signatures, scanning, or heuristic
-  address discovery.
+- Discovering patch sites through signatures, scanning, or heuristics. The four
+  verified RVAs remain fixed.
 - Making any of the four required patches configurable.
 - Replacing the four direct writes with detours.
 - Refactoring unrelated framerate, renderer, input, RFID, or NESYS patch code.
@@ -104,9 +107,9 @@ the game's serial-device initialization path.
 ## Architecture
 
 Add a focused game-process bootstrap unit under
-`src/Patches/GameCompatibility/`. It owns the supported-image identity, four
-patch contracts, image-state classification, checked memory operations,
-transactional installation, and structured errors.
+`src/Patches/GameCompatibility/`. It owns the four patch contracts, per-site
+state classification, checked memory operations, selective installation, and
+structured errors.
 
 The public entry point returns a result instead of displaying UI itself:
 
@@ -115,10 +118,10 @@ std::expected<GameBinaryPatchResult, GameBinaryPatchError>
 GameBinaryPatchInit() noexcept;
 ```
 
-`GameBinaryPatchResult` reports either `PatchedCleanImage` or
+`GameBinaryPatchResult` reports either `PatchedImage` or
 `AlreadyPatchedImage`. `GameBinaryPatchError` identifies the failure stage,
 contract name, RVA, expected clean and patched patterns, actual bytes when
-available, Windows error, and rollback outcome.
+available, and any Windows error.
 
 The unit exposes a test seam that accepts an image base and injected read/write
 actions. Production actions use guarded memory access, `VirtualProtect`, and
@@ -130,52 +133,51 @@ framework or unrelated refactor is introduced.
 the current process is the game. It converts structured errors into log and
 modal text through the existing `SystemPath/StartupFatal` facility.
 
-## Supported Image State Model
+## Applicable Image State Model
 
-After PE identity validation, preflight reads all four sites before any write.
-The complete set is classified as one of four states:
+Preflight reads all four sites before any write. Each site is classified
+independently:
 
-| State | Definition | Result |
+| Site state | Definition | Result |
 |---|---|---|
-| Clean | Every site matches its clean bytes | Apply all four writes transactionally |
-| Legacy patched | Every site matches its patched bytes | Return success without writing |
-| Mixed | Every site is individually known, but clean and patched states are mixed | Reject as unsupported without writing |
-| Unknown | At least one site matches neither known pattern | Reject as unsupported without writing |
+| Clean | Bytes exactly match the verified clean pattern | Queue this site's replacement write |
+| Already patched | Bytes exactly match the verified patched pattern | Accept without writing this site |
+| Unknown | Read succeeds, but bytes match neither pattern | Reject as unsupported before any write |
+| Unreadable | Guarded read fails | Report a setup failure before any write |
 
-Rejecting mixed state keeps the supported contract explicit. It avoids silently
-completing an executable that was partially modified by an unknown tool or an
-interrupted on-disk patcher.
+Any combination containing only clean and already-patched sites is applicable.
+This includes the all-clean image, the all-patched legacy image, and every
+partially patched image. An all-patched image returns `AlreadyPatchedImage`
+with zero writes. Every other applicable combination writes its clean sites and
+returns `PatchedImage`.
 
-Repeated initialization after a successful clean-image transaction observes the
-complete legacy-patched state and is therefore harmless, although `DllMain`
-still calls initialization only once per process attach.
+Repeated initialization after successful selective installation observes all
+four patched patterns and is harmless, although `DllMain` still initializes
+only once per process attach.
 
-## Installation Transaction
+## Installation Flow
 
 Initialization performs these steps in order:
 
 1. Resolve the loaded main-module base with `GetModuleHandleW(nullptr)`.
-2. Safely validate the DOS header, NT header bounds, x86 machine, timestamp,
-   preferred image base, entry RVA, image size, header size, and section count.
-3. Check every `base + RVA` calculation for overflow and require each complete
-   byte range to remain inside the mapped image.
-4. Read all four sites through guarded memory access.
-5. Classify the whole image without writing.
-6. Return immediately for the complete legacy-patched state.
-7. For the complete clean state, write all four replacements in manifest order.
-8. For each write, change only the containing range to executable/read/write,
+2. Check every `base + RVA` calculation for integer overflow.
+3. Read all four sites through guarded memory access. Do not read or validate PE
+   headers or version metadata.
+4. Classify every site without writing and reject if any site is unknown.
+5. Return immediately when all four sites are already patched.
+6. Write only clean sites, preserving manifest order and skipping sites already
+   patched on entry.
+7. For each write, change only the containing range to executable/read/write,
    copy the exact bytes, flush the process instruction cache, and restore the
    original protection.
-9. Publish success only after all writes and protection restorations succeed.
+8. Publish success only after every required write and protection restoration
+   succeeds.
 
-The transaction records a site as applied before entering any operation that
-could leave replacement bytes in memory. If copying, cache flushing, or
-protection restoration fails, rollback restores every possibly applied site to
-its clean bytes in reverse order. Rollback uses the same guarded write rules and
-reports whether restoration was complete.
-
-No rollback occurs on normal process detach. The patched bytes are process-local
-and disappear when the process exits.
+If a write, cache flush, or protection restoration fails, installation stops at
+that site. No rollback is attempted. The existing startup-fatal path logs the
+failure, displays the setup error, terminates the process, and invokes fail-fast
+as a fallback. Any earlier writes are process-local and disappear with that
+terminated process.
 
 ## Startup Ordering
 
@@ -199,37 +201,35 @@ recreates the baseline on which prior GCLoader behavior was developed.
 Every error is fail-closed. No other game feature initializes after this step
 fails.
 
-PE identity mismatch, mixed state, or unknown bytes use the title:
+Unknown patch-site bytes use the title:
 
 ```text
 GCLoader unsupported game version
 ```
 
-The modal states that this GCLoader build supports only the verified decrypted
-Groove Coaster executable and tells the operator to use the supported
-`game_decrypted.exe`. It includes the failing RVA when one exists and directs
-the operator to `loader-log.txt` for the exact byte comparison.
+The modal states that the loaded executable does not contain a supported clean
+or already-patched pattern at the named site. It includes the failing RVA and
+directs the operator to `loader-log.txt` for the exact byte comparison.
 
 The log includes:
 
 - failure stage;
-- PE identity field and actual value, or patch name and RVA;
+- patch name and RVA;
 - expected clean bytes;
 - expected legacy-patched bytes;
 - actual bytes when the read succeeded;
-- Windows error for memory-operation failures;
-- whether rollback was attempted and completed.
+- Windows error for memory-operation failures.
 
-Read, protection, write, cache-flush, protection-restore, or rollback failures
-use a game-patch setup error title rather than misreporting a supported binary
-as the wrong version. Both paths reuse the existing one-shot startup fatal
-sequence: log, modal dialog, process termination, and fail-fast fallback. No
-exception may cross `DllMain`.
+Address overflow, read, protection, write, cache-flush, or protection-restore
+failures use a game-patch setup error title rather than misreporting an
+applicable binary as unsupported. Both paths reuse the existing one-shot
+startup fatal sequence: log, modal dialog, process termination, and fail-fast
+fallback. No exception may cross `DllMain`.
 
 Successful startup logs exactly one concise state line:
 
 ```text
-GameBinaryPatch: state=patched_clean sites=4
+GameBinaryPatch: state=patched sites=4
 ```
 
 or:
@@ -252,23 +252,21 @@ is not generated from or source-grepped out of the production manifest.
 
 Required cases are:
 
-- A supported clean image performs exactly four writes and finishes with all
-  four legacy-patched patterns.
-- A supported legacy-patched image succeeds with zero writes.
-- A PE timestamp, entry RVA, image size, section count, or machine mismatch is
-  rejected before site reads or writes.
+- All 16 combinations of clean and already-patched sites are accepted, write
+  only their clean sites, and finish with all four patched patterns.
+- The all-clean image performs exactly four writes; the all-patched legacy
+  image performs zero writes.
+- Installation reads only the four patch sites and never consults PE headers or
+  version metadata.
 - An unknown byte at each individual site is rejected with that contract and
   RVA, with zero writes.
-- A mixed clean/patched image is rejected with zero writes.
 - A site-read failure is reported with zero writes.
-- A failure at each write position rolls every possibly changed site back to
-  the complete clean state.
-- A cache-flush or protection-restore failure includes the current site in
-  rollback.
-- A simulated rollback failure is reported and never converted to success.
-- Invalid injected actions and overflowing or out-of-image addresses are
-  rejected without memory access.
-- Re-running installation after a successful transaction returns the
+- A failure at each required write position stops immediately, reports that
+  site and memory stage, performs no later writes, and does not roll back
+  earlier writes.
+- Invalid injected actions and overflowing addresses are rejected without
+  memory access.
+- Re-running installation after successful selective writes returns the
   already-patched result without additional writes.
 
 Tests do not patch a live process and do not duplicate the entire executable.
@@ -285,13 +283,15 @@ Implementation verification requires:
 4. Artifact inspection confirming the production DLL contains the unsupported
    version prompt and the four named patch contracts.
 
-These checks prove compilation, binary-contract handling, transactional
-behavior, and loader integration. They do not prove gameplay behavior.
+These checks prove compilation, patch-site applicability handling, selective
+write behavior, and loader integration. They do not prove gameplay behavior.
 
 Runtime acceptance remains separate and requires an operator-run game process:
 
-- clean `game_decrypted.exe` boots with `state=patched_clean`;
+- clean `game_decrypted.exe` boots with `state=patched`;
 - legacy `game471.exe` still boots with `state=already_patched`;
+- a partially patched executable boots with `state=patched` and only its clean
+  sites are written;
 - the game opens the emulated `COM2` RFID path;
 - the recurring dongle path does not suspend the game;
 - native buffered mouse-button events remain disabled as in the legacy image;
