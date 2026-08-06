@@ -1,4 +1,5 @@
 add_library(gc_runtime_patches STATIC
+        GameCompatibility/GameBinaryPatch.cpp
         Framerate/FramerateAuthoredClock.cpp
         Framerate/GameplaySongClock.cpp
         Framerate/FramerateDiagnostics.cpp

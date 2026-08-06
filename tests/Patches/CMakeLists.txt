@@ -45,6 +45,13 @@ target_link_libraries(RendererDeviceLossPatchTests PRIVATE
 add_test(NAME RendererDeviceLossPatchTests
         COMMAND RendererDeviceLossPatchTests)
 
+add_executable(GameBinaryPatchTests
+        GameBinaryPatchTests.cpp)
+target_link_libraries(GameBinaryPatchTests PRIVATE
+        gc_runtime_patches)
+add_test(NAME GameBinaryPatchTests
+        COMMAND GameBinaryPatchTests)
+
 add_executable(FramerateEffectTimingTests
         Framerate/FramerateEffectTimingTests.cpp)
 target_link_libraries(FramerateEffectTimingTests PRIVATE gc_runtime_patches)
