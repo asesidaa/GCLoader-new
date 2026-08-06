@@ -35,7 +35,7 @@ enum class GameBinaryPatchSite {
 };
 
 enum class GameBinaryImageState {
-    PatchedCleanImage,
+    PatchedImage,
     AlreadyPatchedImage,
 };
 

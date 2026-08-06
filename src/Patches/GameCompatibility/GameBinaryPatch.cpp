@@ -11,13 +11,6 @@
 namespace gc::game_compatibility {
 namespace {
 
-constexpr std::uint32_t kSupportedTimestamp = 0x5FA90825U;
-constexpr std::uint32_t kSupportedPreferredImageBase = 0x00400000U;
-constexpr std::uint32_t kSupportedEntryPointRva = 0x0010964AU;
-constexpr std::uint32_t kSupportedImageSize = 0x00433000U;
-constexpr std::uint32_t kSupportedHeaderSize = 0x00000400U;
-constexpr std::uint16_t kSupportedSectionCount = 5;
-
 struct PatchContract {
     GameBinaryPatchSite site{};
     std::uint32_t rva{};
@@ -70,22 +63,20 @@ enum class SiteState {
     Patched,
 };
 
-[[nodiscard]] bool CheckedAddress(
+[[nodiscard]] bool CheckedPatchAddress(
     std::uintptr_t image_base,
-    std::uint64_t offset,
+    std::uint32_t rva,
     std::size_t size,
-    std::uint64_t maximum_size,
     std::uintptr_t& address) noexcept {
-    if (size == 0 || offset > maximum_size ||
-        size > maximum_size - offset) {
+    if (size == 0) {
         return false;
     }
     constexpr auto maximum_address =
         std::numeric_limits<std::uintptr_t>::max();
-    if (offset > maximum_address - image_base) {
+    if (rva > maximum_address - image_base) {
         return false;
     }
-    address = image_base + static_cast<std::uintptr_t>(offset);
+    address = image_base + static_cast<std::uintptr_t>(rva);
     return size - 1 <= maximum_address - address;
 }
 
@@ -96,18 +87,6 @@ enum class SiteState {
         .stage = GameBinaryPatchStage::AddressRange,
         .site = site,
         .rva = rva,
-    };
-}
-
-[[nodiscard]] GameBinaryPatchError IdentityError(
-    GameBinaryIdentityField field,
-    std::uint64_t expected,
-    std::uint64_t actual) noexcept {
-    return {
-        .stage = GameBinaryPatchStage::IdentityMismatch,
-        .identity_field = field,
-        .expected_identity = expected,
-        .actual_identity = actual,
     };
 }
 
@@ -260,134 +239,25 @@ InstallGameBinaryPatch(
         });
     }
 
-    std::uintptr_t dos_address{};
-    if (!CheckedAddress(
-            image_base,
-            0,
-            sizeof(IMAGE_DOS_HEADER),
-            kSupportedHeaderSize,
-            dos_address)) {
-        return std::unexpected(AddressRangeError());
-    }
-
-    IMAGE_DOS_HEADER dos{};
-    const auto dos_read = actions.read(
-        actions.context,
-        dos_address,
-        std::as_writable_bytes(std::span{&dos, 1}));
-    if (!dos_read) {
-        return std::unexpected(ReadError(
-            GameBinaryPatchStage::HeaderRead,
-            dos_read.error()));
-    }
-    if (dos.e_magic != IMAGE_DOS_SIGNATURE) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::DosMagic,
-            IMAGE_DOS_SIGNATURE,
-            static_cast<std::uint16_t>(dos.e_magic)));
-    }
-    if (dos.e_lfanew < 0) {
-        return std::unexpected(AddressRangeError());
-    }
-
-    const auto nt_rva = static_cast<std::uint32_t>(dos.e_lfanew);
-    std::uintptr_t nt_address{};
-    if (!CheckedAddress(
-            image_base,
-            nt_rva,
-            sizeof(IMAGE_NT_HEADERS32),
-            kSupportedHeaderSize,
-            nt_address)) {
-        return std::unexpected(AddressRangeError(
-            GameBinaryPatchSite::None,
-            nt_rva));
-    }
-
-    IMAGE_NT_HEADERS32 nt{};
-    const auto nt_read = actions.read(
-        actions.context,
-        nt_address,
-        std::as_writable_bytes(std::span{&nt, 1}));
-    if (!nt_read) {
-        return std::unexpected(ReadError(
-            GameBinaryPatchStage::HeaderRead,
-            nt_read.error(),
-            GameBinaryPatchSite::None,
-            nt_rva));
-    }
-
-    if (nt.Signature != IMAGE_NT_SIGNATURE) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::NtSignature,
-            IMAGE_NT_SIGNATURE,
-            nt.Signature));
-    }
-    if (nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::OptionalHeaderMagic,
-            IMAGE_NT_OPTIONAL_HDR32_MAGIC,
-            nt.OptionalHeader.Magic));
-    }
-    if (nt.FileHeader.Machine != IMAGE_FILE_MACHINE_I386) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::Machine,
-            IMAGE_FILE_MACHINE_I386,
-            nt.FileHeader.Machine));
-    }
-    if (nt.FileHeader.TimeDateStamp != kSupportedTimestamp) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::Timestamp,
-            kSupportedTimestamp,
-            nt.FileHeader.TimeDateStamp));
-    }
-    if (nt.OptionalHeader.ImageBase != kSupportedPreferredImageBase) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::PreferredImageBase,
-            kSupportedPreferredImageBase,
-            nt.OptionalHeader.ImageBase));
-    }
-    if (nt.OptionalHeader.AddressOfEntryPoint != kSupportedEntryPointRva) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::EntryPointRva,
-            kSupportedEntryPointRva,
-            nt.OptionalHeader.AddressOfEntryPoint));
-    }
-    if (nt.OptionalHeader.SizeOfImage != kSupportedImageSize) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::SizeOfImage,
-            kSupportedImageSize,
-            nt.OptionalHeader.SizeOfImage));
-    }
-    if (nt.OptionalHeader.SizeOfHeaders != kSupportedHeaderSize) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::SizeOfHeaders,
-            kSupportedHeaderSize,
-            nt.OptionalHeader.SizeOfHeaders));
-    }
-    if (nt.FileHeader.NumberOfSections != kSupportedSectionCount) {
-        return std::unexpected(IdentityError(
-            GameBinaryIdentityField::SectionCount,
-            kSupportedSectionCount,
-            nt.FileHeader.NumberOfSections));
-    }
-
     std::array<GameBinaryBytePattern, kGameBinaryPatchSiteCount> actual{};
     std::array<std::uintptr_t, kGameBinaryPatchSiteCount> addresses{};
     for (std::size_t index = 0; index < kContracts.size(); ++index) {
         const auto& contract = kContracts[index];
         if (contract.clean.size != contract.patched.size ||
             contract.clean.size == 0 ||
-            !CheckedAddress(
+            !CheckedPatchAddress(
                 image_base,
                 contract.rva,
                 contract.clean.size,
-                kSupportedImageSize,
                 addresses[index])) {
             return std::unexpected(AddressRangeError(
                 contract.site,
                 contract.rva));
         }
+    }
 
+    for (std::size_t index = 0; index < kContracts.size(); ++index) {
+        const auto& contract = kContracts[index];
         actual[index].size = contract.clean.size;
         const auto site_read = actions.read(
             actions.context,
@@ -426,22 +296,9 @@ InstallGameBinaryPatch(
         });
     }
 
-    for (std::size_t index = 1; index < states.size(); ++index) {
-        if (states[index] == states.front()) {
-            continue;
-        }
-        const auto& contract = kContracts[index];
-        return std::unexpected(GameBinaryPatchError{
-            .stage = GameBinaryPatchStage::MixedState,
-            .site = contract.site,
-            .rva = contract.rva,
-            .expected_clean = contract.clean,
-            .expected_patched = contract.patched,
-            .actual = actual[index],
-        });
-    }
-
-    if (states.front() == SiteState::Patched) {
+    if (std::ranges::all_of(
+            states,
+            [](SiteState state) { return state == SiteState::Patched; })) {
         return GameBinaryPatchResult{
             .state = GameBinaryImageState::AlreadyPatchedImage,
             .site_count = kContracts.size(),
@@ -450,7 +307,10 @@ InstallGameBinaryPatch(
 
     for (std::size_t index = 0; index < kContracts.size(); ++index) {
         const auto& contract = kContracts[index];
-        const std::size_t possibly_applied = index + 1;
+        if (states[index] == SiteState::Patched) {
+            continue;
+        }
+
         const auto write = actions.write(
             actions.context,
             addresses[index],
@@ -459,7 +319,7 @@ InstallGameBinaryPatch(
             continue;
         }
 
-        GameBinaryPatchError error{
+        return std::unexpected(GameBinaryPatchError{
             .stage = GameBinaryPatchStage::SiteWrite,
             .site = contract.site,
             .rva = contract.rva,
@@ -468,40 +328,11 @@ InstallGameBinaryPatch(
             .actual = actual[index],
             .memory_stage = write.error().stage,
             .win32_error = write.error().win32_error,
-            .rollback_attempted = true,
-        };
-
-        bool rollback_complete = true;
-        for (std::size_t rollback = possibly_applied; rollback != 0;
-             --rollback) {
-            const auto restore_index = rollback - 1;
-            if (!actions.write(
-                    actions.context,
-                    addresses[restore_index],
-                    kContracts[restore_index].clean.view())) {
-                rollback_complete = false;
-            }
-        }
-        for (std::size_t verify = 0; verify < possibly_applied; ++verify) {
-            GameBinaryBytePattern restored{};
-            restored.size = kContracts[verify].clean.size;
-            const auto read = actions.read(
-                actions.context,
-                addresses[verify],
-                std::span{
-                    restored.bytes.data(),
-                    static_cast<std::size_t>(restored.size),
-                });
-            if (!read || !Matches(restored, kContracts[verify].clean)) {
-                rollback_complete = false;
-            }
-        }
-        error.rollback_complete = rollback_complete;
-        return std::unexpected(error);
+        });
     }
 
     return GameBinaryPatchResult{
-        .state = GameBinaryImageState::PatchedCleanImage,
+        .state = GameBinaryImageState::PatchedImage,
         .site_count = kContracts.size(),
     };
 }
@@ -593,7 +424,7 @@ const char* GameBinaryMemoryStageName(GameBinaryMemoryStage stage) noexcept {
 
 const char* GameBinaryImageStateName(GameBinaryImageState state) noexcept {
     switch (state) {
-    case GameBinaryImageState::PatchedCleanImage: return "patched_clean";
+    case GameBinaryImageState::PatchedImage: return "patched";
     case GameBinaryImageState::AlreadyPatchedImage: return "already_patched";
     }
     return "unknown";
