@@ -42,33 +42,7 @@ GameBinaryBytePattern TestPattern(
     return pattern;
 }
 
-int TestIdentityMismatchUsesUnsupportedVersionPrompt() {
-    const auto diagnostic = BuildGameBinaryPatchFatalDiagnostic(
-        GameBinaryPatchError{
-            .stage = GameBinaryPatchStage::IdentityMismatch,
-            .identity_field = GameBinaryIdentityField::Timestamp,
-            .expected_identity = 0x5FA90825U,
-            .actual_identity = 0x5FA90826U,
-        });
-
-    return Expect(
-        diagnostic.title == L"GCLoader unsupported game version" &&
-            diagnostic.exit_code == 26 &&
-            diagnostic.log.starts_with("GameBinaryPatch: startup failed") &&
-            Contains(diagnostic.log, "stage=identity_mismatch") &&
-            Contains(diagnostic.log, "identity_field=timestamp") &&
-            Contains(diagnostic.log, "expected_identity=0x5fa90825") &&
-            Contains(diagnostic.log, "actual_identity=0x5fa90826") &&
-            Contains(
-                diagnostic.modal,
-                L"supports only the verified decrypted Groove Coaster executable") &&
-            Contains(diagnostic.modal, L"Timestamp") &&
-            Contains(diagnostic.modal, L"game_decrypted.exe") &&
-            Contains(diagnostic.modal, L"loader-log.txt"),
-        "identity mismatch produces the unsupported-version diagnostic");
-}
-
-int TestUnknownBytesShowsSiteRvaAndAllPatterns() {
+int TestUnknownBytesShowsSupportedSiteStatesAndEvidence() {
     const auto diagnostic = BuildGameBinaryPatchFatalDiagnostic(
         GameBinaryPatchError{
             .stage = GameBinaryPatchStage::UnknownBytes,
@@ -82,42 +56,27 @@ int TestUnknownBytesShowsSiteRvaAndAllPatterns() {
     return Expect(
         diagnostic.title == L"GCLoader unsupported game version" &&
             diagnostic.exit_code == 26 &&
+            diagnostic.log.starts_with("GameBinaryPatch: startup failed") &&
             Contains(diagnostic.log, "stage=unknown_bytes") &&
             Contains(diagnostic.log, "site=rfid_com_port") &&
             Contains(diagnostic.log, "rva=0x002f7ac3") &&
             Contains(diagnostic.log, "expected_clean=31") &&
             Contains(diagnostic.log, "expected_patched=32") &&
             Contains(diagnostic.log, "actual=33") &&
+            !Contains(diagnostic.log, "identity") &&
+            !Contains(diagnostic.log, "rollback") &&
             Contains(diagnostic.modal, L"Patch site: rfid_com_port") &&
             Contains(diagnostic.modal, L"RVA: 0x002f7ac3") &&
-            Contains(diagnostic.modal, L"game_decrypted.exe") &&
-            Contains(diagnostic.modal, L"loader-log.txt"),
-        "unknown bytes expose the complete unsupported-site evidence");
-}
-
-int TestMixedStateUsesUnsupportedVersionPrompt() {
-    const auto diagnostic = BuildGameBinaryPatchFatalDiagnostic(
-        GameBinaryPatchError{
-            .stage = GameBinaryPatchStage::MixedState,
-            .site = GameBinaryPatchSite::DongleSecurityTransmit,
-            .rva = 0x00103EE6U,
-            .expected_clean = TestPattern({0xE8, 0x45, 0xF6, 0xFF, 0xFF}),
-            .expected_patched = TestPattern({0x90, 0x90, 0x90, 0x90, 0x90}),
-            .actual = TestPattern({0x90, 0x90, 0x90, 0x90, 0x90}),
-        });
-
-    return Expect(
-        diagnostic.title == L"GCLoader unsupported game version" &&
-            Contains(diagnostic.log, "stage=mixed_state") &&
-            Contains(diagnostic.log, "site=dongle_security_transmit") &&
-            Contains(diagnostic.log, "rva=0x00103ee6") &&
             Contains(
                 diagnostic.modal,
-                L"remove other executable modifications"),
-        "mixed clean and patched sites use the unsupported-version prompt");
+                L"Every required patch site must be either clean or already patched.") &&
+            Contains(diagnostic.modal, L"loader-log.txt") &&
+            !Contains(diagnostic.modal, L"game_decrypted.exe") &&
+            !Contains(diagnostic.modal, L"Rollback"),
+        "unknown bytes explain the supported per-site states and evidence");
 }
 
-int TestWriteFailureUsesSetupPromptAndRollbackEvidence() {
+int TestWriteFailureUsesSetupPromptWithoutRollbackLanguage() {
     const auto diagnostic = BuildGameBinaryPatchFatalDiagnostic(
         GameBinaryPatchError{
             .stage = GameBinaryPatchStage::SiteWrite,
@@ -125,8 +84,6 @@ int TestWriteFailureUsesSetupPromptAndRollbackEvidence() {
             .rva = 0x00102C7BU,
             .memory_stage = GameBinaryMemoryStage::RestoreProtection,
             .win32_error = ERROR_ACCESS_DENIED,
-            .rollback_attempted = true,
-            .rollback_complete = false,
         });
 
     return Expect(
@@ -137,14 +94,14 @@ int TestWriteFailureUsesSetupPromptAndRollbackEvidence() {
             Contains(diagnostic.log, "rva=0x00102c7b") &&
             Contains(diagnostic.log, "memory_stage=restore_protection") &&
             Contains(diagnostic.log, "win32_error=5") &&
-            Contains(diagnostic.log, "rollback=incomplete") &&
+            !Contains(diagnostic.log, "rollback") &&
             Contains(
                 diagnostic.modal,
                 L"could not apply the required in-memory game patches") &&
             Contains(diagnostic.modal, L"Windows error: 5") &&
-            Contains(diagnostic.modal, L"Rollback: incomplete") &&
-            Contains(diagnostic.modal, L"loader-log.txt"),
-        "write failure produces setup and incomplete-rollback evidence");
+            Contains(diagnostic.modal, L"loader-log.txt") &&
+            !Contains(diagnostic.modal, L"Rollback"),
+        "write failure reports the exact setup error without rollback language");
 }
 
 int TestReadFailureUsesSetupPromptAndWindowsError() {
@@ -167,20 +124,44 @@ int TestReadFailureUsesSetupPromptAndWindowsError() {
             Contains(
                 diagnostic.log,
                 "win32_error=" + std::to_string(ERROR_NOACCESS)) &&
-            Contains(diagnostic.log, "rollback=not_attempted") &&
+            !Contains(diagnostic.log, "rollback") &&
             Contains(diagnostic.modal, L"Stage: site_read") &&
-            Contains(diagnostic.modal, L"Rollback: not attempted"),
-        "read failure produces setup and Windows-error evidence");
+            Contains(diagnostic.modal, L"Memory stage: read") &&
+            !Contains(diagnostic.modal, L"Rollback"),
+        "read failure reports the memory error without rollback language");
+}
+
+int TestAddressRangeFailureIsASetupError() {
+    const auto diagnostic = BuildGameBinaryPatchFatalDiagnostic(
+        GameBinaryPatchError{
+            .stage = GameBinaryPatchStage::AddressRange,
+            .site = GameBinaryPatchSite::DongleSecurityTransmit,
+            .rva = 0x00103EE6U,
+        });
+
+    return Expect(
+        diagnostic.title == L"GCLoader game patch setup error" &&
+            diagnostic.exit_code == 26 &&
+            Contains(diagnostic.log, "stage=address_range") &&
+            Contains(diagnostic.log, "site=dongle_security_transmit") &&
+            Contains(diagnostic.log, "rva=0x00103ee6") &&
+            !Contains(diagnostic.log, "rollback") &&
+            Contains(diagnostic.modal, L"Stage: address_range") &&
+            Contains(
+                diagnostic.modal,
+                L"Patch site: dongle_security_transmit") &&
+            Contains(diagnostic.modal, L"RVA: 0x00103ee6") &&
+            !Contains(diagnostic.modal, L"Rollback"),
+        "address overflow remains a loader setup error");
 }
 
 } // namespace
 
 int main() {
     int failures = 0;
-    failures += TestIdentityMismatchUsesUnsupportedVersionPrompt();
-    failures += TestUnknownBytesShowsSiteRvaAndAllPatterns();
-    failures += TestMixedStateUsesUnsupportedVersionPrompt();
-    failures += TestWriteFailureUsesSetupPromptAndRollbackEvidence();
+    failures += TestUnknownBytesShowsSupportedSiteStatesAndEvidence();
+    failures += TestWriteFailureUsesSetupPromptWithoutRollbackLanguage();
     failures += TestReadFailureUsesSetupPromptAndWindowsError();
+    failures += TestAddressRangeFailureIsASetupError();
     return failures == 0 ? 0 : 1;
 }

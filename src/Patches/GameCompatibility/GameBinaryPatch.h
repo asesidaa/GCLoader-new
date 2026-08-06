@@ -39,20 +39,6 @@ enum class GameBinaryImageState {
     AlreadyPatchedImage,
 };
 
-enum class GameBinaryIdentityField {
-    None,
-    DosMagic,
-    NtSignature,
-    OptionalHeaderMagic,
-    Machine,
-    Timestamp,
-    PreferredImageBase,
-    EntryPointRva,
-    SizeOfImage,
-    SizeOfHeaders,
-    SectionCount,
-};
-
 enum class GameBinaryMemoryStage {
     None,
     Read,
@@ -66,12 +52,9 @@ enum class GameBinaryPatchStage {
     None,
     ResolveModule,
     InvalidActions,
-    HeaderRead,
-    IdentityMismatch,
     AddressRange,
     SiteRead,
     UnknownBytes,
-    MixedState,
     SiteWrite,
 };
 
@@ -98,17 +81,12 @@ struct GameBinaryPatchActions {
 struct GameBinaryPatchError {
     GameBinaryPatchStage stage{GameBinaryPatchStage::None};
     GameBinaryPatchSite site{GameBinaryPatchSite::None};
-    GameBinaryIdentityField identity_field{GameBinaryIdentityField::None};
     std::uint32_t rva{};
-    std::uint64_t expected_identity{};
-    std::uint64_t actual_identity{};
     GameBinaryBytePattern expected_clean{};
     GameBinaryBytePattern expected_patched{};
     GameBinaryBytePattern actual{};
     GameBinaryMemoryStage memory_stage{GameBinaryMemoryStage::None};
     DWORD win32_error{};
-    bool rollback_attempted{};
-    bool rollback_complete{};
 };
 
 struct GameBinaryPatchResult {
@@ -135,8 +113,6 @@ GameBinaryPatchInit() noexcept;
     GameBinaryPatchStage stage) noexcept;
 [[nodiscard]] const char* GameBinaryPatchSiteName(
     GameBinaryPatchSite site) noexcept;
-[[nodiscard]] const char* GameBinaryIdentityFieldName(
-    GameBinaryIdentityField field) noexcept;
 [[nodiscard]] const char* GameBinaryMemoryStageName(
     GameBinaryMemoryStage stage) noexcept;
 [[nodiscard]] const char* GameBinaryImageStateName(

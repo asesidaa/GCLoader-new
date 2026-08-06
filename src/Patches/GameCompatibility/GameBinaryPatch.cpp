@@ -364,12 +364,9 @@ const char* GameBinaryPatchStageName(GameBinaryPatchStage stage) noexcept {
     case GameBinaryPatchStage::None: return "none";
     case GameBinaryPatchStage::ResolveModule: return "resolve_module";
     case GameBinaryPatchStage::InvalidActions: return "invalid_actions";
-    case GameBinaryPatchStage::HeaderRead: return "header_read";
-    case GameBinaryPatchStage::IdentityMismatch: return "identity_mismatch";
     case GameBinaryPatchStage::AddressRange: return "address_range";
     case GameBinaryPatchStage::SiteRead: return "site_read";
     case GameBinaryPatchStage::UnknownBytes: return "unknown_bytes";
-    case GameBinaryPatchStage::MixedState: return "mixed_state";
     case GameBinaryPatchStage::SiteWrite: return "site_write";
     }
     return "unknown";
@@ -384,26 +381,6 @@ const char* GameBinaryPatchSiteName(GameBinaryPatchSite site) noexcept {
     case GameBinaryPatchSite::DongleSecurityTransmit:
         return "dongle_security_transmit";
     case GameBinaryPatchSite::RfidComPort: return "rfid_com_port";
-    }
-    return "unknown";
-}
-
-const char* GameBinaryIdentityFieldName(
-    GameBinaryIdentityField field) noexcept {
-    switch (field) {
-    case GameBinaryIdentityField::None: return "none";
-    case GameBinaryIdentityField::DosMagic: return "dos_magic";
-    case GameBinaryIdentityField::NtSignature: return "nt_signature";
-    case GameBinaryIdentityField::OptionalHeaderMagic:
-        return "optional_header_magic";
-    case GameBinaryIdentityField::Machine: return "machine";
-    case GameBinaryIdentityField::Timestamp: return "timestamp";
-    case GameBinaryIdentityField::PreferredImageBase:
-        return "preferred_image_base";
-    case GameBinaryIdentityField::EntryPointRva: return "entry_point_rva";
-    case GameBinaryIdentityField::SizeOfImage: return "size_of_image";
-    case GameBinaryIdentityField::SizeOfHeaders: return "size_of_headers";
-    case GameBinaryIdentityField::SectionCount: return "section_count";
     }
     return "unknown";
 }
