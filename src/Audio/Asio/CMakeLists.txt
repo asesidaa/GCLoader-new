@@ -1,6 +1,7 @@
 add_library(gc_asio STATIC
         AsioBufferRules.cpp
         AsioCapabilityProbe.cpp
+        AsioClock.cpp
         AsioDriver.cpp
         AsioDriverCatalog.cpp
         AsioSampleConverter.cpp
