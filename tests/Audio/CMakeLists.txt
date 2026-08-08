@@ -25,3 +25,11 @@ add_test(NAME AsioBufferRulesTests COMMAND AsioBufferRulesTests)
 add_executable(AsioSampleConverterTests AsioSampleConverterTests.cpp)
 target_link_libraries(AsioSampleConverterTests PRIVATE gc_asio)
 add_test(NAME AsioSampleConverterTests COMMAND AsioSampleConverterTests)
+
+add_executable(AsioDriverCatalogTests AsioDriverCatalogTests.cpp)
+target_link_libraries(AsioDriverCatalogTests PRIVATE gc_asio)
+add_test(NAME AsioDriverCatalogTests COMMAND AsioDriverCatalogTests)
+
+add_executable(AsioDriverTests AsioDriverTests.cpp)
+target_link_libraries(AsioDriverTests PRIVATE gc_asio)
+add_test(NAME AsioDriverTests COMMAND AsioDriverTests)
