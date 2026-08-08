@@ -1,4 +1,5 @@
 add_subdirectory(Audio)
+add_subdirectory(CMake)
 add_subdirectory(Config)
 add_subdirectory(Diagnostics)
 add_subdirectory(Input)

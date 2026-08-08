@@ -1,0 +1,9 @@
+add_test(
+    NAME AsioSdkConfigureTests
+    COMMAND ${CMAKE_COMMAND}
+        -DGC_PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DGC_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/asio-sdk-contract
+        -DGC_REAL_ASIO_SDK_DIR=${GC_ASIO_SDK_DIR}
+        -DGC_TEST_GENERATOR=${CMAKE_GENERATOR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/AsioSdkConfigureTests.cmake
+)
