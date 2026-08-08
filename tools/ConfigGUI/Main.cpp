@@ -1,6 +1,10 @@
+#include "AsioLogoTexture.h"
+#include "AudioBackendEditorModel.h"
 #include "InputEditorModel.h"
 #include "Win32D3D11Host.h"
 
+#include "Audio/Asio/AsioDriverCatalog.h"
+#include "Audio/Asio/AsioProbeClient.h"
 #include "Config/ConfigDocument.h"
 #include "Config/RegistryConfig.h"
 #include "Config/TargetFps.h"
@@ -19,10 +23,14 @@
 #include "misc/cpp/imgui_stdlib.h"
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -32,6 +40,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -39,6 +48,231 @@
 namespace {
 
 constexpr std::array<USHORT, 4> kRawInputUsages{0x06, 0x05, 0x04, 0x08};
+
+class GuiComApartment final {
+public:
+    GuiComApartment() noexcept
+        : result_(CoInitializeEx(
+              nullptr,
+              COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))
+    {
+    }
+
+    ~GuiComApartment()
+    {
+        if (SUCCEEDED(result_))
+        {
+            CoUninitialize();
+        }
+    }
+
+    GuiComApartment(const GuiComApartment&) = delete;
+    GuiComApartment& operator=(const GuiComApartment&) = delete;
+
+    [[nodiscard]] HRESULT result() const noexcept
+    {
+        return result_;
+    }
+
+private:
+    HRESULT result_{};
+};
+
+class AudioOperationWorker final {
+public:
+    enum class Operation : std::uint8_t
+    {
+        idle,
+        inspection,
+        save,
+    };
+
+    ~AudioOperationWorker()
+    {
+        Shutdown();
+    }
+
+    AudioOperationWorker(const AudioOperationWorker&) = delete;
+    AudioOperationWorker& operator=(const AudioOperationWorker&) = delete;
+    AudioOperationWorker() = default;
+
+    [[nodiscard]] std::expected<void, std::string> StartInspection(
+        const gc::audio::AsioProbeRequest& request) noexcept
+    {
+        if (operation_ != Operation::idle)
+        {
+            return std::unexpected("An audio operation is already running");
+        }
+        try
+        {
+            inspection_result_.reset();
+            completed_.store(false, std::memory_order_relaxed);
+            operation_ = Operation::inspection;
+            worker_ = std::thread([this, request]
+            {
+                try
+                {
+                    gc::audio::AsioProbeClient client;
+                    inspection_result_.emplace(client.Run(
+                        request,
+                        gc::audio::kDefaultAsioProbeTimeout));
+                }
+                catch (const std::exception& error)
+                {
+                    inspection_result_.emplace(std::unexpected(
+                        gc::audio::AsioFailure{
+                            .stage = gc::audio::AsioFailureStage::process_launch,
+                            .domain = gc::audio::AsioResultDomain::none,
+                            .detail = std::string{
+                                "Could not run ASIO inspection worker: "} +
+                                error.what(),
+                        }));
+                }
+                catch (...)
+                {
+                    inspection_result_.emplace(std::unexpected(
+                        gc::audio::AsioFailure{
+                            .stage = gc::audio::AsioFailureStage::process_launch,
+                            .domain = gc::audio::AsioResultDomain::none,
+                            .detail =
+                                "Could not run ASIO inspection worker",
+                        }));
+                }
+                completed_.store(true, std::memory_order_release);
+            });
+            return {};
+        }
+        catch (const std::exception& error)
+        {
+            operation_ = Operation::idle;
+            return std::unexpected(
+                "Could not start ASIO inspection worker: " +
+                std::string{error.what()});
+        }
+        catch (...)
+        {
+            operation_ = Operation::idle;
+            return std::unexpected(
+                "Could not start ASIO inspection worker");
+        }
+    }
+
+    [[nodiscard]] std::expected<void, std::string> StartSave(
+        const std::filesystem::path& path,
+        const InputConfig& config) noexcept
+    {
+        if (operation_ != Operation::idle)
+        {
+            return std::unexpected("An audio operation is already running");
+        }
+        try
+        {
+            auto owned_path = path;
+            auto owned_config = config;
+            save_result_.reset();
+            completed_.store(false, std::memory_order_relaxed);
+            operation_ = Operation::save;
+            worker_ = std::thread(
+                [this,
+                 path = std::move(owned_path),
+                 config = std::move(owned_config)]
+                {
+                    try
+                    {
+                        gc::audio::AsioProbeClient client;
+                        save_result_.emplace(ValidateAndWriteConfig(
+                            path,
+                            config,
+                            client,
+                            gc::config::ProductionAtomicConfigWriteActions()));
+                    }
+                    catch (const std::exception& error)
+                    {
+                        save_result_.emplace(std::unexpected(
+                            "Config save worker failed: " +
+                            std::string{error.what()}));
+                    }
+                    catch (...)
+                    {
+                        save_result_.emplace(std::unexpected(
+                            "Config save worker failed unexpectedly"));
+                    }
+                    completed_.store(true, std::memory_order_release);
+                });
+            return {};
+        }
+        catch (const std::exception& error)
+        {
+            operation_ = Operation::idle;
+            return std::unexpected(
+                "Could not start config save worker: " +
+                std::string{error.what()});
+        }
+        catch (...)
+        {
+            operation_ = Operation::idle;
+            return std::unexpected("Could not start config save worker");
+        }
+    }
+
+    [[nodiscard]] std::optional<gc::audio::AsioProbeResult>
+    TakeInspection()
+    {
+        if (operation_ != Operation::inspection ||
+            !completed_.load(std::memory_order_acquire))
+        {
+            return std::nullopt;
+        }
+        worker_.join();
+        operation_ = Operation::idle;
+        completed_.store(false, std::memory_order_relaxed);
+        auto result = std::move(inspection_result_);
+        inspection_result_.reset();
+        return result;
+    }
+
+    [[nodiscard]] std::optional<std::expected<void, std::string>>
+    TakeSave()
+    {
+        if (operation_ != Operation::save ||
+            !completed_.load(std::memory_order_acquire))
+        {
+            return std::nullopt;
+        }
+        worker_.join();
+        operation_ = Operation::idle;
+        completed_.store(false, std::memory_order_relaxed);
+        auto result = std::move(save_result_);
+        save_result_.reset();
+        return result;
+    }
+
+    [[nodiscard]] Operation operation() const noexcept
+    {
+        return operation_;
+    }
+
+    [[nodiscard]] bool busy() const noexcept
+    {
+        return operation_ != Operation::idle;
+    }
+
+    void Shutdown() noexcept
+    {
+        if (worker_.joinable())
+        {
+            worker_.join();
+        }
+        operation_ = Operation::idle;
+    }
+
+private:
+    Operation operation_{Operation::idle};
+    std::thread worker_;
+    std::atomic<bool> completed_{false};
+    std::optional<gc::audio::AsioProbeResult> inspection_result_;
+    std::optional<std::expected<void, std::string>> save_result_;
+};
 
 std::string Win32Failure(const char* operation)
 {
@@ -1060,7 +1294,294 @@ void DrawRegistry(InputConfig& config, bool& dirty)
         "NewsPath, EventPath, and LogPath are derived from this root.");
 }
 
-void DrawExperimental(InputConfig& config, bool& dirty)
+const char* AsioInspectionStateName(AsioInspectionState state) noexcept
+{
+    switch (state)
+    {
+    case AsioInspectionState::idle:
+        return "idle";
+    case AsioInspectionState::probing:
+        return "probing";
+    case AsioInspectionState::valid:
+        return "valid";
+    case AsioInspectionState::failed:
+        return "failed";
+    }
+    return "unknown";
+}
+
+std::string AsioGranularityDescription(long granularity)
+{
+    if (granularity == -1)
+    {
+        return "power-of-two frame counts";
+    }
+    if (granularity == 0)
+    {
+        return "fixed frame count";
+    }
+    if (granularity == 1)
+    {
+        return "every integer frame count in range";
+    }
+    return "multiples of " + std::to_string(granularity) + " frames";
+}
+
+void DrawAsioLogo(
+    const AsioLogoTexture& logo,
+    std::string_view logo_error)
+{
+    if (logo.view() != nullptr && logo.width() != 0 && logo.height() != 0)
+    {
+        constexpr float maximum_width = 260.0F;
+        const float available_width = ImGui::GetContentRegionAvail().x;
+        const float scale = (std::min)(
+            1.0F,
+            (std::max)(1.0F, available_width) /
+                static_cast<float>(logo.width()));
+        const float bounded_scale = (std::min)(
+            scale,
+            maximum_width / static_cast<float>(logo.width()));
+        const ImTextureID texture_id = static_cast<ImTextureID>(
+            reinterpret_cast<std::uintptr_t>(logo.view()));
+        ImGui::Image(
+            ImTextureRef{texture_id},
+            ImVec2{
+                static_cast<float>(logo.width()) * bounded_scale,
+                static_cast<float>(logo.height()) * bounded_scale,
+            });
+    }
+    if (!logo_error.empty())
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+            "ASIO logo asset error: %s",
+            std::string{logo_error}.c_str());
+    }
+    ImGui::TextWrapped(
+        "ASIO is a registered trademark of Steinberg Media Technologies "
+        "GmbH. Official ASIO Compatible logo used unmodified.");
+}
+
+void DrawAsioSettings(
+    InputConfig& config,
+    AudioBackendEditorModel& audio_editor,
+    AudioOperationWorker& audio_worker,
+    const AsioLogoTexture& logo,
+    std::string_view logo_error,
+    bool& dirty)
+{
+    auto& experimental = config.experimental();
+    const auto catalog_state = audio_editor.catalog_state();
+    if (catalog_state == AsioCatalogState::empty)
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
+            "No 32-bit ASIO driver registration was found. Install a "
+            "32-bit ASIO driver before selecting ASIO.");
+    }
+    else if (catalog_state == AsioCatalogState::failed)
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+            "Could not enumerate 32-bit ASIO registrations.");
+        if (audio_editor.catalog_error())
+        {
+            ImGui::TextWrapped("%s", audio_editor.catalog_error()->c_str());
+        }
+    }
+
+    const std::string preview = experimental.asio_driver_name().empty()
+        ? "Type or choose an exact driver name"
+        : experimental.asio_driver_name();
+    if (ImGui::BeginCombo("ASIO driver name", preview.c_str()))
+    {
+        std::string edited_name = experimental.asio_driver_name();
+        ImGui::SetNextItemWidth(-1.0F);
+        if (ImGui::InputTextWithHint(
+                "##ExactAsioDriverName",
+                "Any exact 32-bit registry name",
+                &edited_name))
+        {
+            audio_editor.SetDriverName(std::move(edited_name));
+            dirty = true;
+        }
+        ImGui::SeparatorText("Installed and common suggestions");
+        for (const auto& suggestion : audio_editor.driver_suggestions())
+        {
+            const bool selected =
+                suggestion == experimental.asio_driver_name();
+            if (ImGui::Selectable(suggestion.c_str(), selected))
+            {
+                audio_editor.SetDriverName(suggestion);
+                dirty = true;
+            }
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextDisabled(
+        "Suggestions are not a whitelist or a support claim; the exact "
+        "entered name is always validated.");
+
+    std::uint32_t buffer_frames = static_cast<std::uint32_t>(
+        experimental.asio_buffer_frames());
+    if (ImGui::InputScalar(
+            "ASIO buffer (frames)",
+            ImGuiDataType_U32,
+            &buffer_frames,
+            nullptr,
+            nullptr,
+            "%u",
+            ImGuiInputTextFlags_CharsDecimal))
+    {
+        audio_editor.SetBufferFrames(buffer_frames);
+        dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::Text("%.3f ms at 48 kHz", buffer_frames / 48.0);
+    if (buffer_frames == 0)
+    {
+        ImGui::TextDisabled(
+            "Zero is inspection-only: Inspect adopts the driver's exact "
+            "preferred frame count in memory.");
+    }
+
+    std::uint32_t base_channel = static_cast<std::uint32_t>(
+        experimental.asio_output_base_channel());
+    if (ImGui::InputScalar(
+            "ASIO output base channel",
+            ImGuiDataType_U32,
+            &base_channel,
+            nullptr,
+            nullptr,
+            "%u",
+            ImGuiInputTextFlags_CharsDecimal))
+    {
+        audio_editor.SetOutputBaseChannel(base_channel);
+        dirty = true;
+    }
+
+    const bool can_inspect =
+        experimental.audio_backend() == gc::config::AudioBackend::asio &&
+        audio_editor.asio_selection_enabled() && !audio_worker.busy();
+    ImGui::BeginDisabled(!can_inspect);
+    if (ImGui::Button("Inspect ASIO driver"))
+    {
+        auto request = audio_editor.BeginInspection();
+        if (request)
+        {
+            const auto started = audio_worker.StartInspection(*request);
+            if (!started)
+            {
+                audio_editor.CompleteInspection(std::unexpected(
+                    gc::audio::AsioFailure{
+                        .stage = gc::audio::AsioFailureStage::process_launch,
+                        .domain = gc::audio::AsioResultDomain::none,
+                        .detail = started.error(),
+                    }));
+            }
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    const auto inspection_state = audio_editor.inspection_state();
+    const ImVec4 state_color = inspection_state == AsioInspectionState::valid
+        ? ImVec4(0.35F, 1.0F, 0.45F, 1.0F)
+        : inspection_state == AsioInspectionState::failed
+            ? ImVec4(1.0F, 0.35F, 0.35F, 1.0F)
+            : ImVec4(0.8F, 0.8F, 0.8F, 1.0F);
+    ImGui::TextColored(
+        state_color,
+        "Inspection: %s",
+        AsioInspectionStateName(inspection_state));
+    ImGui::TextWrapped(
+        "Inspection never starts audio. It may briefly claim the device and "
+        "set 48 kHz, then restores the original sample rate before returning.");
+
+    if (!audio_editor.inspection_error().empty())
+    {
+        ImGui::PushStyleColor(
+            ImGuiCol_ChildBg,
+            ImVec4(0.35F, 0.05F, 0.05F, 0.35F));
+        if (ImGui::BeginChild(
+                "ASIO inspection error",
+                ImVec2(0.0F, 72.0F),
+                ImGuiChildFlags_Borders))
+        {
+            ImGui::TextWrapped(
+                "%s", audio_editor.inspection_error().c_str());
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+
+    if (const auto& report = audio_editor.capability_report(); report)
+    {
+        const auto& limits = report->buffer_limits;
+        ImGui::Text(
+            "Reported driver: %s (version %ld)",
+            report->reported_driver_name.c_str(),
+            report->driver_version);
+        ImGui::Text(
+            "Buffer frames: minimum %ld, maximum %ld, preferred %ld",
+            limits.minimum,
+            limits.maximum,
+            limits.preferred);
+        const auto granularity =
+            AsioGranularityDescription(limits.granularity);
+        ImGui::TextWrapped(
+            "Granularity %ld: %s",
+            limits.granularity,
+            granularity.c_str());
+        ImGui::Text(
+            "Output latency: %u frames (%.3f ms at 48 kHz)",
+            report->output_latency_frames,
+            report->output_latency_frames / 48.0);
+
+        const auto& pairs = audio_editor.channel_pairs();
+        const auto selected = std::ranges::find(
+            pairs,
+            static_cast<std::uint32_t>(
+                experimental.asio_output_base_channel()),
+            &AsioChannelPairChoice::base_channel);
+        const char* pair_preview = selected == pairs.end()
+            ? "Select an adjacent stereo output pair"
+            : selected->label.c_str();
+        if (ImGui::BeginCombo("Adjacent output pair", pair_preview))
+        {
+            for (const auto& pair : pairs)
+            {
+                const bool is_selected =
+                    pair.base_channel ==
+                    experimental.asio_output_base_channel();
+                if (ImGui::Selectable(pair.label.c_str(), is_selected))
+                {
+                    audio_editor.SetOutputBaseChannel(pair.base_channel);
+                    dirty = true;
+                }
+                if (is_selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    DrawAsioLogo(logo, logo_error);
+}
+
+void DrawExperimental(
+    InputConfig& config,
+    AudioBackendEditorModel& audio_editor,
+    AudioOperationWorker& audio_worker,
+    const AsioLogoTexture& logo,
+    std::string_view logo_error,
+    bool& dirty)
 {
     ImGui::SeparatorText("Experimental");
     auto& experimental = config.experimental();
@@ -1115,35 +1636,54 @@ void DrawExperimental(InputConfig& config, bool& dirty)
         experimental.enable_nesys_service_adapter_patch = nesys_adapter;
         dirty = true;
     }
-    auto& audio_backend = experimental.audio_backend();
-    bool exclusive_audio =
-        audio_backend == gc::config::AudioBackend::wasapi_exclusive;
-    if (ImGui::Checkbox("WASAPI exclusive low-latency audio", &exclusive_audio))
+    ImGui::SeparatorText("Audio output");
+    auto select_backend = [&](const char* label, gc::config::AudioBackend backend)
     {
-        audio_backend = exclusive_audio
-            ? gc::config::AudioBackend::wasapi_exclusive
-            : gc::config::AudioBackend::directsound;
-        dirty = true;
-    }
+        const bool selected = experimental.audio_backend() == backend;
+        if (ImGui::RadioButton(label, selected))
+        {
+            audio_editor.SetBackend(backend);
+            dirty = true;
+        }
+    };
+    select_backend("DirectSound", gc::config::AudioBackend::directsound);
     ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip(
-            "Uses the default console endpoint in exclusive stereo PCM16 mode.\n"
-            "Prefers exact 44.1 kHz and falls back to exact 48 kHz.");
-    }
-    auto& buffer_ms = experimental.wasapi_exclusive_buffer_ms();
-    if (ImGui::InputScalar(
-            "WASAPI exclusive buffer (ms)", ImGuiDataType_U32, &buffer_ms))
-    {
-        dirty = true;
-    }
+    select_backend(
+        "WASAPI exclusive", gc::config::AudioBackend::wasapi_exclusive);
     ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
+    ImGui::BeginDisabled(!audio_editor.asio_selection_enabled());
+    select_backend("ASIO\xC2\xAE", gc::config::AudioBackend::asio);
+    ImGui::EndDisabled();
+
+    if (experimental.audio_backend() ==
+        gc::config::AudioBackend::wasapi_exclusive)
     {
-        ImGui::SetTooltip("%s", kWasapiExclusiveBufferTooltip);
+        auto& buffer_ms = experimental.wasapi_exclusive_buffer_ms();
+        if (ImGui::InputScalar(
+                "WASAPI exclusive buffer (ms)",
+                ImGuiDataType_U32,
+                &buffer_ms))
+        {
+            dirty = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s", kWasapiExclusiveBufferTooltip);
+        }
+    }
+
+    if (experimental.audio_backend() == gc::config::AudioBackend::asio ||
+        !audio_editor.asio_selection_enabled())
+    {
+        DrawAsioSettings(
+            config,
+            audio_editor,
+            audio_worker,
+            logo,
+            logo_error,
+            dirty);
     }
 }
 
@@ -1176,24 +1716,26 @@ std::expected<gc::config::ParsedInputConfigDocument, std::string> LoadConfig(
     return gc::config::ParseAndValidateInputConfigDocument(text);
 }
 
-std::expected<void, std::string> SaveConfig(
-    const std::string& path,
-    const InputConfig& config)
-{
-    const auto validation = gc::config::ValidateInputConfig(config);
-    if (!validation)
-    {
-        return std::unexpected(validation.error());
-    }
-    return gc::config::WriteInputConfigAtomically(
-        std::filesystem::path{path},
-        config);
-}
-
 } // namespace
 
 int main(int argc, char** argv)
 {
+    GuiComApartment com_apartment;
+    if (FAILED(com_apartment.result()))
+    {
+        std::ostringstream message;
+        message << "Could not initialize the ConfigGUI STA; HRESULT 0x"
+                << std::hex << std::uppercase
+                << static_cast<std::uint32_t>(com_apartment.result());
+        std::cerr << message.str() << '\n';
+        MessageBoxA(
+            nullptr,
+            message.str().c_str(),
+            "ConfigGUI",
+            MB_OK | MB_ICONERROR);
+        return 1;
+    }
+
     const std::string config_path = argc > 1 ? argv[1] : "config.toml";
     auto loaded = LoadConfig(config_path);
     if (!loaded)
@@ -1207,6 +1749,10 @@ int main(int argc, char** argv)
     const bool config_migrated = loaded->migrations.any();
     InputConfig config = std::move(loaded->config);
     InputEditorModel editor(config.controller());
+    AudioBackendEditorModel audio_editor(config);
+    gc::audio::ProductionAsioRegistrySource asio_registry;
+    audio_editor.ApplyCatalog(
+        gc::audio::EnumerateAsioDrivers(asio_registry));
     GuiInputContext input(config, editor);
     Win32D3D11Host host;
     const auto opened = host.Open(
@@ -1220,6 +1766,25 @@ int main(int argc, char** argv)
     }
     input.SetWindow(host.window());
 
+    AsioLogoTexture asio_logo;
+    std::string asio_logo_error;
+    gc::audio::ProductionAsioProbeProcessActions executable_actions;
+    const auto executable_path = executable_actions.CurrentExecutablePath();
+    if (!executable_path)
+    {
+        asio_logo_error = DescribeAsioFailure(executable_path.error());
+    }
+    else
+    {
+        const auto logo_path =
+            executable_path->parent_path() / GC_ASIO_LOGO_FILENAME;
+        if (const auto loaded_logo = asio_logo.Load(host.device(), logo_path);
+            !loaded_logo)
+        {
+            asio_logo_error = loaded_logo.error();
+        }
+    }
+
     const auto raw_input = RegisterGuiRawInput(host.window());
     if (!raw_input)
     {
@@ -1229,6 +1794,7 @@ int main(int argc, char** argv)
             raw_input.error().c_str(),
             "ConfigGUI",
             MB_OK | MB_ICONERROR);
+        asio_logo.Reset();
         host.Close();
         return 1;
     }
@@ -1236,10 +1802,49 @@ int main(int argc, char** argv)
 
     bool dirty = config_migrated;
     std::string save_status;
+    AudioOperationWorker audio_worker;
+    bool save_modal_open = false;
     constexpr ImVec4 clear_color(0.45F, 0.56F, 0.60F, 1.0F);
 
     while (host.PumpMessages())
     {
+        if (auto inspection = audio_worker.TakeInspection())
+        {
+            const auto previous_frames =
+                config.experimental().asio_buffer_frames();
+            audio_editor.CompleteInspection(std::move(*inspection));
+            if (config.experimental().asio_buffer_frames() != previous_frames)
+            {
+                dirty = true;
+            }
+        }
+        if (auto saved = audio_worker.TakeSave())
+        {
+            if (!saved->has_value())
+            {
+                save_status = saved->error();
+            }
+            else
+            {
+                auto refreshed = LoadConfig(config_path);
+                if (!refreshed)
+                {
+                    save_status =
+                        "Configuration was saved, but the canonical document "
+                        "could not be reloaded: " + refreshed.error();
+                }
+                else
+                {
+                    config = std::move(refreshed->config);
+                    editor = InputEditorModel(config.controller());
+                    input.RefreshDevices();
+                    audio_editor.NotifyConfigReloaded();
+                    dirty = false;
+                    save_status = "Configuration saved and revalidated.";
+                }
+            }
+        }
+
         input.PollSelectedController();
         if (input.ApplyCompletedCapture())
         {
@@ -1258,6 +1863,10 @@ int main(int argc, char** argv)
             ImGuiWindowFlags_NoBringToFrontOnFocus |
             ImGuiWindowFlags_NoNavFocus;
         ImGui::Begin("GCLoader Configuration", nullptr, window_flags);
+
+        const bool save_in_progress = audio_worker.operation() ==
+            AudioOperationWorker::Operation::save;
+        ImGui::BeginDisabled(save_in_progress);
 
         ImGui::SeparatorText("Input");
         int input_mode = config.input_mode() == gc::input::InputMode::Keyboard
@@ -1412,7 +2021,15 @@ int main(int argc, char** argv)
 
         DrawRegistry(config, dirty);
         DrawLogging(config, dirty);
-        DrawExperimental(config, dirty);
+        DrawExperimental(
+            config,
+            audio_editor,
+            audio_worker,
+            asio_logo,
+            asio_logo_error,
+            dirty);
+
+        ImGui::EndDisabled();
 
         config.controller = editor.config();
         const auto validation = gc::config::ValidateInputConfig(config);
@@ -1425,18 +2042,20 @@ int main(int argc, char** argv)
         }
 
         ImGui::Separator();
-        ImGui::BeginDisabled(!validation.has_value() || !dirty);
+        ImGui::BeginDisabled(
+            !validation.has_value() || !dirty || audio_worker.busy());
         if (ImGui::Button("Save Configuration"))
         {
-            const auto saved = SaveConfig(config_path, config);
-            if (saved)
+            const auto started = audio_worker.StartSave(
+                std::filesystem::path{config_path}, config);
+            if (started)
             {
-                dirty = false;
-                save_status = "Configuration saved.";
+                save_status.clear();
+                save_modal_open = true;
             }
             else
             {
-                save_status = saved.error();
+                save_status = started.error();
             }
         }
         ImGui::EndDisabled();
@@ -1451,11 +2070,40 @@ int main(int argc, char** argv)
             ImGui::TextWrapped("%s", save_status.c_str());
         }
 
+        if (save_modal_open)
+        {
+            ImGui::OpenPopup("Validating ASIO and saving");
+        }
+        if (ImGui::BeginPopupModal(
+                "Validating ASIO and saving",
+                nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize |
+                    ImGuiWindowFlags_NoMove))
+        {
+            if (audio_worker.operation() ==
+                AudioOperationWorker::Operation::save)
+            {
+                ImGui::Text(
+                    "Validating the selected audio backend and writing the "
+                    "configuration...");
+                ImGui::TextDisabled(
+                    "ASIO validation is isolated and bounded to five seconds.");
+            }
+            else
+            {
+                save_modal_open = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
         ImGui::End();
         host.Render(clear_color);
     }
 
+    audio_worker.Shutdown();
     UnregisterGuiRawInput();
+    asio_logo.Reset();
     host.Close();
     return 0;
 }

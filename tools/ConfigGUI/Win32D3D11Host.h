@@ -36,6 +36,7 @@ public:
     void Close() noexcept;
 
     [[nodiscard]] HWND window() const noexcept;
+    [[nodiscard]] ID3D11Device* device() const noexcept;
     [[nodiscard]] bool quit_requested() const noexcept;
 
 private:

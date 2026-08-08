@@ -247,6 +247,11 @@ HWND Win32D3D11Host::window() const noexcept
     return window_;
 }
 
+ID3D11Device* Win32D3D11Host::device() const noexcept
+{
+    return device_;
+}
+
 bool Win32D3D11Host::quit_requested() const noexcept
 {
     return quit_requested_;

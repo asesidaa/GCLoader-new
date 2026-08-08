@@ -26,3 +26,14 @@ target_link_libraries(ConfigGuiInputModelTests PRIVATE
         gc_config_gui_model
 )
 add_test(NAME ConfigGuiInputModelTests COMMAND ConfigGuiInputModelTests)
+
+add_executable(ConfigGuiAudioBackendModelTests
+        ConfigGuiAudioBackendModelTests.cpp)
+target_include_directories(ConfigGuiAudioBackendModelTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/tools/ConfigGUI
+)
+target_link_libraries(ConfigGuiAudioBackendModelTests PRIVATE
+        gc_config_gui_model
+)
+add_test(NAME ConfigGuiAudioBackendModelTests
+        COMMAND ConfigGuiAudioBackendModelTests)
