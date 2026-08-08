@@ -1,5 +1,6 @@
 add_library(gc_asio STATIC
         AsioBufferRules.cpp
+        AsioSampleConverter.cpp
 )
 target_include_directories(gc_asio PUBLIC
         ${PROJECT_SOURCE_DIR}/src

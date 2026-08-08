@@ -21,3 +21,7 @@ endforeach()
 add_executable(AsioBufferRulesTests AsioBufferRulesTests.cpp)
 target_link_libraries(AsioBufferRulesTests PRIVATE gc_asio)
 add_test(NAME AsioBufferRulesTests COMMAND AsioBufferRulesTests)
+
+add_executable(AsioSampleConverterTests AsioSampleConverterTests.cpp)
+target_link_libraries(AsioSampleConverterTests PRIVATE gc_asio)
+add_test(NAME AsioSampleConverterTests COMMAND AsioSampleConverterTests)
