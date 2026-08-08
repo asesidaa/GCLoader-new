@@ -1,6 +1,7 @@
 add_subdirectory(Asio)
 
 add_library(gc_audio STATIC
+        Asio/AsioOutputBackend.cpp
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
         Mixer/AudioCursorTimeline.cpp

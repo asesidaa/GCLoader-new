@@ -552,8 +552,9 @@ void AsioCallbackRuntime::DispatchTimeInfo(
         validation_failure = AsioFailureStage::runtime_clock;
     }
 
-    DispatchValidated(request, validation_failure);
-    FinishCallbackTiming(has_start, start);
+    const bool rendered_inline =
+        DispatchValidated(request, validation_failure);
+    FinishCallbackTiming(has_start, start, rendered_inline);
 }
 
 void AsioCallbackRuntime::DispatchLegacy(
@@ -590,16 +591,17 @@ void AsioCallbackRuntime::DispatchLegacy(
         validation_failure = AsioFailureStage::runtime_clock;
     }
 
-    DispatchValidated(request, validation_failure);
-    FinishCallbackTiming(has_start, start);
+    const bool rendered_inline =
+        DispatchValidated(request, validation_failure);
+    FinishCallbackTiming(has_start, start, rendered_inline);
 }
 
-void AsioCallbackRuntime::DispatchValidated(
+bool AsioCallbackRuntime::DispatchValidated(
     const AsioRenderRequest& request,
     AsioFailureStage validation_failure) noexcept {
     if (request.buffer_index < 0 || request.buffer_index > 1) {
         LatchFault(AsioFailureStage::callback);
-        return;
+        return false;
     }
 
     bool expected{};
@@ -610,27 +612,27 @@ void AsioCallbackRuntime::DispatchValidated(
             std::memory_order_acquire)) {
         ++deadline_misses_;
         LatchFault(AsioFailureStage::callback);
-        return;
+        return false;
     }
 
     if (stopping_.load(std::memory_order_acquire) || IsFaulted()) {
         renderer_->ClearAsioBlock(request.buffer_index);
         render_claimed_.store(false, std::memory_order_release);
-        return;
+        return false;
     }
     if (request.direct_process != ASIOTrue &&
         request.direct_process != ASIOFalse) {
         renderer_->ClearAsioBlock(request.buffer_index);
         LatchFault(AsioFailureStage::callback);
         render_claimed_.store(false, std::memory_order_release);
-        return;
+        return false;
     }
     if (previous_buffer_index_ == request.buffer_index) {
         ++buffer_alternation_violations_;
         renderer_->ClearAsioBlock(request.buffer_index);
         LatchFault(AsioFailureStage::callback);
         render_claimed_.store(false, std::memory_order_release);
-        return;
+        return false;
     }
     previous_buffer_index_ = request.buffer_index;
 
@@ -638,12 +640,12 @@ void AsioCallbackRuntime::DispatchValidated(
         renderer_->ClearAsioBlock(request.buffer_index);
         LatchFault(validation_failure);
         render_claimed_.store(false, std::memory_order_release);
-        return;
+        return false;
     }
     if (request.direct_process == ASIOTrue) {
         renderer_->RenderAsioBlock(request);
         render_claimed_.store(false, std::memory_order_release);
-        return;
+        return true;
     }
 
     deferred_request_ = request;
@@ -654,17 +656,23 @@ void AsioCallbackRuntime::DispatchValidated(
         LatchFault(AsioFailureStage::callback);
         render_claimed_.store(false, std::memory_order_release);
     }
+    return false;
 }
 
 void AsioCallbackRuntime::FinishCallbackTiming(
     bool has_start,
-    std::uint64_t start_tick) noexcept {
+    std::uint64_t start_tick,
+    bool rendered_inline) noexcept {
     std::uint64_t finish{};
     if (has_start && runtime_actions_.query_performance_counter(
             runtime_actions_.context,
             &finish) &&
         finish >= start_tick) {
-        UpdateMaximum(maximum_callback_ticks_, finish - start_tick);
+        const auto elapsed = finish - start_tick;
+        UpdateMaximum(maximum_callback_ticks_, elapsed);
+        if (rendered_inline) {
+            UpdateMaximum(maximum_render_ticks_, elapsed);
+        }
     }
 }
 

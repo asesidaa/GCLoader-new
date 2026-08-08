@@ -63,3 +63,7 @@ target_compile_definitions(AsioProbeClientTests PRIVATE
 )
 add_dependencies(AsioProbeClientTests AsioProbe)
 add_test(NAME AsioProbeClientTests COMMAND AsioProbeClientTests)
+
+add_executable(AsioOutputBackendTests AsioOutputBackendTests.cpp)
+target_link_libraries(AsioOutputBackendTests PRIVATE gc_audio)
+add_test(NAME AsioOutputBackendTests COMMAND AsioOutputBackendTests)

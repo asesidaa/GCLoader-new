@@ -133,12 +133,13 @@ private:
     void DispatchLegacy(
         long buffer_index,
         ASIOBool direct_process) noexcept;
-    void DispatchValidated(
+    [[nodiscard]] bool DispatchValidated(
         const AsioRenderRequest& request,
         AsioFailureStage validation_failure) noexcept;
     void FinishCallbackTiming(
         bool has_start,
-        std::uint64_t start_tick) noexcept;
+        std::uint64_t start_tick,
+        bool rendered_inline) noexcept;
     void LatchFault(AsioFailureStage stage) noexcept;
     void RecordSampleRateChange(double sample_rate) noexcept;
     [[nodiscard]] bool IsFaulted() const noexcept;
