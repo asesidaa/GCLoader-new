@@ -440,26 +440,49 @@ file(WRITE "${zip_helper}" [=[param(
 )
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $sourcePath = (Resolve-Path -LiteralPath $SourceDirectory).Path
 $destinationPath = [IO.Path]::GetFullPath($DestinationArchive)
 if (Test-Path -LiteralPath $destinationPath) {
     Remove-Item -LiteralPath $destinationPath -Force
 }
-[IO.Compression.ZipFile]::CreateFromDirectory(
-    $sourcePath,
-    $destinationPath,
-    [IO.Compression.CompressionLevel]::Optimal,
-    $false)
-
 $utf8 = [Text.UTF8Encoding]::new($false)
 $expected = @([IO.File]::ReadAllLines($ExpectedEntriesPath, $utf8) |
     Sort-Object)
+$archive = [IO.Compression.ZipFile]::Open(
+    $destinationPath,
+    [IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($relativePath in $expected) {
+        $sourceFile = Join-Path $sourcePath $relativePath.Replace('/', '\')
+        if (-not [IO.File]::Exists($sourceFile)) {
+            throw "Staged ZIP input is missing: $relativePath"
+        }
+        $entry = $archive.CreateEntry(
+            $relativePath,
+            [IO.Compression.CompressionLevel]::Optimal)
+        $entry.LastWriteTime = [DateTimeOffset]((Get-Item -LiteralPath $sourceFile).LastWriteTime)
+        $inputStream = [IO.File]::OpenRead($sourceFile)
+        $outputStream = $entry.Open()
+        try {
+            $inputStream.CopyTo($outputStream)
+        }
+        finally {
+            $outputStream.Dispose()
+            $inputStream.Dispose()
+        }
+    }
+}
+finally {
+    $archive.Dispose()
+}
+
 $archive = [IO.Compression.ZipFile]::OpenRead($destinationPath)
 try {
     $actual = @($archive.Entries |
         Where-Object { $_.Name.Length -ne 0 } |
-        ForEach-Object { $_.FullName.Replace('\', '/') } |
+        ForEach-Object { $_.FullName } |
         Sort-Object)
     $differences = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
     if ($differences.Count -ne 0) {

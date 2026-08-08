@@ -31,6 +31,25 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
 ]=])
+set(portable_zip_script "${test_root}/verify-portable-zip.ps1")
+file(WRITE "${portable_zip_script}" [=[param(
+    [Parameter(Mandatory = $true)]
+    [string]$Archive
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+try {
+    $nonPortable = @($zip.Entries |
+        Where-Object { $_.FullName.Contains('\') })
+    if ($nonPortable.Count -ne 0) {
+        throw "ZIP contains Windows-only entry separators: $($nonPortable[0].FullName)"
+    }
+}
+finally {
+    $zip.Dispose()
+}
+]=])
 
 set(test_commit 0123456789abcdef0123456789abcdef01234567)
 
@@ -286,6 +305,19 @@ file(SHA256 "${success_ZIP}" source_hash)
 file(SHA256 "${success_DIST_ZIP}" dist_hash)
 if(NOT source_hash STREQUAL dist_hash)
     message(FATAL_ERROR "Distribution ZIP is not the verified source ZIP")
+endif()
+execute_process(
+    COMMAND "${GC_TEST_POWERSHELL_EXECUTABLE}"
+        -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "${portable_zip_script}"
+        -Archive "${success_ZIP}"
+    RESULT_VARIABLE portable_result
+    OUTPUT_VARIABLE portable_output
+    ERROR_VARIABLE portable_error
+)
+if(NOT portable_result EQUAL 0)
+    message(FATAL_ERROR
+        "ZIP entry paths are not portable: ${portable_output}${portable_error}")
 endif()
 
 set(extract_root "${test_root}/verified-package")
