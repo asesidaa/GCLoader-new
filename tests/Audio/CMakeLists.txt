@@ -45,3 +45,7 @@ add_test(NAME AsioCapabilityProbeTests COMMAND AsioCapabilityProbeTests)
 add_executable(AsioClockTests AsioClockTests.cpp)
 target_link_libraries(AsioClockTests PRIVATE gc_asio)
 add_test(NAME AsioClockTests COMMAND AsioClockTests)
+
+add_executable(AsioCallbackRuntimeTests AsioCallbackRuntimeTests.cpp)
+target_link_libraries(AsioCallbackRuntimeTests PRIVATE gc_asio)
+add_test(NAME AsioCallbackRuntimeTests COMMAND AsioCallbackRuntimeTests)
