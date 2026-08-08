@@ -1,6 +1,7 @@
 #include "Nesys/NesysServicePatch.h"
 
 #include "Nesys/NesysHookTransaction.h"
+#include "Nesys/ThreadPriorityOverride.h"
 #include "Nesys/Launcher/NesysServiceLauncher.h"
 #include "Nesys/Registry/RegistryConfigOverride.h"
 #include "Nesys/Network/ServerAddressOverride.h"
@@ -124,6 +125,13 @@ bool initialize_feature_plan(
         return false;
     }
 
+    if (plan.thread_priority_override &&
+        !InitializeThreadPriorityOverride(role)) {
+        PLOG_ERROR
+            << "NesysServicePatch: thread priority override state initialization failed";
+        return false;
+    }
+
     std::uintptr_t executable_base = 0;
     if (plan.service_ping_redirect) {
         executable_base = reinterpret_cast<std::uintptr_t>(
@@ -145,6 +153,9 @@ bool initialize_feature_plan(
     }
     if (plan.registry_config_override) {
         AppendRegistryOverrideHookRequests(requests);
+    }
+    if (plan.thread_priority_override) {
+        AppendThreadPriorityOverrideHookRequest(requests);
     }
     if (role == ProcessRole::Service) {
         append_service_exit_diagnostic_hook_request(requests);
@@ -223,6 +234,11 @@ bool initialize_feature_plan(
                 << "NesysServicePatch: component active"
                 << " name=registry_config_override"
                 << " owned_api_hooks=3";
+        }
+        if (plan.thread_priority_override) {
+            PLOG_INFO
+                << "NesysServicePatch: component active"
+                << " name=thread_priority_override";
         }
         if (plan.service_launcher) {
             PLOG_INFO

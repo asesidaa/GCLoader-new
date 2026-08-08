@@ -20,6 +20,7 @@ struct NesysFeaturePlan {
     bool synthetic_adapter{false};
     bool server_address_override{false};
     bool registry_config_override{false};
+    bool thread_priority_override{false};
     bool service_launcher{false};
     bool service_ping_redirect{false};
     std::size_t api_hook_count{0};

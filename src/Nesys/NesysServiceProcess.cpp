@@ -191,6 +191,8 @@ NesysFeaturePlan ResolveNesysFeaturePlan(
     if (network_enabled) {
         plan.synthetic_adapter = true;
         plan.server_address_override = true;
+        plan.thread_priority_override = true;
+        ++plan.api_hook_count;
         if (role == ProcessRole::Game) {
             plan.api_hook_count += 5;
         } else {

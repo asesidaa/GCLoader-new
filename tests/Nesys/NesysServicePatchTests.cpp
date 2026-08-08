@@ -47,6 +47,7 @@ int expect_plan(
         << " synthetic_adapter=" << actual.synthetic_adapter
         << " server_address_override=" << actual.server_address_override
         << " registry_override=" << actual.registry_config_override
+        << " thread_priority_override=" << actual.thread_priority_override
         << " launcher=" << actual.service_launcher
         << " ping=" << actual.service_ping_redirect
         << " hooks=" << actual.api_hook_count
@@ -281,43 +282,43 @@ int main() {
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Game, false, false),
         NesysFeaturePlan{
-            true, false, false, false, false, false, true, false, 1},
+            true, false, false, false, false, false, false, true, false, 1},
         "game locale-only launcher");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Game, false, true),
         NesysFeaturePlan{
-            true, false, true, false, false, true, true, false, 4},
+            true, false, true, false, false, true, false, true, false, 4},
         "game registry-only");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Game, true, false),
         NesysFeaturePlan{
-            true, true, false, true, true, false, true, false, 6},
+            true, true, false, true, true, false, true, true, false, 7},
         "game network-only");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Game, true, true),
         NesysFeaturePlan{
-            true, true, true, true, true, true, true, false, 9},
+            true, true, true, true, true, true, true, true, false, 10},
         "game combined");
 
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, false, false),
         NesysFeaturePlan{
-            false, false, false, false, false, false, false, false, 0},
+            false, false, false, false, false, false, false, false, false, 0},
         "service network-off registry-off");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, false, true),
         NesysFeaturePlan{
-            true, false, true, false, false, true, false, false, 4},
+            true, false, true, false, false, true, false, false, false, 4},
         "service registry-only");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, true, false),
         NesysFeaturePlan{
-            true, true, false, true, true, false, false, true, 11},
+            true, true, false, true, true, false, true, false, true, 12},
         "service network-only");
     failures += expect_plan(
         ResolveNesysFeaturePlan(ProcessRole::Service, true, true),
         NesysFeaturePlan{
-            true, true, true, true, true, true, false, true, 14},
+            true, true, true, true, true, true, true, false, true, 15},
         "service combined");
 
     return failures == 0 ? 0 : 1;
