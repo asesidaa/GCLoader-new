@@ -10,9 +10,18 @@
 
 namespace gc::config {
 
+struct ConfigDocumentMigrations {
+    bool registry_paths{};
+    bool audio_backend{};
+
+    [[nodiscard]] bool any() const noexcept {
+        return registry_paths || audio_backend;
+    }
+};
+
 struct ParsedInputConfigDocument {
     InputConfig config;
-    bool registry_paths_migrated{};
+    ConfigDocumentMigrations migrations;
 };
 
 [[nodiscard]] std::expected<ParsedInputConfigDocument, std::string>
@@ -60,7 +69,7 @@ struct PreparedGameSystemPathConfig {
 [[nodiscard]] std::expected<PreparedGameSystemPathConfig, std::string>
 PrepareAndPersistGameSystemPathConfiguration(
     InputConfig config,
-    bool registry_schema_migrated,
+    bool document_migrated,
     const std::filesystem::path& config_path,
     bool native_testmode_storage_available,
     GameSystemPathPreparationActions actions =

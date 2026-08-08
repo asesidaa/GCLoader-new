@@ -214,7 +214,7 @@ int TestEnabledFallbackFlow()
     const auto parsed = gc::config::ParseAndValidateInputConfigDocument(
         LegacyConfig(true));
     failures += Expect(
-        parsed && parsed->registry_paths_migrated &&
+        parsed && parsed->migrations.registry_paths &&
             parsed->config.registry().enabled() &&
             parsed->config.registry().system_path() == "D:\\system",
         "legacy enabled config migrates before preparation");
@@ -231,7 +231,7 @@ int TestEnabledFallbackFlow()
     const auto prepared =
         gc::config::PrepareAndPersistGameSystemPathConfiguration(
             parsed->config,
-            parsed->registry_paths_migrated,
+            parsed->migrations.any(),
             config_path,
             true,
             PreparationActions(directories, persisted));
@@ -273,9 +273,9 @@ int TestRegistryDisabledFlow()
     const auto parsed = gc::config::ParseAndValidateInputConfigDocument(
         LegacyConfig(false));
     failures += Expect(
-        parsed && parsed->registry_paths_migrated &&
+        parsed && parsed->migrations.registry_paths &&
             !parsed->config.registry().enabled(),
-        "legacy disabled config migrates only in memory");
+        "legacy disabled config is marked for canonical persistence");
     if (!parsed) {
         return failures;
     }
@@ -285,20 +285,20 @@ int TestRegistryDisabledFlow()
     const auto prepared =
         gc::config::PrepareAndPersistGameSystemPathConfiguration(
             parsed->config,
-            parsed->registry_paths_migrated,
+            parsed->migrations.any(),
             L"H:\\遊戲\\config.toml",
             true,
             PreparationActions(directories, writer));
     failures += Expect(
-        prepared && !prepared->persisted && writer.writes == 0 &&
-            writer.replaces == 0 && writer.removes == 0 &&
+        prepared && prepared->persisted && writer.writes == 1 &&
+            writer.replaces == 1 && writer.removes == 0 &&
             prepared->config.registry().system_path() == "D:\\system" &&
             prepared->runtime.configured_path == "D:\\system" &&
             prepared->runtime.resolved_path == L"D:\\system" &&
             !prepared->runtime.redirect_enabled &&
             directories.calls.size() ==
                 gc::system_path::kRequiredTreeLeaves.size(),
-        "disabled registry mode validates real D without persistence");
+        "disabled registry mode persists the canonical migrated document");
     if (!prepared) {
         return failures;
     }

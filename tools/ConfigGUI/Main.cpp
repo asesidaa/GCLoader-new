@@ -1,6 +1,7 @@
 #include "InputEditorModel.h"
 #include "Win32D3D11Host.h"
 
+#include "Config/ConfigDocument.h"
 #include "Config/RegistryConfig.h"
 #include "Config/TargetFps.h"
 #include "Config/config.h"
@@ -16,14 +17,13 @@
 
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
-#include <rfl/toml.hpp>
-
 #include <Windows.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -1115,10 +1115,14 @@ void DrawExperimental(InputConfig& config, bool& dirty)
         experimental.enable_nesys_service_adapter_patch = nesys_adapter;
         dirty = true;
     }
-    bool exclusive_audio = experimental.enable_wasapi_exclusive_audio();
+    auto& audio_backend = experimental.audio_backend();
+    bool exclusive_audio =
+        audio_backend == gc::config::AudioBackend::wasapi_exclusive;
     if (ImGui::Checkbox("WASAPI exclusive low-latency audio", &exclusive_audio))
     {
-        experimental.enable_wasapi_exclusive_audio = exclusive_audio;
+        audio_backend = exclusive_audio
+            ? gc::config::AudioBackend::wasapi_exclusive
+            : gc::config::AudioBackend::directsound;
         dirty = true;
     }
     ImGui::SameLine();
@@ -1158,7 +1162,7 @@ void DrawLogging(InputConfig& config, bool& dirty)
     ImGui::TextDisabled("Takes effect after restarting the game.");
 }
 
-std::expected<InputConfig, std::string> LoadConfig(
+std::expected<gc::config::ParsedInputConfigDocument, std::string> LoadConfig(
     const std::string& path)
 {
     std::ifstream input(path);
@@ -1169,7 +1173,7 @@ std::expected<InputConfig, std::string> LoadConfig(
     const std::string text{
         std::istreambuf_iterator<char>{input},
         std::istreambuf_iterator<char>{}};
-    return gc::config::ParseAndValidateInputConfig(text);
+    return gc::config::ParseAndValidateInputConfigDocument(text);
 }
 
 std::expected<void, std::string> SaveConfig(
@@ -1181,26 +1185,9 @@ std::expected<void, std::string> SaveConfig(
     {
         return std::unexpected(validation.error());
     }
-    try
-    {
-        std::ofstream output(path, std::ios::trunc);
-        if (!output.is_open())
-        {
-            return std::unexpected("Could not open " + path + " for writing");
-        }
-        output << rfl::toml::write(config);
-        if (!output)
-        {
-            return std::unexpected("Failed while writing " + path);
-        }
-        return {};
-    }
-    catch (const std::exception& error)
-    {
-        return std::unexpected(
-            "Could not serialize configuration: " +
-            std::string(error.what()));
-    }
+    return gc::config::WriteInputConfigAtomically(
+        std::filesystem::path{path},
+        config);
 }
 
 } // namespace
@@ -1217,7 +1204,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    InputConfig config = std::move(*loaded);
+    const bool config_migrated = loaded->migrations.any();
+    InputConfig config = std::move(loaded->config);
     InputEditorModel editor(config.controller());
     GuiInputContext input(config, editor);
     Win32D3D11Host host;
@@ -1246,7 +1234,7 @@ int main(int argc, char** argv)
     }
     input.InitializeControllers();
 
-    bool dirty = false;
+    bool dirty = config_migrated;
     std::string save_status;
     constexpr ImVec4 clear_color(0.45F, 0.56F, 0.60F, 1.0F);
 

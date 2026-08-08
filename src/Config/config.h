@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Config/AudioConfig.h"
 #include "Config/NativeInputConfig.h"
 #include "Config/RegistryConfig.h"
 #include "Config/TargetFps.h"
@@ -79,12 +80,17 @@ struct ExperimentalConfig
         enable_timer_freeze_patches = false;
     rfl::Rename<"enable_nesys_service_adapter_patch", bool>
         enable_nesys_service_adapter_patch = true;
-    rfl::Rename<"enable_wasapi_exclusive_audio", bool>
-        enable_wasapi_exclusive_audio = false;
+    rfl::Rename<"audio_backend", gc::config::AudioBackend>
+        audio_backend = gc::config::AudioBackend::directsound;
     rfl::Rename<
         "wasapi_exclusive_buffer_ms",
         WasapiBufferMillisecondsConfigValue>
         wasapi_exclusive_buffer_ms = 10;
+    rfl::Rename<"asio_driver_name", std::string> asio_driver_name;
+    rfl::Rename<"asio_buffer_frames", unsigned long>
+        asio_buffer_frames = 0;
+    rfl::Rename<"asio_output_base_channel", unsigned long>
+        asio_output_base_channel = 0;
 };
 
 struct InputConfig
@@ -195,12 +201,31 @@ public:
     }
     [[nodiscard]] bool GetEnableWasapiExclusiveAudio() const
     {
-        return config.experimental().enable_wasapi_exclusive_audio();
+        // Transitional compatibility for the current WASAPI-only hook.
+        return GetAudioBackend() != gc::config::AudioBackend::directsound;
+    }
+    [[nodiscard]] gc::config::AudioBackend GetAudioBackend() const
+    {
+        return config.experimental().audio_backend();
     }
     [[nodiscard]] std::uint32_t GetWasapiExclusiveBufferMs() const
     {
         return static_cast<std::uint32_t>(
             config.experimental().wasapi_exclusive_buffer_ms());
+    }
+    [[nodiscard]] const std::string& GetAsioDriverName() const
+    {
+        return config.experimental().asio_driver_name();
+    }
+    [[nodiscard]] std::uint32_t GetAsioBufferFrames() const
+    {
+        return static_cast<std::uint32_t>(
+            config.experimental().asio_buffer_frames());
+    }
+    [[nodiscard]] std::uint32_t GetAsioOutputBaseChannel() const
+    {
+        return static_cast<std::uint32_t>(
+            config.experimental().asio_output_base_channel());
     }
     [[nodiscard]] const std::string& GetNesysServerIp() const
     {
@@ -231,6 +256,6 @@ private:
     ~ConfigManager() = default;
 
     std::filesystem::path config_path_;
-    bool registry_schema_migrated_{};
+    bool document_migrated_{};
     InputConfig config;
 };

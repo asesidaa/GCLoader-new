@@ -986,7 +986,7 @@ int test_production_diagnostics_use_injected_platform_actions() {
                 diagnostics.messages.back(),
                 "WASAPI exclusive low-latency audio failed.\n"
                 "Restart the game after setting "
-                "enable_wasapi_exclusive_audio = false\n"
+                "audio_backend = 'directsound'\n"
                 "to restore the original DirectSound backend."),
         "runtime fatal displays required disable-setting restart text");
     failures += expect(
@@ -1147,7 +1147,7 @@ int test_null_production_api_and_startup_fatal_reporting() {
         diagnostics.messages.size() == 1 &&
             contains(
                 diagnostics.messages.back(),
-                "enable_wasapi_exclusive_audio = false"),
+                "audio_backend = 'directsound'"),
         "startup fatal displays required disable setting");
     failures += expect(
         diagnostics.termination_codes ==
@@ -1247,7 +1247,7 @@ int test_config_gate_and_attach_failure_policy() {
         diagnostics.messages.size() == 1 &&
             contains(
                 diagnostics.messages.back(),
-                "enable_wasapi_exclusive_audio = false") &&
+                "audio_backend = 'directsound'") &&
             diagnostics.termination_codes.empty(),
         "clean hook failure is actionable and does not terminate");
 

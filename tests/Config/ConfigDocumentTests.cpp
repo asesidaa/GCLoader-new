@@ -108,6 +108,22 @@ std::string LegacyConfig(
             "log_path = '" + std::string{log} + "'");
 }
 
+std::string LegacyAudioConfig(
+    const std::string& distributed,
+    bool enable_wasapi) {
+    auto legacy = RemoveAssignment(distributed, "audio_backend");
+    legacy = RemoveAssignment(std::move(legacy), "asio_driver_name");
+    legacy = RemoveAssignment(std::move(legacy), "asio_buffer_frames");
+    legacy = RemoveAssignment(
+        std::move(legacy),
+        "asio_output_base_channel");
+    return InsertAfterLine(
+        std::move(legacy),
+        "[experimental]",
+        std::string{"enable_wasapi_exclusive_audio = "} +
+            (enable_wasapi ? "true" : "false"));
+}
+
 int ExpectDocumentFailure(
     std::string_view text,
     std::string_view expected_error,
@@ -181,8 +197,75 @@ gc::config::AtomicConfigWriteActions AtomicActions(
 } // namespace
 
 int main() {
+    using gc::config::AudioBackend;
+
     int failures = 0;
     const std::string distributed = ReadDistributedConfig();
+
+    const auto canonical =
+        gc::config::ParseAndValidateInputConfigDocument(distributed);
+    failures += Expect(
+        canonical && !canonical->migrations.any(),
+        "new audio schema requires no migration");
+
+    const auto legacy_directsound =
+        gc::config::ParseAndValidateInputConfigDocument(
+            LegacyAudioConfig(distributed, false));
+    failures += Expect(
+        legacy_directsound &&
+            legacy_directsound->migrations.audio_backend &&
+            legacy_directsound->migrations.any() &&
+            legacy_directsound->config.experimental().audio_backend() ==
+                AudioBackend::directsound &&
+            legacy_directsound->config.experimental()
+                .wasapi_exclusive_buffer_ms() == 10 &&
+            legacy_directsound->config.experimental()
+                .asio_driver_name().empty() &&
+            legacy_directsound->config.experimental()
+                .asio_buffer_frames() == 0 &&
+            legacy_directsound->config.experimental()
+                .asio_output_base_channel() == 0,
+        "legacy false audio Boolean migrates to inactive DirectSound schema");
+
+    const auto legacy_wasapi =
+        gc::config::ParseAndValidateInputConfigDocument(
+            LegacyAudioConfig(distributed, true));
+    failures += Expect(
+        legacy_wasapi && legacy_wasapi->migrations.audio_backend &&
+            legacy_wasapi->config.experimental().audio_backend() ==
+                AudioBackend::wasapi_exclusive &&
+            legacy_wasapi->config.experimental()
+                .wasapi_exclusive_buffer_ms() == 10 &&
+            legacy_wasapi->config.experimental()
+                .asio_driver_name().empty() &&
+            legacy_wasapi->config.experimental()
+                .asio_buffer_frames() == 0 &&
+            legacy_wasapi->config.experimental()
+                .asio_output_base_channel() == 0,
+        "legacy true audio Boolean migrates to WASAPI and inactive ASIO defaults");
+
+    failures += ExpectDocumentFailure(
+        InsertAfterLine(
+            distributed,
+            "[experimental]",
+            "enable_wasapi_exclusive_audio = true"),
+        "both audio_backend and legacy",
+        "new and legacy audio selectors are ambiguous");
+    failures += ExpectDocumentFailure(
+        RemoveAssignment(distributed, "asio_buffer_frames"),
+        "",
+        "new audio schema remains strict when one ASIO field is missing");
+    auto non_boolean_legacy = LegacyAudioConfig(distributed, false);
+    const auto legacy_value = FindAssignment(
+        non_boolean_legacy,
+        "enable_wasapi_exclusive_audio");
+    const auto value_begin = legacy_value +
+        std::string_view{"enable_wasapi_exclusive_audio = "}.size();
+    non_boolean_legacy.replace(value_begin, 5, "'no'");
+    failures += ExpectDocumentFailure(
+        non_boolean_legacy,
+        "legacy enable_wasapi_exclusive_audio must be a Boolean",
+        "legacy audio selector must be Boolean");
 
     const auto migrated =
         gc::config::ParseAndValidateInputConfigDocument(
@@ -192,7 +275,7 @@ int main() {
                 "D:\\system\\DUA\\event",
                 "D:\\system\\CmdFile\\log"));
     failures += Expect(
-        migrated && migrated->registry_paths_migrated &&
+        migrated && migrated->migrations.registry_paths &&
             migrated->config.registry().system_path() == "D:\\system",
         "legacy default leaves migrate to one root");
 
@@ -204,7 +287,7 @@ int main() {
                 ".\\cabinet\\DUA\\event",
                 ".\\cabinet\\CmdFile\\log"));
     failures += Expect(
-        custom && custom->registry_paths_migrated &&
+        custom && custom->migrations.registry_paths &&
             custom->config.registry().system_path() == ".\\cabinet",
         "consistent relative legacy leaves preserve their root");
 
@@ -216,7 +299,7 @@ int main() {
                 "c:/root/DUA/event",
                 "C:\\ROOT\\cmdfile\\LOG"));
     failures += Expect(
-        mixed_case && mixed_case->registry_paths_migrated &&
+        mixed_case && mixed_case->migrations.registry_paths &&
             mixed_case->config.registry().system_path() == "C:\\Root",
         "legacy Windows path components compare case-insensitively");
 
@@ -228,7 +311,7 @@ int main() {
                 "D:\\DUA\\event",
                 "D:\\CmdFile\\log"));
     failures += Expect(
-        drive_root && drive_root->registry_paths_migrated &&
+        drive_root && drive_root->migrations.registry_paths &&
             drive_root->config.registry().system_path() == "D:\\",
         "legacy leaves preserve a Windows drive root");
 
@@ -288,7 +371,7 @@ int main() {
         !unknown_result,
         "unknown nonlegacy fields remain strict after migration");
 
-    const InputConfig canonical = migrated
+    const InputConfig canonical_config = migrated
         ? migrated->config
         : InputConfig{};
     const std::filesystem::path target =
@@ -297,7 +380,7 @@ int main() {
     AtomicFake success_fake{};
     const auto success = gc::config::WriteInputConfigAtomically(
         target,
-        canonical,
+        canonical_config,
         AtomicActions(success_fake));
     failures += Expect(
         success && success_fake.writes == 1 &&
@@ -307,13 +390,18 @@ int main() {
             success_fake.serialized.find("system_path") !=
                 std::string::npos &&
             success_fake.serialized.find("news_path") ==
+                std::string::npos &&
+            success_fake.serialized.find("audio_backend") !=
+                std::string::npos &&
+            success_fake.serialized.find(
+                "enable_wasapi_exclusive_audio") ==
                 std::string::npos,
         "atomic writer commits one canonical sibling replacement");
 
     AtomicFake write_failure{.fail_write = true};
     const auto failed_write = gc::config::WriteInputConfigAtomically(
         target,
-        canonical,
+        canonical_config,
         AtomicActions(write_failure));
     failures += Expect(
         !failed_write && write_failure.writes == 1 &&
@@ -328,7 +416,7 @@ int main() {
     AtomicFake replace_failure{.fail_replace = true};
     const auto failed_replace = gc::config::WriteInputConfigAtomically(
         target,
-        canonical,
+        canonical_config,
         AtomicActions(replace_failure));
     failures += Expect(
         !failed_replace && replace_failure.writes == 1 &&

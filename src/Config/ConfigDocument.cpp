@@ -304,6 +304,43 @@ std::expected<bool, std::string> MigrateLegacyRegistryPaths(
     return true;
 }
 
+std::expected<bool, std::string> MigrateLegacyAudioBackend(
+    toml::table& syntax) {
+    auto* experimental = syntax["experimental"].as_table();
+    if (experimental == nullptr) {
+        return std::unexpected(
+            "Missing or invalid [experimental] table");
+    }
+
+    const bool has_legacy =
+        experimental->contains("enable_wasapi_exclusive_audio");
+    const bool has_backend = experimental->contains("audio_backend");
+    if (has_legacy && has_backend) {
+        return std::unexpected(
+            "config contains both audio_backend and legacy "
+            "enable_wasapi_exclusive_audio");
+    }
+    if (!has_legacy) {
+        return false;
+    }
+
+    const auto legacy =
+        (*experimental)["enable_wasapi_exclusive_audio"].value<bool>();
+    if (!legacy) {
+        return std::unexpected(
+            "legacy enable_wasapi_exclusive_audio must be a Boolean");
+    }
+
+    experimental->insert_or_assign(
+        "audio_backend",
+        *legacy ? "wasapi_exclusive" : "directsound");
+    experimental->erase("enable_wasapi_exclusive_audio");
+    experimental->insert("asio_driver_name", "");
+    experimental->insert("asio_buffer_frames", 0);
+    experimental->insert("asio_output_base_channel", 0);
+    return true;
+}
+
 std::string PathForDiagnostic(const std::filesystem::path& path) {
     const auto utf8 = path.u8string();
     return {
@@ -447,9 +484,13 @@ ParseAndValidateInputConfigDocument(std::string_view text) {
     if (auto obsolete = ValidateObsoleteSyntax(*syntax); !obsolete) {
         return std::unexpected(obsolete.error());
     }
-    auto migration = MigrateLegacyRegistryPaths(*syntax);
-    if (!migration) {
-        return std::unexpected(migration.error());
+    auto registry_migration = MigrateLegacyRegistryPaths(*syntax);
+    if (!registry_migration) {
+        return std::unexpected(registry_migration.error());
+    }
+    auto audio_migration = MigrateLegacyAudioBackend(*syntax);
+    if (!audio_migration) {
+        return std::unexpected(audio_migration.error());
     }
 
     std::ostringstream canonical_text;
@@ -466,7 +507,10 @@ ParseAndValidateInputConfigDocument(std::string_view text) {
     }
     return ParsedInputConfigDocument{
         .config = std::move(parsed.value()),
-        .registry_paths_migrated = *migration,
+        .migrations = {
+            .registry_paths = *registry_migration,
+            .audio_backend = *audio_migration,
+        },
     };
 }
 
@@ -551,7 +595,7 @@ ProductionGameSystemPathPreparationActions() noexcept {
 std::expected<PreparedGameSystemPathConfig, std::string>
 PrepareAndPersistGameSystemPathConfiguration(
     InputConfig config,
-    bool registry_schema_migrated,
+    bool document_migrated,
     const std::filesystem::path& config_path,
     bool native_testmode_storage_available,
     GameSystemPathPreparationActions actions) noexcept {
@@ -580,10 +624,9 @@ PrepareAndPersistGameSystemPathConfiguration(
             config.experimental().enable_testmode_storage_redirect = true;
         }
         const bool must_persist =
-            testmode_redirect_changed ||
+            document_migrated || testmode_redirect_changed ||
             (config.registry().enabled() &&
-             (registry_schema_migrated ||
-              prepared->configured_path_changed));
+             prepared->configured_path_changed);
         if (must_persist) {
             auto persisted = WriteInputConfigAtomically(
                 config_path,

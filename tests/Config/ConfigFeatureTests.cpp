@@ -1,6 +1,7 @@
 #include "Config/config.h"
 
 #include <array>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -186,6 +187,7 @@ int ExpectParseFailure(
 } // namespace
 
 int main() {
+    using gc::config::AudioBackend;
     using gc::config::LoaderLogLevel;
 
     int failures = 0;
@@ -253,8 +255,11 @@ int main() {
         "enable_testmode_storage_redirect",
         "enable_timer_freeze_patches",
         "enable_nesys_service_adapter_patch",
-        "enable_wasapi_exclusive_audio",
+        "audio_backend",
         "wasapi_exclusive_buffer_ms",
+        "asio_driver_name",
+        "asio_buffer_frames",
+        "asio_output_base_channel",
     };
     for (const std::string_view key : required_assignments) {
         failures += ExpectParseFailure(
@@ -334,6 +339,192 @@ int main() {
         ReplaceAssignment(distributed, "level", "'Trace'"),
         "unsupported loader log level");
 
+    struct AudioBackendCase {
+        std::string_view text;
+        AudioBackend value;
+    };
+    constexpr std::array audio_backends{
+        AudioBackendCase{"directsound", AudioBackend::directsound},
+        AudioBackendCase{
+            "wasapi_exclusive",
+            AudioBackend::wasapi_exclusive},
+        AudioBackendCase{"asio", AudioBackend::asio},
+    };
+    for (const auto& test : audio_backends) {
+        auto text = ReplaceAssignment(
+            distributed,
+            "audio_backend",
+            std::string{"'"} + std::string{test.text} + "'");
+        if (test.value == AudioBackend::asio) {
+            text = ReplaceAssignment(
+                std::move(text),
+                "asio_driver_name",
+                "'ASUS Xonar AE ASIO'");
+            text = ReplaceAssignment(
+                std::move(text),
+                "asio_buffer_frames",
+                "192");
+        }
+        const auto parsed = ParseOrExit(text, "supported audio backend");
+        failures += Expect(
+            parsed.experimental().audio_backend() == test.value &&
+                std::string_view{gc::config::AudioBackendName(test.value)} ==
+                    test.text,
+            "audio backend maps to the expected enum and name");
+        const auto round_trip = ParseOrExit(
+            rfl::toml::write(parsed),
+            "audio backend round trip");
+        failures += Expect(
+            round_trip.experimental().audio_backend() == test.value,
+            "audio backend survives round trip");
+    }
+    failures += ExpectParseFailure(
+        ReplaceAssignment(distributed, "audio_backend", "'auto'"),
+        "unknown audio backend");
+
+    const auto valid_asio_settings =
+        gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            "ASUS Xonar AE ASIO",
+            static_cast<std::uint32_t>(LONG_MAX),
+            static_cast<std::uint32_t>(LONG_MAX - 1));
+    failures += Expect(
+        valid_asio_settings.has_value(),
+        "ASIO static limits accept their inclusive boundaries");
+    failures += Expect(
+        gc::config::ValidateAudioBackendSettings(
+            AudioBackend::directsound,
+            "",
+            0,
+            0).has_value(),
+        "inactive ASIO defaults are valid for DirectSound");
+    failures += Expect(
+        !gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            "",
+            192,
+            0),
+        "ASIO rejects an empty driver name");
+    failures += Expect(
+        !gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            std::string(1025, 'x'),
+            192,
+            0),
+        "ASIO rejects a driver name over 1024 encoded bytes");
+    const std::string invalid_utf8{
+        static_cast<char>(0xC3),
+        static_cast<char>(0x28)};
+    failures += Expect(
+        !gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            invalid_utf8,
+            192,
+            0),
+        "ASIO rejects invalid UTF-8 driver text");
+    failures += Expect(
+        !gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            "ASUS Xonar AE ASIO",
+            0,
+            0),
+        "ASIO rejects zero buffer frames");
+    failures += Expect(
+        !gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            "ASUS Xonar AE ASIO",
+            static_cast<std::uint32_t>(LONG_MAX) + 1U,
+            0),
+        "ASIO rejects buffer frames above LONG_MAX");
+    failures += Expect(
+        !gc::config::ValidateAudioBackendSettings(
+            AudioBackend::asio,
+            "ASUS Xonar AE ASIO",
+            192,
+            static_cast<std::uint32_t>(LONG_MAX)),
+        "ASIO rejects a base channel above LONG_MAX minus one");
+
+    auto empty_asio_name = ReplaceAssignment(
+        distributed,
+        "audio_backend",
+        "'asio'");
+    empty_asio_name = ReplaceAssignment(
+        std::move(empty_asio_name),
+        "asio_buffer_frames",
+        "192");
+    failures += ExpectParseFailure(
+        empty_asio_name,
+        "ASIO config with empty driver name",
+        "asio_driver_name");
+
+    auto oversized_asio_name = ReplaceAssignment(
+        distributed,
+        "audio_backend",
+        "'asio'");
+    oversized_asio_name = ReplaceAssignment(
+        std::move(oversized_asio_name),
+        "asio_driver_name",
+        std::string{"'"} + std::string(1025, 'x') + "'");
+    oversized_asio_name = ReplaceAssignment(
+        std::move(oversized_asio_name),
+        "asio_buffer_frames",
+        "192");
+    failures += ExpectParseFailure(
+        oversized_asio_name,
+        "ASIO config with oversized driver name",
+        "asio_driver_name");
+
+    auto zero_asio_frames = ReplaceAssignment(
+        distributed,
+        "audio_backend",
+        "'asio'");
+    zero_asio_frames = ReplaceAssignment(
+        std::move(zero_asio_frames),
+        "asio_driver_name",
+        "'ASUS Xonar AE ASIO'");
+    failures += ExpectParseFailure(
+        zero_asio_frames,
+        "ASIO config with zero frames",
+        "asio_buffer_frames");
+
+    auto excessive_asio_frames = ReplaceAssignment(
+        distributed,
+        "audio_backend",
+        "'asio'");
+    excessive_asio_frames = ReplaceAssignment(
+        std::move(excessive_asio_frames),
+        "asio_driver_name",
+        "'ASUS Xonar AE ASIO'");
+    excessive_asio_frames = ReplaceAssignment(
+        std::move(excessive_asio_frames),
+        "asio_buffer_frames",
+        "2147483648");
+    failures += ExpectParseFailure(
+        excessive_asio_frames,
+        "ASIO config with frames above LONG_MAX",
+        "asio_buffer_frames");
+
+    auto excessive_base_channel = ReplaceAssignment(
+        distributed,
+        "audio_backend",
+        "'asio'");
+    excessive_base_channel = ReplaceAssignment(
+        std::move(excessive_base_channel),
+        "asio_driver_name",
+        "'ASUS Xonar AE ASIO'");
+    excessive_base_channel = ReplaceAssignment(
+        std::move(excessive_base_channel),
+        "asio_buffer_frames",
+        "192");
+    excessive_base_channel = ReplaceAssignment(
+        std::move(excessive_base_channel),
+        "asio_output_base_channel",
+        "2147483647");
+    failures += ExpectParseFailure(
+        excessive_base_channel,
+        "ASIO config with base channel above LONG_MAX minus one",
+        "asio_output_base_channel");
+
     for (const std::uint32_t target :
          {60U, 61U, 144U, 240U, 500U}) {
         const auto parsed = ParseOrExit(
@@ -375,12 +566,24 @@ int main() {
         "false");
     custom_text = ReplaceAssignment(
         std::move(custom_text),
-        "enable_wasapi_exclusive_audio",
-        "true");
+        "audio_backend",
+        "'asio'");
     custom_text = ReplaceAssignment(
         std::move(custom_text),
         "wasapi_exclusive_buffer_ms",
         "20");
+    custom_text = ReplaceAssignment(
+        std::move(custom_text),
+        "asio_driver_name",
+        "'ASUS Xonar AE ASIO'");
+    custom_text = ReplaceAssignment(
+        std::move(custom_text),
+        "asio_buffer_frames",
+        "192");
+    custom_text = ReplaceAssignment(
+        std::move(custom_text),
+        "asio_output_base_channel",
+        "2");
     const auto custom =
         ParseOrExit(custom_text, "custom experimental config");
     failures += Expect(
@@ -392,10 +595,14 @@ int main() {
                 .enable_timer_freeze_patches() &&
             !custom.experimental()
                  .enable_nesys_service_adapter_patch() &&
+            custom.experimental().audio_backend() ==
+                AudioBackend::asio &&
             custom.experimental()
-                .enable_wasapi_exclusive_audio() &&
-            custom.experimental()
-                .wasapi_exclusive_buffer_ms() == 20,
+                .wasapi_exclusive_buffer_ms() == 20 &&
+            custom.experimental().asio_driver_name() ==
+                "ASUS Xonar AE ASIO" &&
+            custom.experimental().asio_buffer_frames() == 192 &&
+            custom.experimental().asio_output_base_channel() == 2,
         "experimental settings parse as one coherent config");
 
     const auto zero_buffer = ParseOrExit(

@@ -32,12 +32,12 @@ static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
 
 constexpr std::string_view kFailureMessage =
     "WASAPI exclusive low-latency audio failed.\n"
-    "Restart the game after setting enable_wasapi_exclusive_audio = false\n"
+    "Restart the game after setting audio_backend = 'directsound'\n"
     "to restore the original DirectSound backend.";
 constexpr std::string_view kPacingFailureMessage =
     "WASAPI exclusive low-latency audio pacing failed.\n"
     "Please increase wasapi_exclusive_buffer_ms and restart the game.\n"
-    "Set enable_wasapi_exclusive_audio = false and restart to restore "
+    "Set audio_backend = 'directsound' and restart to restore "
     "the original DirectSound backend.";
 constexpr REFERENCE_TIME kReferenceTimePerMillisecond = 10'000;
 

@@ -26,6 +26,17 @@ std::expected<void, std::string> ValidateInputConfig(
             "Invalid [experimental].target_fps; expected an integer from 60 through 500");
     }
 
+    if (const auto audio_validation = ValidateAudioBackendSettings(
+            value.experimental().audio_backend(),
+            value.experimental().asio_driver_name(),
+            static_cast<std::uint32_t>(
+                value.experimental().asio_buffer_frames()),
+            static_cast<std::uint32_t>(
+                value.experimental().asio_output_base_channel()));
+        !audio_validation) {
+        return std::unexpected(audio_validation.error());
+    }
+
     if (const auto input_validation = ValidateNativeInputFields(
             value.input_schema_version(),
             value.input_poll_hz(),
@@ -96,12 +107,12 @@ ConfigManager::ConfigManager()
         throw std::runtime_error(result.error());
     }
 
-    registry_schema_migrated_ = result->registry_paths_migrated;
+    document_migrated_ = result->migrations.any();
     config = std::move(result->config);
     PLOG_DEBUG << "Config file parsed successfully" << std::endl;
     PLOG_DEBUG
-        << "Registry path schema migrated="
-        << registry_schema_migrated_;
+        << "Config document migrated="
+        << document_migrated_;
     PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
 }
 
@@ -113,7 +124,7 @@ ConfigManager::PrepareGameSystemPath(
         auto prepared =
             gc::config::PrepareAndPersistGameSystemPathConfiguration(
                 config,
-                registry_schema_migrated_,
+                document_migrated_,
                 config_path_,
                 native_testmode_storage_available);
         if (!prepared) {
@@ -121,7 +132,7 @@ ConfigManager::PrepareGameSystemPath(
         }
 
         config = std::move(prepared->config);
-        registry_schema_migrated_ = false;
+        document_migrated_ = false;
         return std::move(prepared->runtime);
     } catch (const std::exception& error) {
         return std::unexpected(

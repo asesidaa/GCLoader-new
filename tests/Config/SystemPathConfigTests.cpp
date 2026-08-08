@@ -210,9 +210,9 @@ int main() {
                 disabled_directories,
                 disabled_writer));
     failures += Expect(
-        disabled_migration && !disabled_migration->persisted &&
-            disabled_writer.writes == 0 &&
-            disabled_writer.replaces == 0 &&
+        disabled_migration && disabled_migration->persisted &&
+            disabled_writer.writes == 1 &&
+            disabled_writer.replaces == 1 &&
             disabled_migration->config.registry().system_path() ==
                 ".\\legacy" &&
             disabled_migration->runtime.configured_path == "D:\\system" &&
@@ -221,7 +221,7 @@ int main() {
             !disabled_directories.calls.empty() &&
             disabled_directories.calls.front() ==
                 std::filesystem::path{L"D:\\system\\CmdFile\\log"},
-        "disabled legacy parsing validates real D without persistence");
+        "document migration persists even with registry overrides disabled");
 
     DirectoryFake fallback_directories{.failing_calls = {0}};
     WriterFake fallback_writer{};
