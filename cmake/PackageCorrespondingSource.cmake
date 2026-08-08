@@ -193,7 +193,7 @@ else()
     execute_process(
         COMMAND "${GC_PACKAGE_GIT_EXECUTABLE}" archive
             --format=zip --prefix=project/
-            --output="${project_archive}" HEAD
+            "--output=${project_archive}" HEAD
         WORKING_DIRECTORY "${project_source_dir}"
         RESULT_VARIABLE archive_result
         OUTPUT_VARIABLE archive_output

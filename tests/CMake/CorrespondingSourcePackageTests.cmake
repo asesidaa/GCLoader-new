@@ -2,7 +2,10 @@
 
 cmake_minimum_required(VERSION 3.31)
 
-foreach(required IN ITEMS GC_PACKAGE_SCRIPT GC_TEST_BINARY_DIR)
+foreach(required IN ITEMS
+        GC_PACKAGE_SCRIPT
+        GC_TEST_BINARY_DIR
+        GC_TEST_GIT_EXECUTABLE)
     if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
         message(FATAL_ERROR "${required} is required")
     endif()
@@ -46,6 +49,64 @@ function(write_project_archive fixture_root archive_path)
     if(NOT archive_result EQUAL 0)
         message(FATAL_ERROR
             "Could not create project fixture: ${archive_output}${archive_error}")
+    endif()
+endfunction()
+
+function(run_git_packager case_name project_root sdk_root inputs_path)
+    foreach(git_arguments IN ITEMS
+            "init"
+            "config;user.name;Corresponding Source Test"
+            "config;user.email;corresponding-source@example.invalid"
+            "add;."
+            "commit;-m;fixture")
+        execute_process(
+            COMMAND "${GC_TEST_GIT_EXECUTABLE}" ${git_arguments}
+            WORKING_DIRECTORY "${project_root}"
+            RESULT_VARIABLE git_result
+            OUTPUT_VARIABLE git_output
+            ERROR_VARIABLE git_error
+        )
+        if(NOT git_result EQUAL 0)
+            message(FATAL_ERROR
+                "Could not prepare Git fixture: ${git_output}${git_error}")
+        endif()
+    endforeach()
+    execute_process(
+        COMMAND "${GC_TEST_GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${project_root}"
+        RESULT_VARIABLE revision_result
+        OUTPUT_VARIABLE fixture_commit
+        ERROR_VARIABLE revision_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT revision_result EQUAL 0)
+        message(FATAL_ERROR
+            "Could not resolve Git fixture: ${revision_error}")
+    endif()
+
+    set(case_build "${test_root}/${case_name}/build")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}"
+            "-DGC_PACKAGE_BUILD_DIR=${case_build}"
+            "-DGC_PACKAGE_DIST_DIR=${case_build}/dist"
+            "-DGC_PACKAGE_PROJECT_SOURCE_DIR=${project_root}"
+            "-DGC_PACKAGE_GIT_EXECUTABLE=${GC_TEST_GIT_EXECUTABLE}"
+            "-DGC_PACKAGE_ASIO_SDK_DIR=${sdk_root}"
+            "-DGC_PACKAGE_INPUTS_FILE=${inputs_path}"
+            -P "${GC_PACKAGE_SCRIPT}"
+        RESULT_VARIABLE package_result
+        OUTPUT_VARIABLE package_output
+        ERROR_VARIABLE package_error
+    )
+    if(NOT package_result EQUAL 0)
+        message(FATAL_ERROR
+            "Git-backed packaging failed: ${package_output}${package_error}")
+    endif()
+    set(expected_zip
+        "${case_build}/source-package/GCLoader-${fixture_commit}-corresponding-source.zip")
+    if(NOT EXISTS "${expected_zip}")
+        message(FATAL_ERROR
+            "Git-backed packaging did not publish ${expected_zip}")
     endif()
 endfunction()
 
@@ -189,6 +250,8 @@ write_inputs("${inputs_path}" "${sdk_root}" "${dep_one_root}" "${dep_two_root}")
 
 run_packager(success "${project_archive}" "${sdk_root}" "${inputs_path}" OFF
     EXPECT_SUCCESS)
+run_git_packager(git_success "${fixture_root}/project"
+    "${sdk_root}" "${inputs_path}")
 
 foreach(archive IN ITEMS "${success_ZIP}" "${success_DIST_ZIP}")
     if(NOT EXISTS "${archive}")
