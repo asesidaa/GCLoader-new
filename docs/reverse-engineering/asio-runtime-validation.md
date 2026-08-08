@@ -2,7 +2,7 @@
 
 # ASIO Runtime Validation
 
-**Date:** 2026-08-08  
+**Date:** 2026-08-08
 **Status:** Build and non-streaming Xonar probe accepted; deployment and
 gameplay acceptance remain pending
 
