@@ -49,3 +49,15 @@ add_test(NAME AsioClockTests COMMAND AsioClockTests)
 add_executable(AsioCallbackRuntimeTests AsioCallbackRuntimeTests.cpp)
 target_link_libraries(AsioCallbackRuntimeTests PRIVATE gc_asio)
 add_test(NAME AsioCallbackRuntimeTests COMMAND AsioCallbackRuntimeTests)
+
+add_executable(AsioProbeProtocolTests AsioProbeProtocolTests.cpp)
+target_link_libraries(AsioProbeProtocolTests PRIVATE gc_asio)
+add_test(NAME AsioProbeProtocolTests COMMAND AsioProbeProtocolTests)
+
+add_executable(AsioProbeClientTests AsioProbeClientTests.cpp)
+target_link_libraries(AsioProbeClientTests PRIVATE gc_asio)
+target_compile_definitions(AsioProbeClientTests PRIVATE
+        GC_ASIO_PROBE_TEST_PATH="$<TARGET_FILE:AsioProbe>"
+)
+add_dependencies(AsioProbeClientTests AsioProbe)
+add_test(NAME AsioProbeClientTests COMMAND AsioProbeClientTests)
