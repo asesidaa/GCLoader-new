@@ -287,9 +287,17 @@ source is committed for this purpose.
 ## Save-Time Probe
 
 ConfigGUI must not load arbitrary vendor code in-process. It launches a Win32
-`AsioProbe` helper hidden, captures a structured result through an anonymous
-pipe, and enforces a bounded timeout. Crash, timeout, malformed output, or a
-failed capability check prevents Save and leaves the existing file untouched.
+`AsioProbe` helper hidden, exchanges a structured request and result through
+paired anonymous pipes, and enforces a bounded timeout. Crash, timeout,
+malformed output, or a failed capability check prevents Save and leaves the
+existing file untouched.
+
+ConfigGUI resolves the helper as an absolute sibling executable and starts it
+with `CreateProcessW`, not through a command shell. The arbitrary driver name
+and numeric request travel through a length-prefixed, size-bounded pipe message;
+they are not interpolated into a command line. A kill-on-close Job Object owns
+the helper so timeout, GUI exit, or cancellation cannot leave a vendor driver
+loaded in an orphan process.
 
 The helper and runtime share a project-owned `gc_asio` library so the probe does
 not become a second compatibility implementation.
@@ -304,9 +312,10 @@ performs this sequence:
 5. require 48 kHz through `canSampleRate`;
 6. validate the exact frame count against minimum, maximum, and granularity;
 7. query both selected output channels and require supported PCM sample types;
-8. prepare exactly those two output channels with `createBuffers`;
-9. query input/output latency after buffer creation;
-10. dispose buffers, restore any temporarily changed sample rate, release the
+8. make the documented pre-start `outputReady` support probe;
+9. prepare exactly those two output channels with `createBuffers`;
+10. query input/output latency after the output-ready probe and buffer creation;
+11. dispose buffers, restore any temporarily changed sample rate, release the
     driver, and uninitialize COM.
 
 The probe never calls `start` and never intentionally emits audio. It may briefly
@@ -353,10 +362,16 @@ The implementation adds:
 
 - complete CC0-1.0 and GPL-3.0-only texts;
 - a short root license-scope document;
-- SPDX identifiers on new project-owned ASIO files;
+- `SPDX-License-Identifier: CC0-1.0` on new project-owned ASIO host, probe,
+  adapter, and test files; those files remain freely reusable on their own;
 - a third-party notice document containing the pinned dependency notices and
   Steinberg attribution;
 - copies of the applicable notices in the distribution directory.
+
+The external SDK files retain Steinberg's GPLv3 notices. The license-scope
+document explains that compiling the CC0 project files against that GPLv3 SDK
+produces a GPL-3.0-only combined work even though the independently authored
+project files keep their CC0 identifiers.
 
 The current git history has one author. The pinned compiled dependencies were
 audited as MIT, BSD, Boost Software License, or public-domain/MIT alternatives;
@@ -407,9 +422,11 @@ Windows system reference without guessing a foreground window. Creating a sound
 buffer before successful priority cooperative level continues to fail according
 to the facade contract.
 
-WASAPI retains its current event-driven render worker. ASIO has no GCLoader
+WASAPI retains its current event-driven render worker. ASIO has no polling
 render thread: the driver owns the callback schedule and requests one configured
-block at a time.
+block at a time. A callback renders inline when `directProcess` is true. A
+pre-created real-time deferral worker handles the same request when the driver
+sets `directProcess` false.
 
 ## Generic ASIO Host Contract
 
@@ -418,8 +435,10 @@ block at a time.
 - Read only the 32-bit `HKLM\SOFTWARE\ASIO` registry view.
 - Convert UTF-8 config text and registry names through checked UTF-16 paths.
 - Resolve a registered CLSID; never accept a configured DLL path.
-- Use COM instantiation and hold the returned `IASIO` interface through an RAII
-  owner on a non-callback control thread.
+- Use COM instantiation on one dedicated, joinable host-control thread. That
+  thread owns COM initialization, the returned `IASIO` interface, lifecycle
+  calls, and teardown through an RAII owner; callback threads never assume that
+  ownership.
 - Allow one active ASIO host per process. ASIO callbacks have no user-context
   pointer, so one atomic callback router targets the committed host. Probe work
   runs in a different process and does not conflict.
@@ -433,13 +452,23 @@ Runtime performs:
 3. capability and exact configuration validation;
 4. `canSampleRate(48000)` and `setSampleRate(48000)` when necessary;
 5. output-channel inspection;
-6. callback-router publication;
-7. `createBuffers` for the selected stereo pair and exact frame count;
-8. `getLatencies` after creation;
-9. callback-safe preallocation and clock reset;
-10. `start`;
-11. stable presentation-clock establishment;
-12. backend commit.
+6. a documented pre-start `outputReady` call to determine whether the driver
+   supports that latency optimization;
+7. callback-router publication;
+8. `createBuffers` for the selected stereo pair and exact frame count;
+9. `getLatencies` after both the output-ready probe and buffer creation;
+10. callback-safe preallocation, deferral-worker readiness, and clock reset;
+11. `start`;
+12. stable presentation-clock establishment within a two-second control-thread
+    deadline;
+13. backend commit.
+
+The startup wait never holds a resource needed by either callback path. A
+returned `start` followed by no stable callback sequence is a pre-commit failure
+and follows the normal WASAPI fallback path. A vendor call that itself never
+returns cannot be safely abandoned inside the game process; the out-of-process
+save probe and its timeout are the practical early guard against that class of
+driver failure.
 
 Teardown calls `stop`, waits for the SDK guarantee that callbacks have ceased,
 clears the callback router, disposes buffers, releases the driver, and then
@@ -449,10 +478,17 @@ uninitializes COM. Driver code is never unloaded from `DllMain`.
 
 For driver values `(minimum, maximum, preferred, granularity)`:
 
-- the configured value must be within the inclusive range;
-- granularity `-1` permits powers of two only;
+- all sizes must be positive and the preferred value must be in the inclusive
+  range;
+- when minimum equals maximum, preferred must equal that fixed value,
+  granularity must be `0`, and only that value is accepted;
+- granularity `-1` permits powers of two only within the range;
+- granularity `1` accepts every integer in the range;
 - granularity greater than `1` requires an exact multiple;
-- granularity `0` or `1` accepts every integer in range;
+- granularity `0` with a non-fixed range, values below `-1`, and other
+  internally inconsistent metadata are rejected;
+- the exact value is still passed to `createBuffers`, whose result is the final
+  driver verdict;
 - no value is silently clamped or rounded.
 
 The preferred value is displayed and used to populate a newly selected driver's
@@ -478,27 +514,36 @@ buffers. No intermediate interleaved PCM16 block is added for ASIO.
 
 The preferred callback is `bufferSwitchTimeInfo`. The legacy `bufferSwitch`
 path calls `getSamplePosition` from the callback and otherwise shares the same
-render function.
+request path.
 
-Each callback may only:
+Callback ingress may only:
 
 1. validate the buffer index and committed callback generation;
-2. read the supplied or queried sample position and timestamp;
-3. plan the future output span using the reported output latency;
-4. render exactly the configured frame count;
-5. convert/deinterleave into the selected planar buffers;
-6. publish atomic counters and presentation-clock observations;
-7. call `outputReady` when the driver reported support.
+2. copy or query the sample position and timestamp;
+3. claim the single render request for that buffer;
+4. either process it immediately when `directProcess` is true or publish it to
+   the preallocated deferral handoff and wake the worker when false;
+5. publish atomic counters or a one-way fault.
 
-The callback performs no allocation, mutex acquisition, driver discovery,
+The render operation, whether inline or deferred, then:
+
+1. plans the future output span using the reported output latency;
+2. renders exactly the configured frame count;
+3. converts and deinterleaves into the selected planar buffers;
+4. publishes presentation-clock observations and completion counters;
+5. calls `outputReady` when the pre-start probe reported support.
+
+Neither callback path performs allocation, mutex acquisition, driver discovery,
 configuration lookup, file or console logging, COM lifetime change, blocking
 wait, or last-owner destruction. Diagnostic formatting and fatal handling occur
 on a control path that consumes atomically published state.
 
-`directProcess` is advisory. On Windows the SDK permits processing on the
-thread-based callback path; adding a second queued worker would add a block of
-latency and a second deadline. The callback therefore processes directly and
-records deadline/overload evidence.
+The deferral worker is created before `start`, registered for the same real-time
+priority policy used by the audio subsystem, and woken through a bounded,
+preallocated handoff. Deferral adds scheduling overhead but never intentionally
+adds a whole audio block. A second callback arriving before the preceding
+deferred request completes is a deadline miss and backend fault; requests are
+never overwritten, coalesced, or rendered concurrently.
 
 ## Presentation Clock and Shared Song Time
 
@@ -600,12 +645,15 @@ Use fake registry, COM, `IASIO`, process-launch, and render-core seams to cover:
 - exact buffer range and all granularity rules without rounding;
 - base-channel bounds, channel-name reporting, mixed/unsupported channel types,
   and every supported conversion including clipping and silence;
-- callback indices, double-buffer alternation, output-ready behavior, callback
-  generation invalidation, and teardown ordering;
+- callback indices, double-buffer alternation, output-ready probing before
+  latency query, callback generation invalidation, and teardown ordering;
+- inline `directProcess` rendering, deferred-worker rendering, handoff overrun,
+  and the guarantee that render operations never overlap;
 - the first two priming callbacks, stable third callback, output-latency future
   placement, legacy sample-position fallback, regression, and discontinuity;
 - helper success, structured failure, timeout, crash, and no-write-on-failure;
-- ASIO runtime failure before commit followed by one WASAPI startup;
+- ASIO runtime failure or stable-clock timeout before commit followed by one
+  WASAPI startup;
 - no automatic hot fallback after commit;
 - config defaults, legacy migration, round-trip serialization, GUI edit model,
   and backend-specific validation;
@@ -672,7 +720,9 @@ part of this design.
 | Unsupported user buffer is silently changed | Validate exact range/granularity and reject |
 | Multi-output driver routes to wrong speakers | Persist and display the selected stereo base channel and names |
 | Callback misses deadlines | Preallocate, avoid locks/logging, collect atomic deadline and overload metrics |
+| Driver requests deferred processing | Use a pre-created real-time worker and a bounded, non-overwriting handoff |
 | ASIO disappears after Save | Repeat the authoritative runtime probe and fall back before commit |
+| A vendor call hangs in-process | Use the bounded save helper as an early guard; document that an entered runtime driver call cannot be force-abandoned safely |
 | Mid-song device loss corrupts timing | Stop with restart guidance; do not hot-switch clocks |
 | Wrong-bitness driver is selected | Enumerate and instantiate only the 32-bit registry view |
 | Universal wrapper adds hidden latency | Treat its reported latency and runtime results like any other driver |
