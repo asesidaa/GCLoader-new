@@ -321,7 +321,7 @@ foreach(dependency IN LISTS GC_PACKAGE_DEPENDENCY_NAMES)
     file(APPEND "${metadata_root}/fetchcontent-overrides.cmake"
         "set(FETCHCONTENT_SOURCE_DIR_${dependency_upper} \"\${CMAKE_CURRENT_LIST_DIR}/../third_party/fetchcontent/${dependency}\" CACHE PATH \"\" FORCE)\n")
     string(APPEND offline_overrides
-        "    ('-DFETCHCONTENT_SOURCE_DIR_${dependency_upper}=' + (Join-Path $PSScriptRoot 'third_party/fetchcontent/${dependency}'))\n")
+        "    ('-DFETCHCONTENT_SOURCE_DIR_${dependency_upper}=' + (Join-Path $SourceRoot 'third_party/fetchcontent/${dependency}'))\n")
 endforeach()
 
 foreach(toolchain_variable IN ITEMS
@@ -342,7 +342,7 @@ file(WRITE "${metadata_root}/toolchain.txt"
     "cxx_compiler=${GC_PACKAGE_CXX_COMPILER}\n"
     "architecture=Win32 x86 (run from vcvars32.bat)\n"
     "configure=./configure-offline.ps1\n"
-    "default_build_directory=%TEMP%/GCLoader-${project_commit}-build\n"
+    "default_paths=%TEMP%/GCLoader-<commit>-<manifest>-<run>-{src,build}\n"
     "build=configure-offline.ps1 builds iDmacDrv32 ConfigGUI AsioProbe\n"
     "dependency_overrides=build-metadata/fetchcontent-overrides.cmake\n")
 
@@ -354,19 +354,26 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$manifestPath = Join-Path $PSScriptRoot 'corresponding-source-manifest.txt'
+$manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.Substring(0, 8).ToLowerInvariant()
+$shortCommit = '@PROJECT_COMMIT@'.Substring(0, 12)
+$runId = [Guid]::NewGuid().ToString('N').Substring(0, 8)
+$instanceId = "$shortCommit-$manifestHash-$runId"
+$SourceRoot = Join-Path ([IO.Path]::GetTempPath()) "GCLoader-$instanceId-src"
+New-Item -ItemType Junction -Path $SourceRoot -Target $PSScriptRoot | Out-Null
 if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
-    $BuildDirectory = Join-Path ([IO.Path]::GetTempPath()) 'GCLoader-@PROJECT_COMMIT@-build'
+    $BuildDirectory = Join-Path ([IO.Path]::GetTempPath()) "GCLoader-$instanceId-build"
 }
 $configureArguments = @(
     '-S'
-    (Join-Path $PSScriptRoot 'project')
+    (Join-Path $SourceRoot 'project')
     '-B'
     $BuildDirectory
     '-G'
     ']=])
 string(APPEND offline_script "${GC_PACKAGE_GENERATOR}'\n")
 string(APPEND offline_script [=[    ('-DCMAKE_BUILD_TYPE=' + $BuildType)
-    ('-DGC_ASIO_SDK_DIR=' + (Join-Path $PSScriptRoot 'third_party/asiosdk'))
+    ('-DGC_ASIO_SDK_DIR=' + (Join-Path $SourceRoot 'third_party/asiosdk'))
     '-DFETCHCONTENT_FULLY_DISCONNECTED=ON'
 ]=])
 string(APPEND offline_script "${offline_overrides}")
