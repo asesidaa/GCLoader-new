@@ -5,7 +5,8 @@ cmake_minimum_required(VERSION 3.31)
 foreach(required IN ITEMS
         GC_PACKAGE_SCRIPT
         GC_TEST_BINARY_DIR
-        GC_TEST_GIT_EXECUTABLE)
+        GC_TEST_GIT_EXECUTABLE
+        GC_TEST_POWERSHELL_EXECUTABLE)
     if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
         message(FATAL_ERROR "${required} is required")
     endif()
@@ -18,6 +19,18 @@ if(test_root STREQUAL "" OR test_root MATCHES "^[A-Za-z]:/$")
 endif()
 file(REMOVE_RECURSE "${test_root}")
 file(MAKE_DIRECTORY "${test_root}")
+
+set(unicode_extract_script "${test_root}/extract-unicode-zip.ps1")
+file(WRITE "${unicode_extract_script}" [=[param(
+    [Parameter(Mandatory = $true)]
+    [string]$Archive,
+    [Parameter(Mandatory = $true)]
+    [string]$Destination
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)
+]=])
 
 set(test_commit 0123456789abcdef0123456789abcdef01234567)
 
@@ -91,6 +104,7 @@ function(run_git_packager case_name project_root sdk_root inputs_path)
             "-DGC_PACKAGE_DIST_DIR=${case_build}/dist"
             "-DGC_PACKAGE_PROJECT_SOURCE_DIR=${project_root}"
             "-DGC_PACKAGE_GIT_EXECUTABLE=${GC_TEST_GIT_EXECUTABLE}"
+            "-DGC_PACKAGE_POWERSHELL_EXECUTABLE=${GC_TEST_POWERSHELL_EXECUTABLE}"
             "-DGC_PACKAGE_ASIO_SDK_DIR=${sdk_root}"
             "-DGC_PACKAGE_INPUTS_FILE=${inputs_path}"
             -P "${GC_PACKAGE_SCRIPT}"
@@ -118,6 +132,8 @@ function(write_sdk sdk_root with_license)
     file(WRITE "${sdk_root}/README.md" "fixture ASIO SDK\n")
     file(WRITE "${sdk_root}/common/asio.h" "/* fixture SDK header */\n")
     file(WRITE "${sdk_root}/documentation/ASIO SDK.pdf" "fixture PDF\n")
+    file(WRITE "${sdk_root}/documentation/ASIO® exact name.pdf"
+        "fixture Unicode PDF name\n")
     file(WRITE
         "${sdk_root}/Steinberg ASIO Logo Artwork/ASIO-compatible-logo-Steinberg-TM-BW.png"
         "fixture logo\n")
@@ -192,6 +208,7 @@ function(run_packager case_name archive_path sdk_root inputs_path dirty)
         "-DGC_PACKAGE_PROJECT_ARCHIVE=${archive_path}"
         "-DGC_PACKAGE_PROJECT_COMMIT=${test_commit}"
         "-DGC_PACKAGE_DIRTY=${dirty}"
+        "-DGC_PACKAGE_POWERSHELL_EXECUTABLE=${GC_TEST_POWERSHELL_EXECUTABLE}"
         "-DGC_PACKAGE_ASIO_SDK_DIR=${sdk_root}"
         "-DGC_PACKAGE_INPUTS_FILE=${inputs_path}")
     if(NOT "${ARG_EXPECTED_ARCHIVE_SHA256}" STREQUAL "")
@@ -266,7 +283,20 @@ endif()
 
 set(extract_root "${test_root}/verified-package")
 file(MAKE_DIRECTORY "${extract_root}")
-file(ARCHIVE_EXTRACT INPUT "${success_ZIP}" DESTINATION "${extract_root}")
+execute_process(
+    COMMAND "${GC_TEST_POWERSHELL_EXECUTABLE}"
+        -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "${unicode_extract_script}"
+        -Archive "${success_ZIP}"
+        -Destination "${extract_root}"
+    RESULT_VARIABLE extract_result
+    OUTPUT_VARIABLE extract_output
+    ERROR_VARIABLE extract_error
+)
+if(NOT extract_result EQUAL 0)
+    message(FATAL_ERROR
+        "Could not extract verified package: ${extract_output}${extract_error}")
+endif()
 set(package_root
     "${extract_root}/GCLoader-${test_commit}-corresponding-source")
 foreach(required IN ITEMS
@@ -281,6 +311,7 @@ foreach(required IN ITEMS
         project/SOURCE-OFFER.md
         third_party/asiosdk/LICENSE.txt
         "third_party/asiosdk/documentation/ASIO SDK.pdf"
+        "third_party/asiosdk/documentation/ASIO® exact name.pdf"
         third_party/fetchcontent/dep_one/LICENSE.txt
         third_party/fetchcontent/dep_one/include/dep_one.h
         third_party/fetchcontent/dep_two/LICENSE.txt

@@ -14,5 +14,6 @@ add_test(
         -DGC_PACKAGE_SCRIPT=${PROJECT_SOURCE_DIR}/cmake/PackageCorrespondingSource.cmake
         -DGC_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/corresponding-source-package
         -DGC_TEST_GIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -DGC_TEST_POWERSHELL_EXECUTABLE=${GC_POWERSHELL_EXECUTABLE}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/CorrespondingSourcePackageTests.cmake
 )

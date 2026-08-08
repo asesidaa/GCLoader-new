@@ -6,6 +6,9 @@ include(ProjectOptions)
 include(AsioSdk)
 gc_require_asio_sdk()
 find_package(Git REQUIRED)
+find_program(GC_POWERSHELL_EXECUTABLE
+        NAMES powershell.exe pwsh.exe
+        REQUIRED)
 include(Dependencies)
 
 # Keep this list synchronized with every FetchContent source used by the build,
@@ -157,6 +160,7 @@ add_custom_target(gc-package-corresponding-source
         "-DGC_PACKAGE_DIST_DIR=${GC_DIST_DIR}"
         "-DGC_PACKAGE_PROJECT_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
         "-DGC_PACKAGE_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DGC_PACKAGE_POWERSHELL_EXECUTABLE=${GC_POWERSHELL_EXECUTABLE}"
         "-DGC_PACKAGE_ASIO_SDK_DIR=${GC_ASIO_SDK_DIR}"
         "-DGC_PACKAGE_INPUTS_FILE=${GC_PACKAGE_INPUTS_FILE}"
         -P "${CMAKE_SOURCE_DIR}/cmake/PackageCorrespondingSource.cmake"

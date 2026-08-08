@@ -48,7 +48,8 @@ foreach(required IN ITEMS
         GC_PACKAGE_BUILD_DIR
         GC_PACKAGE_DIST_DIR
         GC_PACKAGE_ASIO_SDK_DIR
-        GC_PACKAGE_INPUTS_FILE)
+        GC_PACKAGE_INPUTS_FILE
+        GC_PACKAGE_POWERSHELL_EXECUTABLE)
     gc_require_value(${required})
 endforeach()
 
@@ -393,32 +394,82 @@ foreach(relative_path IN LISTS manifest_files)
         "${file_hash}  ${portable_path}\n")
 endforeach()
 
+file(GLOB_RECURSE archive_files
+    LIST_DIRECTORIES FALSE
+    RELATIVE "${staging_root}"
+    "${staging_root}/*")
+list(SORT archive_files)
+set(expected_archive_entries "")
+foreach(relative_path IN LISTS archive_files)
+    string(REPLACE "\\" "/" portable_path "${relative_path}")
+    string(APPEND expected_archive_entries "${portable_path}\n")
+endforeach()
+set(expected_entries_file "${package_area}/.expected-archive-entries.txt")
+file(WRITE "${expected_entries_file}" "${expected_archive_entries}")
+
+set(zip_helper "${package_area}/.create-verified-unicode-zip.ps1")
+file(WRITE "${zip_helper}" [=[param(
+    [Parameter(Mandatory = $true)]
+    [string]$SourceDirectory,
+    [Parameter(Mandatory = $true)]
+    [string]$DestinationArchive,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedEntriesPath
+)
+
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$sourcePath = (Resolve-Path -LiteralPath $SourceDirectory).Path
+$destinationPath = [IO.Path]::GetFullPath($DestinationArchive)
+if (Test-Path -LiteralPath $destinationPath) {
+    Remove-Item -LiteralPath $destinationPath -Force
+}
+[IO.Compression.ZipFile]::CreateFromDirectory(
+    $sourcePath,
+    $destinationPath,
+    [IO.Compression.CompressionLevel]::Optimal,
+    $false)
+
+$utf8 = [Text.UTF8Encoding]::new($false)
+$expected = @([IO.File]::ReadAllLines($ExpectedEntriesPath, $utf8) |
+    Sort-Object)
+$archive = [IO.Compression.ZipFile]::OpenRead($destinationPath)
+try {
+    $actual = @($archive.Entries |
+        Where-Object { $_.Name.Length -ne 0 } |
+        ForEach-Object { $_.FullName.Replace('\', '/') } |
+        Sort-Object)
+    $differences = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
+    if ($differences.Count -ne 0) {
+        throw "ZIP entry names differ from the staged source: $differences"
+    }
+    Write-Output "verified_entries=$($actual.Count)"
+}
+finally {
+    $archive.Dispose()
+}
+]=])
+
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E tar cf "${temporary_zip}"
-        --format=zip "${package_name}"
-    WORKING_DIRECTORY "${staging_root}"
+    COMMAND "${GC_PACKAGE_POWERSHELL_EXECUTABLE}"
+        -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "${zip_helper}"
+        -SourceDirectory "${staging_root}"
+        -DestinationArchive "${temporary_zip}"
+        -ExpectedEntriesPath "${expected_entries_file}"
     RESULT_VARIABLE create_result
     OUTPUT_VARIABLE create_output
     ERROR_VARIABLE create_error
 )
 if(NOT create_result EQUAL 0 OR NOT EXISTS "${temporary_zip}")
-    file(REMOVE "${temporary_zip}")
+    file(REMOVE
+        "${temporary_zip}"
+        "${zip_helper}"
+        "${expected_entries_file}")
     message(FATAL_ERROR
         "Could not create corresponding-source ZIP: ${create_output}${create_error}")
 endif()
-
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E tar tf "${temporary_zip}"
-    RESULT_VARIABLE inspect_result
-    OUTPUT_VARIABLE archive_listing
-    ERROR_VARIABLE inspect_error
-)
-if(NOT inspect_result EQUAL 0 OR
-        NOT archive_listing MATCHES "corresponding-source-manifest.txt")
-    file(REMOVE "${temporary_zip}")
-    message(FATAL_ERROR
-        "Could not verify corresponding-source ZIP: ${inspect_error}")
-endif()
+file(REMOVE "${zip_helper}" "${expected_entries_file}")
 
 file(SHA256 "${temporary_zip}" archive_hash)
 if(DEFINED GC_PACKAGE_EXPECTED_ARCHIVE_SHA256 AND
