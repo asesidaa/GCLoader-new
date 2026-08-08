@@ -508,6 +508,15 @@ if(NOT dist_rename_result STREQUAL "0")
         "Could not publish dist corresponding-source ZIP: ${dist_rename_result}")
 endif()
 
+file(GLOB stale_dist_archives
+    LIST_DIRECTORIES FALSE
+    "${package_dist_dir}/GCLoader-*-corresponding-source.zip")
+foreach(stale_archive IN LISTS stale_dist_archives)
+    if(NOT "${stale_archive}" STREQUAL "${dist_final_zip}")
+        file(REMOVE "${stale_archive}")
+    endif()
+endforeach()
+
 file(REMOVE_RECURSE "${staging_root}")
 message(STATUS
     "Published ${final_zip}\n"

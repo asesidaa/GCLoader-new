@@ -265,8 +265,15 @@ write_dependency("${dep_two_root}" TRUE dep_two)
 set(inputs_path "${fixture_root}/inputs.cmake")
 write_inputs("${inputs_path}" "${sdk_root}" "${dep_one_root}" "${dep_two_root}")
 
+set(stale_dist_zip
+    "${test_root}/success/build/dist/GCLoader-0000000000000000000000000000000000000000-corresponding-source.zip")
+file(MAKE_DIRECTORY "${test_root}/success/build/dist")
+file(WRITE "${stale_dist_zip}" "stale package\n")
 run_packager(success "${project_archive}" "${sdk_root}" "${inputs_path}" OFF
     EXPECT_SUCCESS)
+if(EXISTS "${stale_dist_zip}")
+    message(FATAL_ERROR "Successful packaging retained a stale dist ZIP")
+endif()
 run_git_packager(git_success "${fixture_root}/project"
     "${sdk_root}" "${inputs_path}")
 
