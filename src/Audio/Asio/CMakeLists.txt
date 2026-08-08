@@ -1,8 +1,10 @@
 add_library(gc_asio STATIC
         AsioBufferRules.cpp
+        AsioCapabilityProbe.cpp
         AsioDriver.cpp
         AsioDriverCatalog.cpp
         AsioSampleConverter.cpp
+        AsioSession.cpp
 )
 target_include_directories(gc_asio PUBLIC
         ${PROJECT_SOURCE_DIR}/src

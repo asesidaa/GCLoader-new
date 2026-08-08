@@ -33,3 +33,11 @@ add_test(NAME AsioDriverCatalogTests COMMAND AsioDriverCatalogTests)
 add_executable(AsioDriverTests AsioDriverTests.cpp)
 target_link_libraries(AsioDriverTests PRIVATE gc_asio)
 add_test(NAME AsioDriverTests COMMAND AsioDriverTests)
+
+add_executable(AsioSessionTests AsioSessionTests.cpp)
+target_link_libraries(AsioSessionTests PRIVATE gc_asio)
+add_test(NAME AsioSessionTests COMMAND AsioSessionTests)
+
+add_executable(AsioCapabilityProbeTests AsioCapabilityProbeTests.cpp)
+target_link_libraries(AsioCapabilityProbeTests PRIVATE gc_asio)
+add_test(NAME AsioCapabilityProbeTests COMMAND AsioCapabilityProbeTests)
