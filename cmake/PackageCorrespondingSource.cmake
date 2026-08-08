@@ -355,7 +355,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $manifestPath = Join-Path $PSScriptRoot 'corresponding-source-manifest.txt'
-$manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.Substring(0, 8).ToLowerInvariant()
+$manifestStream = [IO.File]::OpenRead($manifestPath)
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $manifestHashBytes = $sha256.ComputeHash($manifestStream)
+}
+finally {
+    $sha256.Dispose()
+    $manifestStream.Dispose()
+}
+$manifestHash = [BitConverter]::ToString($manifestHashBytes).Replace('-', '').Substring(0, 8).ToLowerInvariant()
 $shortCommit = '@PROJECT_COMMIT@'.Substring(0, 12)
 $runId = [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $instanceId = "$shortCommit-$manifestHash-$runId"

@@ -373,6 +373,10 @@ foreach(fragment IN ITEMS
         message(FATAL_ERROR "Offline script is missing ${fragment}")
     endif()
 endforeach()
+string(FIND "${offline_script}" "Get-FileHash" unsupported_hash_cmdlet)
+if(NOT unsupported_hash_cmdlet EQUAL -1)
+    message(FATAL_ERROR "Offline script depends on unavailable Get-FileHash")
+endif()
 
 run_packager(dirty "${project_archive}" "${sdk_root}" "${inputs_path}" ON)
 run_packager(missing_sdk "${project_archive}"
