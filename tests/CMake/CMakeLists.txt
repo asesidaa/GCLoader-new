@@ -7,3 +7,11 @@ add_test(
         -DGC_TEST_GENERATOR=${CMAKE_GENERATOR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/AsioSdkConfigureTests.cmake
 )
+
+add_test(
+    NAME CorrespondingSourcePackageTests
+    COMMAND ${CMAKE_COMMAND}
+        -DGC_PACKAGE_SCRIPT=${PROJECT_SOURCE_DIR}/cmake/PackageCorrespondingSource.cmake
+        -DGC_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/corresponding-source-package
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/CorrespondingSourcePackageTests.cmake
+)

@@ -13,4 +13,5 @@ in this repository or licensed by this notice.
 
 The complete CC0-1.0 and GPL-3.0-only legal texts are in `LICENSES/`.
 Third-party origins and license choices are recorded in
-`THIRD_PARTY_NOTICES.md`.
+`THIRD_PARTY_NOTICES.md`. `SOURCE-OFFER.md` defines the matching-source release
+policy for every ASIO-enabled binary distribution.
