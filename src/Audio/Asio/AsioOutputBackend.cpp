@@ -997,6 +997,7 @@ private:
                 render_gap_frames_.load(std::memory_order_relaxed),
             .maximum_callback_ticks = callback.maximum_callback_ticks,
             .maximum_render_ticks = callback.maximum_render_ticks,
+            .qpc_frequency = callback.qpc_frequency,
             .pending_cursor_queries =
                 pending_cursor_queries_.load(std::memory_order_relaxed),
             .unmapped_cursor_failures =

@@ -1,7 +1,8 @@
 #pragma once
 
+#include "Audio/AudioPatch.h"
+#include "Audio/Asio/AsioOutputBackend.h"
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
-#include "Audio/Wasapi/WasapiAudioPatch.h"
 
 #include <condition_variable>
 #include <cstdint>
@@ -32,14 +33,14 @@ using CreateWasapiApiFn = std::unique_ptr<IWasapiApi> (*)() noexcept;
 using StartExclusiveAudioEngineFn =
     decltype(&ExclusiveAudioEngine::StartAndWait);
 
-bool InstallWasapiAudioHookWithResolver(
+bool InstallAudioHookWithResolver(
     bool enabled,
     AudioMinHookApi minhook,
     AudioResolverApi resolver,
     AudioHookFailure* failure) noexcept;
 
-bool WasapiAudioPatchInitWithDependencies(
-    bool enabled,
+bool AudioPatchInitWithDependencies(
+    gc::config::AudioBackend requested_backend,
     std::uint32_t configured_buffer_ms,
     AudioPatchInitDependencies dependencies);
 
@@ -57,6 +58,17 @@ void ReportAudioRuntimeFailure(
 void ReportAudioStartupFailure(
     const AudioStartupFailure&,
     AudioPatchPlatformActions) noexcept;
+void ReportAsioStartupSucceeded(
+    const AsioCapabilityReport&,
+    AudioPatchPlatformActions) noexcept;
+void ReportAsioRuntimeSummary(
+    const AsioRuntimeCountersSnapshot&,
+    AudioPatchPlatformActions) noexcept;
+void ReportAsioRuntimeFailure(
+    const AsioCapabilityReport*,
+    const AsioFailure&,
+    const AsioRuntimeCountersSnapshot&,
+    AudioPatchPlatformActions) noexcept;
 
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn,
@@ -66,43 +78,12 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     std::shared_ptr<IAudioEngineObserver>,
     AudioStartupFailure*) noexcept;
 
-class IExclusiveEngineStartup {
-public:
-    virtual ~IExclusiveEngineStartup() = default;
-    virtual IAudioEngineServices* Start(
-        AudioStartupFailure*) noexcept = 0;
-};
-
-class CachedExclusiveEngineFactory final : public IExclusiveEngineFactory {
-public:
-    explicit CachedExclusiveEngineFactory(
-        IExclusiveEngineStartup&) noexcept;
-
-    IAudioEngineServices* GetOrCreate(
-        const AudioStartupFailure**) noexcept override;
-
-private:
-    enum class State {
-        Uninitialized,
-        Initializing,
-        Succeeded,
-        Failed,
-    };
-
-    IExclusiveEngineStartup& startup_;
-    std::mutex mutex_;
-    std::condition_variable condition_;
-    State state_{State::Uninitialized};
-    IAudioEngineServices* engine_{};
-    AudioStartupFailure failure_{};
-};
-
 HRESULT InvokeDirectSoundCreate8Detour(
     LPCGUID device_guid,
     LPDIRECTSOUND8* output,
     LPUNKNOWN outer,
-    IExclusiveEngineFactory& factory,
-    IAudioStartupFailureReporter& reporter,
+    IAudioBackendControllerFactory& factory,
+    IAudioBackendControllerReporter& reporter,
     DirectSoundCreate8Fn saved_original) noexcept;
 
 } // namespace gc::audio::detail

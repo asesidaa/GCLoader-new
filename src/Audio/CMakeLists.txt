@@ -1,6 +1,7 @@
 add_subdirectory(Asio)
 
 add_library(gc_audio STATIC
+        AudioBackendController.cpp
         Asio/AsioOutputBackend.cpp
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
@@ -10,7 +11,7 @@ add_library(gc_audio STATIC
         Mixer/MiniaudioMixer.cpp
         Wasapi/ExclusiveAudioEngine.cpp
         Wasapi/OutputPacingTracker.cpp
-        Wasapi/WasapiAudioPatch.cpp
+        AudioPatch.cpp
         Wasapi/WasapiAudioTypes.cpp
         Wasapi/WasapiEndpoint.cpp
         Wasapi/WasapiPresentedOutputClock.cpp

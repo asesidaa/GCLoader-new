@@ -1,5 +1,5 @@
-#include "Audio/Wasapi/WasapiAudioPatch.h"
-#include "Audio/Wasapi/WasapiAudioPatchInternal.h"
+#include "Audio/AudioPatch.h"
+#include "Audio/AudioPatchInternal.h"
 
 #include <audioclient.h>
 
@@ -22,8 +22,8 @@ using gc::audio::AudioHookFailure;
 using gc::audio::AudioHookStage;
 using gc::audio::AudioStartupFailure;
 using gc::audio::IAudioEngineServices;
-using gc::audio::IAudioStartupFailureReporter;
-using gc::audio::IExclusiveEngineFactory;
+using gc::audio::IAudioBackendControllerFactory;
+using gc::audio::IAudioBackendControllerReporter;
 
 static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
 static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
@@ -145,7 +145,7 @@ bool install(
     FakeState& state,
     AudioHookFailure* failure) {
     g_fake = &state;
-    return gc::audio::detail::InstallWasapiAudioHookWithResolver(
+    return gc::audio::detail::InstallAudioHookWithResolver(
         enabled,
         fake_minhook_api(),
         fake_resolver_api(),
@@ -159,7 +159,7 @@ bool install_with_apis(
     gc::audio::detail::AudioResolverApi resolver,
     AudioHookFailure* failure) {
     g_fake = &state;
-    return gc::audio::detail::InstallWasapiAudioHookWithResolver(
+    return gc::audio::detail::InstallAudioHookWithResolver(
         enabled,
         minhook,
         resolver,
@@ -357,7 +357,7 @@ int expect_invalid_api_rejected(
     return failures;
 }
 
-class FakeEngineServices final : public IAudioEngineServices {
+class FakeEngineServices final : public gc::audio::IAudioEngineController {
 public:
     std::unique_ptr<gc::audio::MixerVoice> CreateVoice(
         const gc::audio::NormalizedSourceFormat&,
@@ -383,79 +383,51 @@ public:
     void CountPendingCursorQuery() noexcept override {}
 
     void CountUnmappedCursorFailure() noexcept override {}
+
+    HRESULT StartForWindow(HWND window) noexcept override {
+        ++start_calls;
+        last_window = window;
+        return start_result;
+    }
+
+    int start_calls{};
+    HWND last_window{};
+    HRESULT start_result{DS_OK};
 };
 
-class FakeEngineFactory final : public IExclusiveEngineFactory {
+class FakeEngineFactory final : public IAudioBackendControllerFactory {
 public:
-    IAudioEngineServices* GetOrCreate(
-        const AudioStartupFailure** failure) noexcept override {
+    gc::audio::IAudioEngineController* GetOrCreate() noexcept override {
         ++calls;
-        if (failure != nullptr) {
-            *failure = engine == nullptr ? &failure_to_return : nullptr;
-        }
         return engine;
     }
 
-    IAudioEngineServices* engine{};
-    AudioStartupFailure failure_to_return{};
+    gc::audio::IAudioEngineController* engine{};
     int calls{};
 };
 
-class FakeEngineStartup final
-    : public gc::audio::detail::IExclusiveEngineStartup {
+class FakeFailureReporter final : public IAudioBackendControllerReporter {
 public:
-    IAudioEngineServices* Start(
-        AudioStartupFailure* output) noexcept override {
-        calls.fetch_add(1, std::memory_order_relaxed);
-        {
-            std::unique_lock lock(mutex);
-            entered = true;
-            condition.notify_all();
-            condition.wait(lock, [this] {
-                return !block_until_released || released;
-            });
-        }
-        if (output != nullptr) {
-            *output = std::move(failure);
-        }
-        return engine;
+    void AsioFallback(const gc::audio::AsioFailure& failure) noexcept override {
+        ++fallback_calls;
+        fallback_failure = failure;
     }
 
-    void WaitUntilEntered() {
-        std::unique_lock lock(mutex);
-        condition.wait(lock, [this] { return entered; });
-    }
-
-    void Release() {
-        {
-            std::lock_guard lock(mutex);
-            released = true;
-        }
-        condition.notify_all();
-    }
-
-    IAudioEngineServices* engine{};
-    AudioStartupFailure failure{};
-    std::atomic_int calls{};
-    bool block_until_released{};
-
-private:
-    std::mutex mutex;
-    std::condition_variable condition;
-    bool entered{};
-    bool released{};
-};
-
-class FakeFailureReporter final : public IAudioStartupFailureReporter {
-public:
     void FatalStartupFailure(
-        const AudioStartupFailure& failure) noexcept override {
-        ++calls;
-        reported = &failure;
+        const gc::audio::AudioBackendStartupFailure& failure) noexcept override {
+        ++fatal_calls;
+        fatal_failure = failure;
     }
 
-    int calls{};
-    const AudioStartupFailure* reported{};
+    void FatalControllerAllocationFailure() noexcept override {
+        ++allocation_calls;
+    }
+
+    int fallback_calls{};
+    int fatal_calls{};
+    int allocation_calls{};
+    std::optional<gc::audio::AsioFailure> fallback_failure;
+    std::optional<gc::audio::AudioBackendStartupFailure> fatal_failure;
 };
 
 std::atomic_int g_saved_original_calls{};
@@ -614,14 +586,14 @@ int test_detour_validation_and_success() {
         output == nullptr,
         "direct detour nulls output before aggregation validation");
     failures += expect(
-        validation_factory.calls == 0 && reporter.calls == 0 &&
+        validation_factory.calls == 0 && reporter.fatal_calls == 0 &&
+            reporter.allocation_calls == 0 &&
             g_saved_original_calls.load(std::memory_order_relaxed) == 0,
         "validation paths perform no factory reporter or original work");
 
     FakeEngineServices engine;
-    FakeEngineStartup startup;
-    startup.engine = &engine;
-    gc::audio::detail::CachedExclusiveEngineFactory factory(startup);
+    FakeEngineFactory factory;
+    factory.engine = &engine;
 
     LPDIRECTSOUND8 first{};
     LPDIRECTSOUND8 second{};
@@ -647,16 +619,10 @@ int test_detour_validation_and_success() {
         first != nullptr && second != nullptr && first != second,
         "valid detours return independent device facades");
     failures += expect(
-        startup.calls.load(std::memory_order_relaxed) == 1,
-        "two valid detours initialize engine once");
-    const AudioStartupFailure sentinel_failure{};
-    const AudioStartupFailure* success_failure = &sentinel_failure;
+        factory.calls == 2 && engine.start_calls == 0,
+        "detours obtain only the controller and start no audio backend");
     failures += expect(
-        factory.GetOrCreate(&success_failure) == &engine &&
-            success_failure == nullptr,
-        "successful cached lookup publishes null failure");
-    failures += expect(
-        reporter.calls == 0,
+        reporter.fatal_calls == 0 && reporter.allocation_calls == 0,
         "successful detours do not report startup failure");
     failures += expect(
         g_saved_original_calls.load(std::memory_order_relaxed) == 0,
@@ -672,10 +638,7 @@ int test_detour_validation_and_success() {
 
 int test_failure_reporting_and_cache() {
     int failures = 0;
-    FakeEngineStartup startup;
-    startup.failure = exact_startup_failure();
-    const auto expected_failure = exact_startup_failure();
-    gc::audio::detail::CachedExclusiveEngineFactory factory(startup);
+    FakeEngineFactory factory;
     FakeFailureReporter reporter;
     g_saved_original_calls.store(0, std::memory_order_relaxed);
 
@@ -687,76 +650,47 @@ int test_failure_reporting_and_cache() {
             nullptr,
             factory,
             reporter,
-            fake_saved_original) == DSERR_NODRIVER,
-        "engine startup failure returns no driver");
+            fake_saved_original) == DSERR_OUTOFMEMORY,
+        "controller allocation failure returns out of memory");
     failures += expect(
         output == nullptr,
         "engine startup failure leaves output null");
     failures += expect(
-        reporter.calls == 1 && reporter.reported != nullptr &&
-            same_failure(*reporter.reported, expected_failure),
-        "engine startup failure reports exact failure once");
+        reporter.allocation_calls == 1 && reporter.fatal_calls == 0,
+        "controller allocation failure uses the non-callback fatal reporter");
     failures += expect(
         g_saved_original_calls.load(std::memory_order_relaxed) == 0,
         "failed detour never calls saved original");
 
-    const AudioStartupFailure* cached_failure{};
-    failures += expect(
-        factory.GetOrCreate(&cached_failure) == nullptr,
-        "cached failure returns no engine");
-    failures += expect(
-        startup.calls.load(std::memory_order_relaxed) == 1,
-        "cached failure is not retried");
-    failures += expect(
-        cached_failure != nullptr &&
-            same_failure(*cached_failure, expected_failure),
-        "cached failure preserves exact startup diagnostics");
-    failures += expect(
-        cached_failure == reporter.reported,
-        "cached failure replays one stable immutable value");
-    failures += expect(
-        reporter.calls == 1,
-        "direct cached lookup does not report a second fatal failure");
+    failures += expect(factory.calls == 1,
+        "failed valid detour performs one controller lookup");
     return failures;
 }
 
 int test_concurrent_first_callers_share_initialization() {
-    int failures = 0;
     FakeEngineServices engine;
-    FakeEngineStartup startup;
-    startup.engine = &engine;
-    startup.block_until_released = true;
-    gc::audio::detail::CachedExclusiveEngineFactory factory(startup);
-    std::atomic_bool begin{};
-    IAudioEngineServices* first{};
-    IAudioEngineServices* second{};
-
-    auto call_factory = [&](IAudioEngineServices** result) {
-        while (!begin.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-        }
-        const AudioStartupFailure* failure{};
-        *result = factory.GetOrCreate(&failure);
-    };
-    std::thread first_caller(call_factory, &first);
-    std::thread second_caller(call_factory, &second);
-    begin.store(true, std::memory_order_release);
-    startup.WaitUntilEntered();
-    for (int attempt = 0; attempt != 100; ++attempt) {
-        std::this_thread::yield();
+    FakeEngineFactory factory;
+    factory.engine = &engine;
+    FakeFailureReporter reporter;
+    LPDIRECTSOUND8 device{};
+    int failures = expect(
+        gc::audio::detail::InvokeDirectSoundCreate8Detour(
+            nullptr,
+            &device,
+            nullptr,
+            factory,
+            reporter,
+            fake_saved_original) == DS_OK &&
+            device != nullptr && engine.start_calls == 0,
+        "hook callback remains backend-free");
+    const HWND game_window = reinterpret_cast<HWND>(0x1234);
+    if (device != nullptr) {
+        failures += expect(
+            device->SetCooperativeLevel(game_window, DSSCL_PRIORITY) == DS_OK &&
+                engine.start_calls == 1 && engine.last_window == game_window,
+            "facade starts through the controller only after priority HWND");
+        device->Release();
     }
-    failures += expect(
-        startup.calls.load(std::memory_order_relaxed) == 1,
-        "concurrent first callers allow one initializer");
-    startup.Release();
-    first_caller.join();
-    second_caller.join();
-    failures += expect(
-        first == &engine && second == &engine,
-        "concurrent first callers receive published engine");
-    failures += expect(
-        startup.calls.load(std::memory_order_relaxed) == 1,
-        "concurrent publication does not retry initialization");
     return failures;
 }
 
@@ -998,6 +932,161 @@ int test_production_diagnostics_use_injected_platform_actions() {
     return failures;
 }
 
+int test_asio_diagnostics_use_injected_platform_actions() {
+    DiagnosticState diagnostics;
+    g_diagnostics = &diagnostics;
+    const auto actions = fake_platform_actions();
+
+    gc::audio::AsioCapabilityReport report{};
+    report.registration.registry_name = "XONAR SOUND CARD(64)";
+    report.registration.clsid = {
+        0x12345678,
+        0x1234,
+        0x5678,
+        {0x90, 0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56, 0x78},
+    };
+    report.reported_driver_name = "Xonar AE ASIO";
+    report.driver_version = 7;
+    report.original_sample_rate = 44'100.0;
+    report.sample_rate = 48'000.0;
+    report.buffer_limits = {64, 2048, 192, -1};
+    report.input_channels = 2;
+    report.output_channels = {
+        {0, "Front Left", ASIOSTInt24LSB},
+        {1, "Front Right", ASIOSTInt24LSB},
+    };
+    report.selected_base_channel = 0;
+    report.effective_buffer_frames = 192;
+    report.input_latency_frames = 128;
+    report.output_latency_frames = 384;
+    report.output_ready_supported = true;
+    report.overload_reporting_supported = true;
+    gc::audio::detail::ReportAsioStartupSucceeded(report, actions);
+
+    int failures = expect(
+        diagnostics.info.size() == 1,
+        "ASIO startup emits one structured information record");
+    const std::string_view startup = diagnostics.info.empty()
+        ? std::string_view{}
+        : diagnostics.info.back();
+    for (const auto required : {
+             "requested_backend=asio",
+             "active_backend=asio",
+             "asio_registry_name=\"XONAR SOUND CARD(64)\"",
+             "asio_reported_name=\"Xonar AE ASIO\"",
+             "asio_clsid=\"{12345678-1234-5678-90AB-CDEF12345678}\"",
+             "asio_driver_version=7",
+             "sample_rate=48000",
+             "asio_requested_buffer_frames=192",
+             "asio_buffer_minimum_frames=64",
+             "asio_buffer_maximum_frames=2048",
+             "asio_buffer_preferred_frames=192",
+             "asio_buffer_granularity=-1",
+             "asio_output_base_channel=0",
+             "asio_left_channel_name=\"Front Left\"",
+             "asio_left_sample_type=Int24LSB(17)",
+             "asio_right_channel_name=\"Front Right\"",
+             "asio_right_sample_type=Int24LSB(17)",
+             "asio_input_latency_frames=128",
+             "asio_output_latency_frames=384",
+             "asio_time_info_mode=preferred_with_legacy_fallback",
+             "asio_overload_notifications=true",
+             "asio_output_ready=true",
+             "fallback_reason=none",
+         }) {
+        failures += expect(
+            contains(startup, required),
+            "ASIO startup record contains every capability field");
+    }
+
+    gc::audio::AsioRuntimeCountersSnapshot counters{};
+    counters.callbacks = 1;
+    counters.time_info_callbacks = 2;
+    counters.legacy_callbacks = 3;
+    counters.deferred_callbacks = 4;
+    counters.deadline_misses = 5;
+    counters.silence_substitutions = 6;
+    counters.overload_messages = 7;
+    counters.reset_requests = 8;
+    counters.resync_requests = 9;
+    counters.latency_change_requests = 10;
+    counters.buffer_size_change_requests = 11;
+    counters.sample_rate_change_requests = 12;
+    counters.sample_position_discontinuities = 13;
+    counters.render_gap_frames = 14;
+    counters.maximum_callback_ticks = 15;
+    counters.maximum_render_ticks = 16;
+    counters.qpc_frequency = 10'000'000;
+    counters.pending_cursor_queries = 17;
+    counters.unmapped_cursor_failures = 18;
+    counters.mixer.maximum_simultaneous_voices = 19;
+    gc::audio::detail::ReportAsioRuntimeSummary(counters, actions);
+    const std::string_view summary = diagnostics.info.size() < 2
+        ? std::string_view{}
+        : diagnostics.info.back();
+    for (const auto required : {
+             "callbacks=1",
+             "time_info_callbacks=2",
+             "legacy_callbacks=3",
+             "deferred_callbacks=4",
+             "deadline_misses=5",
+             "silence_substitutions=6",
+             "overload_messages=7",
+             "reset_requests=8",
+             "resync_requests=9",
+             "latency_change_requests=10",
+             "buffer_size_change_requests=11",
+             "sample_rate_change_requests=12",
+             "sample_position_discontinuities=13",
+             "render_gap_frames=14",
+             "maximum_callback_ticks=15",
+             "maximum_render_ticks=16",
+             "qpc_frequency=10000000",
+             "maximum_callback_us=1.5",
+             "maximum_render_us=1.6",
+             "pending_cursor_queries=17",
+             "unmapped_cursor_failures=18",
+             "maximum_simultaneous_voices=19",
+         }) {
+        failures += expect(
+            contains(summary, required),
+            "ASIO runtime summary contains every counter family");
+    }
+
+    gc::audio::AsioFailure runtime_failure{
+        .stage = gc::audio::AsioFailureStage::runtime_clock,
+        .domain = gc::audio::AsioResultDomain::asio,
+        .result = ASE_NoClock,
+        .driver_message = "clock unavailable",
+        .detail = "presentation anchor invalid",
+    };
+    gc::audio::detail::ReportAsioRuntimeFailure(
+        &report,
+        runtime_failure,
+        counters,
+        actions);
+    failures += expect(
+        diagnostics.errors.size() == 1 &&
+            contains(diagnostics.errors.back(),
+                     "asio_failure_stage=runtime_clock") &&
+            contains(diagnostics.errors.back(), "asio_failure_domain=asio") &&
+            contains(diagnostics.errors.back(),
+                     "asio_driver_message=\"clock unavailable\"") &&
+            contains(diagnostics.errors.back(),
+                     "asio_registry_name=\"XONAR SOUND CARD(64)\"") &&
+            contains(diagnostics.errors.back(), "maximum_render_ticks=16"),
+        "ASIO post-commit failure retains identity, cause, and counters");
+    failures += expect(
+        diagnostics.messages.size() == 1 &&
+            contains(diagnostics.messages.back(),
+                     "select WASAPI Exclusive in ConfigGUI") &&
+            diagnostics.termination_codes ==
+                std::vector<DWORD>{ERROR_DEVICE_NOT_AVAILABLE} &&
+            diagnostics.fail_fast_calls == 1,
+        "ASIO post-commit failure requires restart and never falls back");
+    return failures;
+}
+
 int test_pacing_specific_diagnostics() {
     int failures = 0;
     DiagnosticState diagnostics;
@@ -1165,8 +1254,8 @@ int test_config_gate_and_attach_failure_policy() {
     FakeState disabled;
     g_fake = &disabled;
     failures += expect(
-        gc::audio::detail::WasapiAudioPatchInitWithDependencies(
-            false,
+        gc::audio::detail::AudioPatchInitWithDependencies(
+            gc::config::AudioBackend::directsound,
             10,
             {
                 fake_minhook_api(),
@@ -1194,8 +1283,8 @@ int test_config_gate_and_attach_failure_policy() {
     FakeState enabled;
     g_fake = &enabled;
     failures += expect(
-        gc::audio::detail::WasapiAudioPatchInitWithDependencies(
-            true,
+        gc::audio::detail::AudioPatchInitWithDependencies(
+            gc::config::AudioBackend::wasapi_exclusive,
             10,
             {
                 fake_minhook_api(),
@@ -1210,7 +1299,7 @@ int test_config_gate_and_attach_failure_policy() {
                 "requested_backend=wasapi_exclusive") &&
             contains(
                 diagnostics.info.back(),
-                "active_backend=wasapi_exclusive") &&
+                "active_backend=pending") &&
             contains(diagnostics.info.back(), "hook_installed=true") &&
             contains(diagnostics.info.back(), "configured_buffer_ms=10") &&
             contains(
@@ -1219,12 +1308,31 @@ int test_config_gate_and_attach_failure_policy() {
         "enabled config logs the parsed buffer duration before the detour runs");
 
     diagnostics = {};
+    FakeState asio_enabled;
+    g_fake = &asio_enabled;
+    failures += expect(
+        gc::audio::detail::AudioPatchInitWithDependencies(
+            gc::config::AudioBackend::asio,
+            10,
+            {
+                fake_minhook_api(),
+                fake_resolver_api(),
+                fake_platform_actions(),
+            }) &&
+            diagnostics.info.size() == 1 &&
+            contains(diagnostics.info.back(), "requested_backend=asio") &&
+            contains(diagnostics.info.back(), "active_backend=pending") &&
+            contains(diagnostics.info.back(), "hook_installed=true") &&
+            asio_enabled.engine_factory_calls == 0,
+        "ASIO installs the generic hook without starting either backend");
+
+    diagnostics = {};
     FakeState clean_failure;
     clean_failure.module = nullptr;
     g_fake = &clean_failure;
     failures += expect(
-        !gc::audio::detail::WasapiAudioPatchInitWithDependencies(
-            true,
+        !gc::audio::detail::AudioPatchInitWithDependencies(
+            gc::config::AudioBackend::wasapi_exclusive,
             10,
             {
                 fake_minhook_api(),
@@ -1261,8 +1369,8 @@ int test_config_gate_and_attach_failure_policy() {
     bool returned = false;
     bool fail_fast_escaped = false;
     try {
-        returned = gc::audio::detail::WasapiAudioPatchInitWithDependencies(
-            true,
+        returned = gc::audio::detail::AudioPatchInitWithDependencies(
+            gc::config::AudioBackend::asio,
             10,
             {
                 fake_minhook_api(),
@@ -1684,6 +1792,7 @@ int main() {
     failures += test_failure_reporting_and_cache();
     failures += test_concurrent_first_callers_share_initialization();
     failures += test_production_diagnostics_use_injected_platform_actions();
+    failures += test_asio_diagnostics_use_injected_platform_actions();
     failures += test_pacing_specific_diagnostics();
     failures += test_null_production_api_and_startup_fatal_reporting();
     failures += test_config_gate_and_attach_failure_policy();

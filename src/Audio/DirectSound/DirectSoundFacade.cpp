@@ -1,4 +1,5 @@
 #include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/AudioBackendController.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
 #include <cstring>
@@ -40,7 +41,7 @@ std::uint64_t NextPlaybackGeneration(
 } // namespace
 
 HRESULT CreateDirectSoundDevice(
-    IAudioEngineServices& engine,
+    IAudioEngineController& engine,
     IDirectSound8** result) noexcept {
     if (result == nullptr) {
         return DSERR_INVALIDPARAM;
@@ -238,7 +239,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetObjectInPath(
 }
 
 DirectSoundDevice::DirectSoundDevice(
-    IAudioEngineServices& engine) noexcept
+    IAudioEngineController& engine) noexcept
     : engine_(engine) {}
 
 HRESULT STDMETHODCALLTYPE DirectSoundDevice::QueryInterface(
@@ -335,6 +336,12 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetCooperativeLevel(
     }
     if (level != DSSCL_PRIORITY) {
         return DSERR_PRIOLEVELNEEDED;
+    }
+    if (priority_cooperative_level_.load(std::memory_order_acquire)) {
+        return DS_OK;
+    }
+    if (FAILED(engine_.StartForWindow(window))) {
+        return DSERR_NODRIVER;
     }
     priority_cooperative_level_.store(true, std::memory_order_release);
     return DS_OK;

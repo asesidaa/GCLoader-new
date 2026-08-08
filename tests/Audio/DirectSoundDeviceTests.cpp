@@ -1,3 +1,4 @@
+#include "Audio/AudioBackendController.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
 
 #include <cstdint>
@@ -5,13 +6,14 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace {
 
 using gc::audio::AudioCursorTimeline;
 using gc::audio::AudioSnapshot;
 using gc::audio::CreateDirectSoundDevice;
-using gc::audio::IAudioEngineServices;
+using gc::audio::IAudioEngineController;
 using gc::audio::MiniaudioMixer;
 using gc::audio::MixerVoice;
 using gc::audio::NormalizedSourceFormat;
@@ -71,7 +73,7 @@ DSBUFFERDESC SecondaryDescription(WAVEFORMATEX* format) {
     };
 }
 
-class MixerEngineServices final : public IAudioEngineServices {
+class MixerEngineServices final : public IAudioEngineController {
 public:
     MixerEngineServices() {
         ma_result result = MA_ERROR;
@@ -111,9 +113,18 @@ public:
 
     void CountUnmappedCursorFailure() noexcept override {}
 
+    HRESULT StartForWindow(HWND window) noexcept override {
+        ++start_calls;
+        start_windows.push_back(window);
+        return start_result;
+    }
+
     bool initialized{};
     std::uint32_t voice_creations{};
     std::optional<std::uint64_t> output_frame{};
+    HRESULT start_result{DS_OK};
+    std::uint32_t start_calls{};
+    std::vector<HWND> start_windows;
 
 private:
     std::unique_ptr<MiniaudioMixer> mixer_;
@@ -206,18 +217,55 @@ int TestFactoryIdentityAndCooperativeLevel() {
         "buffer creation requires priority cooperative level");
     failures += Expect(
         device->SetCooperativeLevel(nullptr, DSSCL_PRIORITY) ==
-            DSERR_INVALIDPARAM,
+                DSERR_INVALIDPARAM &&
+            engine.start_calls == 0,
         "null cooperative window rejection");
     failures += Expect(
         device->SetCooperativeLevel(reinterpret_cast<HWND>(1), DSSCL_NORMAL) ==
-            DSERR_PRIOLEVELNEEDED,
+                DSERR_PRIOLEVELNEEDED &&
+            engine.start_calls == 0,
         "normal cooperative level rejection");
     failures += Expect(
         device->SetCooperativeLevel(
-            reinterpret_cast<HWND>(1), DSSCL_PRIORITY) == DS_OK,
-        "observed priority cooperative level acceptance");
+            reinterpret_cast<HWND>(1), DSSCL_PRIORITY) == DS_OK &&
+            engine.start_calls == 1 &&
+            engine.start_windows.front() == reinterpret_cast<HWND>(1),
+        "priority cooperative level starts audio with the exact game HWND");
+    failures += Expect(
+        device->SetCooperativeLevel(
+            reinterpret_cast<HWND>(2), DSSCL_PRIORITY) == DS_OK &&
+            engine.start_calls == 1,
+        "repeated priority cooperative level does not restart audio");
 
     failures += Expect(device->Release() == 0, "device final Release returns zero");
+    return failures;
+}
+
+int TestStartupFailureDoesNotUnlockBufferCreation() {
+    MixerEngineServices engine;
+    engine.start_result = E_FAIL;
+    IDirectSound8* device{};
+    int failures = Expect(
+        CreateDirectSoundDevice(engine, &device) == DS_OK && device != nullptr,
+        "device exists before lazy backend startup");
+    if (device == nullptr) {
+        return failures + 1;
+    }
+
+    const HWND window = reinterpret_cast<HWND>(0x1234);
+    failures += Expect(
+        device->SetCooperativeLevel(window, DSSCL_PRIORITY) ==
+                DSERR_NODRIVER &&
+            engine.start_calls == 1 && engine.start_windows.front() == window,
+        "backend startup failure maps to DirectSound no-driver");
+    auto primary = PrimaryDescription();
+    IDirectSoundBuffer* buffer = reinterpret_cast<IDirectSoundBuffer*>(1);
+    failures += Expect(
+        device->CreateSoundBuffer(&primary, &buffer, nullptr) ==
+                DSERR_PRIOLEVELNEEDED &&
+            buffer == nullptr,
+        "failed startup never publishes priority cooperative level");
+    failures += Expect(device->Release() == 0, "failed-start device release");
     return failures;
 }
 
@@ -516,6 +564,7 @@ int TestSecondaryRoutingAndUnsupportedDeviceMethods() {
 int main() {
     int failures = 0;
     failures += TestFactoryIdentityAndCooperativeLevel();
+    failures += TestStartupFailureDoesNotUnlockBufferCreation();
     failures += TestPrimaryValidationAndIdentity();
     failures += TestPrimaryFormatCapabilitiesAndVtable();
     failures += TestSecondaryRoutingAndUnsupportedDeviceMethods();

@@ -21,7 +21,7 @@
 #include "Nesys/NesysServiceProcess.h"
 #include "Logging/SessionLog.h"
 #include "Input/Switch/SwitchInputPatch.h"
-#include "Audio/Wasapi/WasapiAudioPatch.h"
+#include "Audio/AudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
 #include "SystemPath/StartupFatal.h"
 #include "SystemPath/TtxInitGuard.h"
@@ -391,9 +391,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 PLOG_DEBUG
                     << "Renderer device-loss retry initialization complete!";
 
-                if (!gc::audio::WasapiAudioPatchInit()) {
+                if (!gc::audio::AudioPatchInit()) {
                     PLOG_ERROR
-                        << "WasapiAudioPatch: fail-closed DLL attach";
+                        << "AudioPatch: fail-closed DLL attach";
                     return FALSE;
                 }
 
@@ -412,7 +412,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 PLOG_DEBUG << "RFID/JVS feature init complete!";
 
                 if (!gc::framerate::FrameratePatchInit(
-                        gc::audio::IsWasapiAudioHookCommitted())) {
+                        gc::audio::IsAudioHookCommitted())) {
                     PLOG_ERROR
                         << "FrameratePatch: fail-closed DLL attach";
                     return FALSE;

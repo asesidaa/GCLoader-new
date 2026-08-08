@@ -1,8 +1,11 @@
-#include "Audio/Wasapi/WasapiAudioPatch.h"
+#include "Audio/AudioPatch.h"
 
+#include "Audio/Asio/AsioDriver.h"
+#include "Audio/Asio/AsioDriverCatalog.h"
+#include "Audio/Asio/AsioOutputBackend.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
-#include "Audio/Wasapi/WasapiAudioPatchInternal.h"
+#include "Audio/AudioPatchInternal.h"
 #include "Config/config.h"
 
 #include "plog/Log.h"
@@ -14,7 +17,9 @@
 #include <exception>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <new>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -39,6 +44,13 @@ constexpr std::string_view kPacingFailureMessage =
     "Please increase wasapi_exclusive_buffer_ms and restart the game.\n"
     "Set audio_backend = 'directsound' and restart to restore "
     "the original DirectSound backend.";
+constexpr std::string_view kAsioRuntimeFailureMessage =
+    "ASIO low-latency audio failed after startup.\n"
+    "Restart the game. You may select WASAPI Exclusive in ConfigGUI.";
+constexpr std::string_view kGenericStartupFailureMessage =
+    "Low-latency audio could not start.\n"
+    "Correct the ASIO/WASAPI settings, or select DirectSound in ConfigGUI, "
+    "then restart the game.";
 constexpr REFERENCE_TIME kReferenceTimePerMillisecond = 10'000;
 
 constexpr REFERENCE_TIME BufferMillisecondsToReferenceTime(
@@ -82,6 +94,78 @@ const char* audio_failure_stage_name(AudioFailureStage stage) noexcept {
     case AudioFailureStage::ChronicOutputGap: return "ChronicOutputGap";
     }
     return "Unknown";
+}
+
+const char* asio_failure_stage_name(AsioFailureStage stage) noexcept {
+    switch (stage) {
+    case AsioFailureStage::none: return "none";
+    case AsioFailureStage::registry: return "registry";
+    case AsioFailureStage::clsid: return "clsid";
+    case AsioFailureStage::com: return "com";
+    case AsioFailureStage::init: return "init";
+    case AsioFailureStage::identity: return "identity";
+    case AsioFailureStage::channels: return "channels";
+    case AsioFailureStage::sample_rate: return "sample_rate";
+    case AsioFailureStage::buffer_metadata: return "buffer_metadata";
+    case AsioFailureStage::channel_info: return "channel_info";
+    case AsioFailureStage::output_ready_probe: return "output_ready_probe";
+    case AsioFailureStage::callback_prepare: return "callback_prepare";
+    case AsioFailureStage::create_buffers: return "create_buffers";
+    case AsioFailureStage::latency: return "latency";
+    case AsioFailureStage::render_core: return "render_core";
+    case AsioFailureStage::start: return "start";
+    case AsioFailureStage::startup_clock: return "startup_clock";
+    case AsioFailureStage::callback: return "callback";
+    case AsioFailureStage::conversion: return "conversion";
+    case AsioFailureStage::runtime_clock: return "runtime_clock";
+    case AsioFailureStage::output_ready: return "output_ready";
+    case AsioFailureStage::stop: return "stop";
+    case AsioFailureStage::dispose: return "dispose";
+    case AsioFailureStage::restore_sample_rate: return "restore_sample_rate";
+    case AsioFailureStage::protocol: return "protocol";
+    case AsioFailureStage::process_launch: return "process_launch";
+    case AsioFailureStage::process_job: return "process_job";
+    case AsioFailureStage::probe_timeout: return "probe_timeout";
+    case AsioFailureStage::probe_crash: return "probe_crash";
+    }
+    return "unknown";
+}
+
+const char* asio_result_domain_name(AsioResultDomain domain) noexcept {
+    switch (domain) {
+    case AsioResultDomain::none: return "none";
+    case AsioResultDomain::asio: return "asio";
+    case AsioResultDomain::hresult: return "hresult";
+    case AsioResultDomain::win32: return "win32";
+    }
+    return "unknown";
+}
+
+const char* asio_sample_type_name(ASIOSampleType type) noexcept {
+    switch (type) {
+    case ASIOSTInt16MSB: return "Int16MSB";
+    case ASIOSTInt24MSB: return "Int24MSB";
+    case ASIOSTInt32MSB: return "Int32MSB";
+    case ASIOSTFloat32MSB: return "Float32MSB";
+    case ASIOSTFloat64MSB: return "Float64MSB";
+    case ASIOSTInt32MSB16: return "Int32MSB16";
+    case ASIOSTInt32MSB18: return "Int32MSB18";
+    case ASIOSTInt32MSB20: return "Int32MSB20";
+    case ASIOSTInt32MSB24: return "Int32MSB24";
+    case ASIOSTInt16LSB: return "Int16LSB";
+    case ASIOSTInt24LSB: return "Int24LSB";
+    case ASIOSTInt32LSB: return "Int32LSB";
+    case ASIOSTFloat32LSB: return "Float32LSB";
+    case ASIOSTFloat64LSB: return "Float64LSB";
+    case ASIOSTInt32LSB16: return "Int32LSB16";
+    case ASIOSTInt32LSB18: return "Int32LSB18";
+    case ASIOSTInt32LSB20: return "Int32LSB20";
+    case ASIOSTInt32LSB24: return "Int32LSB24";
+    case ASIOSTDSDInt8LSB1: return "DSDInt8LSB1";
+    case ASIOSTDSDInt8MSB1: return "DSDInt8MSB1";
+    case ASIOSTDSDInt8NER8: return "DSDInt8NER8";
+    default: return "Unknown";
+    }
 }
 
 const char* audio_hook_stage_name(AudioHookStage stage) noexcept {
@@ -204,7 +288,11 @@ std::string format_attempts_text(
     return stream.str();
 }
 
-std::string startup_text(const EndpointInitialization& initialization) {
+std::string startup_text(
+    const EndpointInitialization& initialization,
+    gc::config::AudioBackend requested_backend =
+        gc::config::AudioBackend::wasapi_exclusive,
+    const AsioFailure* asio_failure = nullptr) {
     const auto output_sample_rate = initialization.has_selected_format
         ? initialization.selected_format.wave_format().nSamplesPerSec
         : 0;
@@ -214,7 +302,8 @@ std::string startup_text(const EndpointInitialization& initialization) {
             static_cast<double>(output_sample_rate);
     std::ostringstream stream;
     stream << std::fixed << std::setprecision(3)
-        << "WASAPI audio startup requested_backend=wasapi_exclusive"
+        << "Audio startup requested_backend="
+        << gc::config::AudioBackendName(requested_backend)
         << " active_backend=wasapi_exclusive"
         << " endpoint_name=\"" << utf8(initialization.endpoint_name) << "\""
         << " endpoint_id=\"" << utf8(initialization.endpoint_id) << "\""
@@ -253,7 +342,20 @@ std::string startup_text(const EndpointInitialization& initialization) {
         << " mmcss_profile=\"Pro Audio\""
         << " mmcss_priority=\"Critical\""
         << " mixer_rate_hz=" << output_sample_rate
-        << " mixer_channels=" << kOutputChannels;
+        << " mixer_channels=" << kOutputChannels
+        << " wasapi_buffer_ms="
+        << initialization.configured_duration / kReferenceTimePerMillisecond;
+    if (asio_failure != nullptr) {
+        stream << " fallback_reason=asio_precommit_failure"
+            << " asio_failure_stage="
+            << asio_failure_stage_name(asio_failure->stage)
+            << " asio_failure_domain="
+            << asio_result_domain_name(asio_failure->domain)
+            << " asio_failure_result=" << asio_failure->result
+            << " asio_failure_detail=\"" << asio_failure->detail << '"';
+    } else {
+        stream << " fallback_reason=none";
+    }
     return stream.str();
 }
 
@@ -284,7 +386,7 @@ std::string failure_text(
 
 std::string hook_failure_text(const AudioHookFailure& failure) {
     std::ostringstream stream;
-    stream << "WasapiAudioPatch: hook install failed"
+    stream << "AudioPatch: hook install failed"
         << " stage=" << audio_hook_stage_name(failure.stage)
         << " status=" << static_cast<int>(failure.status)
         << " win32_error=" << failure.win32_error
@@ -304,18 +406,125 @@ std::string hook_failure_text(const AudioHookFailure& failure) {
 }
 
 std::string audio_config_text(
-    bool enabled,
+    gc::config::AudioBackend requested_backend,
     std::uint32_t configured_buffer_ms) {
+    const bool enabled =
+        requested_backend != gc::config::AudioBackend::directsound;
     std::ostringstream stream;
-    stream << "WASAPI audio config requested_backend="
-        << (enabled ? "wasapi_exclusive" : "directsound")
+    stream << "Audio config requested_backend="
+        << gc::config::AudioBackendName(requested_backend)
         << " active_backend="
-        << (enabled ? "wasapi_exclusive" : "directsound")
+        << (enabled ? "pending" : "directsound")
         << " hook_installed=" << (enabled ? "true" : "false")
         << " enabled=" << (enabled ? "true" : "false")
         << " configured_buffer_ms=" << configured_buffer_ms
         << " configured_duration_100ns="
         << BufferMillisecondsToReferenceTime(configured_buffer_ms);
+    return stream.str();
+}
+
+std::string clsid_text(const CLSID& clsid) {
+    wchar_t value[39]{};
+    return StringFromGUID2(clsid, value, static_cast<int>(std::size(value))) > 0
+        ? utf8(value)
+        : "<conversion-failed>";
+}
+
+std::string asio_failure_text(
+    std::string_view kind,
+    const AsioFailure& failure) {
+    std::ostringstream stream;
+    stream << kind
+        << " asio_failure_stage=" << asio_failure_stage_name(failure.stage)
+        << " asio_failure_domain=" << asio_result_domain_name(failure.domain)
+        << " asio_failure_result=" << failure.result
+        << " asio_driver_message=\"" << failure.driver_message << '"'
+        << " asio_failure_detail=\"" << failure.detail << '"';
+    return stream.str();
+}
+
+std::string asio_startup_text(const AsioCapabilityReport& report) {
+    const auto base = static_cast<std::size_t>(report.selected_base_channel);
+    const auto& left = report.output_channels.at(base);
+    const auto& right = report.output_channels.at(base + 1U);
+    std::ostringstream stream;
+    stream << "Audio startup requested_backend=asio active_backend=asio"
+        << " asio_registry_name=\"" << report.registration.registry_name << '"'
+        << " asio_reported_name=\"" << report.reported_driver_name << '"'
+        << " asio_clsid=\"" << clsid_text(report.registration.clsid) << '"'
+        << " asio_driver_version=" << report.driver_version
+        << " sample_rate=" << report.sample_rate
+        << " asio_requested_buffer_frames=" << report.effective_buffer_frames
+        << " asio_buffer_frames=" << report.effective_buffer_frames
+        << " asio_buffer_minimum_frames=" << report.buffer_limits.minimum
+        << " asio_buffer_maximum_frames=" << report.buffer_limits.maximum
+        << " asio_buffer_preferred_frames=" << report.buffer_limits.preferred
+        << " asio_buffer_granularity=" << report.buffer_limits.granularity
+        << " asio_output_base_channel=" << report.selected_base_channel
+        << " asio_left_channel_index=" << left.index
+        << " asio_left_channel_name=\"" << left.name << '"'
+        << " asio_left_sample_type="
+        << asio_sample_type_name(left.sample_type)
+        << '(' << static_cast<long>(left.sample_type) << ')'
+        << " asio_right_channel_index=" << right.index
+        << " asio_right_channel_name=\"" << right.name << '"'
+        << " asio_right_sample_type="
+        << asio_sample_type_name(right.sample_type)
+        << '(' << static_cast<long>(right.sample_type) << ')'
+        << " asio_input_latency_frames=" << report.input_latency_frames
+        << " asio_output_latency_frames=" << report.output_latency_frames
+        << " asio_time_info_mode=preferred_with_legacy_fallback"
+        << " asio_overload_notifications="
+        << (report.overload_reporting_supported ? "true" : "false")
+        << " asio_output_ready="
+        << (report.output_ready_supported ? "true" : "false")
+        << " fallback_reason=none";
+    return stream.str();
+}
+
+std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters) {
+    std::ostringstream stream;
+    stream << "callbacks=" << counters.callbacks
+        << " time_info_callbacks=" << counters.time_info_callbacks
+        << " legacy_callbacks=" << counters.legacy_callbacks
+        << " deferred_callbacks=" << counters.deferred_callbacks
+        << " deadline_misses=" << counters.deadline_misses
+        << " silence_substitutions=" << counters.silence_substitutions
+        << " overload_messages=" << counters.overload_messages
+        << " reset_requests=" << counters.reset_requests
+        << " resync_requests=" << counters.resync_requests
+        << " latency_change_requests=" << counters.latency_change_requests
+        << " buffer_size_change_requests="
+        << counters.buffer_size_change_requests
+        << " sample_rate_change_requests="
+        << counters.sample_rate_change_requests
+        << " sample_position_discontinuities="
+        << counters.sample_position_discontinuities
+        << " render_gap_frames=" << counters.render_gap_frames
+        << " maximum_callback_ticks=" << counters.maximum_callback_ticks
+        << " maximum_render_ticks=" << counters.maximum_render_ticks
+        << " qpc_frequency=" << counters.qpc_frequency;
+    if (counters.qpc_frequency != 0) {
+        stream << " maximum_callback_us="
+            << static_cast<double>(counters.maximum_callback_ticks) *
+                1'000'000.0 / static_cast<double>(counters.qpc_frequency)
+            << " maximum_render_us="
+            << static_cast<double>(counters.maximum_render_ticks) *
+                1'000'000.0 / static_cast<double>(counters.qpc_frequency);
+    }
+    stream
+        << " pending_cursor_queries=" << counters.pending_cursor_queries
+        << " unmapped_cursor_failures=" << counters.unmapped_cursor_failures
+        << " native_rate_buffers=" << counters.mixer.native_rate_buffers
+        << " sample_format_converted_buffers="
+        << counters.mixer.sample_format_converted_buffers
+        << " sample_rate_converted_buffers="
+        << counters.mixer.sample_rate_converted_buffers
+        << " native_gameplay_buffers="
+        << counters.mixer.native_gameplay_buffers
+        << " active_voices=" << counters.mixer.active_voices
+        << " maximum_simultaneous_voices="
+        << counters.mixer.maximum_simultaneous_voices;
     return stream.str();
 }
 
@@ -360,6 +569,15 @@ void show_error(detail::AudioPatchPlatformActions actions) noexcept {
     }
 }
 
+void show_generic_startup_error(
+    detail::AudioPatchPlatformActions actions) noexcept {
+    if (actions.show_error != nullptr) {
+        try {
+            actions.show_error(kGenericStartupFailureMessage.data());
+        } catch (...) {}
+    }
+}
+
 void show_runtime_error(
     detail::AudioPatchPlatformActions actions,
     AudioFailureStage stage) noexcept {
@@ -384,7 +602,7 @@ void production_show_error(const char* text) {
     MessageBoxA(
         nullptr,
         text == nullptr ? "" : text,
-        "GCLoader WASAPI audio error",
+        "GCLoader audio error",
         MB_OK | MB_ICONERROR);
 }
 
@@ -407,16 +625,37 @@ detail::AudioPatchPlatformActions production_platform_actions() noexcept {
     };
 }
 
+struct ProductionDiagnosticContext {
+    gc::config::AudioBackend requested_backend{
+        gc::config::AudioBackend::directsound};
+    std::mutex mutex;
+    std::optional<AsioFailure> asio_fallback;
+};
+
 class ProductionAudioObserver final : public IAudioEngineObserver {
 public:
     explicit ProductionAudioObserver(
-        detail::AudioPatchPlatformActions actions) noexcept
-        : actions_(actions) {}
+        detail::AudioPatchPlatformActions actions,
+        ProductionDiagnosticContext& diagnostics) noexcept
+        : actions_(actions), diagnostics_(diagnostics) {}
 
     void StartupSucceeded(
         const EndpointInitialization& initialization) noexcept override {
-        initialization_ = &initialization;
-        detail::ReportAudioStartupSucceeded(initialization, actions_);
+        try {
+            initialization_ = initialization;
+            std::optional<AsioFailure> fallback;
+            {
+                std::lock_guard lock(diagnostics_.mutex);
+                fallback = diagnostics_.asio_fallback;
+            }
+            const auto text = startup_text(
+                initialization,
+                diagnostics_.requested_backend,
+                fallback ? &*fallback : nullptr);
+            emit_info(actions_, text.c_str());
+        } catch (...) {
+            emit_error(actions_, "Audio startup diagnostics formatting failed");
+        }
     }
     void RuntimeSummary(
         const AudioRuntimeCountersSnapshot& counters) noexcept override {
@@ -427,7 +666,7 @@ public:
         const AudioRuntimeCountersSnapshot& counters) noexcept override {
         const EndpointInitialization unknown{};
         detail::ReportAudioRuntimeFailure(
-            initialization_ == nullptr ? unknown : *initialization_,
+            initialization_ ? *initialization_ : unknown,
             failure,
             counters,
             actions_);
@@ -435,23 +674,61 @@ public:
 
 private:
     detail::AudioPatchPlatformActions actions_{};
-    const EndpointInitialization* initialization_{};
+    ProductionDiagnosticContext& diagnostics_;
+    std::optional<EndpointInitialization> initialization_;
 };
 
-class ProductionExclusiveEngineStartup final
-    : public detail::IExclusiveEngineStartup {
+class ProductionAsioObserver final : public IAsioOutputObserver {
 public:
-    explicit ProductionExclusiveEngineStartup(
-        detail::AudioPatchPlatformActions actions,
-        REFERENCE_TIME configured_duration) noexcept
-        : actions_(actions),
-          configured_duration_(configured_duration) {}
+    explicit ProductionAsioObserver(
+        detail::AudioPatchPlatformActions actions) noexcept
+        : actions_(actions) {}
 
-    IAudioEngineServices* Start(
+    void StartupSucceeded(
+        const AsioCapabilityReport& report) noexcept override {
+        try {
+            report_ = report;
+        } catch (...) {
+            report_.reset();
+        }
+        detail::ReportAsioStartupSucceeded(report, actions_);
+    }
+
+    void RuntimeSummary(
+        const AsioRuntimeCountersSnapshot& counters) noexcept override {
+        detail::ReportAsioRuntimeSummary(counters, actions_);
+    }
+
+    void RuntimeFailed(
+        const AsioFailure& failure,
+        const AsioRuntimeCountersSnapshot& counters) noexcept override {
+        detail::ReportAsioRuntimeFailure(
+            report_ ? &*report_ : nullptr,
+            failure,
+            counters,
+            actions_);
+    }
+
+private:
+    detail::AudioPatchPlatformActions actions_{};
+    std::optional<AsioCapabilityReport> report_;
+};
+
+class ProductionWasapiOutputBackendFactory final
+    : public IWasapiOutputBackendFactory {
+public:
+    ProductionWasapiOutputBackendFactory(
+        detail::AudioPatchPlatformActions actions,
+        ProductionDiagnosticContext& diagnostics) noexcept
+        : actions_(actions), diagnostics_(diagnostics) {}
+
+    std::unique_ptr<IAudioEngineServices> Start(
+        REFERENCE_TIME configured_duration,
         AudioStartupFailure* startup_failure) noexcept override {
         std::shared_ptr<ProductionAudioObserver> observer;
         try {
-            observer = std::make_shared<ProductionAudioObserver>(actions_);
+            observer = std::make_shared<ProductionAudioObserver>(
+                actions_, diagnostics_);
         } catch (...) {
             if (startup_failure != nullptr) {
                 *startup_failure = {};
@@ -466,61 +743,206 @@ public:
         auto engine = detail::StartProductionExclusiveAudioEngine(
             CreateProductionWasapiApi,
             &ExclusiveAudioEngine::StartAndWait,
-            configured_duration_,
+            configured_duration,
             actions_,
             std::move(observer),
             startup_failure);
-        if (engine == nullptr) {
-            return nullptr;
-        }
-        engine_ = std::move(engine);
-        return engine_.get();
+        return engine;
     }
 
 private:
     detail::AudioPatchPlatformActions actions_{};
-    REFERENCE_TIME configured_duration_{};
-    std::unique_ptr<ExclusiveAudioEngine> engine_;
+    ProductionDiagnosticContext& diagnostics_;
 };
 
-class ProductionAudioStartupFailureReporter final
-    : public IAudioStartupFailureReporter {
+class ProductionAsioOutputBackendFactory final
+    : public IAsioOutputBackendFactory {
 public:
-    explicit ProductionAudioStartupFailureReporter(
+    explicit ProductionAsioOutputBackendFactory(
         detail::AudioPatchPlatformActions actions) noexcept
         : actions_(actions) {}
 
-    void FatalStartupFailure(
-        const AudioStartupFailure& failure) noexcept override {
-        detail::ReportAudioStartupFailure(failure, actions_);
+    std::unique_ptr<IAudioEngineServices> Start(
+        HWND game_window,
+        const AsioStreamRequest& request,
+        AsioFailure* failure) noexcept override {
+        try {
+            auto observer = std::make_shared<ProductionAsioObserver>(actions_);
+            return AsioOutputBackend::StartAndWait(
+                game_window,
+                request,
+                std::make_unique<ProductionAsioRegistrySource>(),
+                std::make_unique<ProductionAsioDriverFactory>(),
+                std::move(observer),
+                {},
+                2'000,
+                failure);
+        } catch (...) {
+            if (failure != nullptr) {
+                *failure = {
+                    .stage = AsioFailureStage::render_core,
+                    .detail = "Could not allocate ASIO runtime dependencies",
+                };
+            }
+            return nullptr;
+        }
     }
 
 private:
     detail::AudioPatchPlatformActions actions_{};
 };
+
+class ProductionAudioBackendControllerReporter final
+    : public IAudioBackendControllerReporter {
+public:
+    ProductionAudioBackendControllerReporter(
+        detail::AudioPatchPlatformActions actions,
+        ProductionDiagnosticContext* diagnostics = nullptr) noexcept
+        : actions_(actions), diagnostics_(diagnostics) {}
+
+    void AsioFallback(const AsioFailure& failure) noexcept override {
+        if (diagnostics_ != nullptr) {
+            try {
+                std::lock_guard lock(diagnostics_->mutex);
+                diagnostics_->asio_fallback = failure;
+            } catch (...) {}
+        }
+        try {
+            const auto text = asio_failure_text(
+                "ASIO startup failed; falling back to WASAPI", failure);
+            emit_error(actions_, text.c_str());
+        } catch (...) {
+            emit_error(actions_, "ASIO fallback diagnostics formatting failed");
+        }
+    }
+
+    void FatalStartupFailure(
+        const AudioBackendStartupFailure& failure) noexcept override {
+        try {
+            std::ostringstream stream;
+            stream << failure_text(
+                "Audio startup fatal",
+                failure.wasapi_failure.attempted,
+                failure.wasapi_failure.failure)
+                << " requested_backend="
+                << gc::config::AudioBackendName(failure.requested_backend)
+                << " active_backend=failed";
+            if (failure.asio_failure) {
+                stream << ' ' << asio_failure_text(
+                    "nested_asio_failure", *failure.asio_failure);
+            }
+            const auto text = stream.str();
+            emit_error(actions_, text.c_str());
+        } catch (...) {
+            emit_error(actions_, "Audio startup fatal formatting failed");
+        }
+        show_generic_startup_error(actions_);
+        if (actions_.terminate_process != nullptr) {
+            try {
+                actions_.terminate_process(ERROR_DEVICE_NOT_AVAILABLE);
+            } catch (...) {}
+        }
+        if (actions_.fail_fast != nullptr) {
+            try { actions_.fail_fast(); } catch (...) {}
+        }
+    }
+
+    void FatalControllerAllocationFailure() noexcept override {
+        emit_error(
+            actions_,
+            "Audio controller allocation fatal hresult=0x8007000E");
+        show_generic_startup_error(actions_);
+        if (actions_.terminate_process != nullptr) {
+            try {
+                actions_.terminate_process(ERROR_NOT_ENOUGH_MEMORY);
+            } catch (...) {}
+        }
+        if (actions_.fail_fast != nullptr) {
+            try { actions_.fail_fast(); } catch (...) {}
+        }
+    }
+
+private:
+    detail::AudioPatchPlatformActions actions_{};
+    ProductionDiagnosticContext* diagnostics_{};
+};
+
+class ProductionAudioBackendControllerFactory final
+    : public IAudioBackendControllerFactory {
+public:
+    ProductionAudioBackendControllerFactory(
+        const AudioBackendControllerConfig& config,
+        IWasapiOutputBackendFactory& wasapi,
+        IAsioOutputBackendFactory& asio,
+        IAudioBackendControllerReporter& reporter) noexcept
+        : config_(config),
+          wasapi_(wasapi),
+          asio_(asio),
+          reporter_(reporter) {}
+
+    IAudioEngineController* GetOrCreate() noexcept override {
+        std::lock_guard lock(mutex_);
+        if (attempted_) {
+            return controller_.get();
+        }
+        attempted_ = true;
+        try {
+            controller_ = std::make_unique<AudioBackendController>(
+                config_, wasapi_, asio_, reporter_);
+        } catch (...) {
+            controller_.reset();
+        }
+        return controller_.get();
+    }
+
+private:
+    const AudioBackendControllerConfig& config_;
+    IWasapiOutputBackendFactory& wasapi_;
+    IAsioOutputBackendFactory& asio_;
+    IAudioBackendControllerReporter& reporter_;
+    std::mutex mutex_;
+    bool attempted_{};
+    std::unique_ptr<AudioBackendController> controller_;
+};
+
+AudioBackendControllerConfig production_controller_config() {
+    const auto& config = ConfigManager::instance();
+    return {
+        .requested_backend = config.GetAudioBackend(),
+        .wasapi_configured_duration = BufferMillisecondsToReferenceTime(
+            config.GetWasapiExclusiveBufferMs()),
+        .asio_request = {
+            .driver_name = config.GetAsioDriverName(),
+            .buffer_frames = config.GetAsioBufferFrames(),
+            .output_base_channel = config.GetAsioOutputBaseChannel(),
+        },
+    };
+}
 
 struct ProductionDetourState {
     // This process-lifetime state samples the parsed value exactly once.
     ProductionDetourState()
-        : ProductionDetourState(
-              BufferMillisecondsToReferenceTime(
-                  ConfigManager::instance().GetWasapiExclusiveBufferMs())) {}
-
-    explicit ProductionDetourState(REFERENCE_TIME configured_duration)
-        : startup(
-              production_platform_actions(),
-              configured_duration) {
+        : config(production_controller_config()),
+          diagnostics{config.requested_backend},
+          reporter(production_platform_actions(), &diagnostics),
+          wasapi(production_platform_actions(), diagnostics),
+          asio(production_platform_actions()),
+          factory(config, wasapi, asio, reporter) {
         report_audio_buffer_handoff(
             production_platform_actions(),
             "detour_state",
-            configured_duration);
+            config.wasapi_configured_duration);
     }
 
-    ProductionExclusiveEngineStartup startup;
-    detail::CachedExclusiveEngineFactory factory{startup};
+    AudioBackendControllerConfig config;
+    ProductionDiagnosticContext diagnostics;
+    ProductionAudioBackendControllerReporter reporter;
+    ProductionWasapiOutputBackendFactory wasapi;
+    ProductionAsioOutputBackendFactory asio;
+    ProductionAudioBackendControllerFactory factory;
 };
 
-ProductionAudioStartupFailureReporter g_startup_failure_reporter{
+ProductionAudioBackendControllerReporter g_startup_failure_reporter{
     production_platform_actions()};
 
 ProductionDetourState* production_detour_state() noexcept {
@@ -559,20 +981,15 @@ HRESULT WINAPI DirectSoundCreate8Detour(
 
     auto* state = production_detour_state();
     if (state == nullptr) {
-        AudioStartupFailure failure{};
-        failure.failure = {
-            AudioFailureStage::InitializeMixer,
-            E_OUTOFMEMORY,
-        };
-        g_startup_failure_reporter.FatalStartupFailure(failure);
-        return DSERR_NODRIVER;
+        g_startup_failure_reporter.FatalControllerAllocationFailure();
+        return DSERR_OUTOFMEMORY;
     }
     return detail::InvokeDirectSoundCreate8Detour(
         device_guid,
         output,
         outer,
         state->factory,
-        g_startup_failure_reporter,
+        state->reporter,
         reinterpret_cast<DirectSoundCreate8Fn>(
             g_original_direct_sound_create8));
 }
@@ -697,6 +1114,64 @@ void ReportAudioStartupFailure(
     }
 }
 
+void ReportAsioStartupSucceeded(
+    const AsioCapabilityReport& report,
+    AudioPatchPlatformActions actions) noexcept {
+    try {
+        const auto text = asio_startup_text(report);
+        emit_info(actions, text.c_str());
+    } catch (...) {
+        emit_error(actions, "ASIO startup diagnostics formatting failed");
+    }
+}
+
+void ReportAsioRuntimeSummary(
+    const AsioRuntimeCountersSnapshot& counters,
+    AudioPatchPlatformActions actions) noexcept {
+    try {
+        const auto text = std::string{"ASIO audio runtime summary "} +
+            asio_counters_text(counters);
+        emit_info(actions, text.c_str());
+    } catch (...) {
+        emit_error(actions, "ASIO runtime summary formatting failed");
+    }
+}
+
+void ReportAsioRuntimeFailure(
+    const AsioCapabilityReport* report,
+    const AsioFailure& failure,
+    const AsioRuntimeCountersSnapshot& counters,
+    AudioPatchPlatformActions actions) noexcept {
+    try {
+        std::ostringstream stream;
+        stream << asio_failure_text("ASIO audio runtime fatal", failure)
+            << ' ' << asio_counters_text(counters);
+        if (report != nullptr) {
+            stream << " asio_registry_name=\""
+                << report->registration.registry_name << '"'
+                << " asio_reported_name=\""
+                << report->reported_driver_name << '"';
+        }
+        const auto text = stream.str();
+        emit_error(actions, text.c_str());
+    } catch (...) {
+        emit_error(actions, "ASIO runtime failure formatting failed");
+    }
+    if (actions.show_error != nullptr) {
+        try {
+            actions.show_error(kAsioRuntimeFailureMessage.data());
+        } catch (...) {}
+    }
+    if (actions.terminate_process != nullptr) {
+        try {
+            actions.terminate_process(ERROR_DEVICE_NOT_AVAILABLE);
+        } catch (...) {}
+    }
+    if (actions.fail_fast != nullptr) {
+        try { actions.fail_fast(); } catch (...) {}
+    }
+}
+
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn create_api,
     StartExclusiveAudioEngineFn start_engine,
@@ -741,12 +1216,14 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
         startup_failure);
 }
 
-bool WasapiAudioPatchInitWithDependencies(
-    bool enabled,
+bool AudioPatchInitWithDependencies(
+    gc::config::AudioBackend requested_backend,
     std::uint32_t configured_buffer_ms,
     AudioPatchInitDependencies dependencies) {
+    const bool enabled =
+        requested_backend != gc::config::AudioBackend::directsound;
     AudioHookFailure failure{};
-    if (!InstallWasapiAudioHookWithResolver(
+    if (!InstallAudioHookWithResolver(
             enabled,
             dependencies.minhook,
             dependencies.resolver,
@@ -757,7 +1234,7 @@ bool WasapiAudioPatchInitWithDependencies(
         } catch (...) {
             emit_error(
                 dependencies.platform,
-                "WasapiAudioPatch: hook failure formatting failed");
+                "AudioPatch: hook failure formatting failed");
         }
         show_error(dependencies.platform);
         if (failure.rollback_complete) {
@@ -774,7 +1251,9 @@ bool WasapiAudioPatchInitWithDependencies(
     }
 
     try {
-        const auto text = audio_config_text(enabled, configured_buffer_ms);
+        const auto text = audio_config_text(
+            requested_backend,
+            configured_buffer_ms);
         emit_info(dependencies.platform, text.c_str());
     } catch (...) {
         emit_error(
@@ -784,59 +1263,12 @@ bool WasapiAudioPatchInitWithDependencies(
     return true;
 }
 
-CachedExclusiveEngineFactory::CachedExclusiveEngineFactory(
-    IExclusiveEngineStartup& startup) noexcept
-    : startup_(startup) {}
-
-IAudioEngineServices* CachedExclusiveEngineFactory::GetOrCreate(
-    const AudioStartupFailure** startup_failure) noexcept {
-    if (startup_failure != nullptr) {
-        *startup_failure = nullptr;
-    }
-
-    {
-        std::unique_lock lock(mutex_);
-        while (state_ == State::Initializing) {
-            condition_.wait(lock);
-        }
-        if (state_ == State::Succeeded) {
-            return engine_;
-        }
-        if (state_ == State::Failed) {
-            if (startup_failure != nullptr) {
-                *startup_failure = &failure_;
-            }
-            return nullptr;
-        }
-        state_ = State::Initializing;
-    }
-
-    AudioStartupFailure observed_failure{};
-    auto* observed_engine = startup_.Start(&observed_failure);
-
-    {
-        std::lock_guard lock(mutex_);
-        if (observed_engine != nullptr) {
-            engine_ = observed_engine;
-            state_ = State::Succeeded;
-        } else {
-            failure_ = std::move(observed_failure);
-            state_ = State::Failed;
-            if (startup_failure != nullptr) {
-                *startup_failure = &failure_;
-            }
-        }
-    }
-    condition_.notify_all();
-    return observed_engine;
-}
-
 HRESULT InvokeDirectSoundCreate8Detour(
     LPCGUID device_guid,
     LPDIRECTSOUND8* output,
     LPUNKNOWN outer,
-    IExclusiveEngineFactory& factory,
-    IAudioStartupFailureReporter& reporter,
+    IAudioBackendControllerFactory& factory,
+    IAudioBackendControllerReporter& reporter,
     DirectSoundCreate8Fn saved_original) noexcept {
     static_cast<void>(saved_original);
     if (output == nullptr) {
@@ -850,24 +1282,15 @@ HRESULT InvokeDirectSoundCreate8Detour(
         return DSERR_NOAGGREGATION;
     }
 
-    const AudioStartupFailure* startup_failure{};
-    auto* engine = factory.GetOrCreate(&startup_failure);
-    if (engine == nullptr) {
-        AudioStartupFailure missing_failure{};
-        if (startup_failure == nullptr) {
-            missing_failure.failure = {
-                AudioFailureStage::InitializeMixer,
-                E_UNEXPECTED,
-            };
-            startup_failure = &missing_failure;
-        }
-        reporter.FatalStartupFailure(*startup_failure);
-        return DSERR_NODRIVER;
+    auto* controller = factory.GetOrCreate();
+    if (controller == nullptr) {
+        reporter.FatalControllerAllocationFailure();
+        return DSERR_OUTOFMEMORY;
     }
-    return CreateDirectSoundDevice(*engine, output);
+    return CreateDirectSoundDevice(*controller, output);
 }
 
-bool InstallWasapiAudioHookWithResolver(
+bool InstallAudioHookWithResolver(
     bool enabled,
     AudioMinHookApi minhook,
     AudioResolverApi resolver,
@@ -970,23 +1393,23 @@ bool InstallWasapiAudioHookWithResolver(
 
 } // namespace detail
 
-bool InstallWasapiAudioHook(
+bool InstallAudioHook(
     bool enabled,
     AudioMinHookApi api,
     AudioHookFailure* failure) noexcept {
-    return detail::InstallWasapiAudioHookWithResolver(
+    return detail::InstallAudioHookWithResolver(
         enabled,
         api,
         {GetModuleHandleW, GetProcAddress},
         failure);
 }
 
-bool WasapiAudioPatchInit() noexcept {
+bool AudioPatchInit() noexcept {
     const auto actions = production_platform_actions();
     try {
         const auto& config = ConfigManager::instance();
-        return detail::WasapiAudioPatchInitWithDependencies(
-            config.GetEnableWasapiExclusiveAudio(),
+        return detail::AudioPatchInitWithDependencies(
+            config.GetAudioBackend(),
             config.GetWasapiExclusiveBufferMs(),
             {
                 {
@@ -1003,7 +1426,7 @@ bool WasapiAudioPatchInit() noexcept {
     } catch (...) {
         emit_error(
             actions,
-            "WasapiAudioPatch: unexpected attach initialization failure");
+            "AudioPatch: unexpected attach initialization failure");
         show_error(actions);
         actions.terminate_process(ERROR_DLL_INIT_FAILED);
         actions.fail_fast();
@@ -1011,7 +1434,7 @@ bool WasapiAudioPatchInit() noexcept {
     }
 }
 
-bool IsWasapiAudioHookCommitted() noexcept {
+bool IsAudioHookCommitted() noexcept {
     return g_committed_target != nullptr;
 }
 

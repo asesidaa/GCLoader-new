@@ -2048,7 +2048,7 @@ bool FramerateHookHasRuntimeBinding(FramerateHookId id) noexcept {
     return operation.install != nullptr && operation.reset != nullptr;
 }
 
-bool FrameratePatchInit(bool wasapi_audio_committed) {
+bool FrameratePatchInit(bool authoritative_audio_clock_available) {
     static std::atomic_bool initialized{false};
     bool expected = false;
     if (!initialized.compare_exchange_strong(expected, true)) {
@@ -2083,7 +2083,7 @@ bool FrameratePatchInit(bool wasapi_audio_committed) {
     }
 
     const auto audio_clock_plan =
-        !wasapi_audio_committed
+        !authoritative_audio_clock_available
         ? GameplayAudioClockPlan::OriginalWatchdog
         : profile_result->gameplay_validated()
             ? GameplayAudioClockPlan::WasapiSharedSongClock

@@ -10,6 +10,8 @@
 
 namespace gc::audio {
 
+class IAudioEngineController;
+
 class IAudioEngineServices {
 public:
     virtual ~IAudioEngineServices() = default;
@@ -28,7 +30,7 @@ public:
 };
 
 HRESULT CreateDirectSoundDevice(
-    IAudioEngineServices&, IDirectSound8**) noexcept;
+    IAudioEngineController&, IDirectSound8**) noexcept;
 
 class PrimarySoundBuffer final : public IDirectSoundBuffer8 {
 public:
@@ -92,12 +94,12 @@ public:
 
 private:
     friend HRESULT CreateDirectSoundDevice(
-        IAudioEngineServices&, IDirectSound8**) noexcept;
+        IAudioEngineController&, IDirectSound8**) noexcept;
 
-    explicit DirectSoundDevice(IAudioEngineServices&) noexcept;
+    explicit DirectSoundDevice(IAudioEngineController&) noexcept;
     ~DirectSoundDevice() = default;
 
-    IAudioEngineServices& engine_;
+    IAudioEngineController& engine_;
     std::atomic_ulong references_{1};
     std::atomic_bool priority_cooperative_level_{};
 };

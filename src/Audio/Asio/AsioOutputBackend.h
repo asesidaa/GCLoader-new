@@ -32,6 +32,7 @@ struct AsioRuntimeCountersSnapshot
     std::uint64_t render_gap_frames{};
     std::uint64_t maximum_callback_ticks{};
     std::uint64_t maximum_render_ticks{};
+    std::uint64_t qpc_frequency{};
     std::uint64_t pending_cursor_queries{};
     std::uint64_t unmapped_cursor_failures{};
     MixerDiagnosticsSnapshot mixer{};

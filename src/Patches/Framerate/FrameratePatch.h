@@ -13,7 +13,8 @@ enum class GameplayAudioClockPlan : std::uint8_t;
 
 [[nodiscard]] bool FramerateHookHasRuntimeBinding(
     FramerateHookId id) noexcept;
-[[nodiscard]] bool FrameratePatchInit(bool wasapi_audio_committed);
+[[nodiscard]] bool FrameratePatchInit(
+    bool authoritative_audio_clock_available);
 
 namespace detail {
 

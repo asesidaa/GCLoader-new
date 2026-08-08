@@ -1,4 +1,5 @@
 set(GC_AUDIO_TESTS
+        AudioBackendControllerTests
         AudioCursorTimelineTests
         AudioFormatTests
         AudioRenderCoreTests
@@ -9,7 +10,7 @@ set(GC_AUDIO_TESTS
         MiniaudioMixerTests
         OutputPacingTrackerTests
         SecondarySoundBufferTests
-        WasapiAudioPatchTests
+        AudioPatchTests
         WasapiEndpointTests
         WasapiPresentedOutputClockTests
 )

@@ -199,11 +199,6 @@ public:
     {
         return config.experimental().enable_nesys_service_adapter_patch();
     }
-    [[nodiscard]] bool GetEnableWasapiExclusiveAudio() const
-    {
-        // Transitional compatibility for the current WASAPI-only hook.
-        return GetAudioBackend() != gc::config::AudioBackend::directsound;
-    }
     [[nodiscard]] gc::config::AudioBackend GetAudioBackend() const
     {
         return config.experimental().audio_backend();

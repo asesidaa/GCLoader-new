@@ -1,30 +1,15 @@
 #pragma once
 
+#include "Audio/AudioBackendController.h"
+
 #include <Windows.h>
 #include <MinHook.h>
 #include <dsound.h>
 
 namespace gc::audio {
 
-class IAudioEngineServices;
-struct AudioStartupFailure;
-
 using DirectSoundCreate8Fn = HRESULT (WINAPI*)(
     LPCGUID, LPDIRECTSOUND8*, LPUNKNOWN);
-
-class IExclusiveEngineFactory {
-public:
-    virtual ~IExclusiveEngineFactory() = default;
-    virtual IAudioEngineServices* GetOrCreate(
-        const AudioStartupFailure**) noexcept = 0;
-};
-
-class IAudioStartupFailureReporter {
-public:
-    virtual ~IAudioStartupFailureReporter() = default;
-    virtual void FatalStartupFailure(
-        const AudioStartupFailure&) noexcept = 0;
-};
 
 enum class AudioHookStage {
     None,
@@ -60,12 +45,12 @@ struct AudioMinHookApi {
 // Enabled installation requires a nonnull failure record so the caller can
 // distinguish complete cleanup from a possibly live detour. Disabled
 // installation accepts nullptr and performs no hook work.
-bool InstallWasapiAudioHook(
+bool InstallAudioHook(
     bool enabled,
     AudioMinHookApi api,
     AudioHookFailure* failure) noexcept;
 
-bool WasapiAudioPatchInit() noexcept;
-[[nodiscard]] bool IsWasapiAudioHookCommitted() noexcept;
+bool AudioPatchInit() noexcept;
+[[nodiscard]] bool IsAudioHookCommitted() noexcept;
 
 } // namespace gc::audio
