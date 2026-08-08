@@ -5,6 +5,7 @@ target_include_directories(gc_nesys_process PUBLIC
 add_library(gc_nesys STATIC
         NesysHookTransaction.cpp
         NesysServicePatch.cpp
+        ThreadPriorityOverride.cpp
         Launcher/NesysServiceLauncher.cpp
         Network/ServerAddressOverride.cpp
         Network/SyntheticNetworkAdapter.cpp

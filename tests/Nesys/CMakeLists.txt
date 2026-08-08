@@ -6,6 +6,10 @@ add_executable(NesysServicePatchTests NesysServicePatchTests.cpp)
 target_link_libraries(NesysServicePatchTests PRIVATE gc_nesys)
 add_test(NAME NesysServicePatchTests COMMAND NesysServicePatchTests)
 
+add_executable(ThreadPriorityOverrideTests ThreadPriorityOverrideTests.cpp)
+target_link_libraries(ThreadPriorityOverrideTests PRIVATE gc_nesys)
+add_test(NAME ThreadPriorityOverrideTests COMMAND ThreadPriorityOverrideTests)
+
 add_executable(ServerAddressOverrideTests
         Network/ServerAddressOverrideTests.cpp)
 target_link_libraries(ServerAddressOverrideTests PRIVATE gc_nesys)
