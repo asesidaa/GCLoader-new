@@ -1,6 +1,7 @@
 set(GC_AUDIO_TESTS
         AudioCursorTimelineTests
         AudioFormatTests
+        AudioRenderCoreTests
         AudioSnapshotTests
         DirectSoundDeviceTests
         ExclusiveAudioEngineTests
@@ -10,6 +11,7 @@ set(GC_AUDIO_TESTS
         SecondarySoundBufferTests
         WasapiAudioPatchTests
         WasapiEndpointTests
+        WasapiPresentedOutputClockTests
 )
 
 foreach(test_target IN LISTS GC_AUDIO_TESTS)

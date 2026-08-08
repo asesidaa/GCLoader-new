@@ -34,14 +34,7 @@ ExclusiveAudioEngine::ExclusiveAudioEngine(
       configured_duration_(configured_duration),
       observer_(std::move(observer)),
       mixer_allocations_(std::move(mixer_allocations)),
-      summary_interval_ms_(summary_interval_ms) {
-    LARGE_INTEGER frequency{};
-    if (QueryPerformanceFrequency(&frequency) &&
-        frequency.QuadPart > 0) {
-        qpc_frequency_ =
-            static_cast<std::uint64_t>(frequency.QuadPart);
-    }
-}
+      summary_interval_ms_(summary_interval_ms) {}
 
 ExclusiveAudioEngine::~ExclusiveAudioEngine() {
     if (shutdown_event_ != nullptr) {
@@ -235,22 +228,19 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         output_sample_rate_.store(
             output_sample_rate, std::memory_order_release);
 
-        if (!detail::CanAddressOutputSamples(frames)) {
-            failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
-            CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(
-                failure, std::move(initialization_));
-            SetEvent(audio_exited_event_);
-            return;
-        }
-
+        auto presented_clock = std::make_unique<WasapiPresentedOutputClock>(
+            output_sample_rate,
+            ProductionWasapiPresentedOutputClockActions());
+        presented_clock_ = presented_clock.get();
         ma_result mixer_result = MA_ERROR;
-        mixer_ = MiniaudioMixer::Create(
+        render_core_ = AudioRenderCore::Create(
             frames,
             output_sample_rate,
-            mixer_allocations_,
+            std::move(mixer_allocations_),
+            std::move(presented_clock),
             &mixer_result);
-        if (mixer_ == nullptr) {
+        if (render_core_ == nullptr) {
+            presented_clock_ = nullptr;
             failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
             CleanupEndpointOnAudioThread();
             SignalInitializationFailure(
@@ -259,8 +249,6 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             return;
         }
 
-        float_mix_.resize(
-            static_cast<std::size_t>(frames) * kOutputChannels);
         pcm16_mix_.resize(
             static_cast<std::size_t>(frames) * kOutputChannels);
 
@@ -376,17 +364,15 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
             break;
         }
 
-        auto rendered = mixer_->Render(
-            float_mix_,
+        const auto block = render_core_->Render(
             MixerRenderTimeline{
                 decision.block_begin,
                 decision.discontinuity_frames,
             });
-        if (detail::FinalizeMixerRenderBlock(
-                float_mix_, frames, rendered)) {
+        if (block.silence_substituted) {
             silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
         }
-        ConvertFloatToPcm16(float_mix_, pcm16_mix_);
+        ConvertFloatToPcm16(block.interleaved_stereo, pcm16_mix_);
         if (FAILED(endpoint_->SubmitPcm16(pcm16_mix_, &failure))) {
             RecordRuntimeFailure(failure);
             break;
@@ -399,10 +385,12 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
             break;
         }
         const auto submitted_tail = pacing_tracker_->submitted_tail();
-        presented_clock_.Publish(
-            *presented,
-            clock.qpc_100ns,
-            submitted_tail);
+        if (presented_clock_ != nullptr) {
+            presented_clock_->Publish(
+                *presented,
+                clock.qpc_100ns,
+                submitted_tail);
+        }
         RecordPacingDecision(decision);
         render_callbacks_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -451,7 +439,9 @@ void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
 }
 
 void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept {
-    presented_clock_.Invalidate();
+    if (render_core_ != nullptr) {
+        render_core_->InvalidatePresentationClock();
+    }
     if (endpoint_ == nullptr) {
         return;
     }
@@ -553,7 +543,9 @@ ExclusiveAudioEngine::SnapshotCounters() const noexcept {
         current_submitted_lead_frames_.load(std::memory_order_relaxed),
         minimum_submitted_lead_frames_.load(std::memory_order_relaxed),
         endpoint_hresult_failures_.load(std::memory_order_relaxed),
-        mixer_ != nullptr ? mixer_->diagnostics() : MixerDiagnosticsSnapshot{},
+        render_core_ != nullptr
+            ? render_core_->diagnostics()
+            : MixerDiagnosticsSnapshot{},
     };
 }
 
@@ -584,13 +576,13 @@ std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
     std::shared_ptr<AudioCursorTimeline> timeline,
     VoiceUsage usage,
     ma_result* result) noexcept {
-    if (mixer_ == nullptr) {
+    if (render_core_ == nullptr) {
         if (result != nullptr) {
             *result = MA_INVALID_OPERATION;
         }
         return nullptr;
     }
-    return mixer_->CreateVoice(
+    return render_core_->CreateVoice(
         format,
         std::move(snapshot),
         std::move(timeline),
@@ -600,21 +592,9 @@ std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
 
 std::optional<std::uint64_t>
 ExclusiveAudioEngine::CurrentOutputFrame() noexcept {
-    LARGE_INTEGER now{};
-    std::uint64_t now_qpc_ticks{};
-    std::uint64_t qpc_frequency{};
-    if (qpc_frequency_ != 0 &&
-        QueryPerformanceCounter(&now) &&
-        now.QuadPart >= 0) {
-        now_qpc_ticks =
-            static_cast<std::uint64_t>(now.QuadPart);
-        qpc_frequency = qpc_frequency_;
-    }
-
-    return presented_clock_.Project(
-        now_qpc_ticks,
-        qpc_frequency,
-        output_sample_rate_.load(std::memory_order_acquire));
+    return render_core_ != nullptr
+        ? render_core_->CurrentOutputFrame()
+        : std::nullopt;
 }
 
 std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept {

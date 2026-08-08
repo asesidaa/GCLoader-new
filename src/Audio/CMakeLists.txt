@@ -4,6 +4,7 @@ add_library(gc_audio STATIC
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
         Mixer/AudioCursorTimeline.cpp
+        Mixer/AudioRenderCore.cpp
         Mixer/AudioSnapshot.cpp
         Mixer/MiniaudioMixer.cpp
         Wasapi/ExclusiveAudioEngine.cpp
@@ -11,6 +12,7 @@ add_library(gc_audio STATIC
         Wasapi/WasapiAudioPatch.cpp
         Wasapi/WasapiAudioTypes.cpp
         Wasapi/WasapiEndpoint.cpp
+        Wasapi/WasapiPresentedOutputClock.cpp
 )
 target_include_directories(gc_audio PUBLIC
         ${PROJECT_SOURCE_DIR}/src

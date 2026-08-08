@@ -1,9 +1,10 @@
 #pragma once
 
-#include "Audio/Mixer/AudioCursorTimeline.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/Mixer/AudioRenderCore.h"
 #include "Audio/Wasapi/OutputPacingTracker.h"
 #include "Audio/Wasapi/WasapiEndpoint.h"
+#include "Audio/Wasapi/WasapiPresentedOutputClock.h"
 
 #include <Windows.h>
 
@@ -131,8 +132,8 @@ private:
     std::unique_ptr<WasapiEndpoint> endpoint_;
     std::shared_ptr<IAudioEngineObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
-    std::unique_ptr<MiniaudioMixer> mixer_;
-    std::vector<float> float_mix_;
+    std::unique_ptr<AudioRenderCore> render_core_;
+    WasapiPresentedOutputClock* presented_clock_{};
     std::vector<std::int16_t> pcm16_mix_;
     EndpointClockMapper clock_mapper_;
     std::optional<OutputPacingTracker> pacing_tracker_;
@@ -151,8 +152,6 @@ private:
     std::atomic_long failure_result_{S_OK};
     std::atomic_uint32_t endpoint_buffer_frames_{};
     std::atomic_uint32_t output_sample_rate_{};
-    PresentedClockPublication presented_clock_;
-    std::uint64_t qpc_frequency_{};
     std::atomic_uint64_t render_callbacks_{};
     std::atomic_uint64_t late_event_wakes_{};
     std::atomic_uint64_t silence_fallbacks_{};

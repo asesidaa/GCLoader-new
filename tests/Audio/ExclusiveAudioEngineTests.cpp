@@ -70,7 +70,7 @@ int Expect(bool condition, std::string_view name) {
     return 1;
 }
 
-int TestProductionRenderFinalizationAndStartupTimeoutClamp() {
+int TestProductionStartupTimeoutClamp() {
     int failures = 0;
     failures += Expect(
         gc::audio::detail::ClampExclusiveAudioStartupTimeout(10'001) ==
@@ -84,39 +84,6 @@ int TestProductionRenderFinalizationAndStartupTimeoutClamp() {
                 .summary_interval_ms == 30'000,
         "production runtime summary interval defaults to thirty seconds");
 
-    std::array<float, kSamples> short_block{};
-    short_block.fill(0.5F);
-    failures += Expect(
-        gc::audio::detail::FinalizeMixerRenderBlock(
-            short_block,
-            kFrames,
-            {MA_SUCCESS, kFrames / 2}),
-        "successful short mixer read reports silence fallback");
-    failures += Expect(
-        std::all_of(
-            short_block.begin(),
-            short_block.begin() +
-                static_cast<std::ptrdiff_t>(kSamples / 2),
-            [](float sample) { return sample == 0.5F; }) &&
-            std::all_of(
-                short_block.begin() +
-                    static_cast<std::ptrdiff_t>(kSamples / 2),
-                short_block.end(),
-                [](float sample) { return sample == 0.0F; }),
-        "successful short mixer read zero-fills only the missing suffix");
-
-    std::array<float, kSamples> failed_block{};
-    failed_block.fill(0.5F);
-    failures += Expect(
-        gc::audio::detail::FinalizeMixerRenderBlock(
-            failed_block,
-            kFrames,
-            {MA_ERROR, 0}) &&
-            std::all_of(
-                failed_block.begin(),
-                failed_block.end(),
-                [](float sample) { return sample == 0.0F; }),
-        "mixer error zero-fills the complete production block");
     return failures;
 }
 
@@ -1653,7 +1620,7 @@ int TestConfiguredDurationPropagation() {
 
 int main() {
     int failures = 0;
-    failures += TestProductionRenderFinalizationAndStartupTimeoutClamp();
+    failures += TestProductionStartupTimeoutClamp();
     failures += TestBoundedInitializationTimeout();
     failures += TestAllocatorOwnerOutlivesEngineThroughVoiceDestruction();
     failures += TestStartupFailuresAndStartOrdering();
