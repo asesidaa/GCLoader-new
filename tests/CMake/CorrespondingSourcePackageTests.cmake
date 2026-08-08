@@ -359,6 +359,7 @@ endforeach()
 file(READ "${package_root}/configure-offline.ps1" offline_script)
 foreach(fragment IN ITEMS
         "FETCHCONTENT_FULLY_DISCONNECTED=ON"
+        "[IO.Path]::GetTempPath()"
         "FETCHCONTENT_SOURCE_DIR_DEP_ONE"
         "FETCHCONTENT_SOURCE_DIR_DEP_TWO"
         "third_party/asiosdk"

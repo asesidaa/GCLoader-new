@@ -342,17 +342,21 @@ file(WRITE "${metadata_root}/toolchain.txt"
     "cxx_compiler=${GC_PACKAGE_CXX_COMPILER}\n"
     "architecture=Win32 x86 (run from vcvars32.bat)\n"
     "configure=./configure-offline.ps1\n"
-    "build=cmake --build build-offline --target iDmacDrv32 ConfigGUI AsioProbe\n"
+    "default_build_directory=%TEMP%/GCLoader-${project_commit}-build\n"
+    "build=configure-offline.ps1 builds iDmacDrv32 ConfigGUI AsioProbe\n"
     "dependency_overrides=build-metadata/fetchcontent-overrides.cmake\n")
 
 set(offline_script [=[# SPDX-License-Identifier: CC0-1.0
 param(
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot 'build-offline'),
+    [string]$BuildDirectory = '',
     [ValidateSet('Debug', 'RelWithDebInfo', 'Release')]
     [string]$BuildType = 'RelWithDebInfo'
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
+    $BuildDirectory = Join-Path ([IO.Path]::GetTempPath()) 'GCLoader-@PROJECT_COMMIT@-build'
+}
 $configureArguments = @(
     '-S'
     (Join-Path $PSScriptRoot 'project')
@@ -376,6 +380,8 @@ if ($LASTEXITCODE -ne 0) {
 & cmake --build $BuildDirectory --target iDmacDrv32 ConfigGUI AsioProbe
 exit $LASTEXITCODE
 ]=])
+string(REPLACE "@PROJECT_COMMIT@" "${project_commit}"
+    offline_script "${offline_script}")
 file(WRITE "${package_root}/configure-offline.ps1" "${offline_script}")
 
 file(GLOB_RECURSE manifest_files
