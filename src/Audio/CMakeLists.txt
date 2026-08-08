@@ -1,3 +1,5 @@
+add_subdirectory(Asio)
+
 add_library(gc_audio STATIC
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
@@ -16,6 +18,7 @@ target_include_directories(gc_audio PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_audio PUBLIC
+        gc_asio
         gc_config
         minhook
         miniaudio
