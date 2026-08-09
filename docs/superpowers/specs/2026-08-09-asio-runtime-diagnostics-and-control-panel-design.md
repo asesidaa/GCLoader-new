@@ -42,13 +42,14 @@ authoritative.
 - Keep arbitrary vendor driver code and its UI isolated from the ConfigGUI
   process.
 - Show no helper console, wrapper window, duplicate ConfigGUI, or taskbar item.
-- Refresh capability information after the vendor panel closes without
+- Refresh capability information after the isolated panel host completes without
   silently changing the operator's configured frame count.
 - Distinguish late callback delivery from expensive callback work.
 - Compare host callback cadence with the ASIO timestamps and sample positions
   supplied by the driver.
-- Distinguish expected idle silence from mixer failures or short reads while a
-  voice is active.
+- Distinguish silence produced with no playing mixer voice from mixer failures
+  or short reads while a voice is active, without assuming that no-voice
+  silence was necessarily expected by the game.
 - Detect output clipping and non-finite render samples before ASIO sample-format
   conversion hides their source.
 - Keep runtime reporting cumulative and infrequent, with no formatting,
@@ -85,9 +86,11 @@ genuine window created by the ASIO driver. There is no child console, helper
 dialog, wrapper GUI, duplicate ConfigGUI, or taskbar entry.
 
 While a panel request is active, ConfigGUI prevents another panel, ASIO
-inspection, or Save operation from starting. Other harmless editor interaction
-may continue. The UI reports that the driver panel is open and reports a typed
-error if launch, registry lookup, COM initialization, driver initialization, or
+inspection, or Save operation from starting. It also disables the ASIO backend,
+driver-name, frame-count, and output-pair fields so the completing operation
+still refers to the visible selection; unrelated editor interaction may
+continue. The UI reports that the driver panel is open and reports a typed error
+if launch, registry lookup, COM initialization, driver initialization, or
 `controlPanel()` fails.
 
 When the panel host finishes successfully, ConfigGUI automatically performs a
@@ -210,22 +213,28 @@ active-voice snapshot instead of reducing all incomplete renders to one
 boolean. The existing safety behavior remains: an incomplete or failed render
 clears the complete output block before conversion.
 
-Every substituted block falls into exactly one cumulative reason:
+Every substituted block falls into exactly one cumulative reason, using
+contract validity, mixer result, and frame count in that order:
 
-- `idle_silence_blocks`: successful short/zero read with no active voice;
+- `no_active_voice_silence_blocks`: successful short/zero read with no playing
+  voice;
 - `active_short_read_blocks`: successful short read while at least one voice
   was active;
-- `mixer_error_blocks`: non-success miniaudio result.
+- `mixer_error_blocks`: non-success miniaudio result;
+- `render_contract_error_blocks`: invalid render-buffer geometry or an
+  impossible frame count that cannot be classified as a normal short read.
 
 The snapshot also includes total missing frames from successful short reads and
 the first non-success mixer result. The old total remains derivable as the sum
-of the three reason counters and may remain in the log during transition for
-easy comparison with earlier runs.
+of the four reason counters and may remain in the log during transition for easy
+comparison with earlier runs.
 
 The active-voice value is captured by the mixer as part of the same render
 result; the summary does not infer historical state from a later control-thread
-snapshot. This is what lets startup/shutdown idle silence be separated from an
-actual dropout while sound should be playing.
+snapshot. A no-active-voice block therefore proves only that the mixer had no
+playing voice at that callback. It may be normal startup/shutdown silence, or it
+may direct the next investigation upstream toward a missing or rejected
+voice-start request.
 
 ### Render sample integrity
 
@@ -234,7 +243,9 @@ each channel's float samples:
 
 - blocks and samples whose magnitude exceeded 1.0 before clamping;
 - maximum finite absolute sample magnitude;
-- blocks containing a non-finite sample.
+- blocks containing a non-finite sample;
+- complete successful blocks that were exactly zero, split by whether the
+  callback-local mixer snapshot had a playing voice.
 
 The statistics use fixed-size values and lock-free atomics. They do not add a
 third traversal of the interleaved block. Existing behavior remains unchanged:
@@ -245,6 +256,11 @@ Clipped counts are sample counts across both left and right output channels,
 not stereo frame counts. This makes sustained clipping distinguishable from an
 isolated peak without logging individual samples.
 
+The zero-output classification excludes blocks already counted as substituted
+silence. A zero block with a playing voice points toward source/mixer state; a
+nonzero block during a reported audible gap is evidence that GCLoader handed
+real samples to the driver's ASIO buffer.
+
 ## Runtime Interpretation
 
 The added fields provide this evidence boundary:
@@ -254,7 +270,8 @@ The added fields provide this evidence boundary:
 | Late/severe host intervals with matching driver-time progression | Driver callback delivery or system scheduling |
 | Large driver-period error or sample-position discontinuity | ASIO driver/device clock behavior |
 | High render duration relative to the period | GCLoader render path |
-| Active short reads or mixer errors | Common miniaudio mixer/source path |
+| Active short reads, mixer errors, or zero blocks with a playing voice | Common miniaudio mixer/source path |
+| No-active-voice silence during an expected sound | Voice-start/control path upstream of rendering |
 | Clipped or non-finite render samples | Mix level, source data, or sample conversion input |
 | All host metrics clean while crackling remains audible | Driver/device/DPC path below the ASIO callback boundary |
 
