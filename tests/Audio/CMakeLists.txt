@@ -79,6 +79,10 @@ target_compile_definitions(AsioIsolatedProcessTests PRIVATE
 add_dependencies(AsioIsolatedProcessTests AsioIsolatedProcessTestChild)
 add_test(NAME AsioIsolatedProcessTests COMMAND AsioIsolatedProcessTests)
 
+add_executable(AsioControlPanelClientTests AsioControlPanelClientTests.cpp)
+target_link_libraries(AsioControlPanelClientTests PRIVATE gc_asio)
+add_test(NAME AsioControlPanelClientTests COMMAND AsioControlPanelClientTests)
+
 add_executable(AsioOutputBackendTests AsioOutputBackendTests.cpp)
 target_link_libraries(AsioOutputBackendTests PRIVATE gc_audio)
 add_test(NAME AsioOutputBackendTests COMMAND AsioOutputBackendTests)

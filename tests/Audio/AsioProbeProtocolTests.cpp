@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
 #include "Audio/Asio/AsioProbeProtocol.h"
+#include "Audio/Asio/AsioControlPanel.h"
 
 #include <array>
 #include <bit>
@@ -19,6 +20,8 @@ namespace {
 
 using gc::audio::AsioCapabilityReport;
 using gc::audio::AsioChannelDescriptor;
+using gc::audio::AsioControlPanelRequest;
+using gc::audio::AsioControlPanelResult;
 using gc::audio::AsioFailure;
 using gc::audio::AsioFailureStage;
 using gc::audio::AsioProbeMode;
@@ -28,8 +31,12 @@ using gc::audio::AsioProbeResult;
 using gc::audio::AsioResultDomain;
 using gc::audio::DecodeAsioProbeRequest;
 using gc::audio::DecodeAsioProbeResult;
+using gc::audio::DecodeAsioControlPanelRequest;
+using gc::audio::DecodeAsioControlPanelResult;
 using gc::audio::EncodeAsioProbeRequest;
 using gc::audio::EncodeAsioProbeResult;
+using gc::audio::EncodeAsioControlPanelRequest;
+using gc::audio::EncodeAsioControlPanelResult;
 using gc::audio::kAsioProbeMaxChannels;
 using gc::audio::kAsioProbeMaxDriverNameBytes;
 using gc::audio::kAsioProbeMaxPayloadBytes;
@@ -501,6 +508,186 @@ int TestResultFramingRejectsTruncationAndWrongKind() {
     return failures;
 }
 
+int TestControlPanelRequestCodec() {
+    const AsioControlPanelRequest request{
+        .driver_name = "用户选择的 ASIO 驱动",
+    };
+    const auto encoded = EncodeAsioControlPanelRequest(request);
+    int failures = Expect(
+        encoded.has_value(),
+        "Unicode control-panel request encodes");
+    if (!encoded) {
+        return failures;
+    }
+    const auto decoded = DecodeAsioControlPanelRequest(*encoded);
+    failures += Expect(
+        decoded && decoded->driver_name == request.driver_name,
+        "control-panel request round-trips exact UTF-8 name");
+
+    failures += Expect(
+        HasProtocolError(
+            EncodeAsioControlPanelRequest({.driver_name = {}}),
+            AsioProbeProtocolError::invalid_value),
+        "empty control-panel driver name is rejected");
+    failures += Expect(
+        HasProtocolError(
+            EncodeAsioControlPanelRequest({
+                .driver_name = std::string(
+                    kAsioProbeMaxDriverNameBytes + 1,
+                    'A'),
+            }),
+            AsioProbeProtocolError::limit_exceeded),
+        "oversized control-panel driver name is rejected");
+    failures += Expect(
+        HasProtocolError(
+            EncodeAsioControlPanelRequest({
+                .driver_name = std::string{"\xF0\x28\x8C\x28", 4},
+            }),
+            AsioProbeProtocolError::invalid_utf8),
+        "invalid UTF-8 control-panel driver name is rejected");
+
+    auto wrong_kind = *encoded;
+    WriteU16(wrong_kind, 6, 1);
+    failures += Expect(
+        HasProtocolError(
+            DecodeAsioControlPanelRequest(wrong_kind),
+            AsioProbeProtocolError::wrong_kind),
+        "probe request cannot be decoded as a panel request");
+
+    auto oversized = *encoded;
+    WriteU32(oversized, 12, kAsioProbeMaxDriverNameBytes + 1);
+    failures += Expect(
+        HasProtocolError(
+            DecodeAsioControlPanelRequest(oversized),
+            AsioProbeProtocolError::limit_exceeded),
+        "decoder rejects oversized panel name before allocation");
+
+    auto invalid_utf8 = *encoded;
+    invalid_utf8[16] = std::byte{0xFF};
+    failures += Expect(
+        HasProtocolError(
+            DecodeAsioControlPanelRequest(invalid_utf8),
+            AsioProbeProtocolError::invalid_utf8),
+        "decoder rejects invalid UTF-8 panel name");
+
+    auto trailing = *encoded;
+    trailing.push_back(std::byte{0x7F});
+    failures += Expect(
+        HasProtocolError(
+            DecodeAsioControlPanelRequest(trailing),
+            AsioProbeProtocolError::trailing_data),
+        "panel request rejects trailing bytes");
+    for (std::size_t size = 0; size < encoded->size(); ++size) {
+        if (DecodeAsioControlPanelRequest(
+                std::span<const std::byte>{encoded->data(), size})) {
+            failures += Expect(false, "every panel-request truncation fails");
+            break;
+        }
+    }
+    return failures;
+}
+
+int TestControlPanelResultCodecAndStageCompatibility() {
+    const auto encoded_success = EncodeAsioControlPanelResult(
+        AsioControlPanelResult{});
+    int failures = Expect(
+        encoded_success.has_value(),
+        "control-panel success encodes");
+    if (encoded_success) {
+        const auto decoded = DecodeAsioControlPanelResult(*encoded_success);
+        failures += Expect(
+            decoded && decoded->has_value(),
+            "control-panel success round-trips");
+        auto trailing = *encoded_success;
+        trailing.push_back(std::byte{0});
+        failures += Expect(
+            HasProtocolError(
+                DecodeAsioControlPanelResult(trailing),
+                AsioProbeProtocolError::trailing_data),
+            "control-panel result rejects trailing bytes");
+    }
+
+    const AsioFailure failure{
+        .stage = AsioFailureStage::control_panel,
+        .domain = AsioResultDomain::asio,
+        .result = ASE_NotPresent,
+        .driver_message = "驱动没有面板",
+        .detail = "controlPanel failed",
+    };
+    const auto encoded_failure = EncodeAsioControlPanelResult(
+        AsioControlPanelResult{std::unexpected(failure)});
+    failures += Expect(
+        encoded_failure.has_value(),
+        "control-panel failure encodes");
+    if (encoded_failure) {
+        const auto decoded = DecodeAsioControlPanelResult(*encoded_failure);
+        failures += Expect(
+            decoded && !decoded->has_value() &&
+                decoded->error().stage == failure.stage &&
+                decoded->error().domain == failure.domain &&
+                decoded->error().result == failure.result &&
+                decoded->error().driver_message == failure.driver_message &&
+                decoded->error().detail == failure.detail,
+            "control-panel failure round-trips every field");
+    }
+
+    const auto probe_request = EncodeAsioProbeRequest({
+        AsioProbeMode::inspect,
+        "FlexASIO",
+        0,
+        0,
+    });
+    failures += Expect(
+        probe_request && HasProtocolError(
+            DecodeAsioControlPanelResult(*probe_request),
+            AsioProbeProtocolError::wrong_kind),
+        "probe request cannot be decoded as a panel result");
+
+    constexpr std::array preexisting_stages{
+        AsioFailureStage::none,
+        AsioFailureStage::registry,
+        AsioFailureStage::clsid,
+        AsioFailureStage::com,
+        AsioFailureStage::init,
+        AsioFailureStage::identity,
+        AsioFailureStage::channels,
+        AsioFailureStage::sample_rate,
+        AsioFailureStage::buffer_metadata,
+        AsioFailureStage::channel_info,
+        AsioFailureStage::output_ready_probe,
+        AsioFailureStage::callback_prepare,
+        AsioFailureStage::create_buffers,
+        AsioFailureStage::latency,
+        AsioFailureStage::render_core,
+        AsioFailureStage::start,
+        AsioFailureStage::startup_clock,
+        AsioFailureStage::callback,
+        AsioFailureStage::conversion,
+        AsioFailureStage::runtime_clock,
+        AsioFailureStage::output_ready,
+        AsioFailureStage::stop,
+        AsioFailureStage::dispose,
+        AsioFailureStage::restore_sample_rate,
+        AsioFailureStage::protocol,
+        AsioFailureStage::process_launch,
+        AsioFailureStage::process_job,
+        AsioFailureStage::probe_timeout,
+        AsioFailureStage::probe_crash,
+    };
+    for (std::uint32_t wire_value{};
+         wire_value < preexisting_stages.size();
+         ++wire_value) {
+        const auto bytes = EncodeAsioControlPanelResult(
+            AsioControlPanelResult{std::unexpected(AsioFailure{
+                .stage = preexisting_stages[wire_value],
+            })});
+        failures += Expect(
+            bytes && ReadU32(*bytes, 12) == wire_value,
+            "pre-existing failure stage retains its wire value");
+    }
+    return failures;
+}
+
 int TestDeterministicFuzzInputsStayBounded() {
     std::uint32_t state = 0xC0FFEEU;
     auto next = [&]() noexcept {
@@ -532,6 +719,8 @@ int main() {
     failures += TestRequestValueValidation();
     failures += TestCapabilityBoundsAndEnums();
     failures += TestResultFramingRejectsTruncationAndWrongKind();
+    failures += TestControlPanelRequestCodec();
+    failures += TestControlPanelResultCodecAndStageCompatibility();
     failures += TestDeterministicFuzzInputsStayBounded();
     return failures == 0 ? 0 : 1;
 }

@@ -4,6 +4,7 @@ add_library(gc_asio STATIC
         AsioCapabilityProbe.cpp
         AsioClock.cpp
         AsioControlPanel.cpp
+        AsioControlPanelClient.cpp
         AsioDriver.cpp
         AsioDriverCatalog.cpp
         AsioIsolatedProcess.cpp

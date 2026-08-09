@@ -1,6 +1,7 @@
 #pragma once
 // SPDX-License-Identifier: CC0-1.0
 
+#include "Audio/Asio/AsioControlPanel.h"
 #include "Audio/Asio/AsioTypes.h"
 
 #include <cstddef>
@@ -47,6 +48,7 @@ struct AsioProbeRequest {
 
 using AsioProbeResult =
     std::expected<AsioCapabilityReport, AsioFailure>;
+using AsioControlPanelResult = std::expected<void, AsioFailure>;
 
 [[nodiscard]] std::expected<
     std::vector<std::byte>,
@@ -67,5 +69,29 @@ EncodeAsioProbeResult(const AsioProbeResult& result) noexcept;
     AsioProbeResult,
     AsioProbeProtocolError>
 DecodeAsioProbeResult(std::span<const std::byte> bytes) noexcept;
+
+[[nodiscard]] std::expected<
+    std::vector<std::byte>,
+    AsioProbeProtocolError>
+EncodeAsioControlPanelRequest(
+    const AsioControlPanelRequest& request) noexcept;
+
+[[nodiscard]] std::expected<
+    AsioControlPanelRequest,
+    AsioProbeProtocolError>
+DecodeAsioControlPanelRequest(
+    std::span<const std::byte> bytes) noexcept;
+
+[[nodiscard]] std::expected<
+    std::vector<std::byte>,
+    AsioProbeProtocolError>
+EncodeAsioControlPanelResult(
+    const AsioControlPanelResult& result) noexcept;
+
+[[nodiscard]] std::expected<
+    AsioControlPanelResult,
+    AsioProbeProtocolError>
+DecodeAsioControlPanelResult(
+    std::span<const std::byte> bytes) noexcept;
 
 } // namespace gc::audio

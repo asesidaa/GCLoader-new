@@ -20,6 +20,8 @@ enum class MessageKind : std::uint16_t {
     request = 1,
     capability = 2,
     failure = 3,
+    control_panel_request = 4,
+    control_panel_success = 5,
 };
 
 bool IsValidUtf8(std::string_view text) noexcept {
@@ -338,7 +340,8 @@ bool IsKnownProbeMode(std::uint32_t value) noexcept {
 
 bool IsKnownFailureStage(std::uint32_t value) noexcept {
     return value <=
-        static_cast<std::uint32_t>(AsioFailureStage::probe_crash);
+        static_cast<std::uint32_t>(
+            AsioFailureStage::control_panel_crash);
 }
 
 bool IsKnownResultDomain(std::uint32_t value) noexcept {
@@ -697,6 +700,117 @@ DecodeAsioProbeResult(std::span<const std::byte> bytes) noexcept {
                 return std::unexpected(failure.error());
             }
             return AsioProbeResult{
+                std::unexpected(std::move(*failure))};
+        }
+        return std::unexpected(AsioProbeProtocolError::wrong_kind);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(
+            AsioProbeProtocolError::allocation_failure);
+    } catch (...) {
+        return std::unexpected(AsioProbeProtocolError::invalid_value);
+    }
+}
+
+std::expected<std::vector<std::byte>, AsioProbeProtocolError>
+EncodeAsioControlPanelRequest(
+    const AsioControlPanelRequest& request) noexcept {
+    try {
+        if (request.driver_name.empty()) {
+            return std::unexpected(
+                AsioProbeProtocolError::invalid_value);
+        }
+        Writer payload;
+        auto name = payload.String(
+            request.driver_name,
+            kAsioProbeMaxDriverNameBytes);
+        if (!name) {
+            return std::unexpected(name.error());
+        }
+        return Frame(MessageKind::control_panel_request, payload);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(
+            AsioProbeProtocolError::allocation_failure);
+    } catch (...) {
+        return std::unexpected(AsioProbeProtocolError::invalid_value);
+    }
+}
+
+std::expected<AsioControlPanelRequest, AsioProbeProtocolError>
+DecodeAsioControlPanelRequest(
+    std::span<const std::byte> bytes) noexcept {
+    try {
+        const auto envelope = ReadEnvelope(bytes);
+        if (!envelope) {
+            return std::unexpected(envelope.error());
+        }
+        if (envelope->kind != MessageKind::control_panel_request) {
+            return std::unexpected(AsioProbeProtocolError::wrong_kind);
+        }
+        Reader reader{envelope->payload};
+        AsioControlPanelRequest request;
+        if (!reader.String(
+                kAsioProbeMaxDriverNameBytes,
+                &request.driver_name)) {
+            return std::unexpected(reader.error());
+        }
+        if (!reader.Finished()) {
+            return std::unexpected(reader.error());
+        }
+        if (request.driver_name.empty()) {
+            return std::unexpected(
+                AsioProbeProtocolError::invalid_value);
+        }
+        return request;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(
+            AsioProbeProtocolError::allocation_failure);
+    } catch (...) {
+        return std::unexpected(AsioProbeProtocolError::invalid_value);
+    }
+}
+
+std::expected<std::vector<std::byte>, AsioProbeProtocolError>
+EncodeAsioControlPanelResult(
+    const AsioControlPanelResult& result) noexcept {
+    try {
+        Writer payload;
+        if (result.has_value()) {
+            return Frame(MessageKind::control_panel_success, payload);
+        }
+        auto encoded = WriteFailure(payload, result.error());
+        if (!encoded) {
+            return std::unexpected(encoded.error());
+        }
+        return Frame(MessageKind::failure, payload);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(
+            AsioProbeProtocolError::allocation_failure);
+    } catch (...) {
+        return std::unexpected(AsioProbeProtocolError::invalid_value);
+    }
+}
+
+std::expected<AsioControlPanelResult, AsioProbeProtocolError>
+DecodeAsioControlPanelResult(
+    std::span<const std::byte> bytes) noexcept {
+    try {
+        const auto envelope = ReadEnvelope(bytes);
+        if (!envelope) {
+            return std::unexpected(envelope.error());
+        }
+        if (envelope->kind == MessageKind::control_panel_success) {
+            if (!envelope->payload.empty()) {
+                return std::unexpected(
+                    AsioProbeProtocolError::trailing_data);
+            }
+            return AsioControlPanelResult{};
+        }
+        if (envelope->kind == MessageKind::failure) {
+            auto failure = ReadFailure(envelope->payload);
+            if (!failure) {
+                return std::unexpected(failure.error());
+            }
+            return AsioControlPanelResult{
                 std::unexpected(std::move(*failure))};
         }
         return std::unexpected(AsioProbeProtocolError::wrong_kind);
