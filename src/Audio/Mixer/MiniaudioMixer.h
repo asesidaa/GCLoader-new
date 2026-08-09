@@ -68,8 +68,9 @@ struct MixerDiagnosticsSnapshot {
 };
 
 struct MixerRenderResult {
-    ma_result result;
-    std::uint64_t frames_read;
+    ma_result result{MA_ERROR};
+    std::uint64_t frames_read{};
+    std::uint32_t active_voices{};
 };
 
 struct MixerRenderTimeline {

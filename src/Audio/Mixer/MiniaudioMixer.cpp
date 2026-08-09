@@ -1252,11 +1252,11 @@ MixerRenderResult MiniaudioMixer::Render(
         stereo.size() !=
             static_cast<std::size_t>(state_->period_frames) *
                 kOutputChannels) {
-        return {MA_INVALID_ARGS, 0};
+        return {MA_INVALID_ARGS, 0, 0};
     }
     if (current_render_context != nullptr) {
         std::fill(stereo.begin(), stereo.end(), 0.0F);
-        return {MA_INVALID_OPERATION, 0};
+        return {MA_INVALID_OPERATION, 0, 0};
     }
 
     MixerRenderContext context{
@@ -1273,6 +1273,8 @@ MixerRenderResult MiniaudioMixer::Render(
         state_->period_frames,
         &frames_read);
     current_render_context = nullptr;
+    const auto active_voices = state_->active_voices.load(
+        std::memory_order_seq_cst);
 
     if (frames_read < state_->period_frames) {
         std::fill(
@@ -1281,7 +1283,7 @@ MixerRenderResult MiniaudioMixer::Render(
             stereo.end(),
             0.0F);
     }
-    return {result, frames_read};
+    return {result, frames_read, active_voices};
 }
 
 MixerDiagnosticsSnapshot MiniaudioMixer::diagnostics() const noexcept {

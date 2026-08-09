@@ -1443,7 +1443,14 @@ int main() {
         "looping mono play");
     failures += Expect(mono_voice->playing(), "mono voice reports playing");
     failures += Expect(mono_voice->looping(), "mono voice reports looping");
-    failures += ExpectRender(*mixer, output, 100, "native mono render");
+    const auto active_render = mixer->Render(
+        output,
+        MixerRenderTimeline{100, 0});
+    failures += Expect(
+        active_render.result == MA_SUCCESS &&
+            active_render.frames_read == kPeriodFrames &&
+            active_render.active_voices == 1,
+        "render snapshots one active voice while it is playing");
     failures += ExpectStereoMono(output, "mono duplication to equal L/R");
     failures += ExpectNear(output[0], 0.5F, "first mono sample near 0.5");
     failures += Expect(
@@ -1470,6 +1477,14 @@ int main() {
         !mono_voice->playing() &&
             !mono_voice->audible_until_output_frame().has_value(),
         "stopped mono is not playing and has no drain boundary");
+    const auto inactive_render = mixer->Render(
+        output,
+        MixerRenderTimeline{132, 0});
+    failures += Expect(
+        inactive_render.result == MA_SUCCESS &&
+            inactive_render.frames_read == kPeriodFrames &&
+            inactive_render.active_voices == 0,
+        "next render snapshots zero active voices after stop");
 
     stereo_voice_a->SetGain(0.75F);
     stereo_voice_b->SetGain(0.75F);

@@ -12,10 +12,23 @@
 
 namespace gc::audio {
 
+enum class AudioRenderSilenceReason : std::uint8_t {
+    none,
+    no_active_voice,
+    active_short_read,
+    mixer_error,
+    render_contract_error,
+};
+
 struct AudioRenderBlock
 {
     std::span<const float> interleaved_stereo;
     ma_result mixer_result{MA_ERROR};
+    std::uint64_t frames_read{};
+    std::uint32_t active_voices{};
+    std::uint32_t missing_frames{};
+    AudioRenderSilenceReason silence_reason{
+        AudioRenderSilenceReason::none};
     bool silence_substituted{};
 };
 

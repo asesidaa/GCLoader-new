@@ -21,6 +21,7 @@ using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioCursorTimeline;
 using gc::audio::AudioLockRegions;
 using gc::audio::AudioRenderCore;
+using gc::audio::AudioRenderSilenceReason;
 using gc::audio::AudioSnapshot;
 using gc::audio::IPresentedOutputClock;
 using gc::audio::MixerRenderTimeline;
@@ -102,9 +103,13 @@ int TestRenderFinalization()
     const auto successful = gc::audio::detail::FinalizeAudioRenderBlock(
         exact,
         kFrames,
-        {MA_SUCCESS, kFrames});
+        {MA_SUCCESS, kFrames, 1});
     failures += Expect(
         successful.mixer_result == MA_SUCCESS &&
+            successful.frames_read == kFrames &&
+            successful.active_voices == 1 &&
+            successful.missing_frames == 0 &&
+            successful.silence_reason == AudioRenderSilenceReason::none &&
             !successful.silence_substituted &&
             successful.interleaved_stereo.data() == exact.data() &&
             successful.interleaved_stereo.size() == exact.size() &&
@@ -113,33 +118,95 @@ int TestRenderFinalization()
 
     std::array<float, kSamples> short_read{};
     short_read.fill(0.75F);
-    const auto shortened = gc::audio::detail::FinalizeAudioRenderBlock(
+    const auto no_voice = gc::audio::detail::FinalizeAudioRenderBlock(
         short_read,
         kFrames,
-        {MA_SUCCESS, kFrames - 1});
+        {MA_SUCCESS, kFrames - 1, 0});
     failures += Expect(
-        shortened.mixer_result == MA_SUCCESS &&
-            shortened.silence_substituted &&
+        no_voice.mixer_result == MA_SUCCESS &&
+            no_voice.frames_read == kFrames - 1 &&
+            no_voice.active_voices == 0 &&
+            no_voice.missing_frames == 1 &&
+            no_voice.silence_reason ==
+                AudioRenderSilenceReason::no_active_voice &&
+            no_voice.silence_substituted &&
             std::ranges::all_of(short_read, [](float sample)
             {
                 return sample == 0.0F;
             }),
-        "short read substitutes silence for the complete fixed block");
+        "inactive short read reports no-active-voice silence");
+
+    std::array<float, kSamples> active_short{};
+    active_short.fill(0.5F);
+    const auto active_shortened =
+        gc::audio::detail::FinalizeAudioRenderBlock(
+            active_short,
+            kFrames,
+            {MA_SUCCESS, kFrames - 3, 1});
+    failures += Expect(
+        active_shortened.missing_frames == 3 &&
+            active_shortened.active_voices == 1 &&
+            active_shortened.silence_reason ==
+                AudioRenderSilenceReason::active_short_read &&
+            active_shortened.silence_substituted &&
+            std::ranges::all_of(active_short, [](float sample)
+            {
+                return sample == 0.0F;
+            }),
+        "active short read reports exact missing frames and clears all samples");
 
     std::array<float, kSamples> error{};
     error.fill(-0.5F);
     const auto failed = gc::audio::detail::FinalizeAudioRenderBlock(
         error,
         kFrames,
-        {MA_ERROR, kFrames});
+        {MA_ERROR, kFrames - 2, 1});
     failures += Expect(
         failed.mixer_result == MA_ERROR &&
+            failed.missing_frames == 0 &&
+            failed.silence_reason ==
+                AudioRenderSilenceReason::mixer_error &&
             failed.silence_substituted &&
             std::ranges::all_of(error, [](float sample)
             {
                 return sample == 0.0F;
             }),
         "mixer error substitutes silence for the complete fixed block");
+
+    std::array<float, kSamples - 1> wrong_span{};
+    wrong_span.fill(0.25F);
+    const auto wrong_contract =
+        gc::audio::detail::FinalizeAudioRenderBlock(
+            wrong_span,
+            kFrames,
+            {MA_SUCCESS, kFrames, 1});
+    failures += Expect(
+        wrong_contract.missing_frames == 0 &&
+            wrong_contract.silence_reason ==
+                AudioRenderSilenceReason::render_contract_error &&
+            wrong_contract.silence_substituted &&
+            std::ranges::all_of(wrong_span, [](float sample)
+            {
+                return sample == 0.0F;
+            }),
+        "wrong stereo span is a cleared render contract error");
+
+    std::array<float, kSamples> excessive{};
+    excessive.fill(-0.25F);
+    const auto excessive_frames =
+        gc::audio::detail::FinalizeAudioRenderBlock(
+            excessive,
+            kFrames,
+            {MA_SUCCESS, kFrames + 1, 0});
+    failures += Expect(
+        excessive_frames.missing_frames == 0 &&
+            excessive_frames.silence_reason ==
+                AudioRenderSilenceReason::render_contract_error &&
+            std::ranges::all_of(excessive, [](float sample)
+            {
+                return sample == 0.0F;
+            }),
+        "excessive frame count is a cleared render contract error");
     return failures;
 }
 
