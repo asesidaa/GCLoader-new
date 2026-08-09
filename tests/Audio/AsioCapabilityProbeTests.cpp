@@ -161,6 +161,10 @@ public:
         state_.calls.push_back("disposeBuffers");
         return ASE_OK;
     }
+    ASIOError ControlPanel() noexcept override {
+        state_.calls.push_back("controlPanel");
+        return ASE_NotPresent;
+    }
     ASIOError Future(long selector, void*) noexcept override {
         state_.calls.push_back("future");
         return selector == kAsioCanReportOverload

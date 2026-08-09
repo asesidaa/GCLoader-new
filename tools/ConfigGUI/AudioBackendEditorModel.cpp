@@ -93,6 +93,8 @@ const char* FailureStageName(gc::audio::AsioFailureStage stage) noexcept {
     case process_job: return "process_job";
     case probe_timeout: return "probe_timeout";
     case probe_crash: return "probe_crash";
+    case control_panel: return "control_panel";
+    case control_panel_crash: return "control_panel_crash";
     }
     return "unknown";
 }

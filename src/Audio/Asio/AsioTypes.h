@@ -53,6 +53,8 @@ enum class AsioFailureStage : std::uint8_t {
     process_job,
     probe_timeout,
     probe_crash,
+    control_panel,
+    control_panel_crash,
 };
 
 enum class AsioResultDomain : std::uint8_t {

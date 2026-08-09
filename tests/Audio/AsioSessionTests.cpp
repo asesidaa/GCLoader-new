@@ -207,6 +207,11 @@ public:
         return state_.dispose_result;
     }
 
+    ASIOError ControlPanel() noexcept override {
+        state_.calls.push_back("controlPanel");
+        return ASE_NotPresent;
+    }
+
     ASIOError Future(long, void*) noexcept override {
         state_.calls.push_back("future");
         return state_.future_result;

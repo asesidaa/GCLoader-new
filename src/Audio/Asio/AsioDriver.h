@@ -38,6 +38,7 @@ public:
     virtual ASIOError CreateBuffers(
         ASIOBufferInfo*, long, long, ASIOCallbacks*) noexcept = 0;
     virtual ASIOError DisposeBuffers() noexcept = 0;
+    virtual ASIOError ControlPanel() noexcept = 0;
     virtual ASIOError Future(long selector, void*) noexcept = 0;
     virtual ASIOError OutputReady() noexcept = 0;
 };

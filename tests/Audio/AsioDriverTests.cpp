@@ -68,6 +68,7 @@ public:
     DriverCalls calls;
     void* initialized_with{};
     ASIOSampleRate set_rate{};
+    ASIOError control_panel_result{ASE_NotPresent};
 
     HRESULT STDMETHODCALLTYPE QueryInterface(
         REFIID,
@@ -205,7 +206,7 @@ public:
 
     ASIOError controlPanel() override {
         ++calls.control_panel;
-        return ASE_NotPresent;
+        return control_panel_result;
     }
 
     ASIOError future(long, void*) override {
@@ -443,6 +444,10 @@ int main() {
     failures += Expect(
         driver.DisposeBuffers() == ASE_OK,
         "buffer disposal forwards");
+    raw_driver.control_panel_result = ASE_SUCCESS;
+    failures += Expect(
+        driver.ControlPanel() == ASE_SUCCESS,
+        "control panel forwards the exact driver result");
     failures += Expect(
         driver.Future(kAsioCanReportOverload, nullptr) == ASE_SUCCESS,
         "future forwards");
@@ -461,11 +466,12 @@ int main() {
             calls.set_sample_rate == 1 &&
             calls.get_sample_position == 1 &&
             calls.get_channel_info == 1 && calls.create_buffers == 1 &&
-            calls.dispose_buffers == 1 && calls.future == 1 &&
+            calls.dispose_buffers == 1 && calls.control_panel == 1 &&
+            calls.future == 1 &&
             calls.output_ready == 1 && calls.query_interface == 0 &&
             calls.add_ref == 0 && calls.release == 0 &&
             calls.get_clock_sources == 0 && calls.set_clock_source == 0 &&
-            calls.control_panel == 0,
+            raw_driver.control_panel_result == ASE_SUCCESS,
         "narrow wrapper forwards every exposed method exactly once");
 
     created->reset();

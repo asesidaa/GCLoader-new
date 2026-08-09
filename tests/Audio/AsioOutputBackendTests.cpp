@@ -396,6 +396,12 @@ public:
         return state_->dispose_result;
     }
 
+    ASIOError ControlPanel() noexcept override
+    {
+        state_->Record("controlPanel", true);
+        return ASE_NotPresent;
+    }
+
     ASIOError Future(long, void*) noexcept override
     {
         return ASE_SUCCESS;

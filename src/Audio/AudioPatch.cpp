@@ -127,6 +127,8 @@ const char* asio_failure_stage_name(AsioFailureStage stage) noexcept {
     case AsioFailureStage::process_job: return "process_job";
     case AsioFailureStage::probe_timeout: return "probe_timeout";
     case AsioFailureStage::probe_crash: return "probe_crash";
+    case AsioFailureStage::control_panel: return "control_panel";
+    case AsioFailureStage::control_panel_crash: return "control_panel_crash";
     }
     return "unknown";
 }

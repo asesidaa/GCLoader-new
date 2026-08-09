@@ -127,6 +127,10 @@ public:
         return driver_->disposeBuffers();
     }
 
+    ASIOError ControlPanel() noexcept override {
+        return driver_->controlPanel();
+    }
+
     ASIOError Future(long selector, void* option) noexcept override {
         return driver_->future(selector, option);
     }

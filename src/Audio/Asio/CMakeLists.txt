@@ -3,6 +3,7 @@ add_library(gc_asio STATIC
         AsioCallbackRuntime.cpp
         AsioCapabilityProbe.cpp
         AsioClock.cpp
+        AsioControlPanel.cpp
         AsioDriver.cpp
         AsioDriverCatalog.cpp
         AsioProbeClient.cpp
