@@ -386,8 +386,7 @@ foreach(fragment IN ITEMS
         "FETCHCONTENT_SOURCE_DIR_DEP_TWO"
         "third_party/asiosdk"
         "iDmacDrv32"
-        "ConfigGUI"
-        "AsioProbe")
+        "ConfigGUI")
     string(FIND "${offline_script}" "${fragment}" position)
     if(position EQUAL -1)
         message(FATAL_ERROR "Offline script is missing ${fragment}")

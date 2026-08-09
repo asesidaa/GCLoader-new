@@ -79,6 +79,7 @@ public:
         const AsioProbeProcessRequest& request) noexcept override {
         ++run_calls;
         executable = request.executable_path;
+        fixed_argument = request.fixed_argument;
         timeout = request.timeout;
         maximum_stdout_bytes = request.maximum_stdout_bytes;
         creation_flags = request.creation_flags;
@@ -100,6 +101,7 @@ public:
     int path_calls{};
     int run_calls{};
     std::filesystem::path executable;
+    std::wstring fixed_argument;
     std::chrono::milliseconds timeout{};
     std::uint32_t maximum_stdout_bytes{};
     DWORD creation_flags{};
@@ -143,9 +145,10 @@ int TestSuccessfulLaunchContract() {
     failures += Expect(
         observed->path_calls == 1 && observed->run_calls == 1 &&
             observed->executable ==
-                std::filesystem::path{L"C:\\Arcade\\AsioProbe.exe"} &&
-            observed->executable.is_absolute(),
-        "helper resolves beside the current ConfigGUI executable");
+                std::filesystem::path{L"C:\\Arcade\\ConfigGUI.exe"} &&
+            observed->executable.is_absolute() &&
+            observed->fixed_argument == L"--asio-probe",
+        "ConfigGUI self-probe uses only the fixed internal argument");
     failures += Expect(
         observed->input_decoded &&
             observed->decoded_request.mode == request.mode &&
@@ -368,6 +371,7 @@ int TestProductionHelperBoundary() {
     ProductionAsioProbeProcessActions actions;
     const AsioProbeProcessRequest process_request{
         std::filesystem::path{GC_ASIO_PROBE_TEST_PATH},
+        L"--asio-probe",
         *encoded,
         std::chrono::milliseconds{5'000},
         gc::audio::kAsioProbeMaxMessageBytes,

@@ -1,4 +1,5 @@
 #include "AsioLogoTexture.h"
+#include "AsioProbeMode.h"
 #include "AudioBackendEditorModel.h"
 #include "InputEditorModel.h"
 #include "Win32D3D11Host.h"
@@ -1720,6 +1721,11 @@ std::expected<gc::config::ParsedInputConfigDocument, std::string> LoadConfig(
 
 int main(int argc, char** argv)
 {
+    if (argc == 2 && std::string_view{argv[1]} == "--asio-probe")
+    {
+        return RunAsioProbeMode();
+    }
+
     GuiComApartment com_apartment;
     if (FAILED(com_apartment.result()))
     {

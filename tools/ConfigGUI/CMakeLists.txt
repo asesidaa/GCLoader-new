@@ -38,6 +38,7 @@ configure_file(
 
 add_executable(ConfigGUI
         AsioLogoTexture.cpp
+        AsioProbeMode.cpp
         Main.cpp
 )
 set_target_properties(ConfigGUI PROPERTIES

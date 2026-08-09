@@ -34,8 +34,8 @@ environment (for example by running `vcvars32.bat`), and run:
 
 The script uses only the copied `third_party/asiosdk` and
 `third_party/fetchcontent` trees, enables
-`FETCHCONTENT_FULLY_DISCONNECTED`, and builds `iDmacDrv32`, `ConfigGUI`, and
-`AsioProbe`. Ordinary development may point `GC_ASIO_SDK_DIR` at a separately
+`FETCHCONTENT_FULLY_DISCONNECTED`, and builds `iDmacDrv32` and `ConfigGUI`.
+Ordinary development may point `GC_ASIO_SDK_DIR` at a separately
 downloaded SDK, but a mutable upstream link is not a substitute for this
 release archive.
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
+#include "AsioProbeMode.h"
+
 #include "Audio/Asio/AsioCapabilityProbe.h"
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
@@ -189,7 +191,7 @@ private:
 
 } // namespace
 
-int wmain() {
+int RunAsioProbeMode() noexcept {
     try {
         const auto input = ReadRequest(GetStdHandle(STD_INPUT_HANDLE));
         if (!input.has_value()) {

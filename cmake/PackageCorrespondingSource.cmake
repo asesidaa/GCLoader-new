@@ -338,7 +338,7 @@ file(WRITE "${metadata_root}/toolchain.txt"
     "architecture=Win32 x86 (run from vcvars32.bat)\n"
     "configure=./configure-offline.ps1\n"
     "default_paths=%TEMP%/GCLoader-<commit>-<manifest>-<run>-{src,build}\n"
-    "build=configure-offline.ps1 builds iDmacDrv32 ConfigGUI AsioProbe\n"
+    "build=configure-offline.ps1 builds iDmacDrv32 and ConfigGUI\n"
     "dependency_overrides=build-metadata/fetchcontent-overrides.cmake\n")
 
 set(offline_script [=[# SPDX-License-Identifier: CC0-1.0
@@ -388,7 +388,7 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-& cmake --build $BuildDirectory --target iDmacDrv32 ConfigGUI AsioProbe
+& cmake --build $BuildDirectory --target iDmacDrv32 ConfigGUI
 exit $LASTEXITCODE
 ]=])
 string(REPLACE "@PROJECT_COMMIT@" "${project_commit}"

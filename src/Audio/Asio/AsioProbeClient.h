@@ -12,11 +12,14 @@
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace gc::audio {
 
 inline constexpr std::chrono::milliseconds kDefaultAsioProbeTimeout{5'000};
+inline constexpr std::wstring_view kAsioProbeModeArgument{L"--asio-probe"};
 
 class IAsioProbeClient {
 public:
@@ -37,6 +40,7 @@ enum class AsioProbeProcessStatus : std::uint8_t {
 
 struct AsioProbeProcessRequest {
     std::filesystem::path executable_path;
+    std::wstring fixed_argument;
     std::span<const std::byte> standard_input;
     std::chrono::milliseconds timeout{};
     std::uint32_t maximum_stdout_bytes{};

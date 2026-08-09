@@ -60,9 +60,9 @@ add_test(NAME AsioProbeProtocolTests COMMAND AsioProbeProtocolTests)
 add_executable(AsioProbeClientTests AsioProbeClientTests.cpp)
 target_link_libraries(AsioProbeClientTests PRIVATE gc_asio)
 target_compile_definitions(AsioProbeClientTests PRIVATE
-        GC_ASIO_PROBE_TEST_PATH="$<TARGET_FILE:AsioProbe>"
+        GC_ASIO_PROBE_TEST_PATH="$<TARGET_FILE:ConfigGUI>"
 )
-add_dependencies(AsioProbeClientTests AsioProbe)
+add_dependencies(AsioProbeClientTests ConfigGUI)
 add_test(NAME AsioProbeClientTests COMMAND AsioProbeClientTests)
 
 add_executable(AsioOutputBackendTests AsioOutputBackendTests.cpp)

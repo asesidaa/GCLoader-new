@@ -281,6 +281,7 @@ AsioProbeProcessOutcome ProductionAsioProbeProcessActions::Run(
             CREATE_SUSPENDED | CREATE_NO_WINDOW |
             EXTENDED_STARTUPINFO_PRESENT;
         if (!request.executable_path.is_absolute() || request.use_shell ||
+            request.fixed_argument != kAsioProbeModeArgument ||
             !request.inherit_handles || !request.restricted_handle_list ||
             !request.kill_on_job_close ||
             request.creation_flags != required_flags ||
@@ -382,7 +383,8 @@ AsioProbeProcessOutcome ProductionAsioProbeProcessActions::Run(
         startup.lpAttributeList = attributes.get();
 
         const auto executable = request.executable_path.native();
-        std::wstring command_line = L"\"" + executable + L"\"";
+        std::wstring command_line =
+            L"\"" + executable + L"\" " + request.fixed_argument;
         std::vector<wchar_t> mutable_command(
             command_line.begin(),
             command_line.end());
@@ -561,13 +563,12 @@ AsioProbeClient::Run(
                 ERROR_BAD_PATHNAME,
                 "ConfigGUI executable path is not absolute"));
         }
-        const auto helper =
-            current_executable->parent_path() / L"AsioProbe.exe";
         constexpr DWORD creation_flags =
             CREATE_SUSPENDED | CREATE_NO_WINDOW |
             EXTENDED_STARTUPINFO_PRESENT;
         const AsioProbeProcessRequest process_request{
-            helper,
+            *current_executable,
+            std::wstring{kAsioProbeModeArgument},
             *encoded,
             timeout,
             kAsioProbeMaxMessageBytes,
