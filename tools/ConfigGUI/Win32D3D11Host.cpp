@@ -130,6 +130,7 @@ std::expected<void, std::string> Win32D3D11Host::Open(
     ImGui::CreateContext();
     imgui_context_created_ = true;
     ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
 

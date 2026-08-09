@@ -83,8 +83,7 @@ endif()
 foreach(required_sdk_file IN ITEMS
         README.md
         LICENSE.txt
-        common/asio.h
-        "Steinberg ASIO Logo Artwork/ASIO-compatible-logo-Steinberg-TM-BW.png")
+        common/asio.h)
     if(NOT EXISTS "${asio_sdk_dir}/${required_sdk_file}")
         message(FATAL_ERROR
             "ASIO SDK source tree is missing ${required_sdk_file}")

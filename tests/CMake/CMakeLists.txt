@@ -17,3 +17,10 @@ add_test(
         -DGC_TEST_POWERSHELL_EXECUTABLE=${GC_POWERSHELL_EXECUTABLE}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/CorrespondingSourcePackageTests.cmake
 )
+
+add_test(
+    NAME DistributionArtifactTests
+    COMMAND ${CMAKE_COMMAND}
+        -DGC_TEST_DIST_DIR=${GC_DIST_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/DistributionArtifactTests.cmake
+)

@@ -24,8 +24,7 @@ function(gc_require_asio_sdk)
             changes.txt
             common/asio.h
             common/asiosys.h
-            common/iasiodrv.h
-            "Steinberg ASIO Logo Artwork/ASIO-compatible-logo-Steinberg-TM-BW.png")
+            common/iasiodrv.h)
         if(NOT EXISTS "${asio_root}/${required}")
             message(FATAL_ERROR
                 "GC_ASIO_SDK_DIR is incomplete; missing ${required}")
@@ -67,7 +66,4 @@ function(gc_require_asio_sdk)
     set(GC_ASIO_SDK_VERSION
         "${asio_version_major}.${asio_version_minor}.${asio_version_patch}"
         CACHE STRING "Resolved Steinberg ASIO SDK version" FORCE)
-    set(GC_ASIO_COMPATIBLE_LOGO
-        "${asio_root}/Steinberg ASIO Logo Artwork/ASIO-compatible-logo-Steinberg-TM-BW.png"
-        CACHE FILEPATH "Official unmodified ASIO Compatible logo" FORCE)
 endfunction()

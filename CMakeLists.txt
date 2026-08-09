@@ -133,26 +133,20 @@ endif()
 
 set(GC_DIST_DIR "${CMAKE_BINARY_DIR}/dist")
 file(MAKE_DIRECTORY "${GC_DIST_DIR}")
-set(GC_LICENSE_DIR "${GC_DIST_DIR}/licenses")
-file(MAKE_DIRECTORY "${GC_LICENSE_DIR}")
-foreach(license_file IN ITEMS
-        LICENSE.md
-        LICENSES/CC0-1.0.txt
-        LICENSES/GPL-3.0-only.txt
-        THIRD_PARTY_NOTICES.md
-        SOURCE-OFFER.md)
-    get_filename_component(license_name "${license_file}" NAME)
-    configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/${license_file}"
-        "${GC_LICENSE_DIR}/${license_name}"
-        COPYONLY
-    )
-endforeach()
-configure_file(
-    "${GC_ASIO_SDK_DIR}/LICENSE.txt"
-    "${GC_LICENSE_DIR}/ASIO-SDK-LICENSE.txt"
-    COPYONLY
-)
+
+# Remove only retired project-owned outputs so an existing build tree cannot
+# silently preserve files that no longer belong in the deployable directory.
+file(REMOVE
+        "${GC_DIST_DIR}/AsioProbe.exe"
+        "${GC_DIST_DIR}/ASIO-compatible-logo-Steinberg-TM-BW.png"
+        "${GC_DIST_DIR}/imgui.ini")
+file(REMOVE_RECURSE "${GC_DIST_DIR}/licenses")
+file(GLOB stale_corresponding_source_archives
+        LIST_DIRECTORIES FALSE
+        "${GC_DIST_DIR}/GCLoader-*-corresponding-source.zip")
+if(stale_corresponding_source_archives)
+    file(REMOVE ${stale_corresponding_source_archives})
+endif()
 
 add_custom_target(gc-package-corresponding-source
     COMMAND "${CMAKE_COMMAND}"

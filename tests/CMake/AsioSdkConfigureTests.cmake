@@ -27,9 +27,7 @@ file(MAKE_DIRECTORY "${test_root}")
 set(fixture_source "${project_root}/tests/CMake/AsioSdkFixture")
 
 function(write_fake_sdk root version include_iasiodrv marker)
-    file(MAKE_DIRECTORY
-        "${root}/common"
-        "${root}/Steinberg ASIO Logo Artwork")
+    file(MAKE_DIRECTORY "${root}/common")
     file(WRITE "${root}/README.md" "fixture ${marker}\n")
     file(WRITE "${root}/LICENSE.txt" "fixture license ${marker}\n")
     file(WRITE "${root}/changes.txt" "Changes in ASIO ${version}\n")
@@ -38,9 +36,6 @@ function(write_fake_sdk root version include_iasiodrv marker)
     if(include_iasiodrv)
         file(WRITE "${root}/common/iasiodrv.h" "// fixture\n")
     endif()
-    file(WRITE
-        "${root}/Steinberg ASIO Logo Artwork/ASIO-compatible-logo-Steinberg-TM-BW.png"
-        "fixture logo ${marker}\n")
 endfunction()
 
 function(run_configure case_name env_sdk cache_sdk expected_result expected_text)

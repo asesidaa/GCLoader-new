@@ -1,4 +1,3 @@
-#include "AsioLogoTexture.h"
 #include "AsioProbeMode.h"
 #include "AudioBackendEditorModel.h"
 #include "InputEditorModel.h"
@@ -1328,48 +1327,10 @@ std::string AsioGranularityDescription(long granularity)
     return "multiples of " + std::to_string(granularity) + " frames";
 }
 
-void DrawAsioLogo(
-    const AsioLogoTexture& logo,
-    std::string_view logo_error)
-{
-    if (logo.view() != nullptr && logo.width() != 0 && logo.height() != 0)
-    {
-        constexpr float maximum_width = 260.0F;
-        const float available_width = ImGui::GetContentRegionAvail().x;
-        const float scale = (std::min)(
-            1.0F,
-            (std::max)(1.0F, available_width) /
-                static_cast<float>(logo.width()));
-        const float bounded_scale = (std::min)(
-            scale,
-            maximum_width / static_cast<float>(logo.width()));
-        const ImTextureID texture_id = static_cast<ImTextureID>(
-            reinterpret_cast<std::uintptr_t>(logo.view()));
-        ImGui::Image(
-            ImTextureRef{texture_id},
-            ImVec2{
-                static_cast<float>(logo.width()) * bounded_scale,
-                static_cast<float>(logo.height()) * bounded_scale,
-            });
-    }
-    if (!logo_error.empty())
-    {
-        ImGui::TextColored(
-            ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
-            "ASIO logo asset error: %s",
-            std::string{logo_error}.c_str());
-    }
-    ImGui::TextWrapped(
-        "ASIO is a registered trademark of Steinberg Media Technologies "
-        "GmbH. Official ASIO Compatible logo used unmodified.");
-}
-
 void DrawAsioSettings(
     InputConfig& config,
     AudioBackendEditorModel& audio_editor,
     AudioOperationWorker& audio_worker,
-    const AsioLogoTexture& logo,
-    std::string_view logo_error,
     bool& dirty)
 {
     auto& experimental = config.experimental();
@@ -1572,16 +1533,12 @@ void DrawAsioSettings(
             ImGui::EndCombo();
         }
     }
-
-    DrawAsioLogo(logo, logo_error);
 }
 
 void DrawExperimental(
     InputConfig& config,
     AudioBackendEditorModel& audio_editor,
     AudioOperationWorker& audio_worker,
-    const AsioLogoTexture& logo,
-    std::string_view logo_error,
     bool& dirty)
 {
     ImGui::SeparatorText("Experimental");
@@ -1682,8 +1639,6 @@ void DrawExperimental(
             config,
             audio_editor,
             audio_worker,
-            logo,
-            logo_error,
             dirty);
     }
 }
@@ -1772,25 +1727,6 @@ int main(int argc, char** argv)
     }
     input.SetWindow(host.window());
 
-    AsioLogoTexture asio_logo;
-    std::string asio_logo_error;
-    gc::audio::ProductionAsioProbeProcessActions executable_actions;
-    const auto executable_path = executable_actions.CurrentExecutablePath();
-    if (!executable_path)
-    {
-        asio_logo_error = DescribeAsioFailure(executable_path.error());
-    }
-    else
-    {
-        const auto logo_path =
-            executable_path->parent_path() / GC_ASIO_LOGO_FILENAME;
-        if (const auto loaded_logo = asio_logo.Load(host.device(), logo_path);
-            !loaded_logo)
-        {
-            asio_logo_error = loaded_logo.error();
-        }
-    }
-
     const auto raw_input = RegisterGuiRawInput(host.window());
     if (!raw_input)
     {
@@ -1800,7 +1736,6 @@ int main(int argc, char** argv)
             raw_input.error().c_str(),
             "ConfigGUI",
             MB_OK | MB_ICONERROR);
-        asio_logo.Reset();
         host.Close();
         return 1;
     }
@@ -2031,8 +1966,6 @@ int main(int argc, char** argv)
             config,
             audio_editor,
             audio_worker,
-            asio_logo,
-            asio_logo_error,
             dirty);
 
         ImGui::EndDisabled();
@@ -2109,7 +2042,6 @@ int main(int argc, char** argv)
 
     audio_worker.Shutdown();
     UnregisterGuiRawInput();
-    asio_logo.Reset();
     host.Close();
     return 0;
 }

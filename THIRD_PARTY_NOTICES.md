@@ -10,13 +10,10 @@ own copyright and license terms.
 - Build input: external `GC_ASIO_SDK_DIR`; the SDK is not vendored or fetched
 - License choice for GCLoader's ASIO-enabled combined program: GNU General
   Public License Version 3
-- Local license copied into distributions as `ASIO-SDK-LICENSE.txt`
-- Exact SDK tree copied into the corresponding-source ZIP shipped with each
-  ASIO-enabled binary distribution
+- The repository contains the project's notices and source offer; the exact SDK
+  tree is retained in the separately produced corresponding-source ZIP
 
-ASIO is a registered trademark of Steinberg Media Technologies GmbH. The
-official ASIO Compatible logo is used unmodified under the usage guidelines
-shipped with the SDK.
+ASIO is a registered trademark of Steinberg Media Technologies GmbH.
 
 The matching-source ZIP also contains the exact configured source trees for
 all dependencies below, including SafetyHook's transitive Zydis and embedded
