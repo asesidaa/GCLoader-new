@@ -978,6 +978,7 @@ int test_asio_diagnostics_use_injected_platform_actions() {
              "asio_driver_version=7",
              "sample_rate=48000",
              "asio_requested_buffer_frames=192",
+             "asio_expected_callback_us=4000",
              "asio_buffer_minimum_frames=64",
              "asio_buffer_maximum_frames=2048",
              "asio_buffer_preferred_frames=192",
@@ -1014,8 +1015,35 @@ int test_asio_diagnostics_use_injected_platform_actions() {
     counters.sample_rate_change_requests = 12;
     counters.sample_position_discontinuities = 13;
     counters.render_gap_frames = 14;
+    counters.expected_period_ns = 4'000'000;
+    counters.callback_interval_samples = 20;
+    counters.total_callback_interval_ticks = 200'000;
+    counters.maximum_callback_interval_ticks = 30'000;
+    counters.early_callback_intervals = 21;
+    counters.late_callback_intervals = 22;
+    counters.severe_callback_intervals = 23;
+    counters.timed_callback_work_samples = 24;
+    counters.total_callback_ticks = 2'400;
     counters.maximum_callback_ticks = 15;
+    counters.timed_render_work_samples = 25;
+    counters.total_render_ticks = 2'500;
     counters.maximum_render_ticks = 16;
+    counters.driver_interval_samples = 26;
+    counters.maximum_driver_period_error_ns = 1'000'000;
+    counters.maximum_host_driver_interval_skew_ns = 2'000'000;
+    counters.buffer_alternation_violations = 27;
+    counters.no_active_voice_silence_blocks = 28;
+    counters.active_short_read_blocks = 29;
+    counters.mixer_error_blocks = 30;
+    counters.render_contract_error_blocks = 31;
+    counters.short_read_missing_frames = 32;
+    counters.first_mixer_error = MA_INVALID_ARGS;
+    counters.clipped_output_blocks = 33;
+    counters.clipped_output_samples = 34;
+    counters.zero_output_blocks_with_active_voice = 35;
+    counters.zero_output_blocks_without_active_voice = 36;
+    counters.non_finite_output_blocks = 37;
+    counters.maximum_absolute_output_sample = 1.25F;
     counters.qpc_frequency = 10'000'000;
     counters.pending_cursor_queries = 17;
     counters.unmapped_cursor_failures = 18;
@@ -1039,11 +1067,38 @@ int test_asio_diagnostics_use_injected_platform_actions() {
              "sample_rate_change_requests=12",
              "sample_position_discontinuities=13",
              "render_gap_frames=14",
+             "asio_expected_callback_us=4000",
+             "callback_interval_samples=20",
+             "average_callback_interval_us=1000",
+             "maximum_callback_interval_us=3000",
+             "early_callback_intervals=21",
+             "late_callback_intervals=22",
+             "severe_callback_intervals=23",
+             "timed_callback_work_samples=24",
+             "average_callback_us=10",
              "maximum_callback_ticks=15",
+             "timed_render_work_samples=25",
+             "average_render_us=10",
              "maximum_render_ticks=16",
              "qpc_frequency=10000000",
              "maximum_callback_us=1.5",
              "maximum_render_us=1.6",
+             "driver_interval_samples=26",
+             "maximum_driver_period_error_us=1000",
+             "maximum_host_driver_interval_skew_us=2000",
+             "buffer_alternation_violations=27",
+             "no_active_voice_silence_blocks=28",
+             "active_short_read_blocks=29",
+             "mixer_error_blocks=30",
+             "render_contract_error_blocks=31",
+             "short_read_missing_frames=32",
+             "first_mixer_error=-2",
+             "clipped_output_blocks=33",
+             "clipped_output_samples=34",
+             "zero_output_blocks_with_active_voice=35",
+             "zero_output_blocks_without_active_voice=36",
+             "non_finite_output_blocks=37",
+             "maximum_absolute_output_sample=1.25",
              "pending_cursor_queries=17",
              "unmapped_cursor_failures=18",
              "maximum_simultaneous_voices=19",
@@ -1052,6 +1107,21 @@ int test_asio_diagnostics_use_injected_platform_actions() {
             contains(summary, required),
             "ASIO runtime summary contains every counter family");
     }
+
+    gc::audio::detail::ReportAsioRuntimeSummary({}, actions);
+    const std::string_view zero_summary = diagnostics.info.empty()
+        ? std::string_view{}
+        : diagnostics.info.back();
+    failures += expect(
+        contains(zero_summary, "average_callback_interval_us=0") &&
+            contains(zero_summary, "maximum_callback_interval_us=0") &&
+            contains(zero_summary, "average_callback_us=0") &&
+            contains(zero_summary, "maximum_callback_us=0") &&
+            contains(zero_summary, "average_render_us=0") &&
+            contains(zero_summary, "maximum_render_us=0") &&
+            !contains(zero_summary, "=nan") &&
+            !contains(zero_summary, "=inf"),
+        "zero ASIO timing counters format finite zero microseconds");
 
     gc::audio::AsioFailure runtime_failure{
         .stage = gc::audio::AsioFailureStage::runtime_clock,

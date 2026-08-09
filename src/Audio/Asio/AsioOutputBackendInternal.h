@@ -3,9 +3,12 @@
 
 #include "Audio/Asio/AsioCallbackRuntime.h"
 #include "Audio/Asio/AsioOutputBackend.h"
+#include "Audio/Asio/AsioSampleConverter.h"
+#include "Audio/Mixer/AudioRenderCore.h"
 
 #include <Windows.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -14,6 +17,46 @@ namespace gc::audio::detail {
 
 inline constexpr DWORD kAsioStartupClockDeadlineMs = 2'000;
 inline constexpr DWORD kAsioRuntimeSummaryIntervalMs = 30'000;
+
+struct AsioRenderDiagnosticsSnapshot
+{
+    std::uint64_t no_active_voice_silence_blocks{};
+    std::uint64_t active_short_read_blocks{};
+    std::uint64_t mixer_error_blocks{};
+    std::uint64_t render_contract_error_blocks{};
+    std::uint64_t short_read_missing_frames{};
+    ma_result first_mixer_error{MA_SUCCESS};
+    std::uint64_t clipped_output_blocks{};
+    std::uint64_t clipped_output_samples{};
+    std::uint64_t zero_output_blocks_with_active_voice{};
+    std::uint64_t zero_output_blocks_without_active_voice{};
+    std::uint64_t non_finite_output_blocks{};
+    float maximum_absolute_output_sample{};
+};
+
+class AsioRenderDiagnostics final
+{
+public:
+    void RecordRender(const AudioRenderBlock&) noexcept;
+    void RecordConversion(
+        const AudioRenderBlock&,
+        const AsioStereoConversionResult&) noexcept;
+    [[nodiscard]] AsioRenderDiagnosticsSnapshot Snapshot() const noexcept;
+
+private:
+    std::atomic_uint64_t no_active_voice_silence_blocks_{};
+    std::atomic_uint64_t active_short_read_blocks_{};
+    std::atomic_uint64_t mixer_error_blocks_{};
+    std::atomic_uint64_t render_contract_error_blocks_{};
+    std::atomic_uint64_t short_read_missing_frames_{};
+    std::atomic_int32_t first_mixer_error_{MA_SUCCESS};
+    std::atomic_uint64_t clipped_output_blocks_{};
+    std::atomic_uint64_t clipped_output_samples_{};
+    std::atomic_uint64_t zero_output_blocks_with_active_voice_{};
+    std::atomic_uint64_t zero_output_blocks_without_active_voice_{};
+    std::atomic_uint64_t non_finite_output_blocks_{};
+    std::atomic_uint32_t maximum_absolute_output_sample_bits_{};
+};
 
 struct AsioOutputBackendActions
 {

@@ -15,10 +15,13 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <new>
@@ -31,6 +34,11 @@
 namespace gc::audio {
 namespace detail {
 namespace {
+
+static_assert(std::atomic_uint64_t::is_always_lock_free);
+static_assert(std::atomic_uint32_t::is_always_lock_free);
+static_assert(std::atomic_int32_t::is_always_lock_free);
+static_assert(std::numeric_limits<float>::is_iec559);
 
 HRESULT ProductionInitializeCom(void*, DWORD coinit_flags) noexcept
 {
@@ -168,7 +176,177 @@ const char* RuntimeFailureDetail(AsioFailureStage stage) noexcept
     }
 }
 
+void SaturatingAddCounter(
+    std::atomic_uint64_t& destination,
+    std::uint64_t value) noexcept
+{
+    auto observed = destination.load(std::memory_order_relaxed);
+    for (;;)
+    {
+        const auto remaining =
+            (std::numeric_limits<std::uint64_t>::max)() - observed;
+        const auto desired = value > remaining
+            ? (std::numeric_limits<std::uint64_t>::max)()
+            : observed + value;
+        if (destination.compare_exchange_weak(
+                observed,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed))
+        {
+            return;
+        }
+    }
+}
+
+void SaturatingIncrementCounter(
+    std::atomic_uint64_t& destination) noexcept
+{
+    SaturatingAddCounter(destination, 1);
+}
+
+std::uint64_t SaturatingSum(
+    std::initializer_list<std::uint64_t> values) noexcept
+{
+    std::uint64_t sum{};
+    for (const auto value : values)
+    {
+        const auto remaining =
+            (std::numeric_limits<std::uint64_t>::max)() - sum;
+        sum = value > remaining
+            ? (std::numeric_limits<std::uint64_t>::max)()
+            : sum + value;
+    }
+    return sum;
+}
+
+void UpdateMaximumFloatBits(
+    std::atomic_uint32_t& destination,
+    float value) noexcept
+{
+    if (!std::isfinite(value) || value < 0.0F)
+    {
+        return;
+    }
+    const auto bits = std::bit_cast<std::uint32_t>(value);
+    auto observed = destination.load(std::memory_order_relaxed);
+    while (observed < bits &&
+           !destination.compare_exchange_weak(
+               observed,
+               bits,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed))
+    {
+    }
+}
+
 } // namespace
+
+void AsioRenderDiagnostics::RecordRender(
+    const AudioRenderBlock& block) noexcept
+{
+    switch (block.silence_reason)
+    {
+    case AudioRenderSilenceReason::none:
+        break;
+    case AudioRenderSilenceReason::no_active_voice:
+        SaturatingIncrementCounter(no_active_voice_silence_blocks_);
+        SaturatingAddCounter(
+            short_read_missing_frames_,
+            block.missing_frames);
+        break;
+    case AudioRenderSilenceReason::active_short_read:
+        SaturatingIncrementCounter(active_short_read_blocks_);
+        SaturatingAddCounter(
+            short_read_missing_frames_,
+            block.missing_frames);
+        break;
+    case AudioRenderSilenceReason::mixer_error:
+    {
+        SaturatingIncrementCounter(mixer_error_blocks_);
+        if (block.mixer_result != MA_SUCCESS)
+        {
+            std::int32_t expected = MA_SUCCESS;
+            first_mixer_error_.compare_exchange_strong(
+                expected,
+                static_cast<std::int32_t>(block.mixer_result),
+                std::memory_order_relaxed,
+                std::memory_order_relaxed);
+        }
+        break;
+    }
+    case AudioRenderSilenceReason::render_contract_error:
+        SaturatingIncrementCounter(render_contract_error_blocks_);
+        break;
+    }
+}
+
+void AsioRenderDiagnostics::RecordConversion(
+    const AudioRenderBlock& block,
+    const AsioStereoConversionResult& conversion) noexcept
+{
+    if (conversion.stats.non_finite)
+    {
+        SaturatingIncrementCounter(non_finite_output_blocks_);
+        return;
+    }
+    if (!conversion.converted || block.silence_substituted)
+    {
+        return;
+    }
+    if (conversion.stats.clipped_samples != 0)
+    {
+        SaturatingIncrementCounter(clipped_output_blocks_);
+        SaturatingAddCounter(
+            clipped_output_samples_,
+            conversion.stats.clipped_samples);
+    }
+    UpdateMaximumFloatBits(
+        maximum_absolute_output_sample_bits_,
+        conversion.stats.maximum_absolute_sample);
+    if (conversion.stats.all_zero)
+    {
+        auto& counter = block.active_voices != 0
+            ? zero_output_blocks_with_active_voice_
+            : zero_output_blocks_without_active_voice_;
+        SaturatingIncrementCounter(counter);
+    }
+}
+
+AsioRenderDiagnosticsSnapshot
+AsioRenderDiagnostics::Snapshot() const noexcept
+{
+    return {
+        .no_active_voice_silence_blocks =
+            no_active_voice_silence_blocks_.load(
+                std::memory_order_relaxed),
+        .active_short_read_blocks =
+            active_short_read_blocks_.load(std::memory_order_relaxed),
+        .mixer_error_blocks =
+            mixer_error_blocks_.load(std::memory_order_relaxed),
+        .render_contract_error_blocks =
+            render_contract_error_blocks_.load(std::memory_order_relaxed),
+        .short_read_missing_frames =
+            short_read_missing_frames_.load(std::memory_order_relaxed),
+        .first_mixer_error = static_cast<ma_result>(
+            first_mixer_error_.load(std::memory_order_relaxed)),
+        .clipped_output_blocks =
+            clipped_output_blocks_.load(std::memory_order_relaxed),
+        .clipped_output_samples =
+            clipped_output_samples_.load(std::memory_order_relaxed),
+        .zero_output_blocks_with_active_voice =
+            zero_output_blocks_with_active_voice_.load(
+                std::memory_order_relaxed),
+        .zero_output_blocks_without_active_voice =
+            zero_output_blocks_without_active_voice_.load(
+                std::memory_order_relaxed),
+        .non_finite_output_blocks =
+            non_finite_output_blocks_.load(std::memory_order_relaxed),
+        .maximum_absolute_output_sample = std::bit_cast<float>(
+            maximum_absolute_output_sample_bits_.load(
+                std::memory_order_relaxed)),
+    };
+}
 
 AsioOutputBackendActions ProductionAsioOutputBackendActions() noexcept
 {
@@ -803,23 +981,17 @@ private:
             decision.render_output_frame_begin,
             0,
         });
-        if (block.silence_substituted)
-        {
-            silence_substitutions_.fetch_add(1, std::memory_order_relaxed);
-        }
+        render_diagnostics_.RecordRender(block);
         const auto index = static_cast<std::size_t>(request.buffer_index);
-        const bool left_converted = ConvertFloatStereoChannelToAsio(
+        const auto conversion = ConvertFloatStereoToAsio(
             block.interleaved_stereo,
-            0,
-            channel_types_[0],
-            driver_buffers_[0][index]);
-        const bool right_converted = left_converted &&
-            ConvertFloatStereoChannelToAsio(
-                block.interleaved_stereo,
-                1,
-                channel_types_[1],
-                driver_buffers_[1][index]);
-        if (!left_converted || !right_converted)
+            channel_types_,
+            {
+                driver_buffers_[0][index],
+                driver_buffers_[1][index],
+            });
+        render_diagnostics_.RecordConversion(block, conversion);
+        if (!conversion.converted)
         {
             ClearAsioBlock(request.buffer_index);
             LatchRuntimeFault(AsioFailureStage::conversion);
@@ -975,14 +1147,19 @@ private:
             : has_final_callback_snapshot_
                 ? final_callback_snapshot_
                 : AsioCallbackRuntimeSnapshot{};
+        const auto render = render_diagnostics_.Snapshot();
         return {
             .callbacks = callback.callbacks,
             .time_info_callbacks = callback.time_info_callbacks,
             .legacy_callbacks = callback.legacy_callbacks,
             .deferred_callbacks = callback.deferred_callbacks,
             .deadline_misses = callback.deadline_misses,
-            .silence_substitutions =
-                silence_substitutions_.load(std::memory_order_relaxed),
+            .silence_substitutions = SaturatingSum({
+                render.no_active_voice_silence_blocks,
+                render.active_short_read_blocks,
+                render.mixer_error_blocks,
+                render.render_contract_error_blocks,
+            }),
             .overload_messages = callback.overload_messages,
             .reset_requests = callback.reset_requests,
             .resync_requests = callback.resync_requests,
@@ -996,8 +1173,52 @@ private:
                     std::memory_order_relaxed),
             .render_gap_frames =
                 render_gap_frames_.load(std::memory_order_relaxed),
+            .expected_period_ns = callback.expected_period_ns,
+            .callback_interval_samples =
+                callback.callback_interval_samples,
+            .total_callback_interval_ticks =
+                callback.total_callback_interval_ticks,
+            .maximum_callback_interval_ticks =
+                callback.maximum_callback_interval_ticks,
+            .early_callback_intervals =
+                callback.early_callback_intervals,
+            .late_callback_intervals = callback.late_callback_intervals,
+            .severe_callback_intervals =
+                callback.severe_callback_intervals,
+            .timed_callback_work_samples =
+                callback.timed_callback_work_samples,
+            .total_callback_ticks = callback.total_callback_ticks,
             .maximum_callback_ticks = callback.maximum_callback_ticks,
+            .timed_render_work_samples =
+                callback.timed_render_work_samples,
+            .total_render_ticks = callback.total_render_ticks,
             .maximum_render_ticks = callback.maximum_render_ticks,
+            .driver_interval_samples = callback.driver_interval_samples,
+            .maximum_driver_period_error_ns =
+                callback.maximum_driver_period_error_ns,
+            .maximum_host_driver_interval_skew_ns =
+                callback.maximum_host_driver_interval_skew_ns,
+            .buffer_alternation_violations =
+                callback.buffer_alternation_violations,
+            .no_active_voice_silence_blocks =
+                render.no_active_voice_silence_blocks,
+            .active_short_read_blocks = render.active_short_read_blocks,
+            .mixer_error_blocks = render.mixer_error_blocks,
+            .render_contract_error_blocks =
+                render.render_contract_error_blocks,
+            .short_read_missing_frames =
+                render.short_read_missing_frames,
+            .first_mixer_error = render.first_mixer_error,
+            .clipped_output_blocks = render.clipped_output_blocks,
+            .clipped_output_samples = render.clipped_output_samples,
+            .zero_output_blocks_with_active_voice =
+                render.zero_output_blocks_with_active_voice,
+            .zero_output_blocks_without_active_voice =
+                render.zero_output_blocks_without_active_voice,
+            .non_finite_output_blocks =
+                render.non_finite_output_blocks,
+            .maximum_absolute_output_sample =
+                render.maximum_absolute_output_sample,
             .qpc_frequency = callback.qpc_frequency,
             .pending_cursor_queries =
                 pending_cursor_queries_.load(std::memory_order_relaxed),
@@ -1041,7 +1262,7 @@ private:
 
     std::atomic_uint32_t endpoint_buffer_frames_{};
     std::atomic_uint32_t output_sample_rate_{};
-    std::atomic_uint64_t silence_substitutions_{};
+    AsioRenderDiagnostics render_diagnostics_;
     std::atomic_uint64_t sample_position_discontinuities_{};
     std::atomic_uint64_t render_gap_frames_{};
     std::atomic_uint64_t pending_cursor_queries_{};

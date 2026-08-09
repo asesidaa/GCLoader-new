@@ -2,7 +2,9 @@
 
 #include "Audio/Asio/AsioOutputBackend.h"
 #include "Audio/Asio/AsioOutputBackendInternal.h"
+#include "Audio/Asio/AsioSampleConverter.h"
 
+#include "Audio/Mixer/AudioRenderCore.h"
 #include "Audio/Mixer/AudioSnapshot.h"
 
 #include <Windows.h>
@@ -40,6 +42,9 @@ using gc::audio::AsioFailure;
 using gc::audio::AsioFailureStage;
 using gc::audio::AsioOutputBackend;
 using gc::audio::AsioRuntimeCountersSnapshot;
+using gc::audio::AsioStereoConversionResult;
+using gc::audio::AudioRenderBlock;
+using gc::audio::AudioRenderSilenceReason;
 using gc::audio::AsioStreamRequest;
 using gc::audio::AudioCursorResolutionKind;
 using gc::audio::AudioCursorTimeline;
@@ -749,6 +754,130 @@ WAVEFORMATEX StereoPcm16(std::uint32_t sample_rate)
     return format;
 }
 
+int TestRenderDiagnosticsAccumulator()
+{
+    gc::audio::detail::AsioRenderDiagnostics diagnostics;
+    diagnostics.RecordRender(AudioRenderBlock{
+        .mixer_result = MA_SUCCESS,
+        .active_voices = 0,
+        .missing_frames = 7,
+        .silence_reason = AudioRenderSilenceReason::no_active_voice,
+        .silence_substituted = true,
+    });
+    diagnostics.RecordRender(AudioRenderBlock{
+        .mixer_result = MA_SUCCESS,
+        .active_voices = 1,
+        .missing_frames = 11,
+        .silence_reason = AudioRenderSilenceReason::active_short_read,
+        .silence_substituted = true,
+    });
+    diagnostics.RecordRender(AudioRenderBlock{
+        .mixer_result = MA_INVALID_ARGS,
+        .active_voices = 1,
+        .silence_reason = AudioRenderSilenceReason::mixer_error,
+        .silence_substituted = true,
+    });
+    diagnostics.RecordRender(AudioRenderBlock{
+        .mixer_result = MA_OUT_OF_MEMORY,
+        .active_voices = 1,
+        .silence_reason = AudioRenderSilenceReason::mixer_error,
+        .silence_substituted = true,
+    });
+    diagnostics.RecordRender(AudioRenderBlock{
+        .mixer_result = MA_SUCCESS,
+        .silence_reason = AudioRenderSilenceReason::render_contract_error,
+        .silence_substituted = true,
+    });
+    diagnostics.RecordRender(AudioRenderBlock{
+        .mixer_result = MA_SUCCESS,
+        .silence_reason = AudioRenderSilenceReason::none,
+    });
+
+    AudioRenderBlock active_block{
+        .mixer_result = MA_SUCCESS,
+        .active_voices = 2,
+        .silence_reason = AudioRenderSilenceReason::none,
+    };
+    diagnostics.RecordConversion(
+        active_block,
+        AsioStereoConversionResult{
+            .converted = true,
+            .stats = {
+                .clipped_samples =
+                    (std::numeric_limits<std::uint64_t>::max)() - 2,
+                .maximum_absolute_sample = 1.25F,
+            },
+        });
+    diagnostics.RecordConversion(
+        active_block,
+        AsioStereoConversionResult{
+            .converted = true,
+            .stats = {
+                .clipped_samples = 10,
+                .maximum_absolute_sample = 1.0F,
+            },
+        });
+    diagnostics.RecordConversion(
+        active_block,
+        AsioStereoConversionResult{
+            .converted = true,
+            .stats = {.all_zero = true},
+        });
+    AudioRenderBlock inactive_block{
+        .mixer_result = MA_SUCCESS,
+        .active_voices = 0,
+        .silence_reason = AudioRenderSilenceReason::none,
+    };
+    diagnostics.RecordConversion(
+        inactive_block,
+        AsioStereoConversionResult{
+            .converted = true,
+            .stats = {.all_zero = true},
+        });
+    AudioRenderBlock substituted_block{
+        .mixer_result = MA_SUCCESS,
+        .active_voices = 1,
+        .silence_reason = AudioRenderSilenceReason::active_short_read,
+        .silence_substituted = true,
+    };
+    diagnostics.RecordConversion(
+        substituted_block,
+        AsioStereoConversionResult{
+            .converted = true,
+            .stats = {
+                .clipped_samples = 5,
+                .maximum_absolute_sample = 2.0F,
+                .all_zero = true,
+            },
+        });
+    diagnostics.RecordConversion(
+        active_block,
+        AsioStereoConversionResult{
+            .converted = false,
+            .stats = {.non_finite = true},
+        });
+
+    const auto snapshot = diagnostics.Snapshot();
+    int failures = Expect(
+        snapshot.no_active_voice_silence_blocks == 1 &&
+            snapshot.active_short_read_blocks == 1 &&
+            snapshot.mixer_error_blocks == 2 &&
+            snapshot.render_contract_error_blocks == 1 &&
+            snapshot.short_read_missing_frames == 18 &&
+            snapshot.first_mixer_error == MA_INVALID_ARGS,
+        "render silence reasons are exclusive and first mixer error is retained");
+    failures += Expect(
+        snapshot.clipped_output_blocks == 2 &&
+            snapshot.clipped_output_samples ==
+                (std::numeric_limits<std::uint64_t>::max)() &&
+            snapshot.maximum_absolute_output_sample == 1.25F &&
+            snapshot.zero_output_blocks_with_active_voice == 1 &&
+            snapshot.zero_output_blocks_without_active_voice == 1 &&
+            snapshot.non_finite_output_blocks == 1,
+        "conversion integrity counters saturate and exclude substituted silence");
+    return failures;
+}
+
 int TestFakeXonarEndToEnd()
 {
     auto driver = std::make_shared<DriverState>();
@@ -883,20 +1012,126 @@ int TestFakeXonarEndToEnd()
             resolved.source_frame == 0,
         "stable render uses sample position plus latency and converts packed 24-bit stereo");
 
+    voice.reset();
+    auto create_constant_voice = [&](std::int16_t left_sample,
+                                     std::int16_t right_sample,
+                                     std::uint32_t play_time_ms)
+    {
+        std::vector<std::int16_t> constant_samples(kFrames * 2 * 2);
+        for (std::size_t frame{};
+             frame < constant_samples.size() / 2;
+             ++frame)
+        {
+            constant_samples[frame * 2] = left_sample;
+            constant_samples[frame * 2 + 1] = right_sample;
+        }
+        auto constant_snapshot = std::make_shared<AudioSnapshot>(
+            static_cast<std::uint32_t>(
+                constant_samples.size() * sizeof(std::int16_t)),
+            normalized.block_align);
+        AudioLockRegions constant_regions{};
+        if (constant_snapshot->Lock(
+                0,
+                static_cast<DWORD>(
+                    constant_samples.size() * sizeof(std::int16_t)),
+                DSBLOCK_ENTIREBUFFER,
+                &constant_regions) != DS_OK)
+        {
+            ++failures;
+            return std::unique_ptr<gc::audio::MixerVoice>{};
+        }
+        std::memcpy(
+            constant_regions.first,
+            constant_samples.data(),
+            constant_regions.first_bytes);
+        if (constant_regions.second_bytes != 0)
+        {
+            std::memcpy(
+                constant_regions.second,
+                reinterpret_cast<const std::byte*>(constant_samples.data()) +
+                    constant_regions.first_bytes,
+                constant_regions.second_bytes);
+        }
+        if (constant_snapshot->Unlock(
+                constant_regions.first,
+                constant_regions.first_bytes,
+                constant_regions.second,
+                constant_regions.second_bytes) != DS_OK)
+        {
+            ++failures;
+            return std::unique_ptr<gc::audio::MixerVoice>{};
+        }
+        ma_result create_result = MA_ERROR;
+        auto constant_voice = backend->CreateVoice(
+            normalized,
+            constant_snapshot,
+            std::make_shared<AudioCursorTimeline>(),
+            VoiceUsage::General,
+            &create_result);
+        if (create_result != MA_SUCCESS || constant_voice == nullptr ||
+            constant_voice->Play(false, play_time_ms) != DS_OK)
+        {
+            ++failures;
+            return std::unique_ptr<gc::audio::MixerVoice>{};
+        }
+        return constant_voice;
+    };
+
+    auto clipped_voice_a = create_constant_voice(32'767, 32'767, 1008);
+    auto clipped_voice_b = create_constant_voice(32'767, 32'767, 1008);
+    actions.now_ms.store(1012, std::memory_order_relaxed);
+    driver->Queue({0, 768, 1'012'000'000});
+    failures += Expect(
+        clipped_voice_a != nullptr && clipped_voice_b != nullptr &&
+            WaitUntil([&]
+            {
+                return driver->callbacks_processed.load(
+                           std::memory_order_acquire) == 5;
+            }),
+        "two full-scale voices render one clipped ASIO block");
+    clipped_voice_a.reset();
+    clipped_voice_b.reset();
+
+    auto zero_voice = create_constant_voice(0, 0, 1012);
+    actions.now_ms.store(1016, std::memory_order_relaxed);
+    driver->Queue({1, 960, 1'016'000'000});
+    failures += Expect(
+        zero_voice != nullptr && WaitUntil([&]
+        {
+            return driver->callbacks_processed.load(
+                       std::memory_order_acquire) == 6;
+        }),
+        "active exact-zero voice renders one zero ASIO block");
+    zero_voice.reset();
+
     backend->CountPendingCursorQuery();
     backend->CountUnmappedCursorFailure();
     voice.reset();
     backend.reset();
     if (observer->last_counters &&
         !(observer->runtime_failures == 0 && observer->summaries == 1 &&
-          observer->last_counters->callbacks == 4 &&
-          observer->last_counters->time_info_callbacks == 4 &&
+          observer->last_counters->callbacks == 6 &&
+          observer->last_counters->time_info_callbacks == 6 &&
           observer->last_counters->legacy_callbacks == 0 &&
           observer->last_counters->silence_substitutions == 1 &&
           observer->last_counters->pending_cursor_queries == 1 &&
           observer->last_counters->unmapped_cursor_failures == 1 &&
           observer->last_counters->maximum_callback_ticks > 0 &&
-          observer->last_counters->mixer.native_rate_buffers == 1))
+          observer->last_counters->callback_interval_samples == 5 &&
+          observer->last_counters->timed_callback_work_samples == 6 &&
+          observer->last_counters->timed_render_work_samples == 6 &&
+          observer->last_counters->driver_interval_samples == 3 &&
+          observer->last_counters->expected_period_ns == 4'000'000 &&
+          observer->last_counters->buffer_alternation_violations == 0 &&
+          observer->last_counters->no_active_voice_silence_blocks == 1 &&
+          observer->last_counters->active_short_read_blocks == 0 &&
+          observer->last_counters->mixer_error_blocks == 0 &&
+          observer->last_counters->render_contract_error_blocks == 0 &&
+          observer->last_counters->clipped_output_blocks == 1 &&
+          observer->last_counters->clipped_output_samples > 0 &&
+          observer->last_counters->maximum_absolute_output_sample > 1.0F &&
+          observer->last_counters->zero_output_blocks_with_active_voice == 1 &&
+          observer->last_counters->zero_output_blocks_without_active_voice == 0))
     {
         const auto& counters = *observer->last_counters;
         std::cerr << "Final counters: summaries=" << observer->summaries
@@ -914,14 +1149,28 @@ int TestFakeXonarEndToEnd()
     failures += Expect(
         observer->runtime_failures == 0 && observer->summaries == 1 &&
             observer->last_counters.has_value() &&
-            observer->last_counters->callbacks == 4 &&
-            observer->last_counters->time_info_callbacks == 4 &&
+            observer->last_counters->callbacks == 6 &&
+            observer->last_counters->time_info_callbacks == 6 &&
             observer->last_counters->legacy_callbacks == 0 &&
             observer->last_counters->silence_substitutions == 1 &&
             observer->last_counters->pending_cursor_queries == 1 &&
             observer->last_counters->unmapped_cursor_failures == 1 &&
             observer->last_counters->maximum_callback_ticks > 0 &&
-            observer->last_counters->mixer.native_rate_buffers == 1,
+            observer->last_counters->callback_interval_samples == 5 &&
+            observer->last_counters->timed_callback_work_samples == 6 &&
+            observer->last_counters->timed_render_work_samples == 6 &&
+            observer->last_counters->driver_interval_samples == 3 &&
+            observer->last_counters->expected_period_ns == 4'000'000 &&
+            observer->last_counters->buffer_alternation_violations == 0 &&
+            observer->last_counters->no_active_voice_silence_blocks == 1 &&
+            observer->last_counters->active_short_read_blocks == 0 &&
+            observer->last_counters->mixer_error_blocks == 0 &&
+            observer->last_counters->render_contract_error_blocks == 0 &&
+            observer->last_counters->clipped_output_blocks == 1 &&
+            observer->last_counters->clipped_output_samples > 0 &&
+            observer->last_counters->maximum_absolute_output_sample > 1.0F &&
+            observer->last_counters->zero_output_blocks_with_active_voice == 1 &&
+            observer->last_counters->zero_output_blocks_without_active_voice == 0,
         "final control-thread summary carries complete callback and mixer counters");
     failures += Expect(
         driver->stop_calls == 1 && driver->dispose_calls == 1 &&
@@ -1298,6 +1547,7 @@ int TestPostCommitFaultStopsWithoutRecommit()
 int main()
 {
     int failures{};
+    failures += TestRenderDiagnosticsAccumulator();
     failures += TestFakeXonarEndToEnd();
     failures += TestStableCallbackCannotCommitInsideDriverStart();
     failures += TestPrecommitFailureMatrix();

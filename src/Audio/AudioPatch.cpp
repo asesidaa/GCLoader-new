@@ -13,6 +13,7 @@
 #include <dsound.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <iomanip>
@@ -449,6 +450,11 @@ std::string asio_startup_text(const AsioCapabilityReport& report) {
     const auto base = static_cast<std::size_t>(report.selected_base_channel);
     const auto& left = report.output_channels.at(base);
     const auto& right = report.output_channels.at(base + 1U);
+    const double expected_callback_us =
+        std::isfinite(report.sample_rate) && report.sample_rate > 0.0
+        ? static_cast<double>(report.effective_buffer_frames) *
+            1'000'000.0 / report.sample_rate
+        : 0.0;
     std::ostringstream stream;
     stream << "Audio startup requested_backend=asio active_backend=asio"
         << " asio_registry_name=\"" << report.registration.registry_name << '"'
@@ -458,6 +464,7 @@ std::string asio_startup_text(const AsioCapabilityReport& report) {
         << " sample_rate=" << report.sample_rate
         << " asio_requested_buffer_frames=" << report.effective_buffer_frames
         << " asio_buffer_frames=" << report.effective_buffer_frames
+        << " asio_expected_callback_us=" << expected_callback_us
         << " asio_buffer_minimum_frames=" << report.buffer_limits.minimum
         << " asio_buffer_maximum_frames=" << report.buffer_limits.maximum
         << " asio_buffer_preferred_frames=" << report.buffer_limits.preferred
@@ -485,6 +492,19 @@ std::string asio_startup_text(const AsioCapabilityReport& report) {
 }
 
 std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters) {
+    const auto ticks_to_microseconds = [&](std::uint64_t ticks) {
+        return counters.qpc_frequency == 0
+            ? 0.0
+            : static_cast<double>(ticks) * 1'000'000.0 /
+                static_cast<double>(counters.qpc_frequency);
+    };
+    const auto average_ticks_microseconds = [&](std::uint64_t ticks,
+                                                 std::uint64_t samples) {
+        return samples == 0
+            ? 0.0
+            : ticks_to_microseconds(ticks) /
+                static_cast<double>(samples);
+    };
     std::ostringstream stream;
     stream << "callbacks=" << counters.callbacks
         << " time_info_callbacks=" << counters.time_info_callbacks
@@ -503,18 +523,75 @@ std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters) {
         << " sample_position_discontinuities="
         << counters.sample_position_discontinuities
         << " render_gap_frames=" << counters.render_gap_frames
+        << " asio_expected_callback_us="
+        << static_cast<double>(counters.expected_period_ns) / 1'000.0
+        << " callback_interval_samples="
+        << counters.callback_interval_samples
+        << " total_callback_interval_ticks="
+        << counters.total_callback_interval_ticks
+        << " maximum_callback_interval_ticks="
+        << counters.maximum_callback_interval_ticks
+        << " average_callback_interval_us="
+        << average_ticks_microseconds(
+            counters.total_callback_interval_ticks,
+            counters.callback_interval_samples)
+        << " maximum_callback_interval_us="
+        << ticks_to_microseconds(counters.maximum_callback_interval_ticks)
+        << " early_callback_intervals="
+        << counters.early_callback_intervals
+        << " late_callback_intervals=" << counters.late_callback_intervals
+        << " severe_callback_intervals="
+        << counters.severe_callback_intervals
+        << " timed_callback_work_samples="
+        << counters.timed_callback_work_samples
+        << " total_callback_ticks=" << counters.total_callback_ticks
+        << " average_callback_us="
+        << average_ticks_microseconds(
+            counters.total_callback_ticks,
+            counters.timed_callback_work_samples)
         << " maximum_callback_ticks=" << counters.maximum_callback_ticks
+        << " maximum_callback_us="
+        << ticks_to_microseconds(counters.maximum_callback_ticks)
+        << " timed_render_work_samples="
+        << counters.timed_render_work_samples
+        << " total_render_ticks=" << counters.total_render_ticks
+        << " average_render_us="
+        << average_ticks_microseconds(
+            counters.total_render_ticks,
+            counters.timed_render_work_samples)
         << " maximum_render_ticks=" << counters.maximum_render_ticks
-        << " qpc_frequency=" << counters.qpc_frequency;
-    if (counters.qpc_frequency != 0) {
-        stream << " maximum_callback_us="
-            << static_cast<double>(counters.maximum_callback_ticks) *
-                1'000'000.0 / static_cast<double>(counters.qpc_frequency)
-            << " maximum_render_us="
-            << static_cast<double>(counters.maximum_render_ticks) *
-                1'000'000.0 / static_cast<double>(counters.qpc_frequency);
-    }
-    stream
+        << " maximum_render_us="
+        << ticks_to_microseconds(counters.maximum_render_ticks)
+        << " qpc_frequency=" << counters.qpc_frequency
+        << " driver_interval_samples=" << counters.driver_interval_samples
+        << " maximum_driver_period_error_us="
+        << static_cast<double>(counters.maximum_driver_period_error_ns) /
+            1'000.0
+        << " maximum_host_driver_interval_skew_us="
+        << static_cast<double>(
+            counters.maximum_host_driver_interval_skew_ns) / 1'000.0
+        << " buffer_alternation_violations="
+        << counters.buffer_alternation_violations
+        << " no_active_voice_silence_blocks="
+        << counters.no_active_voice_silence_blocks
+        << " active_short_read_blocks="
+        << counters.active_short_read_blocks
+        << " mixer_error_blocks=" << counters.mixer_error_blocks
+        << " render_contract_error_blocks="
+        << counters.render_contract_error_blocks
+        << " short_read_missing_frames="
+        << counters.short_read_missing_frames
+        << " first_mixer_error=" << counters.first_mixer_error
+        << " clipped_output_blocks=" << counters.clipped_output_blocks
+        << " clipped_output_samples=" << counters.clipped_output_samples
+        << " zero_output_blocks_with_active_voice="
+        << counters.zero_output_blocks_with_active_voice
+        << " zero_output_blocks_without_active_voice="
+        << counters.zero_output_blocks_without_active_voice
+        << " non_finite_output_blocks="
+        << counters.non_finite_output_blocks
+        << " maximum_absolute_output_sample="
+        << counters.maximum_absolute_output_sample
         << " pending_cursor_queries=" << counters.pending_cursor_queries
         << " unmapped_cursor_failures=" << counters.unmapped_cursor_failures
         << " native_rate_buffers=" << counters.mixer.native_rate_buffers
