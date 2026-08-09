@@ -69,6 +69,16 @@ target_compile_definitions(AsioProbeClientTests PRIVATE
 add_dependencies(AsioProbeClientTests ConfigGUI)
 add_test(NAME AsioProbeClientTests COMMAND AsioProbeClientTests)
 
+add_executable(AsioIsolatedProcessTestChild AsioIsolatedProcessTestChild.cpp)
+
+add_executable(AsioIsolatedProcessTests AsioIsolatedProcessTests.cpp)
+target_link_libraries(AsioIsolatedProcessTests PRIVATE gc_asio)
+target_compile_definitions(AsioIsolatedProcessTests PRIVATE
+        GC_ASIO_ISOLATED_TEST_CHILD_PATH="$<TARGET_FILE:AsioIsolatedProcessTestChild>"
+)
+add_dependencies(AsioIsolatedProcessTests AsioIsolatedProcessTestChild)
+add_test(NAME AsioIsolatedProcessTests COMMAND AsioIsolatedProcessTests)
+
 add_executable(AsioOutputBackendTests AsioOutputBackendTests.cpp)
 target_link_libraries(AsioOutputBackendTests PRIVATE gc_audio)
 add_test(NAME AsioOutputBackendTests COMMAND AsioOutputBackendTests)

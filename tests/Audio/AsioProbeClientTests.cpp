@@ -79,8 +79,10 @@ public:
         const AsioProbeProcessRequest& request) noexcept override {
         ++run_calls;
         executable = request.executable_path;
-        fixed_argument = request.fixed_argument;
+        fixed_argument = std::wstring{
+            gc::audio::AsioInternalModeArgument(request.mode)};
         timeout = request.timeout;
+        cancellation_event = request.cancellation_event;
         maximum_stdout_bytes = request.maximum_stdout_bytes;
         creation_flags = request.creation_flags;
         inherit_handles = request.inherit_handles;
@@ -103,6 +105,7 @@ public:
     std::filesystem::path executable;
     std::wstring fixed_argument;
     std::chrono::milliseconds timeout{};
+    HANDLE cancellation_event{};
     std::uint32_t maximum_stdout_bytes{};
     DWORD creation_flags{};
     bool inherit_handles{};
@@ -159,6 +162,7 @@ int TestSuccessfulLaunchContract() {
         "driver-controlled data travels only in bounded stdin payload");
     failures += Expect(
         observed->timeout == std::chrono::milliseconds{5'000} &&
+            observed->cancellation_event == nullptr &&
             observed->maximum_stdout_bytes ==
                 gc::audio::kAsioProbeMaxMessageBytes,
         "caller timeout and bounded response size reach process layer");
@@ -370,17 +374,19 @@ int TestProductionHelperBoundary() {
 
     ProductionAsioProbeProcessActions actions;
     const AsioProbeProcessRequest process_request{
-        std::filesystem::path{GC_ASIO_PROBE_TEST_PATH},
-        L"--asio-probe",
-        *encoded,
-        std::chrono::milliseconds{5'000},
-        gc::audio::kAsioProbeMaxMessageBytes,
-        CREATE_SUSPENDED | CREATE_NO_WINDOW |
+        .executable_path =
+            std::filesystem::path{GC_ASIO_PROBE_TEST_PATH},
+        .mode = gc::audio::AsioInternalMode::probe,
+        .standard_input = *encoded,
+        .timeout = std::chrono::milliseconds{5'000},
+        .cancellation_event = nullptr,
+        .maximum_stdout_bytes = gc::audio::kAsioProbeMaxMessageBytes,
+        .creation_flags = CREATE_SUSPENDED | CREATE_NO_WINDOW |
             EXTENDED_STARTUPINFO_PRESENT,
-        true,
-        true,
-        true,
-        false,
+        .inherit_handles = true,
+        .restricted_handle_list = true,
+        .kill_on_job_close = true,
+        .use_shell = false,
     };
     const auto outcome = actions.Run(process_request);
     int failures = Expect(
