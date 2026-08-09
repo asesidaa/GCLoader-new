@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: CC0-1.0
 
 #include "Audio/Asio/AsioDriverCatalog.h"
+#include "Audio/Asio/AsioControlPanel.h"
 #include "Audio/Asio/AsioProbeClient.h"
 #include "Config/ConfigDocument.h"
 #include "Config/AudioConfig.h"
@@ -67,6 +68,10 @@ public:
 
     [[nodiscard]] std::expected<gc::audio::AsioProbeRequest, std::string>
         BeginInspection();
+    [[nodiscard]] std::expected<
+        gc::audio::AsioControlPanelRequest,
+        std::string>
+        BeginControlPanel();
     void CompleteInspection(gc::audio::AsioProbeResult result);
 
     [[nodiscard]] AsioInspectionState

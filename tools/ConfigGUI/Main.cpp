@@ -1,11 +1,11 @@
 #include "AsioControlPanelMode.h"
 #include "AsioProbeMode.h"
 #include "AudioBackendEditorModel.h"
+#include "AudioOperationWorker.h"
 #include "InputEditorModel.h"
 #include "Win32D3D11Host.h"
 
 #include "Audio/Asio/AsioDriverCatalog.h"
-#include "Audio/Asio/AsioProbeClient.h"
 #include "Config/ConfigDocument.h"
 #include "Config/RegistryConfig.h"
 #include "Config/TargetFps.h"
@@ -26,8 +26,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -41,7 +39,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -77,202 +74,6 @@ public:
 
 private:
     HRESULT result_{};
-};
-
-class AudioOperationWorker final {
-public:
-    enum class Operation : std::uint8_t
-    {
-        idle,
-        inspection,
-        save,
-    };
-
-    ~AudioOperationWorker()
-    {
-        Shutdown();
-    }
-
-    AudioOperationWorker(const AudioOperationWorker&) = delete;
-    AudioOperationWorker& operator=(const AudioOperationWorker&) = delete;
-    AudioOperationWorker() = default;
-
-    [[nodiscard]] std::expected<void, std::string> StartInspection(
-        const gc::audio::AsioProbeRequest& request) noexcept
-    {
-        if (operation_ != Operation::idle)
-        {
-            return std::unexpected("An audio operation is already running");
-        }
-        try
-        {
-            inspection_result_.reset();
-            completed_.store(false, std::memory_order_relaxed);
-            operation_ = Operation::inspection;
-            worker_ = std::thread([this, request]
-            {
-                try
-                {
-                    gc::audio::AsioProbeClient client;
-                    inspection_result_.emplace(client.Run(
-                        request,
-                        gc::audio::kDefaultAsioProbeTimeout));
-                }
-                catch (const std::exception& error)
-                {
-                    inspection_result_.emplace(std::unexpected(
-                        gc::audio::AsioFailure{
-                            .stage = gc::audio::AsioFailureStage::process_launch,
-                            .domain = gc::audio::AsioResultDomain::none,
-                            .detail = std::string{
-                                "Could not run ASIO inspection worker: "} +
-                                error.what(),
-                        }));
-                }
-                catch (...)
-                {
-                    inspection_result_.emplace(std::unexpected(
-                        gc::audio::AsioFailure{
-                            .stage = gc::audio::AsioFailureStage::process_launch,
-                            .domain = gc::audio::AsioResultDomain::none,
-                            .detail =
-                                "Could not run ASIO inspection worker",
-                        }));
-                }
-                completed_.store(true, std::memory_order_release);
-            });
-            return {};
-        }
-        catch (const std::exception& error)
-        {
-            operation_ = Operation::idle;
-            return std::unexpected(
-                "Could not start ASIO inspection worker: " +
-                std::string{error.what()});
-        }
-        catch (...)
-        {
-            operation_ = Operation::idle;
-            return std::unexpected(
-                "Could not start ASIO inspection worker");
-        }
-    }
-
-    [[nodiscard]] std::expected<void, std::string> StartSave(
-        const std::filesystem::path& path,
-        const InputConfig& config) noexcept
-    {
-        if (operation_ != Operation::idle)
-        {
-            return std::unexpected("An audio operation is already running");
-        }
-        try
-        {
-            auto owned_path = path;
-            auto owned_config = config;
-            save_result_.reset();
-            completed_.store(false, std::memory_order_relaxed);
-            operation_ = Operation::save;
-            worker_ = std::thread(
-                [this,
-                 path = std::move(owned_path),
-                 config = std::move(owned_config)]
-                {
-                    try
-                    {
-                        gc::audio::AsioProbeClient client;
-                        save_result_.emplace(ValidateAndWriteConfig(
-                            path,
-                            config,
-                            client,
-                            gc::config::ProductionAtomicConfigWriteActions()));
-                    }
-                    catch (const std::exception& error)
-                    {
-                        save_result_.emplace(std::unexpected(
-                            "Config save worker failed: " +
-                            std::string{error.what()}));
-                    }
-                    catch (...)
-                    {
-                        save_result_.emplace(std::unexpected(
-                            "Config save worker failed unexpectedly"));
-                    }
-                    completed_.store(true, std::memory_order_release);
-                });
-            return {};
-        }
-        catch (const std::exception& error)
-        {
-            operation_ = Operation::idle;
-            return std::unexpected(
-                "Could not start config save worker: " +
-                std::string{error.what()});
-        }
-        catch (...)
-        {
-            operation_ = Operation::idle;
-            return std::unexpected("Could not start config save worker");
-        }
-    }
-
-    [[nodiscard]] std::optional<gc::audio::AsioProbeResult>
-    TakeInspection()
-    {
-        if (operation_ != Operation::inspection ||
-            !completed_.load(std::memory_order_acquire))
-        {
-            return std::nullopt;
-        }
-        worker_.join();
-        operation_ = Operation::idle;
-        completed_.store(false, std::memory_order_relaxed);
-        auto result = std::move(inspection_result_);
-        inspection_result_.reset();
-        return result;
-    }
-
-    [[nodiscard]] std::optional<std::expected<void, std::string>>
-    TakeSave()
-    {
-        if (operation_ != Operation::save ||
-            !completed_.load(std::memory_order_acquire))
-        {
-            return std::nullopt;
-        }
-        worker_.join();
-        operation_ = Operation::idle;
-        completed_.store(false, std::memory_order_relaxed);
-        auto result = std::move(save_result_);
-        save_result_.reset();
-        return result;
-    }
-
-    [[nodiscard]] Operation operation() const noexcept
-    {
-        return operation_;
-    }
-
-    [[nodiscard]] bool busy() const noexcept
-    {
-        return operation_ != Operation::idle;
-    }
-
-    void Shutdown() noexcept
-    {
-        if (worker_.joinable())
-        {
-            worker_.join();
-        }
-        operation_ = Operation::idle;
-    }
-
-private:
-    Operation operation_{Operation::idle};
-    std::thread worker_;
-    std::atomic<bool> completed_{false};
-    std::optional<gc::audio::AsioProbeResult> inspection_result_;
-    std::optional<std::expected<void, std::string>> save_result_;
 };
 
 std::string Win32Failure(const char* operation)
@@ -1332,6 +1133,8 @@ void DrawAsioSettings(
     InputConfig& config,
     AudioBackendEditorModel& audio_editor,
     AudioOperationWorker& audio_worker,
+    std::string& panel_status,
+    std::string& panel_error,
     bool& dirty)
 {
     auto& experimental = config.experimental();
@@ -1434,6 +1237,7 @@ void DrawAsioSettings(
     ImGui::BeginDisabled(!can_inspect);
     if (ImGui::Button("Inspect ASIO driver"))
     {
+        panel_status.clear();
         auto request = audio_editor.BeginInspection();
         if (request)
         {
@@ -1451,6 +1255,43 @@ void DrawAsioSettings(
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
+    const bool can_open_panel =
+        experimental.audio_backend() == gc::config::AudioBackend::asio &&
+        !experimental.asio_driver_name().empty() && !audio_worker.busy();
+    ImGui::BeginDisabled(!can_open_panel);
+    if (ImGui::Button("Open ASIO Control Panel"))
+    {
+        panel_error.clear();
+        auto request = audio_editor.BeginControlPanel();
+        if (!request)
+        {
+            panel_error = request.error();
+        }
+        else
+        {
+            const auto started = audio_worker.StartControlPanel(*request);
+            if (!started)
+            {
+                panel_error = started.error();
+            }
+            else
+            {
+                panel_status = "ASIO control panel is open...";
+            }
+        }
+    }
+    ImGui::EndDisabled();
+    if (!panel_status.empty())
+    {
+        ImGui::TextWrapped("%s", panel_status.c_str());
+    }
+    if (!panel_error.empty())
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+            "%s",
+            panel_error.c_str());
+    }
     const auto inspection_state = audio_editor.inspection_state();
     const ImVec4 state_color = inspection_state == AsioInspectionState::valid
         ? ImVec4(0.35F, 1.0F, 0.45F, 1.0F)
@@ -1540,6 +1381,8 @@ void DrawExperimental(
     InputConfig& config,
     AudioBackendEditorModel& audio_editor,
     AudioOperationWorker& audio_worker,
+    std::string& panel_status,
+    std::string& panel_error,
     bool& dirty)
 {
     ImGui::SeparatorText("Experimental");
@@ -1596,6 +1439,7 @@ void DrawExperimental(
         dirty = true;
     }
     ImGui::SeparatorText("Audio output");
+    ImGui::BeginDisabled(audio_worker.busy());
     auto select_backend = [&](const char* label, gc::config::AudioBackend backend)
     {
         const bool selected = experimental.audio_backend() == backend;
@@ -1640,8 +1484,11 @@ void DrawExperimental(
             config,
             audio_editor,
             audio_worker,
+            panel_status,
+            panel_error,
             dirty);
     }
+    ImGui::EndDisabled();
 }
 
 void DrawLogging(InputConfig& config, bool& dirty)
@@ -1749,12 +1596,55 @@ int main(int argc, char** argv)
 
     bool dirty = config_migrated;
     std::string save_status;
+    std::string panel_status;
+    std::string panel_error;
     AudioOperationWorker audio_worker;
     bool save_modal_open = false;
     constexpr ImVec4 clear_color(0.45F, 0.56F, 0.60F, 1.0F);
 
     while (host.PumpMessages())
     {
+        if (auto panel = audio_worker.TakeControlPanel())
+        {
+            if (!panel->has_value())
+            {
+                panel_status.clear();
+                panel_error = DescribeAsioFailure(panel->error());
+            }
+            else if (**panel ==
+                gc::audio::AsioControlPanelCompletion::cancelled)
+            {
+                panel_status.clear();
+            }
+            else
+            {
+                panel_status =
+                    "ASIO control panel closed; refreshing driver "
+                    "capabilities...";
+                auto request = audio_editor.BeginInspection();
+                if (!request)
+                {
+                    panel_status.clear();
+                    panel_error = request.error();
+                }
+                else
+                {
+                    const auto started =
+                        audio_worker.StartInspection(*request);
+                    if (!started)
+                    {
+                        panel_status.clear();
+                        panel_error = started.error();
+                        audio_editor.CompleteInspection(std::unexpected(
+                            gc::audio::AsioFailure{
+                                .stage = gc::audio::AsioFailureStage::process_launch,
+                                .domain = gc::audio::AsioResultDomain::none,
+                                .detail = started.error(),
+                            }));
+                    }
+                }
+            }
+        }
         if (auto inspection = audio_worker.TakeInspection())
         {
             const auto previous_frames =
@@ -1763,6 +1653,14 @@ int main(int argc, char** argv)
             if (config.experimental().asio_buffer_frames() != previous_frames)
             {
                 dirty = true;
+            }
+            if (!panel_status.empty())
+            {
+                panel_status = audio_editor.inspection_state() ==
+                        AsioInspectionState::valid
+                    ? "ASIO control panel closed; driver capabilities "
+                      "refreshed."
+                    : std::string{};
             }
         }
         if (auto saved = audio_worker.TakeSave())
@@ -1810,10 +1708,6 @@ int main(int argc, char** argv)
             ImGuiWindowFlags_NoBringToFrontOnFocus |
             ImGuiWindowFlags_NoNavFocus;
         ImGui::Begin("GCLoader Configuration", nullptr, window_flags);
-
-        const bool save_in_progress = audio_worker.operation() ==
-            AudioOperationWorker::Operation::save;
-        ImGui::BeginDisabled(save_in_progress);
 
         ImGui::SeparatorText("Input");
         int input_mode = config.input_mode() == gc::input::InputMode::Keyboard
@@ -1972,9 +1866,9 @@ int main(int argc, char** argv)
             config,
             audio_editor,
             audio_worker,
+            panel_status,
+            panel_error,
             dirty);
-
-        ImGui::EndDisabled();
 
         config.controller = editor.config();
         const auto validation = gc::config::ValidateInputConfig(config);

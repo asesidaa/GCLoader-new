@@ -55,3 +55,14 @@ target_link_libraries(ConfigGuiAsioModeHostTests PRIVATE
         gc_config_gui_asio_mode_host
 )
 add_test(NAME ConfigGuiAsioModeHostTests COMMAND ConfigGuiAsioModeHostTests)
+
+add_executable(ConfigGuiAudioOperationWorkerTests
+        ConfigGuiAudioOperationWorkerTests.cpp)
+target_include_directories(ConfigGuiAudioOperationWorkerTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/tools/ConfigGUI
+)
+target_link_libraries(ConfigGuiAudioOperationWorkerTests PRIVATE
+        gc_config_gui_model
+)
+add_test(NAME ConfigGuiAudioOperationWorkerTests
+        COMMAND ConfigGuiAudioOperationWorkerTests)

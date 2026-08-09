@@ -330,6 +330,24 @@ AudioBackendEditorModel::BeginInspection() {
     };
 }
 
+std::expected<gc::audio::AsioControlPanelRequest, std::string>
+AudioBackendEditorModel::BeginControlPanel() {
+    InvalidateInspection();
+    if (config_->experimental().audio_backend() !=
+        gc::config::AudioBackend::asio) {
+        return std::unexpected(
+            "Select ASIO before opening its control panel");
+    }
+    const auto& name = config_->experimental().asio_driver_name();
+    if (name.empty()) {
+        return std::unexpected(
+            "Enter an exact ASIO driver name before opening its control panel");
+    }
+    return gc::audio::AsioControlPanelRequest{
+        .driver_name = name,
+    };
+}
+
 void AudioBackendEditorModel::CompleteInspection(
     gc::audio::AsioProbeResult result) {
     if (inspection_state_ != AsioInspectionState::probing) {

@@ -235,6 +235,15 @@ int TestInspectionStateAndEdits() {
             model.channel_pairs()[2].base_channel == 2,
         "all adjacent output pairs expose indexes names and sample formats");
 
+    model.SetDriverName("任意 Unicode ASIO 名称");
+    const auto panel_request = model.BeginControlPanel();
+    failures += Expect(
+        panel_request &&
+            panel_request->driver_name == "任意 Unicode ASIO 名称" &&
+            model.inspection_state() == AsioInspectionState::idle &&
+            !model.capability_report(),
+        "panel request preserves exact text and invalidates inspection");
+
     model.SetDriverName("Arbitrary Typed Name");
     failures += Expect(
         model.inspection_state() == AsioInspectionState::idle &&
@@ -260,12 +269,19 @@ int TestInspectionStateAndEdits() {
         "base channel absent from adjacent pairs is rejected");
 
     model.SetBackend(AudioBackend::wasapi_exclusive);
+    const auto wrong_backend_panel = model.BeginControlPanel();
     failures += Expect(
-        model.inspection_state() == AsioInspectionState::idle &&
+        !wrong_backend_panel &&
+            model.inspection_state() == AsioInspectionState::idle &&
             config.experimental().audio_backend() ==
                 AudioBackend::wasapi_exclusive,
-        "backend edit invalidates inspection");
+        "control panel requires the ASIO backend");
     model.SetBackend(AudioBackend::asio);
+    model.SetDriverName({});
+    failures += Expect(
+        !model.BeginControlPanel(),
+        "control panel rejects an empty exact driver name");
+    model.SetDriverName("XONAR SOUND CARD");
     model.SetOutputBaseChannel(0);
     request = model.BeginInspection();
     model.CompleteInspection(std::unexpected(AsioFailure{

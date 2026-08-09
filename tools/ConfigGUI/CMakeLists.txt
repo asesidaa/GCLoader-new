@@ -13,6 +13,7 @@ target_link_libraries(gc_config_gui_host PUBLIC
 
 add_library(gc_config_gui_model STATIC
         AudioBackendEditorModel.cpp
+        AudioOperationWorker.cpp
         InputEditorModel.cpp
 )
 target_include_directories(gc_config_gui_model PUBLIC
