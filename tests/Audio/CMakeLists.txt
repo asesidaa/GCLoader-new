@@ -81,6 +81,10 @@ add_test(NAME AsioIsolatedProcessTests COMMAND AsioIsolatedProcessTests)
 
 add_executable(AsioControlPanelClientTests AsioControlPanelClientTests.cpp)
 target_link_libraries(AsioControlPanelClientTests PRIVATE gc_asio)
+target_compile_definitions(AsioControlPanelClientTests PRIVATE
+        GC_ASIO_CONTROL_PANEL_TEST_PATH="$<TARGET_FILE:ConfigGUI>"
+)
+add_dependencies(AsioControlPanelClientTests ConfigGUI)
 add_test(NAME AsioControlPanelClientTests COMMAND AsioControlPanelClientTests)
 
 add_executable(AsioOutputBackendTests AsioOutputBackendTests.cpp)

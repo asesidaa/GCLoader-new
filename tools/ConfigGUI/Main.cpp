@@ -1,3 +1,4 @@
+#include "AsioControlPanelMode.h"
 #include "AsioProbeMode.h"
 #include "AudioBackendEditorModel.h"
 #include "InputEditorModel.h"
@@ -1679,6 +1680,11 @@ int main(int argc, char** argv)
     if (argc == 2 && std::string_view{argv[1]} == "--asio-probe")
     {
         return RunAsioProbeMode();
+    }
+    if (argc == 2 &&
+        std::string_view{argv[1]} == "--asio-control-panel")
+    {
+        return RunAsioControlPanelMode();
     }
 
     GuiComApartment com_apartment;

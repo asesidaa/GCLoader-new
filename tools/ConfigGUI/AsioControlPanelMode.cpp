@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: CC0-1.0
 
-#include "AsioProbeMode.h"
+#include "AsioControlPanelMode.h"
 
 #include "AsioModeHost.h"
-#include "Audio/Asio/AsioCapabilityProbe.h"
+#include "Audio/Asio/AsioControlPanel.h"
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
 #include "Audio/Asio/AsioProbeProtocol.h"
@@ -17,13 +17,13 @@ namespace {
 
 enum class ExitCode : int {
     success = 0,
-    input_io = 10,
-    request_protocol = 11,
-    com_initialization = 12,
-    window_creation = 13,
-    response_protocol = 14,
-    output_io = 15,
-    unexpected = 16,
+    input_io = 20,
+    request_protocol = 21,
+    com_initialization = 22,
+    window_creation = 23,
+    response_protocol = 24,
+    output_io = 25,
+    unexpected = 26,
 };
 
 int ReadExitCode(AsioModeHostError error) noexcept {
@@ -34,16 +34,20 @@ int ReadExitCode(AsioModeHostError error) noexcept {
             : static_cast<int>(ExitCode::unexpected);
 }
 
+void WaitForPanel(void*, HWND owner) noexcept {
+    WaitForVisiblePanelWindows(owner);
+}
+
 } // namespace
 
-int RunAsioProbeMode() noexcept {
+int RunAsioControlPanelMode() noexcept {
     try {
         const auto input = ReadAsioModeMessage(
             GetStdHandle(STD_INPUT_HANDLE));
         if (!input) {
             return ReadExitCode(input.error());
         }
-        auto request = gc::audio::DecodeAsioProbeRequest(*input);
+        auto request = gc::audio::DecodeAsioControlPanelRequest(*input);
         if (!request) {
             return static_cast<int>(ExitCode::request_protocol);
         }
@@ -52,29 +56,26 @@ int RunAsioProbeMode() noexcept {
         if (!com.ready()) {
             return static_cast<int>(ExitCode::com_initialization);
         }
-        AsioHiddenOwnerWindow window;
-        if (!window.Create()) {
+        AsioHiddenOwnerWindow owner;
+        if (!owner.Create()) {
             return static_cast<int>(ExitCode::window_creation);
         }
 
         gc::audio::ProductionAsioRegistrySource registry;
         gc::audio::ProductionAsioDriverFactory factory;
-        const gc::audio::AsioStreamRequest stream_request{
-            request->driver_name,
-            request->buffer_frames,
-            request->output_base_channel,
-        };
-        auto probe = gc::audio::ProbeAsioCapability(
+        auto opened = gc::audio::OpenAsioControlPanel(
             registry,
             factory,
-            stream_request,
-            window.get(),
-            request->mode);
-        gc::audio::AsioProbeResult result = probe
-            ? gc::audio::AsioProbeResult{std::move(*probe)}
-            : gc::audio::AsioProbeResult{
-                  std::unexpected(std::move(probe.error()))};
-        auto response = gc::audio::EncodeAsioProbeResult(result);
+            *request,
+            owner.get(),
+            {
+                .wait_for_visible_windows = &WaitForPanel,
+            });
+        gc::audio::AsioControlPanelResult result = opened
+            ? gc::audio::AsioControlPanelResult{}
+            : gc::audio::AsioControlPanelResult{
+                  std::unexpected(std::move(opened.error()))};
+        auto response = gc::audio::EncodeAsioControlPanelResult(result);
         if (!response) {
             return static_cast<int>(ExitCode::response_protocol);
         }

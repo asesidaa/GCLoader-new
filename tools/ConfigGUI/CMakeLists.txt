@@ -24,7 +24,20 @@ target_link_libraries(gc_config_gui_model PUBLIC
         gc_input_win32
 )
 
+add_library(gc_config_gui_asio_mode_host STATIC
+        AsioModeHost.cpp
+)
+target_include_directories(gc_config_gui_asio_mode_host PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(gc_config_gui_asio_mode_host PUBLIC
+        gc_asio
+        ole32
+        user32
+)
+
 add_executable(ConfigGUI
+        AsioControlPanelMode.cpp
         AsioProbeMode.cpp
         Main.cpp
 )
@@ -48,6 +61,7 @@ target_link_libraries(ConfigGUI PRIVATE
         tomlplusplus::tomlplusplus
         reflectcpp
         imgui
+        gc_config_gui_asio_mode_host
         gc_config_gui_host
         gc_config_gui_model
 )

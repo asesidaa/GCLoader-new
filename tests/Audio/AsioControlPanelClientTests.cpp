@@ -32,6 +32,7 @@ using gc::audio::AsioResultDomain;
 using gc::audio::DecodeAsioControlPanelRequest;
 using gc::audio::EncodeAsioControlPanelResult;
 using gc::audio::IAsioIsolatedProcessActions;
+using gc::audio::ProductionAsioIsolatedProcessActions;
 
 int Expect(bool condition, std::string_view name) {
     if (condition) {
@@ -306,6 +307,40 @@ int TestPathAndInputFailuresStopBeforeLaunch() {
     return failures;
 }
 
+class ConfigGuiActions final : public IAsioIsolatedProcessActions {
+public:
+    std::expected<std::filesystem::path, AsioFailure>
+    CurrentExecutablePath() noexcept override {
+        return std::filesystem::path{GC_ASIO_CONTROL_PANEL_TEST_PATH};
+    }
+
+    AsioIsolatedProcessOutcome Run(
+        const AsioIsolatedProcessRequest& request) noexcept override {
+        return production_.Run(request);
+    }
+
+private:
+    ProductionAsioIsolatedProcessActions production_;
+};
+
+int TestProductionHelperBoundary() {
+    HANDLE cancellation = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (cancellation == nullptr) {
+        return 1;
+    }
+    AsioControlPanelClient client{std::make_unique<ConfigGuiActions>()};
+    const auto result = client.Run(
+        {
+            .driver_name =
+                "GCLoader deliberately absent ASIO driver 29898B4E",
+        },
+        cancellation);
+    CloseHandle(cancellation);
+    return Expect(
+        !result && result.error().stage == AsioFailureStage::registry,
+        "real background panel mode returns structured registry failure");
+}
+
 } // namespace
 
 int main() {
@@ -314,5 +349,6 @@ int main() {
     failures += TestStructuredFailureAndProcessTaxonomy();
     failures += TestCancellationAndMalformedOutput();
     failures += TestPathAndInputFailuresStopBeforeLaunch();
+    failures += TestProductionHelperBoundary();
     return failures == 0 ? 0 : 1;
 }

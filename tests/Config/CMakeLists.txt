@@ -46,3 +46,12 @@ target_link_libraries(ConfigGuiHostTests PRIVATE
         gc_config_gui_host
 )
 add_test(NAME ConfigGuiHostTests COMMAND ConfigGuiHostTests)
+
+add_executable(ConfigGuiAsioModeHostTests ConfigGuiAsioModeHostTests.cpp)
+target_include_directories(ConfigGuiAsioModeHostTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/tools/ConfigGUI
+)
+target_link_libraries(ConfigGuiAsioModeHostTests PRIVATE
+        gc_config_gui_asio_mode_host
+)
+add_test(NAME ConfigGuiAsioModeHostTests COMMAND ConfigGuiAsioModeHostTests)
