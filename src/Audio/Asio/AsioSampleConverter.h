@@ -3,6 +3,7 @@
 
 #include "Audio/Asio/AsioTypes.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -26,5 +27,22 @@ namespace gc::audio {
     std::uint32_t channel,
     ASIOSampleType type,
     std::span<std::byte> destination) noexcept;
+
+struct AsioStereoConversionStats {
+    std::uint64_t clipped_samples{};
+    float maximum_absolute_sample{};
+    bool all_zero{};
+    bool non_finite{};
+};
+
+struct AsioStereoConversionResult {
+    bool converted{};
+    AsioStereoConversionStats stats;
+};
+
+[[nodiscard]] AsioStereoConversionResult ConvertFloatStereoToAsio(
+    std::span<const float> interleaved_stereo,
+    const std::array<ASIOSampleType, 2>& types,
+    const std::array<std::span<std::byte>, 2>& destinations) noexcept;
 
 } // namespace gc::audio

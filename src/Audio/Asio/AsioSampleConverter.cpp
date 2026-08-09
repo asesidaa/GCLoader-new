@@ -75,6 +75,60 @@ bool RequiredBytes(
     return true;
 }
 
+bool DestinationSpansOverlap(
+    std::span<std::byte> left,
+    std::span<std::byte> right) noexcept {
+    if (left.empty() || right.empty()) {
+        return false;
+    }
+    const auto left_begin =
+        reinterpret_cast<std::uintptr_t>(left.data());
+    const auto right_begin =
+        reinterpret_cast<std::uintptr_t>(right.data());
+    return left_begin <= right_begin
+        ? right_begin - left_begin < left.size()
+        : left_begin - right_begin < right.size();
+}
+
+void StoreSample(
+    ASIOSampleType type,
+    float input,
+    std::byte* output) noexcept {
+    switch (type) {
+    case ASIOSTInt16LSB:
+        StoreInteger16(output, QuantizeInteger(input, 16));
+        break;
+    case ASIOSTInt24LSB:
+        StoreInteger24(output, QuantizeInteger(input, 24));
+        break;
+    case ASIOSTInt32LSB:
+        StoreInteger32(output, QuantizeInteger(input, 32));
+        break;
+    case ASIOSTFloat32LSB:
+        StoreFloat32(output, std::clamp(input, -1.0F, 1.0F));
+        break;
+    case ASIOSTFloat64LSB:
+        StoreFloat64(
+            output,
+            std::clamp(static_cast<double>(input), -1.0, 1.0));
+        break;
+    case ASIOSTInt32LSB16:
+        StoreInteger32(output, QuantizeInteger(input, 16));
+        break;
+    case ASIOSTInt32LSB18:
+        StoreInteger32(output, QuantizeInteger(input, 18));
+        break;
+    case ASIOSTInt32LSB20:
+        StoreInteger32(output, QuantizeInteger(input, 20));
+        break;
+    case ASIOSTInt32LSB24:
+        StoreInteger32(output, QuantizeInteger(input, 24));
+        break;
+    default:
+        break;
+    }
+}
+
 } // namespace
 
 std::optional<std::size_t> AsioBytesPerSample(
@@ -146,41 +200,66 @@ bool ConvertFloatStereoChannelToAsio(
         const float input = interleaved_stereo[frame * 2 + channel];
         std::byte* output =
             destination.data() + frame * *bytes_per_sample;
-        switch (type) {
-        case ASIOSTInt16LSB:
-            StoreInteger16(output, QuantizeInteger(input, 16));
-            break;
-        case ASIOSTInt24LSB:
-            StoreInteger24(output, QuantizeInteger(input, 24));
-            break;
-        case ASIOSTInt32LSB:
-            StoreInteger32(output, QuantizeInteger(input, 32));
-            break;
-        case ASIOSTFloat32LSB:
-            StoreFloat32(output, std::clamp(input, -1.0F, 1.0F));
-            break;
-        case ASIOSTFloat64LSB:
-            StoreFloat64(
-                output,
-                std::clamp(static_cast<double>(input), -1.0, 1.0));
-            break;
-        case ASIOSTInt32LSB16:
-            StoreInteger32(output, QuantizeInteger(input, 16));
-            break;
-        case ASIOSTInt32LSB18:
-            StoreInteger32(output, QuantizeInteger(input, 18));
-            break;
-        case ASIOSTInt32LSB20:
-            StoreInteger32(output, QuantizeInteger(input, 20));
-            break;
-        case ASIOSTInt32LSB24:
-            StoreInteger32(output, QuantizeInteger(input, 24));
-            break;
-        default:
-            return false;
-        }
+        StoreSample(type, input, output);
     }
     return true;
+}
+
+AsioStereoConversionResult ConvertFloatStereoToAsio(
+    std::span<const float> interleaved_stereo,
+    const std::array<ASIOSampleType, 2>& types,
+    const std::array<std::span<std::byte>, 2>& destinations) noexcept {
+    std::array<std::size_t, 2> bytes_per_sample{};
+    std::array<std::size_t, 2> required_bytes{};
+    if (interleaved_stereo.size() % 2 != 0) {
+        return {};
+    }
+    const auto frames = interleaved_stereo.size() / 2;
+    for (std::size_t channel{}; channel < 2; ++channel) {
+        const auto bytes = AsioBytesPerSample(types[channel]);
+        if (!bytes ||
+            !RequiredBytes(frames, *bytes, required_bytes[channel]) ||
+            destinations[channel].size() < required_bytes[channel]) {
+            return {};
+        }
+        bytes_per_sample[channel] = *bytes;
+    }
+    if (DestinationSpansOverlap(destinations[0], destinations[1])) {
+        return {};
+    }
+
+    AsioStereoConversionStats stats{
+        .all_zero = true,
+    };
+    for (const float sample : interleaved_stereo) {
+        if (!std::isfinite(sample)) {
+            return {
+                .converted = false,
+                .stats = {.non_finite = true},
+            };
+        }
+        const float magnitude = std::abs(sample);
+        stats.maximum_absolute_sample =
+            (std::max)(stats.maximum_absolute_sample, magnitude);
+        stats.all_zero = stats.all_zero && sample == 0.0F;
+        if (magnitude > 1.0F) {
+            ++stats.clipped_samples;
+        }
+    }
+
+    for (std::size_t frame{}; frame < frames; ++frame) {
+        for (std::size_t channel{}; channel < 2; ++channel) {
+            StoreSample(
+                types[channel],
+                interleaved_stereo[frame * 2 + channel],
+                destinations[channel].data() +
+                    frame * bytes_per_sample[channel]);
+        }
+    }
+    return {
+        .converted = true,
+        .stats = stats,
+    };
 }
 
 } // namespace gc::audio
