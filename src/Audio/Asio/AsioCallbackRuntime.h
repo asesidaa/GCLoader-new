@@ -55,6 +55,11 @@ struct AsioCallbackRuntimeActions {
         void* registration) noexcept{};
 };
 
+struct AsioCallbackTimingConfig {
+    std::uint32_t buffer_frames{};
+    std::uint32_t sample_rate{};
+};
+
 [[nodiscard]] AsioCallbackRuntimeActions
 ProductionAsioCallbackRuntimeActions() noexcept;
 
@@ -71,8 +76,22 @@ struct AsioCallbackRuntimeSnapshot {
     std::uint64_t buffer_size_change_requests{};
     std::uint64_t sample_rate_change_requests{};
     std::uint64_t buffer_alternation_violations{};
+    std::uint64_t callback_interval_samples{};
+    std::uint64_t total_callback_interval_ticks{};
+    std::uint64_t maximum_callback_interval_ticks{};
+    std::uint64_t early_callback_intervals{};
+    std::uint64_t late_callback_intervals{};
+    std::uint64_t severe_callback_intervals{};
+    std::uint64_t timed_callback_work_samples{};
+    std::uint64_t total_callback_ticks{};
     std::uint64_t maximum_callback_ticks{};
+    std::uint64_t timed_render_work_samples{};
+    std::uint64_t total_render_ticks{};
     std::uint64_t maximum_render_ticks{};
+    std::uint64_t driver_interval_samples{};
+    std::uint64_t maximum_driver_period_error_ns{};
+    std::uint64_t maximum_host_driver_interval_skew_ns{};
+    std::uint64_t expected_period_ns{};
     std::uint64_t qpc_frequency{};
     double last_reported_sample_rate{};
     AsioFailureStage first_fault{AsioFailureStage::none};
@@ -84,6 +103,7 @@ public:
     Prepare(
         IAsioBlockRenderer& renderer,
         AsioLegacyPositionActions legacy_actions,
+        AsioCallbackTimingConfig timing_config,
         AsioCallbackRuntimeActions runtime_actions =
             ProductionAsioCallbackRuntimeActions()) noexcept;
 
@@ -100,11 +120,19 @@ public:
     [[nodiscard]] static ASIOCallbacks* Callbacks() noexcept;
 
 private:
+    struct CallbackArrivalInterval {
+        bool valid{};
+        bool nanoseconds_valid{};
+        std::uint64_t ticks{};
+        std::uint64_t nanoseconds{};
+    };
+
     AsioCallbackRuntime(
         IAsioBlockRenderer& renderer,
         AsioLegacyPositionActions legacy_actions,
         AsioCallbackRuntimeActions runtime_actions,
-        std::uint64_t qpc_frequency) noexcept;
+        std::uint64_t qpc_frequency,
+        std::uint64_t expected_period_ns) noexcept;
 
     [[nodiscard]] std::expected<void, AsioFailure>
         PrepareWorker() noexcept;
@@ -136,10 +164,23 @@ private:
     [[nodiscard]] bool DispatchValidated(
         const AsioRenderRequest& request,
         AsioFailureStage validation_failure) noexcept;
+    [[nodiscard]] CallbackArrivalInterval RecordCallbackArrival(
+        bool has_entry,
+        std::uint64_t entry_tick,
+        std::uint64_t callback_ordinal) noexcept;
+    void RecordDriverCadence(
+        std::uint64_t driver_time_ns,
+        std::uint64_t callback_ordinal,
+        const CallbackArrivalInterval& host_interval) noexcept;
+    void RecordRenderTiming(
+        bool has_start,
+        std::uint64_t start_tick) noexcept;
     void FinishCallbackTiming(
         bool has_start,
-        std::uint64_t start_tick,
-        bool rendered_inline) noexcept;
+        std::uint64_t start_tick) noexcept;
+    [[nodiscard]] bool TicksToNanoseconds(
+        std::uint64_t ticks,
+        std::uint64_t* nanoseconds) const noexcept;
     void LatchFault(AsioFailureStage stage) noexcept;
     void RecordSampleRateChange(double sample_rate) noexcept;
     [[nodiscard]] bool IsFaulted() const noexcept;
@@ -150,6 +191,10 @@ private:
     AsioLegacyPositionActions legacy_actions_{};
     AsioCallbackRuntimeActions runtime_actions_{};
     std::uint64_t qpc_frequency_{};
+    std::uint64_t expected_period_ns_{};
+    std::uint64_t early_interval_threshold_ns_{};
+    std::uint64_t late_interval_threshold_ns_{};
+    std::uint64_t severe_interval_threshold_ns_{};
 
     HANDLE work_event_{};
     HANDLE stop_event_{};
@@ -178,8 +223,27 @@ private:
     std::atomic_uint64_t buffer_size_change_requests_{};
     std::atomic_uint64_t sample_rate_change_requests_{};
     std::atomic_uint64_t buffer_alternation_violations_{};
+    std::atomic_bool previous_callback_entry_valid_{};
+    std::atomic_uint64_t previous_callback_entry_tick_{};
+    std::atomic_uint64_t previous_callback_entry_ordinal_{};
+    std::atomic_uint64_t callback_interval_samples_{};
+    std::atomic_uint64_t total_callback_interval_ticks_{};
+    std::atomic_uint64_t maximum_callback_interval_ticks_{};
+    std::atomic_uint64_t early_callback_intervals_{};
+    std::atomic_uint64_t late_callback_intervals_{};
+    std::atomic_uint64_t severe_callback_intervals_{};
+    std::atomic_uint64_t timed_callback_work_samples_{};
+    std::atomic_uint64_t total_callback_ticks_{};
     std::atomic_uint64_t maximum_callback_ticks_{};
+    std::atomic_uint64_t timed_render_work_samples_{};
+    std::atomic_uint64_t total_render_ticks_{};
     std::atomic_uint64_t maximum_render_ticks_{};
+    std::atomic_uint8_t driver_cadence_state_{};
+    std::atomic_uint64_t previous_driver_time_ns_{};
+    std::atomic_uint64_t previous_driver_ordinal_{};
+    std::atomic_uint64_t driver_interval_samples_{};
+    std::atomic_uint64_t maximum_driver_period_error_ns_{};
+    std::atomic_uint64_t maximum_host_driver_interval_skew_ns_{};
     std::atomic_uint64_t last_reported_sample_rate_bits_{};
     std::atomic<std::uint8_t> first_fault_{};
 };

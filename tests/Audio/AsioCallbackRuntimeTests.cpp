@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -19,6 +20,7 @@ namespace {
 
 using gc::audio::AsioCallbackRuntime;
 using gc::audio::AsioCallbackRuntimeActions;
+using gc::audio::AsioCallbackTimingConfig;
 using gc::audio::AsioFailureStage;
 using gc::audio::AsioLegacyPositionActions;
 using gc::audio::AsioRenderRequest;
@@ -81,6 +83,17 @@ ASIOTime MakeTime(
 }
 
 struct FakeActionsState {
+    struct QpcSample {
+        bool succeeds{};
+        std::uint64_t tick{};
+    };
+
+    struct QpcSequence {
+        std::array<QpcSample, 64> samples{};
+        std::uint32_t count{};
+        std::atomic_uint32_t next{};
+    };
+
     std::atomic_uint64_t qpc_ticks{100};
     std::atomic_uint32_t qpc_calls{};
     std::atomic_uint32_t frequency_calls{};
@@ -90,6 +103,9 @@ struct FakeActionsState {
     bool qpc_succeeds{true};
     bool frequency_succeeds{true};
     bool promotion_succeeds{true};
+    DWORD primary_qpc_thread_id{};
+    QpcSequence primary_qpc{};
+    QpcSequence secondary_qpc{};
 
     ASIOError legacy_result{ASE_OK};
     ASIOSamples legacy_samples{};
@@ -97,11 +113,49 @@ struct FakeActionsState {
     std::atomic_uint32_t legacy_calls{};
 };
 
+void PushQpc(
+    FakeActionsState::QpcSequence& sequence,
+    std::uint64_t tick,
+    bool succeeds = true) noexcept {
+    if (sequence.count >= sequence.samples.size()) {
+        return;
+    }
+    sequence.samples[sequence.count++] = {succeeds, tick};
+}
+
+void ScriptInlineCallback(
+    FakeActionsState::QpcSequence& sequence,
+    std::uint64_t entry_tick,
+    bool entry_succeeds = true) noexcept {
+    PushQpc(sequence, entry_tick, entry_succeeds);
+    PushQpc(sequence, entry_tick + 100);
+    PushQpc(sequence, entry_tick + 200);
+    if (entry_succeeds) {
+        PushQpc(sequence, entry_tick + 300);
+    }
+}
+
 bool FakeQueryPerformanceCounter(
     void* context,
     std::uint64_t* value) noexcept {
     auto& state = *static_cast<FakeActionsState*>(context);
     ++state.qpc_calls;
+    FakeActionsState::QpcSequence* sequence{};
+    if (GetCurrentThreadId() == state.primary_qpc_thread_id &&
+        state.primary_qpc.count != 0) {
+        sequence = &state.primary_qpc;
+    } else if (state.secondary_qpc.count != 0) {
+        sequence = &state.secondary_qpc;
+    }
+    if (sequence != nullptr) {
+        const auto index = sequence->next.fetch_add(1);
+        if (index >= sequence->count ||
+            !sequence->samples[index].succeeds) {
+            return false;
+        }
+        *value = sequence->samples[index].tick;
+        return true;
+    }
     if (!state.qpc_succeeds) {
         return false;
     }
@@ -239,6 +293,7 @@ std::unique_ptr<AsioCallbackRuntime> PrepareRuntime(
     auto prepared = AsioCallbackRuntime::Prepare(
         renderer,
         LegacyActions(actions_state),
+        AsioCallbackTimingConfig{192, 48'000},
         RuntimeActions(actions_state));
     if (!prepared.has_value()) {
         std::cerr << "Runtime preparation failed at stage "
@@ -335,7 +390,8 @@ int TestInlineTimeInfoAndLegacyCallbacks() {
         snapshot.callbacks == 2 &&
             snapshot.time_info_callbacks == 1 &&
             snapshot.legacy_callbacks == 1 &&
-            snapshot.maximum_callback_ticks == 10 &&
+            snapshot.maximum_callback_ticks == 30 &&
+            snapshot.maximum_render_ticks == 10 &&
             snapshot.qpc_frequency == 10'000'000,
         "inline callback counters and cached timer frequency are published");
     failures += Expect(
@@ -348,6 +404,218 @@ int TestInlineTimeInfoAndLegacyCallbacks() {
     failures += Expect(
         actions.revert_calls.load() == 1,
         "worker reverts MMCSS registration when joined");
+    return failures;
+}
+
+int TestCallbackCadenceAndInlineWork() {
+    FakeRenderer renderer;
+    FakeActionsState actions;
+    actions.primary_qpc_thread_id = GetCurrentThreadId();
+    for (const auto entry : {
+             0ULL,
+             40'000ULL,
+             50'000ULL,
+             120'000ULL,
+             210'000ULL}) {
+        ScriptInlineCallback(actions.primary_qpc, entry);
+    }
+
+    auto runtime = PrepareRuntime(renderer, actions);
+    if (runtime == nullptr) {
+        return 1;
+    }
+    int failures = Expect(Install(*runtime), "cadence runtime installs");
+    auto* callbacks = AsioCallbackRuntime::Callbacks();
+    for (std::uint64_t index{}; index < 5; ++index) {
+        auto time = MakeTime(index * 192, 1'000'000);
+        callbacks->bufferSwitchTimeInfo(
+            &time,
+            static_cast<long>(index % 2),
+            ASIOTrue);
+    }
+
+    const auto snapshot = runtime->Snapshot();
+    const bool cadence_matches =
+        snapshot.expected_period_ns == 4'000'000 &&
+            snapshot.callback_interval_samples == 4 &&
+            snapshot.total_callback_interval_ticks == 210'000 &&
+            snapshot.maximum_callback_interval_ticks == 90'000 &&
+            snapshot.early_callback_intervals == 1 &&
+            snapshot.late_callback_intervals == 2 &&
+            snapshot.severe_callback_intervals == 1;
+    if (!cadence_matches) {
+        std::cerr
+            << "cadence expected_ns=" << snapshot.expected_period_ns
+            << " samples=" << snapshot.callback_interval_samples
+            << " total_ticks=" << snapshot.total_callback_interval_ticks
+            << " max_ticks=" << snapshot.maximum_callback_interval_ticks
+            << " early=" << snapshot.early_callback_intervals
+            << " late=" << snapshot.late_callback_intervals
+            << " severe=" << snapshot.severe_callback_intervals << '\n';
+    }
+    failures += Expect(
+        cadence_matches,
+        "callback arrival cadence uses exact configured period buckets");
+    failures += Expect(
+        snapshot.timed_callback_work_samples == 5 &&
+            snapshot.total_callback_ticks == 1'500 &&
+            snapshot.maximum_callback_ticks == 300 &&
+            snapshot.timed_render_work_samples == 5 &&
+            snapshot.total_render_ticks == 500 &&
+            snapshot.maximum_render_ticks == 100,
+        "inline callback and render work retain separate exact totals");
+
+    Shutdown(*runtime);
+    return failures;
+}
+
+int TestDriverCadenceCorrelation() {
+    FakeRenderer renderer;
+    FakeActionsState actions;
+    actions.primary_qpc_thread_id = GetCurrentThreadId();
+    for (const auto entry : {0ULL, 40'000ULL, 80'000ULL, 150'000ULL}) {
+        ScriptInlineCallback(actions.primary_qpc, entry);
+    }
+
+    auto runtime = PrepareRuntime(renderer, actions);
+    if (runtime == nullptr) {
+        return 1;
+    }
+    int failures = Expect(Install(*runtime), "driver cadence runtime installs");
+    constexpr std::array driver_times{
+        1'000'000ULL,
+        5'000'000ULL,
+        9'000'000ULL,
+        14'000'000ULL,
+    };
+    auto* callbacks = AsioCallbackRuntime::Callbacks();
+    for (std::size_t index{}; index < driver_times.size(); ++index) {
+        auto time = MakeTime(index * 192, driver_times[index]);
+        callbacks->bufferSwitchTimeInfo(
+            &time,
+            static_cast<long>(index % 2),
+            ASIOTrue);
+    }
+
+    const auto snapshot = runtime->Snapshot();
+    failures += Expect(
+        snapshot.driver_interval_samples == 2 &&
+            snapshot.maximum_driver_period_error_ns == 1'000'000 &&
+            snapshot.maximum_host_driver_interval_skew_ns == 2'000'000,
+        "driver periods correlate matching duration pairs without comparing epochs");
+    Shutdown(*runtime);
+    return failures;
+}
+
+int TestRepeatedStartupDriverTimestampPrimesWithoutFalseSamples() {
+    FakeRenderer renderer;
+    FakeActionsState actions;
+    actions.primary_qpc_thread_id = GetCurrentThreadId();
+    for (const auto entry : {0ULL, 40'000ULL, 80'000ULL, 120'000ULL}) {
+        ScriptInlineCallback(actions.primary_qpc, entry);
+    }
+
+    auto runtime = PrepareRuntime(renderer, actions);
+    if (runtime == nullptr) {
+        return 1;
+    }
+    int failures = Expect(Install(*runtime), "startup clock runtime installs");
+    constexpr std::array driver_times{
+        1'000'000ULL,
+        1'000'000ULL,
+        5'000'000ULL,
+        9'000'000ULL,
+    };
+    auto* callbacks = AsioCallbackRuntime::Callbacks();
+    for (std::size_t index{}; index < driver_times.size(); ++index) {
+        auto time = MakeTime(index * 192, driver_times[index]);
+        callbacks->bufferSwitchTimeInfo(
+            &time,
+            static_cast<long>(index % 2),
+            ASIOTrue);
+    }
+
+    const auto snapshot = runtime->Snapshot();
+    failures += Expect(
+        snapshot.driver_interval_samples == 1 &&
+            snapshot.maximum_driver_period_error_ns == 0 &&
+            snapshot.maximum_host_driver_interval_skew_ns == 0,
+        "repeated initial ASIO timestamp primes without a false interval");
+    Shutdown(*runtime);
+    return failures;
+}
+
+int TestMissingQpcSampleDoesNotBridgeIntervals() {
+    FakeRenderer renderer;
+    FakeActionsState actions;
+    actions.primary_qpc_thread_id = GetCurrentThreadId();
+    ScriptInlineCallback(actions.primary_qpc, 0);
+    ScriptInlineCallback(actions.primary_qpc, 40'000, false);
+    ScriptInlineCallback(actions.primary_qpc, 80'000);
+    ScriptInlineCallback(actions.primary_qpc, 120'000);
+
+    auto runtime = PrepareRuntime(renderer, actions);
+    if (runtime == nullptr) {
+        return 1;
+    }
+    int failures = Expect(Install(*runtime), "missing-QPC runtime installs");
+    auto* callbacks = AsioCallbackRuntime::Callbacks();
+    for (std::uint64_t index{}; index < 4; ++index) {
+        auto time = MakeTime(index * 192, 1'000'000);
+        callbacks->bufferSwitchTimeInfo(
+            &time,
+            static_cast<long>(index % 2),
+            ASIOTrue);
+    }
+
+    const auto snapshot = runtime->Snapshot();
+    failures += Expect(
+        snapshot.callback_interval_samples == 1 &&
+            snapshot.total_callback_interval_ticks == 40'000 &&
+            snapshot.timed_callback_work_samples == 3 &&
+            snapshot.total_callback_ticks == 900,
+        "failed callback-entry QPC omits its work and cannot bridge arrivals");
+    failures += Expect(
+        snapshot.timed_render_work_samples == 4 &&
+            snapshot.total_render_ticks == 400,
+        "failed outer timing does not discard independent render timing");
+    Shutdown(*runtime);
+    return failures;
+}
+
+int TestDeferredRenderWorkUsesDedicatedTimingPair() {
+    FakeRenderer renderer;
+    FakeActionsState actions;
+    actions.primary_qpc_thread_id = GetCurrentThreadId();
+    PushQpc(actions.primary_qpc, 100);
+    PushQpc(actions.primary_qpc, 400);
+    PushQpc(actions.secondary_qpc, 1'000);
+    PushQpc(actions.secondary_qpc, 1'200);
+
+    auto runtime = PrepareRuntime(renderer, actions);
+    if (runtime == nullptr) {
+        return 1;
+    }
+    int failures = Expect(Install(*runtime), "deferred timing runtime installs");
+    auto time = MakeTime(0, 1'000'000);
+    AsioCallbackRuntime::Callbacks()->bufferSwitchTimeInfo(
+        &time,
+        0,
+        ASIOFalse);
+    failures += Expect(
+        WaitForSingleObject(renderer.render_finished, 2'000) == WAIT_OBJECT_0,
+        "deferred render completes before timing snapshot");
+
+    const auto snapshot = runtime->Snapshot();
+    failures += Expect(
+        snapshot.timed_callback_work_samples == 1 &&
+            snapshot.total_callback_ticks == 300 &&
+            snapshot.maximum_callback_ticks == 300 &&
+            snapshot.timed_render_work_samples == 1 &&
+            snapshot.total_render_ticks == 200 &&
+            snapshot.maximum_render_ticks == 200,
+        "deferred callback and worker rendering use independent QPC pairs");
+    Shutdown(*runtime);
     return failures;
 }
 
@@ -743,6 +1011,7 @@ int TestInstallCollisionAndPreparationFailure() {
     auto failed = AsioCallbackRuntime::Prepare(
         failed_renderer,
         LegacyActions(failed_actions),
+        AsioCallbackTimingConfig{192, 48'000},
         RuntimeActions(failed_actions));
     failures += Expect(
         !failed.has_value() &&
@@ -755,11 +1024,24 @@ int TestInstallCollisionAndPreparationFailure() {
     auto bad_timer = AsioCallbackRuntime::Prepare(
         timer_renderer,
         LegacyActions(timer_actions),
+        AsioCallbackTimingConfig{192, 48'000},
         RuntimeActions(timer_actions));
     failures += Expect(
         !bad_timer.has_value() &&
             bad_timer.error().stage == AsioFailureStage::callback_prepare,
         "performance-counter setup failure rejects preparation");
+
+    FakeRenderer bad_config_renderer;
+    FakeActionsState bad_config_actions;
+    auto bad_config = AsioCallbackRuntime::Prepare(
+        bad_config_renderer,
+        LegacyActions(bad_config_actions),
+        AsioCallbackTimingConfig{0, 48'000},
+        RuntimeActions(bad_config_actions));
+    failures += Expect(
+        !bad_config.has_value() &&
+            bad_config.error().stage == AsioFailureStage::callback_prepare,
+        "zero timing dimensions reject callback preparation");
     return failures;
 }
 
@@ -769,6 +1051,11 @@ int main() {
     int failures{};
     failures += TestCallbacksAreInertOutsideInstallation();
     failures += TestInlineTimeInfoAndLegacyCallbacks();
+    failures += TestCallbackCadenceAndInlineWork();
+    failures += TestDriverCadenceCorrelation();
+    failures += TestRepeatedStartupDriverTimestampPrimesWithoutFalseSamples();
+    failures += TestMissingQpcSampleDoesNotBridgeIntervals();
+    failures += TestDeferredRenderWorkUsesDedicatedTimingPair();
     failures += TestDeferredRequestIsBounded();
     failures += TestOverlappingInlineAndDeferredCallbacksLoseClaim();
     failures += TestBufferAlternationAndStopping();

@@ -1214,6 +1214,7 @@ int TestCallbackRouterCollisionIsRecoverable()
     auto prepared_incumbent = AsioCallbackRuntime::Prepare(
         renderer,
         {nullptr, &InertLegacyPosition},
+        {192, 48'000},
         Actions(actions).callback_runtime_actions);
     if (!prepared_incumbent)
     {

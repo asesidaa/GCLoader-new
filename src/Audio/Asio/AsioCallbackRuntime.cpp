@@ -87,6 +87,95 @@ void UpdateMaximum(Atomic& destination, std::uint64_t value) noexcept {
     }
 }
 
+void SaturatingAdd(
+    std::atomic_uint64_t& destination,
+    std::uint64_t value) noexcept {
+    auto observed = destination.load(std::memory_order_relaxed);
+    for (;;) {
+        const auto remaining =
+            std::numeric_limits<std::uint64_t>::max() - observed;
+        const auto desired = value > remaining
+            ? std::numeric_limits<std::uint64_t>::max()
+            : observed + value;
+        if (destination.compare_exchange_weak(
+                observed,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed)) {
+            return;
+        }
+    }
+}
+
+void SaturatingIncrement(std::atomic_uint64_t& destination) noexcept {
+    SaturatingAdd(destination, 1);
+}
+
+bool CheckedMultiply(
+    std::uint64_t left,
+    std::uint64_t right,
+    std::uint64_t* result) noexcept {
+    if (result == nullptr ||
+        (left != 0 &&
+         right > std::numeric_limits<std::uint64_t>::max() / left)) {
+        return false;
+    }
+    *result = left * right;
+    return true;
+}
+
+bool CheckedAdd(
+    std::uint64_t left,
+    std::uint64_t right,
+    std::uint64_t* result) noexcept {
+    if (result == nullptr ||
+        right > std::numeric_limits<std::uint64_t>::max() - left) {
+        return false;
+    }
+    *result = left + right;
+    return true;
+}
+
+bool ComputeExpectedPeriodNanoseconds(
+    AsioCallbackTimingConfig config,
+    std::uint64_t* result) noexcept {
+    constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000;
+    if (result == nullptr || config.buffer_frames == 0 ||
+        config.sample_rate == 0) {
+        return false;
+    }
+
+    const auto whole_seconds =
+        static_cast<std::uint64_t>(config.buffer_frames / config.sample_rate);
+    const auto remaining_frames =
+        static_cast<std::uint64_t>(config.buffer_frames % config.sample_rate);
+    std::uint64_t whole_nanoseconds{};
+    std::uint64_t fractional_numerator{};
+    if (!CheckedMultiply(
+            whole_seconds,
+            nanoseconds_per_second,
+            &whole_nanoseconds) ||
+        !CheckedMultiply(
+            remaining_frames,
+            nanoseconds_per_second,
+            &fractional_numerator)) {
+        return false;
+    }
+    const auto fractional_nanoseconds =
+        fractional_numerator / config.sample_rate;
+    return CheckedAdd(
+               whole_nanoseconds,
+               fractional_nanoseconds,
+               result) &&
+        *result != 0;
+}
+
+std::uint64_t AbsoluteDifference(
+    std::uint64_t left,
+    std::uint64_t right) noexcept {
+    return left >= right ? left - right : right - left;
+}
+
 bool ConvertSamples(
     const ASIOSamples& source,
     std::uint64_t* value) noexcept {
@@ -171,16 +260,31 @@ AsioCallbackRuntime::AsioCallbackRuntime(
     IAsioBlockRenderer& renderer,
     AsioLegacyPositionActions legacy_actions,
     AsioCallbackRuntimeActions runtime_actions,
-    std::uint64_t qpc_frequency) noexcept
+    std::uint64_t qpc_frequency,
+    std::uint64_t expected_period_ns) noexcept
     : renderer_(&renderer),
       legacy_actions_(legacy_actions),
       runtime_actions_(runtime_actions),
-      qpc_frequency_(qpc_frequency) {}
+      qpc_frequency_(qpc_frequency),
+      expected_period_ns_(expected_period_ns),
+      early_interval_threshold_ns_(expected_period_ns / 2),
+      late_interval_threshold_ns_(
+          expected_period_ns >
+                  std::numeric_limits<std::uint64_t>::max() -
+                      expected_period_ns / 2
+              ? std::numeric_limits<std::uint64_t>::max()
+              : expected_period_ns + expected_period_ns / 2),
+      severe_interval_threshold_ns_(
+          expected_period_ns >
+                  std::numeric_limits<std::uint64_t>::max() / 2
+              ? std::numeric_limits<std::uint64_t>::max()
+              : expected_period_ns * 2) {}
 
 std::expected<std::unique_ptr<AsioCallbackRuntime>, AsioFailure>
 AsioCallbackRuntime::Prepare(
     IAsioBlockRenderer& renderer,
     AsioLegacyPositionActions legacy_actions,
+    AsioCallbackTimingConfig timing_config,
     AsioCallbackRuntimeActions runtime_actions) noexcept {
     if (legacy_actions.get_sample_position == nullptr ||
         runtime_actions.query_performance_counter == nullptr ||
@@ -191,6 +295,16 @@ AsioCallbackRuntime::Prepare(
             AsioResultDomain::none,
             0,
             "ASIO callback actions are incomplete"));
+    }
+
+    std::uint64_t expected_period_ns{};
+    if (!ComputeExpectedPeriodNanoseconds(
+            timing_config,
+            &expected_period_ns)) {
+        return std::unexpected(CallbackPrepareFailure(
+            AsioResultDomain::none,
+            0,
+            "ASIO callback timing dimensions are invalid"));
     }
 
     std::uint64_t qpc_frequency{};
@@ -209,7 +323,8 @@ AsioCallbackRuntime::Prepare(
             renderer,
             legacy_actions,
             runtime_actions,
-            qpc_frequency));
+            qpc_frequency,
+            expected_period_ns));
     if (!runtime) {
         return std::unexpected(CallbackPrepareFailure(
             AsioResultDomain::none,
@@ -421,13 +536,7 @@ void AsioCallbackRuntime::ProcessDeferredRequest() noexcept {
         runtime_actions_.context,
         &start);
     renderer_->RenderAsioBlock(request);
-    std::uint64_t finish{};
-    if (has_start && runtime_actions_.query_performance_counter(
-            runtime_actions_.context,
-            &finish) &&
-        finish >= start) {
-        UpdateMaximum(maximum_render_ticks_, finish - start);
-    }
+    RecordRenderTiming(has_start, start);
     render_claimed_.store(false, std::memory_order_release);
 }
 
@@ -512,7 +621,12 @@ void AsioCallbackRuntime::DispatchTimeInfo(
     const bool has_start = runtime_actions_.query_performance_counter(
         runtime_actions_.context,
         &start);
-    ++callbacks_count_;
+    const auto callback_ordinal =
+        callbacks_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto host_interval = RecordCallbackArrival(
+        has_start,
+        start,
+        callback_ordinal);
     ++time_info_callbacks_;
     if (direct_process == ASIOFalse) {
         ++deferred_callbacks_;
@@ -552,9 +666,14 @@ void AsioCallbackRuntime::DispatchTimeInfo(
         validation_failure = AsioFailureStage::runtime_clock;
     }
 
-    const bool rendered_inline =
-        DispatchValidated(request, validation_failure);
-    FinishCallbackTiming(has_start, start, rendered_inline);
+    if (validation_failure == AsioFailureStage::none) {
+        RecordDriverCadence(
+            request.system_time_ns,
+            callback_ordinal,
+            host_interval);
+    }
+    (void)DispatchValidated(request, validation_failure);
+    FinishCallbackTiming(has_start, start);
 }
 
 void AsioCallbackRuntime::DispatchLegacy(
@@ -564,7 +683,12 @@ void AsioCallbackRuntime::DispatchLegacy(
     const bool has_start = runtime_actions_.query_performance_counter(
         runtime_actions_.context,
         &start);
-    ++callbacks_count_;
+    const auto callback_ordinal =
+        callbacks_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto host_interval = RecordCallbackArrival(
+        has_start,
+        start,
+        callback_ordinal);
     ++legacy_callbacks_;
     if (direct_process == ASIOFalse) {
         ++deferred_callbacks_;
@@ -591,9 +715,14 @@ void AsioCallbackRuntime::DispatchLegacy(
         validation_failure = AsioFailureStage::runtime_clock;
     }
 
-    const bool rendered_inline =
-        DispatchValidated(request, validation_failure);
-    FinishCallbackTiming(has_start, start, rendered_inline);
+    if (validation_failure == AsioFailureStage::none) {
+        RecordDriverCadence(
+            request.system_time_ns,
+            callback_ordinal,
+            host_interval);
+    }
+    (void)DispatchValidated(request, validation_failure);
+    FinishCallbackTiming(has_start, start);
 }
 
 bool AsioCallbackRuntime::DispatchValidated(
@@ -643,7 +772,13 @@ bool AsioCallbackRuntime::DispatchValidated(
         return false;
     }
     if (request.direct_process == ASIOTrue) {
+        std::uint64_t render_start{};
+        const bool has_render_start =
+            runtime_actions_.query_performance_counter(
+                runtime_actions_.context,
+                &render_start);
         renderer_->RenderAsioBlock(request);
+        RecordRenderTiming(has_render_start, render_start);
         render_claimed_.store(false, std::memory_order_release);
         return true;
     }
@@ -659,21 +794,182 @@ bool AsioCallbackRuntime::DispatchValidated(
     return false;
 }
 
+AsioCallbackRuntime::CallbackArrivalInterval
+AsioCallbackRuntime::RecordCallbackArrival(
+    bool has_entry,
+    std::uint64_t entry_tick,
+    std::uint64_t callback_ordinal) noexcept {
+    CallbackArrivalInterval interval{};
+    const bool had_previous = previous_callback_entry_valid_.exchange(
+        false,
+        std::memory_order_acq_rel);
+    const auto previous_tick =
+        previous_callback_entry_tick_.load(std::memory_order_acquire);
+    const auto previous_ordinal =
+        previous_callback_entry_ordinal_.load(std::memory_order_acquire);
+
+    if (has_entry) {
+        previous_callback_entry_tick_.store(
+            entry_tick,
+            std::memory_order_relaxed);
+        previous_callback_entry_ordinal_.store(
+            callback_ordinal,
+            std::memory_order_relaxed);
+        previous_callback_entry_valid_.store(true, std::memory_order_release);
+    }
+    if (!has_entry || !had_previous || callback_ordinal == 0 ||
+        previous_ordinal != callback_ordinal - 1 ||
+        entry_tick < previous_tick) {
+        return interval;
+    }
+
+    interval.valid = true;
+    interval.ticks = entry_tick - previous_tick;
+    SaturatingIncrement(callback_interval_samples_);
+    SaturatingAdd(total_callback_interval_ticks_, interval.ticks);
+    UpdateMaximum(maximum_callback_interval_ticks_, interval.ticks);
+
+    interval.nanoseconds_valid =
+        TicksToNanoseconds(interval.ticks, &interval.nanoseconds);
+    if (!interval.nanoseconds_valid) {
+        return interval;
+    }
+    if (interval.nanoseconds < early_interval_threshold_ns_) {
+        SaturatingIncrement(early_callback_intervals_);
+    }
+    if (interval.nanoseconds > late_interval_threshold_ns_) {
+        SaturatingIncrement(late_callback_intervals_);
+    }
+    if (interval.nanoseconds > severe_interval_threshold_ns_) {
+        SaturatingIncrement(severe_callback_intervals_);
+    }
+    return interval;
+}
+
+void AsioCallbackRuntime::RecordDriverCadence(
+    std::uint64_t driver_time_ns,
+    std::uint64_t callback_ordinal,
+    const CallbackArrivalInterval& host_interval) noexcept {
+    constexpr std::uint8_t empty = 0;
+    constexpr std::uint8_t awaiting_positive_advance = 1;
+    constexpr std::uint8_t primed = 2;
+
+    const auto state =
+        driver_cadence_state_.load(std::memory_order_acquire);
+    if (state == empty) {
+        previous_driver_time_ns_.store(
+            driver_time_ns,
+            std::memory_order_relaxed);
+        previous_driver_ordinal_.store(
+            callback_ordinal,
+            std::memory_order_relaxed);
+        driver_cadence_state_.store(
+            awaiting_positive_advance,
+            std::memory_order_release);
+        return;
+    }
+
+    const auto previous_time =
+        previous_driver_time_ns_.load(std::memory_order_acquire);
+    const auto previous_ordinal =
+        previous_driver_ordinal_.load(std::memory_order_acquire);
+    const bool adjacent = callback_ordinal != 0 &&
+        previous_ordinal == callback_ordinal - 1;
+    if (!adjacent || driver_time_ns <= previous_time) {
+        previous_driver_time_ns_.store(
+            driver_time_ns,
+            std::memory_order_relaxed);
+        previous_driver_ordinal_.store(
+            callback_ordinal,
+            std::memory_order_relaxed);
+        driver_cadence_state_.store(
+            awaiting_positive_advance,
+            std::memory_order_release);
+        return;
+    }
+
+    previous_driver_time_ns_.store(
+        driver_time_ns,
+        std::memory_order_relaxed);
+    previous_driver_ordinal_.store(
+        callback_ordinal,
+        std::memory_order_relaxed);
+    if (state == awaiting_positive_advance) {
+        driver_cadence_state_.store(primed, std::memory_order_release);
+        return;
+    }
+
+    const auto driver_interval_ns = driver_time_ns - previous_time;
+    SaturatingIncrement(driver_interval_samples_);
+    UpdateMaximum(
+        maximum_driver_period_error_ns_,
+        AbsoluteDifference(driver_interval_ns, expected_period_ns_));
+    if (host_interval.valid && host_interval.nanoseconds_valid) {
+        UpdateMaximum(
+            maximum_host_driver_interval_skew_ns_,
+            AbsoluteDifference(
+                driver_interval_ns,
+                host_interval.nanoseconds));
+    }
+}
+
+void AsioCallbackRuntime::RecordRenderTiming(
+    bool has_start,
+    std::uint64_t start_tick) noexcept {
+    std::uint64_t finish{};
+    if (!has_start ||
+        !runtime_actions_.query_performance_counter(
+            runtime_actions_.context,
+            &finish) ||
+        finish < start_tick) {
+        return;
+    }
+    const auto elapsed = finish - start_tick;
+    SaturatingIncrement(timed_render_work_samples_);
+    SaturatingAdd(total_render_ticks_, elapsed);
+    UpdateMaximum(maximum_render_ticks_, elapsed);
+}
+
 void AsioCallbackRuntime::FinishCallbackTiming(
     bool has_start,
-    std::uint64_t start_tick,
-    bool rendered_inline) noexcept {
+    std::uint64_t start_tick) noexcept {
     std::uint64_t finish{};
     if (has_start && runtime_actions_.query_performance_counter(
             runtime_actions_.context,
             &finish) &&
         finish >= start_tick) {
         const auto elapsed = finish - start_tick;
+        SaturatingIncrement(timed_callback_work_samples_);
+        SaturatingAdd(total_callback_ticks_, elapsed);
         UpdateMaximum(maximum_callback_ticks_, elapsed);
-        if (rendered_inline) {
-            UpdateMaximum(maximum_render_ticks_, elapsed);
-        }
     }
+}
+
+bool AsioCallbackRuntime::TicksToNanoseconds(
+    std::uint64_t ticks,
+    std::uint64_t* nanoseconds) const noexcept {
+    constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000;
+    if (nanoseconds == nullptr || qpc_frequency_ == 0) {
+        return false;
+    }
+    const auto whole_seconds = ticks / qpc_frequency_;
+    const auto remaining_ticks = ticks % qpc_frequency_;
+    std::uint64_t whole_nanoseconds{};
+    std::uint64_t fractional_numerator{};
+    if (!CheckedMultiply(
+            whole_seconds,
+            nanoseconds_per_second,
+            &whole_nanoseconds) ||
+        !CheckedMultiply(
+            remaining_ticks,
+            nanoseconds_per_second,
+            &fractional_numerator)) {
+        return false;
+    }
+    return CheckedAdd(
+        whole_nanoseconds,
+        fractional_numerator / qpc_frequency_,
+        nanoseconds);
 }
 
 void AsioCallbackRuntime::LatchFault(AsioFailureStage stage) noexcept {
@@ -730,10 +1026,40 @@ AsioCallbackRuntime::Snapshot() const noexcept {
             sample_rate_change_requests_.load(std::memory_order_acquire),
         .buffer_alternation_violations =
             buffer_alternation_violations_.load(std::memory_order_acquire),
+        .callback_interval_samples =
+            callback_interval_samples_.load(std::memory_order_acquire),
+        .total_callback_interval_ticks =
+            total_callback_interval_ticks_.load(std::memory_order_acquire),
+        .maximum_callback_interval_ticks =
+            maximum_callback_interval_ticks_.load(
+                std::memory_order_acquire),
+        .early_callback_intervals =
+            early_callback_intervals_.load(std::memory_order_acquire),
+        .late_callback_intervals =
+            late_callback_intervals_.load(std::memory_order_acquire),
+        .severe_callback_intervals =
+            severe_callback_intervals_.load(std::memory_order_acquire),
+        .timed_callback_work_samples =
+            timed_callback_work_samples_.load(std::memory_order_acquire),
+        .total_callback_ticks =
+            total_callback_ticks_.load(std::memory_order_acquire),
         .maximum_callback_ticks =
             maximum_callback_ticks_.load(std::memory_order_acquire),
+        .timed_render_work_samples =
+            timed_render_work_samples_.load(std::memory_order_acquire),
+        .total_render_ticks =
+            total_render_ticks_.load(std::memory_order_acquire),
         .maximum_render_ticks =
             maximum_render_ticks_.load(std::memory_order_acquire),
+        .driver_interval_samples =
+            driver_interval_samples_.load(std::memory_order_acquire),
+        .maximum_driver_period_error_ns =
+            maximum_driver_period_error_ns_.load(
+                std::memory_order_acquire),
+        .maximum_host_driver_interval_skew_ns =
+            maximum_host_driver_interval_skew_ns_.load(
+                std::memory_order_acquire),
+        .expected_period_ns = expected_period_ns_,
         .qpc_frequency = qpc_frequency_,
         .last_reported_sample_rate = std::bit_cast<double>(
             last_reported_sample_rate_bits_.load(

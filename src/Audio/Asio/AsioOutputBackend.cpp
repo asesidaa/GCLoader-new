@@ -475,6 +475,7 @@ private:
             auto callbacks = AsioCallbackRuntime::Prepare(
                 *this,
                 legacy,
+                {request_.buffer_frames, 48'000},
                 actions_.callback_runtime_actions);
             if (!callbacks)
             {
