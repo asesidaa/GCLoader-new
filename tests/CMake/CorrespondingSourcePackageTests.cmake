@@ -120,7 +120,6 @@ function(run_git_packager case_name project_root sdk_root inputs_path)
     execute_process(
         COMMAND "${CMAKE_COMMAND}"
             "-DGC_PACKAGE_BUILD_DIR=${case_build}"
-            "-DGC_PACKAGE_DIST_DIR=${case_build}/dist"
             "-DGC_PACKAGE_PROJECT_SOURCE_DIR=${project_root}"
             "-DGC_PACKAGE_GIT_EXECUTABLE=${GC_TEST_GIT_EXECUTABLE}"
             "-DGC_PACKAGE_POWERSHELL_EXECUTABLE=${GC_TEST_POWERSHELL_EXECUTABLE}"
@@ -140,6 +139,10 @@ function(run_git_packager case_name project_root sdk_root inputs_path)
     if(NOT EXISTS "${expected_zip}")
         message(FATAL_ERROR
             "Git-backed packaging did not publish ${expected_zip}")
+    endif()
+    if(EXISTS "${case_build}/dist")
+        message(FATAL_ERROR
+            "Git-backed packaging created deployable dist output")
     endif()
 endfunction()
 
@@ -219,11 +222,9 @@ function(run_packager case_name archive_path sdk_root inputs_path dirty)
     cmake_parse_arguments(ARG "${options}" "${one_value}" "" ${ARGN})
 
     set(case_build "${test_root}/${case_name}/build")
-    set(case_dist "${case_build}/dist")
     set(command
         "${CMAKE_COMMAND}"
         "-DGC_PACKAGE_BUILD_DIR=${case_build}"
-        "-DGC_PACKAGE_DIST_DIR=${case_dist}"
         "-DGC_PACKAGE_PROJECT_ARCHIVE=${archive_path}"
         "-DGC_PACKAGE_PROJECT_COMMIT=${test_commit}"
         "-DGC_PACKAGE_DIRTY=${dirty}"
@@ -251,9 +252,6 @@ function(run_packager case_name archive_path sdk_root inputs_path dirty)
         endif()
         set(${case_name}_ZIP
             "${case_build}/source-package/GCLoader-${test_commit}-corresponding-source.zip"
-            PARENT_SCOPE)
-        set(${case_name}_DIST_ZIP
-            "${case_dist}/GCLoader-${test_commit}-corresponding-source.zip"
             PARENT_SCOPE)
         return()
     endif()
@@ -284,27 +282,17 @@ write_dependency("${dep_two_root}" TRUE dep_two)
 set(inputs_path "${fixture_root}/inputs.cmake")
 write_inputs("${inputs_path}" "${sdk_root}" "${dep_one_root}" "${dep_two_root}")
 
-set(stale_dist_zip
-    "${test_root}/success/build/dist/GCLoader-0000000000000000000000000000000000000000-corresponding-source.zip")
-file(MAKE_DIRECTORY "${test_root}/success/build/dist")
-file(WRITE "${stale_dist_zip}" "stale package\n")
 run_packager(success "${project_archive}" "${sdk_root}" "${inputs_path}" OFF
     EXPECT_SUCCESS)
-if(EXISTS "${stale_dist_zip}")
-    message(FATAL_ERROR "Successful packaging retained a stale dist ZIP")
-endif()
 run_git_packager(git_success "${fixture_root}/project"
     "${sdk_root}" "${inputs_path}")
 
-foreach(archive IN ITEMS "${success_ZIP}" "${success_DIST_ZIP}")
-    if(NOT EXISTS "${archive}")
-        message(FATAL_ERROR "Expected package was not published: ${archive}")
-    endif()
-endforeach()
-file(SHA256 "${success_ZIP}" source_hash)
-file(SHA256 "${success_DIST_ZIP}" dist_hash)
-if(NOT source_hash STREQUAL dist_hash)
-    message(FATAL_ERROR "Distribution ZIP is not the verified source ZIP")
+if(NOT EXISTS "${success_ZIP}")
+    message(FATAL_ERROR "Expected package was not published: ${success_ZIP}")
+endif()
+if(EXISTS "${test_root}/success/build/dist")
+    message(FATAL_ERROR
+        "Corresponding-source packaging created deployable dist output")
 endif()
 execute_process(
     COMMAND "${GC_TEST_POWERSHELL_EXECUTABLE}"

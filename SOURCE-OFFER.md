@@ -1,7 +1,7 @@
 # GCLoader ASIO Corresponding Source
 
-Every distributed ASIO-enabled GCLoader binary must be accompanied by the
-matching archive named:
+Every recipient of a distributed ASIO-enabled GCLoader binary must be given
+access to the matching archive named:
 
 ```text
 GCLoader-<full-git-commit>-corresponding-source.zip
@@ -14,6 +14,10 @@ source tree, applicable license files, build metadata, SHA-256 inventory, and
 an offline PowerShell configure/build script. The package target accepts only a
 clean committed repository so the commit in its name and manifest identifies
 the project source used for the binary.
+
+The `gc-package-corresponding-source` target publishes this as a separate
+release artifact under the build tree's `source-package` directory. It is not
+copied into the runnable `dist` deployment directory.
 
 Project-authored files remain dedicated under CC0-1.0 individually. The
 distributed ASIO-enabled combined work is conveyed under GPL-3.0-only because

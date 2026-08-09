@@ -46,7 +46,6 @@ endfunction()
 
 foreach(required IN ITEMS
         GC_PACKAGE_BUILD_DIR
-        GC_PACKAGE_DIST_DIR
         GC_PACKAGE_ASIO_SDK_DIR
         GC_PACKAGE_INPUTS_FILE
         GC_PACKAGE_POWERSHELL_EXECUTABLE)
@@ -61,8 +60,6 @@ if(package_build_dir STREQUAL "" OR
     message(FATAL_ERROR
         "Refusing unsafe corresponding-source build root: ${package_build_dir}")
 endif()
-cmake_path(ABSOLUTE_PATH GC_PACKAGE_DIST_DIR NORMALIZE
-    OUTPUT_VARIABLE package_dist_dir)
 cmake_path(ABSOLUTE_PATH GC_PACKAGE_ASIO_SDK_DIR NORMALIZE
     OUTPUT_VARIABLE asio_sdk_dir)
 cmake_path(ABSOLUTE_PATH GC_PACKAGE_INPUTS_FILE NORMALIZE
@@ -223,11 +220,9 @@ set(staging_root "${package_area}/.staging-${project_commit}")
 set(package_root "${staging_root}/${package_name}")
 set(temporary_zip "${package_area}/.${package_name}.zip.tmp")
 set(final_zip "${package_area}/${package_name}.zip")
-set(dist_temporary_zip "${package_dist_dir}/.${package_name}.zip.tmp")
-set(dist_final_zip "${package_dist_dir}/${package_name}.zip")
 
 file(REMOVE_RECURSE "${staging_root}")
-file(REMOVE "${temporary_zip}" "${dist_temporary_zip}")
+file(REMOVE "${temporary_zip}")
 file(MAKE_DIRECTORY "${package_root}")
 
 file(ARCHIVE_EXTRACT
@@ -533,31 +528,11 @@ if(NOT rename_result STREQUAL "0")
         "Could not publish corresponding-source ZIP: ${rename_result}")
 endif()
 
-file(MAKE_DIRECTORY "${package_dist_dir}")
-file(COPY_FILE "${final_zip}" "${dist_temporary_zip}" RESULT copy_result)
-if(NOT copy_result STREQUAL "0")
-    file(REMOVE "${dist_temporary_zip}")
-    message(FATAL_ERROR
-        "Could not copy corresponding-source ZIP to dist: ${copy_result}")
-endif()
-file(SHA256 "${dist_temporary_zip}" dist_archive_hash)
-if(NOT "${archive_hash}" STREQUAL "${dist_archive_hash}")
-    file(REMOVE "${dist_temporary_zip}")
-    message(FATAL_ERROR "Distribution corresponding-source ZIP hash mismatch")
-endif()
-file(RENAME "${dist_temporary_zip}" "${dist_final_zip}"
-    RESULT dist_rename_result)
-if(NOT dist_rename_result STREQUAL "0")
-    file(REMOVE "${dist_temporary_zip}")
-    message(FATAL_ERROR
-        "Could not publish dist corresponding-source ZIP: ${dist_rename_result}")
-endif()
-
-file(GLOB stale_dist_archives
+file(GLOB stale_source_archives
     LIST_DIRECTORIES FALSE
-    "${package_dist_dir}/GCLoader-*-corresponding-source.zip")
-foreach(stale_archive IN LISTS stale_dist_archives)
-    if(NOT "${stale_archive}" STREQUAL "${dist_final_zip}")
+    "${package_area}/GCLoader-*-corresponding-source.zip")
+foreach(stale_archive IN LISTS stale_source_archives)
+    if(NOT "${stale_archive}" STREQUAL "${final_zip}")
         file(REMOVE "${stale_archive}")
     endif()
 endforeach()
