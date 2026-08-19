@@ -1,12 +1,35 @@
-> **ABANDONED, UNAPPROVED REDESIGN DRAFT — NOT AUTHORITATIVE.** Its review
-> inherited assumptions from the failed judgement driver, including an invalid
-> coupling between judgement ownership and the high-FPS shared/visual clock.
+> **APPROVED POST-FAILURE DISCUSSION RECORD.** The 2026-08-20 code rollback
+> removed failed implementation code; it did not discard the decisions reached
+> in this document. These decisions are the input to the consolidated clean
+> specification requested after the rollback.
 
 # Absolute-Time Native-Cadence Judgement Design
 
-**Status:** Abandoned during final consistency review on 2026-08-20. Sections
-historically marked **Approved** record the conversation at that time; they do
-not define a current implementation contract.
+**Status:** Approved discussion decisions awaiting consolidation into one clean
+implementation specification. Sections marked **Approved** remain binding
+unless the erratum below explicitly supersedes them.
+
+## 2026-08-20 scope erratum
+
+The rollback and the final clock discussion establish a narrower ownership
+boundary than the tail of this record originally proposed:
+
+- the existing high-FPS framerate, shared `Tune` clock, and visual hooks retain
+  their current behavior and ownership;
+- the judgement/input patch must not reconfigure their target-rate domain or
+  install `0x63FA0C` as compensation for a clock change it introduced;
+- the final “preserve high-FPS visual clock separately” proposal is withdrawn;
+- the approved requirement for one exact time decision per outer update may be
+  implemented through a read-only exact-time publication/provider, but it may
+  not change the high-FPS hook's native output or progression; and
+- any tail wording that assigns authored judgement-boundary counts to
+  `Tune+0x14` is superseded by this separation. Authored judgement cadence, if
+  required by the consolidated design, is private judgement state.
+
+Every other approved behavioral decision—including timestamped transition
+history, recognition scopes, held-age semantics, native candidate/result
+ownership, catch-up, ordering, WASAPI scope, activation/failure policy,
+observability, and runtime acceptance—remains established discussion input.
 
 ## Architecture reopening — Resolved
 

@@ -85,9 +85,12 @@ behavior:
    produced a run in which no input registered and no judgement was made.
 
 The later
-[native-cadence redesign draft](../../specs/2026-08-19-absolute-time-native-cadence-judgement-design.md)
-was never implemented or finally approved. It is also abandoned because its
-review inherited assumptions from the failed driver.
+[native-cadence discussion record](../../specs/2026-08-19-absolute-time-native-cadence-judgement-design.md)
+is not part of the failed implementation chain. It records the approved
+post-failure discussion results that must be consolidated into the new clean
+specification. Its final proposal to couple judgement to the existing high-FPS
+clock/visual hooks is explicitly withdrawn; the rest of its approved decisions
+remain design input.
 
 ## Confirmed non-repeat findings
 
@@ -103,7 +106,9 @@ review inherited assumptions from the failed driver.
   tests as proof. Five observed runtime defects passed the former suite.
 - Do not treat rounded frame timestamps, implementation-derived fixtures, or
   successful hook installation as proof of judgement correctness.
-- Preserve the still-standing product goal only: judgement must use absolute
-  time and remain independent of render framerate. All mechanisms and patch
-  boundaries must be justified again from the retained native evidence and
-  actual runtime behavior.
+- Preserve the established post-failure discussion results, not merely the
+  product goal. The new specification must carry forward the approved
+  transition-history, event-scope, held-age, native-ownership, catch-up,
+  WASAPI, configuration, failure, observability, and acceptance decisions from
+  the native-cadence discussion record while applying its explicit clock-scope
+  erratum.
