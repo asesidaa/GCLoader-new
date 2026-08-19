@@ -1,4 +1,0 @@
-add_executable(CrashDumpHandlerTests CrashDumpHandlerTests.cpp)
-target_link_libraries(CrashDumpHandlerTests PRIVATE gc_crash_dump dbghelp)
-add_test(NAME CrashDumpHandlerTests COMMAND CrashDumpHandlerTests)
-set_tests_properties(CrashDumpHandlerTests PROPERTIES TIMEOUT 120)

@@ -21,16 +21,14 @@ runtime-patch behavior.
 The project targets Windows x86, uses C++23, and links the static MSVC runtime.
 Run CMake from an x86 MSVC developer environment.
 
-Configure, build, and test with the checked-in presets:
+Configure and build with the checked-in presets:
 
 ```powershell
 cmake --preset msvc32-debug
 cmake --build --preset msvc32-debug
-ctest --preset msvc32-debug -j 4
 
 cmake --preset msvc32-release
 cmake --build --preset msvc32-release
-ctest --preset msvc32-release -j 4
 ```
 
 If a build tree contains a stale MSVC cache, refresh that preset rather than
@@ -40,10 +38,10 @@ patching generated cache files:
 cmake --fresh --preset msvc32-debug
 ```
 
-- Build the affected targets and run focused tests while iterating.
+- Build the affected targets while iterating.
 - Before completing a production change, build the complete affected preset
-  graph and run the full suite. Use both Debug and Release when the change can
-  depend on optimization, ABI, memory layout, timing, or configuration.
+  graph. Use both Debug and Release when the change can depend on optimization,
+  ABI, memory layout, timing, or configuration.
 - For documentation-only changes, reference checks and diff validation are
   sufficient unless the documentation changes executable commands or behavior.
 - Always run `git diff --check` and inspect `git status` before committing.
@@ -81,37 +79,30 @@ cmake --fresh --preset msvc32-debug
 
 ## Test Policy
 
-Every test must have a plausible regression it can catch. Prefer tests of:
+The unit-test suite was intentionally removed. It repeatedly encoded expected
+values derived from the same unproven model as the implementation, so incorrect
+designs passed while actual game behavior remained broken. Do not restore the
+suite, add test targets, or add tests merely to satisfy TDD or workflow policy.
 
-- observable behavior and public or production-facing contracts;
-- boundary values, invalid input, and failure behavior;
-- protocol encoding, decoding, and state transitions;
-- concurrency, ownership, lifetime, and real-time invariants;
-- preflight rejection, partial failure, and transactional rollback;
-- transformations whose expected result is independently derived.
+A new automated test is prohibited unless every asserted expectation has an
+independent, documented oracle that is formally and strictly derived from one
+of these sources:
 
-Do not add tests merely because a workflow requests tests. In particular, avoid:
+- verified bytes, disassembly, ABI, or control flow from the supported game
+  binary/IDB;
+- a mathematically proven identity whose assumptions are also verified; or
+- recorded behavior from the actual game or an external protocol authority.
 
-- CMake or script tests that grep implementation source for names, tokens, or
-  regex patterns;
-- copied production RVA tables, byte manifests, defaults, or lookup tables that
-  are updated in lockstep with the implementation and provide no independent
-  oracle;
-- tests that exercise only a test-local helper or restate a trivial inline
-  expression;
-- enormous fixtures that duplicate `config.toml` instead of exercising the
-  distributed file and production parser;
-- one-test-per-function or coverage-padding tests with no meaningful failure
-  mode.
+Expected values copied from the implementation, chosen by the design, produced
+by a loader-side emulation of native behavior, or updated until a test turns
+green are not evidence and must not be tested. If a qualifying formal oracle is
+not available, use binary inspection, guarded runtime instrumentation, build
+checks, and actual game runs instead.
 
-Exact binary fixtures are appropriate only when their provenance is independent
-and the test explains what accidental change they protect. Prefer invariant and
-transaction tests for patch-plan plumbing; keep authoritative binary evidence
-in the relevant reverse-engineering record.
-
-Automated tests prove only what they execute. Keep build/static proof separate
-from in-game acceptance, and do not report gameplay success without the user's
-runtime confirmation.
+Compilation proves only that the code builds. Static binary evidence proves
+only the facts inspected. Gameplay correctness and acceptance come from the
+supported executable and observed game behavior, not from a simulated test
+model.
 
 ## Runtime Evidence and Acceptance
 

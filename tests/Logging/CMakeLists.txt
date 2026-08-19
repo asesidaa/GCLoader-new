@@ -1,3 +1,0 @@
-add_executable(SessionLogTests SessionLogTests.cpp)
-target_link_libraries(SessionLogTests PRIVATE gc_logging)
-add_test(NAME SessionLogTests COMMAND SessionLogTests)
