@@ -5,9 +5,10 @@
 
 # Absolute-Time Native-Cadence Judgement Design
 
-**Status:** Approved discussion decisions awaiting consolidation into one clean
-implementation specification. Sections marked **Approved** remain binding
-unless the erratum below explicitly supersedes them.
+**Status:** Historical approved discussion record. Its decisions and the
+erratum below are consolidated into the authoritative
+[2026-08-20 specification](2026-08-20-absolute-time-judgement-spec.md).
+Use that specification for implementation and this record for rationale.
 
 ## 2026-08-20 scope erratum
 
@@ -2079,7 +2080,13 @@ any result authority. Dropping it would make the implementation smaller but
 would knowingly reintroduce a visible behavior the prior high-FPS design had
 already compensated for.
 
-## Design completion and implementation-plan readiness — Pending final visual scope approval
+## Historical tail status — Superseded by the 2026-08-20 specification
+
+The visual/shared-clock proposal immediately above was not approved. The scope
+erratum at the top of this record and the consolidated specification resolve
+the question: the new judgement feature does not modify or depend on the
+existing high-FPS visual/shared-`Tune` hooks. The remaining approved decisions
+are carried into the consolidated specification.
 
 Apart from the explicit visual-scope choice immediately above, the final
 consistency review found no remaining high-level semantic decision that must be

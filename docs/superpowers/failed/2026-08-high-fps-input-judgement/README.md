@@ -92,6 +92,11 @@ specification. Its final proposal to couple judgement to the existing high-FPS
 clock/visual hooks is explicitly withdrawn; the rest of its approved decisions
 remain design input.
 
+Those results are now consolidated in the authoritative
+[2026-08-20 absolute-time judgement specification](../../specs/2026-08-20-absolute-time-judgement-spec.md).
+New implementation planning must use that document while retaining this index
+and the older files as negative evidence.
+
 ## Confirmed non-repeat findings
 
 - Do not preserve old code merely because it exists; implementation starts
