@@ -32,6 +32,18 @@ history, recognition scopes, held-age semantics, native candidate/result
 ownership, catch-up, ordering, WASAPI scope, activation/failure policy,
 observability, and runtime acceptance—remains established discussion input.
 
+### 2026-08-20 fail-fast simplicity addendum
+
+The user subsequently tightened the implementation error-handling rule.
+Internal Boolean/results that represent operations expected to succeed do not
+justify fallback modes, retry state machines, or propagated “maybe continue”
+branches. Check them once and take the appropriate startup or active-session
+fatal path on failure. The check must remain active in Release; a C/C++
+`assert()` that compiles out is not sufficient. Expected operational states
+such as armed `NoPlayback`/`Pending` and same-generation temporary clock
+unavailability remain explicit statuses because they are not invariant
+failures.
+
 ## Architecture reopening — Resolved
 
 The user rejected recreating a 16.67 ms CBooster sampling window at high FPS

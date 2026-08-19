@@ -142,9 +142,11 @@ The judgement-facing native transaction has exactly six interception sites:
    - direction VA `0x62E480` / RVA `0x22E480`; and
    - held age VA `0x62DAA0` / RVA `0x22DAA0`.
 
-All six sites install as one guarded, rollback-capable transaction. The
-existing Switch hooks remain separate policy hooks and reach these lower
-queries through their original wrappers.
+All six sites form one guarded, fully preflighted set. Verify every signature
+before creating the first hook. Any creation failure takes the startup-fatal
+path immediately; the process never continues with a partial set and never
+falls back to stock judgement. The existing Switch hooks remain separate
+policy hooks and reach these lower queries through their original wrappers.
 
 ## 5. Exact time coordinate
 
@@ -278,7 +280,11 @@ The provider exposes explicit statuses rather than ambiguous optionals:
 - `Discontinuous`.
 
 The same endpoint source supplies current exact ready time for the scheduler.
-A transient failed clock read freezes delivery; it does not manufacture a time.
+A bounded coherent-publication read that cannot obtain a stable same-generation
+snapshot reports `TemporarilyUnavailable` and freezes delivery; it does not
+manufacture a time. An underlying `IAudioClock` HRESULT failure keeps the
+existing WASAPI engine's fatal behavior. Absolute judgement may publish that
+failure context, but it does not add an audio retry/recovery state machine.
 
 ### 7.2 Exact playback mapping
 
@@ -337,8 +343,8 @@ At process-start preflight, when enabled, validate:
 
 - game-process role, target configuration, WASAPI-exclusive route/capability,
   exact input poll rate, QPC frequency, and bounded storage allocation;
-- all six supported executable signatures, x86 calling conventions, trampoline
-  availability, and rollback transaction;
+- all six supported executable signatures, x86 calling conventions,
+  trampoline availability, and fail-fast all-or-none installation;
 - availability of the audited live configuration accessor; and
 - that no prohibited rounded fallback or partial hook set can activate.
 
@@ -366,9 +372,11 @@ has begun is forbidden. While awaiting a same-lifecycle provider, withhold
 recognition and retain input only while all required histories remain intact.
 
 At session start, discard queued pre-session records through a recorded cutoff
-and sample the current 10-bit held mask as the baseline. Pre-held controls have
-no current edge, no paired companion, and held age at least 2. They cannot
-synthesize a tap, free-input effect, flick head, or slide head.
+and take the journal's current 10-bit held mask from the same synchronized
+cutoff snapshot as the baseline. Do not combine that cutoff with a separately
+sampled later FastIO aggregate. Pre-held controls have no current edge, no
+paired companion, and held age at least 2. They cannot synthesize a tap,
+free-input effect, flick head, or slide head.
 
 ### 8.3 Active
 
@@ -541,6 +549,13 @@ once. Event count never becomes a `Tune` step count.
 The scheduler retains both its last delivered exact `(time, sequence)` frontier
 and its last committed heartbeat index; the former detects late records while
 the latter derives cadence without turning event scopes into boundary steps.
+The frontier also records whether a boundary at that exact time has committed.
+An ordinary event frontier permits a later sequence at the same time; a
+committed heartbeat/boundary is ordered after every possible event sequence at
+that time. Therefore a record that becomes visible later at an already
+committed boundary is the accepted late-record case, never a second
+post-boundary event scope.
+
 Let `c` be the private last committed heartbeat index and
 `target=floor(ready/Q)`. The scheduler advances at most three authored
 boundaries (`3Q = 50 ms`) in one outer call:
@@ -580,6 +595,8 @@ enable_absolute_time_judgement = false
 
 - install zero absolute-judgement sites;
 - preserve stock input/judgement behavior and every audio backend;
+- do not allocate/register the 60-second exact WASAPI anchor provider or
+  publish gameplay transitions;
 - make no FPS-independent judgement guarantee; and
 - emit a clear warning when a non-60 target uses stock judgement.
 
@@ -605,6 +622,29 @@ Expected nonfatal states are limited to:
   intact;
 - ordinary render hitch/catch-up; and
 - the accepted, individually counted late handoff record.
+
+### 13.1 Fail-fast implementation rule
+
+An internal Boolean/result whose contract is “this operation is expected to
+succeed” must not create a fallback mode, retry state machine, or ladder of
+error propagation. Check it once. Before activation, failure enters the
+existing startup-fatal path; during an active session, failure enters the one
+active-session fatal path below. Both paths terminate the process.
+
+An existing or layer-appropriate Boolean API may remain, but its owning caller
+checks it exactly once and immediately enters the phase-appropriate fatal path;
+it does not propagate the Boolean into runtime policy. `...OrFatal`/`void` is
+also appropriate when it preserves cleaner ownership. A plain C/C++ `assert()`
+is insufficient because Release builds may compile it out; the check and
+termination must be active in both Debug and Release. This rule applies to
+unlikely setup/invariant results, not to expected operational states such as
+armed `NoPlayback`/`Pending` or same-generation `TemporarilyUnavailable`, which
+retain their explicit status semantics.
+
+The six sites are still preflighted together and are never exposed as a
+partial operational mode. If installation fails, startup terminates; there is
+no fallback to stock judgement. Ordinary RAII cleanup is welcome, but no
+custom recovery protocol is required merely to keep the doomed process alive.
 
 Fatal conditions include:
 
@@ -712,8 +752,9 @@ Only the third permits the claim that judgement is sane in play.
 
 ### 15.1 Static review gates
 
-- Six guarded interception sites install transactionally with verified bytes
-  and correct x86 ABI.
+- Six guarded interception sites are preflighted before mutation and all six
+  install with verified bytes and correct x86 ABI before operational mode is
+  exposed.
 - The existing framerate/shared-Tune/visual hook implementation has no
   behavior change from the clean baseline.
 - Event `J`, native ms/frame, held age, lookback, boundaries, and horizon have
@@ -811,6 +852,9 @@ The implementation and review must reject these known failure patterns:
   native behavior proof.
 - **Partial fallback:** never mix absolute history with the native CBooster ring
   inside one active session.
+- **Recovery machinery for impossible internal failures:** do not turn an
+  expected-success Boolean into fallback/retry state. Perform one always-on
+  check and terminate through the phase-appropriate fatal path.
 
 These are review gates, not optional historical commentary.
 
