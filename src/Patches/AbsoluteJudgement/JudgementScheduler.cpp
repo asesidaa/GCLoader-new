@@ -1,6 +1,7 @@
 #include "Patches/AbsoluteJudgement/JudgementScheduler.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <limits>
 #include <span>
@@ -121,6 +122,8 @@ void JudgementScheduler::EndNativeStage(
         Fatal(AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
     }
 
+    AccountCleanupDropsOrFatal();
+
     JudgementDiagnostics().LogNativeStageEnd({
         .loader_stage_generation = stage_.generation(),
         .native_manager = tune_manager,
@@ -167,8 +170,12 @@ void JudgementScheduler::ClearStageOwnedState() noexcept {
     next_drain_sequence_ = 0;
     next_delivery_sequence_ = 0;
     pending_event_count_ = 0;
+    marked_overload_count_ = 0;
     last_selected_buffer_instance_id_ = 0;
     accumulated_clock_waits_ = 0;
+    endpoint_publication_baseline_ = 0;
+    last_endpoint_publication_count_ = 0;
+    has_endpoint_publication_baseline_ = false;
     last_resolved_coordinate_.reset();
     committed_frontier_.reset();
     committed_frontier_is_boundary_ = false;
@@ -177,12 +184,19 @@ void JudgementScheduler::ClearStageOwnedState() noexcept {
     outer_horizon_.reset();
     outstanding_scope_.reset();
     outer_scope_count_ = 0;
+    outer_event_scope_count_ = 0;
+    outer_heartbeat_scope_count_ = 0;
     outer_prepared_ = false;
     outer_uses_closed_frontier_ = false;
+    outer_event_barrier_recorded_ = false;
+    outer_closed_frontier_.reset();
     last_output_frame_.reset();
     last_source_frame_.reset();
     last_j_.reset();
+    last_closed_frontier_.reset();
+    frozen_j_.reset();
     last_anchor_sequence_ = 0;
+    last_endpoint_position_.reset();
     outer_now_qpc_ = 0;
     last_qpc_ = 0;
 }
@@ -203,10 +217,28 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
     if (!clock_binding_.endpoint) {
         clock_binding_.endpoint_generation = endpoint_generation;
         clock_binding_.endpoint = probe.endpoint;
+        endpoint_publication_baseline_ =
+            probe.endpoint->publication_count();
+        last_endpoint_publication_count_ =
+            endpoint_publication_baseline_;
+        has_endpoint_publication_baseline_ = true;
     } else if (clock_binding_.endpoint_generation != endpoint_generation ||
                clock_binding_.endpoint.get() != probe.endpoint.get()) {
         Fatal(AbsoluteJudgementFatalReason::EndpointGenerationChanged);
     }
+    if (!has_endpoint_publication_baseline_) {
+        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
+    }
+    const auto publication_count = probe.endpoint->publication_count();
+    if (publication_count < last_endpoint_publication_count_ ||
+        publication_count < endpoint_publication_baseline_) {
+        Fatal(AbsoluteJudgementFatalReason::ClockDiscontinuous);
+    }
+    last_endpoint_publication_count_ = publication_count;
+    auto& counters = JudgementDiagnostics().stage_counters();
+    counters.endpoint_publication_count = publication_count;
+    counters.endpoint_stage_publications =
+        publication_count - endpoint_publication_baseline_;
 }
 
 ObservedPlaybackHistory*
@@ -253,6 +285,8 @@ ExactClockStatus JudgementScheduler::UpdatePlaybackDiagnostics() noexcept {
         clock_binding_.observed_stage_bgm_histories.size()) {
         Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
     }
+    std::uint64_t play_epochs{};
+    std::uint64_t seek_epochs{};
     for (std::size_t index = 0;
          index < clock_binding_.observed_stage_bgm_histories.size();
          ++index) {
@@ -292,9 +326,21 @@ ExactClockStatus JudgementScheduler::UpdatePlaybackDiagnostics() noexcept {
         for (std::size_t epoch = 0; epoch < count; ++epoch) {
             if (left_epoch_scratch_[epoch].origin ==
                 gc::audio::ExactPlaybackOrigin::Play) {
+                if (play_epochs ==
+                    (std::numeric_limits<std::uint64_t>::max)()) {
+                    Fatal(
+                        AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+                }
                 ++diagnostic.play_epoch_count;
+                ++play_epochs;
             } else {
+                if (seek_epochs ==
+                    (std::numeric_limits<std::uint64_t>::max)()) {
+                    Fatal(
+                        AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+                }
                 ++diagnostic.seek_epoch_count;
+                ++seek_epochs;
             }
         }
         const auto& first = left_epoch_scratch_[0];
@@ -305,6 +351,14 @@ ExactClockStatus JudgementScheduler::UpdatePlaybackDiagnostics() noexcept {
         diagnostic.output_rate = first.output_rate;
         diagnostic.source_rate = first.source_rate;
     }
+    if (seek_epochs > (std::numeric_limits<std::uint64_t>::max)() -
+            play_epochs) {
+        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+    }
+    auto& counters = JudgementDiagnostics().stage_counters();
+    counters.playback_play_epochs = play_epochs;
+    counters.playback_seek_epochs = seek_epochs;
+    counters.playback_epochs = play_epochs + seek_epochs;
     return ExactClockStatus::Resolved;
 }
 
@@ -319,7 +373,11 @@ void JudgementScheduler::PrepareOuterCall(
     outer_prepared_ = true;
     outer_horizon_.reset();
     outer_scope_count_ = 0;
+    outer_event_scope_count_ = 0;
+    outer_heartbeat_scope_count_ = 0;
     outer_uses_closed_frontier_ = false;
+    outer_event_barrier_recorded_ = false;
+    outer_closed_frontier_.reset();
     outer_now_qpc_ = probe.now_qpc;
     last_qpc_ = probe.now_qpc;
     IncrementOrFatal(JudgementDiagnostics().stage_counters().outer_calls);
@@ -327,7 +385,7 @@ void JudgementScheduler::PrepareOuterCall(
     ValidateStageBindingOrFatal(probe);
 
     ObservedPlaybackHistory* selected{};
-    if (probe.group2_playing) {
+    if (probe.group2_cursor_selected) {
         if (!probe.group2_observation) {
             Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
         }
@@ -429,6 +487,22 @@ void JudgementScheduler::DrainTransportOrFatal() noexcept {
                     diagnostics.stage_counters().sequence_errors);
                 Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
             }
+            IncrementOrFatal(
+                diagnostics.stage_counters().transport_records_drained);
+            const auto rising = static_cast<std::uint64_t>(
+                std::popcount(record.rising));
+            const auto falling = static_cast<std::uint64_t>(
+                std::popcount(record.falling));
+            auto& counters = diagnostics.stage_counters();
+            if (rising > (std::numeric_limits<std::uint64_t>::max)() -
+                    counters.transport_rising_controls ||
+                falling > (std::numeric_limits<std::uint64_t>::max)() -
+                    counters.transport_falling_controls) {
+                Fatal(
+                    AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+            }
+            counters.transport_rising_controls += rising;
+            counters.transport_falling_controls += falling;
             AppendUnresolvedOrFatal(record);
             ++next_drain_sequence_;
         }
@@ -450,6 +524,63 @@ void JudgementScheduler::DrainTransportOrFatal() noexcept {
             Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
         }
     }
+}
+
+void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
+    gc::input::GameplayTransitionCutoff cutoff{};
+    if (!gc::input::CaptureGameplayTransitionCutoff(&cutoff)) {
+        Fatal(AbsoluteJudgementFatalReason::TransportEpochLost);
+    }
+    const auto& stage_cutoff = stage_.cutoff();
+    if (cutoff.transport_epoch != stage_cutoff.transport_epoch ||
+        cutoff.qpc_frequency != stage_cutoff.qpc_frequency) {
+        Fatal(AbsoluteJudgementFatalReason::TransportEpochLost);
+    }
+    if (cutoff.eviction_count != stage_cutoff.eviction_count) {
+        Fatal(AbsoluteJudgementFatalReason::TransportEviction);
+    }
+    if (cutoff.first_stage_sequence <
+        stage_cutoff.first_stage_sequence) {
+        Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+    }
+
+    auto& diagnostics = JudgementDiagnostics();
+    auto& counters = diagnostics.stage_counters();
+    counters.post_cutoff_records = cutoff.first_stage_sequence -
+        stage_cutoff.first_stage_sequence;
+
+    std::uint64_t already_classified{};
+    const auto add_classified = [this, &already_classified](
+                                    const std::uint64_t value) noexcept {
+        if (value > (std::numeric_limits<std::uint64_t>::max)() -
+                already_classified) {
+            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+        }
+        already_classified += value;
+    };
+    add_classified(counters.event_scopes);
+    add_classified(counters.outside_playback_baseline_records);
+    add_classified(counters.late_records);
+    add_classified(counters.overload_drops);
+    if (counters.post_cutoff_records < already_classified) {
+        Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+    }
+    counters.cleanup_drops =
+        counters.post_cutoff_records - already_classified;
+
+    unresolved_read_slot_ = 0;
+    unresolved_size_ = 0;
+    pending_event_count_ = 0;
+    marked_overload_count_ = 0;
+    next_drain_sequence_ = cutoff.first_stage_sequence;
+    next_delivery_sequence_ = cutoff.first_stage_sequence;
+    history_.Reset(
+        cutoff.transport_epoch,
+        cutoff.first_stage_sequence,
+        cutoff.held_baseline);
+    diagnostics.ObserveTransportPendingDepth(0);
+    diagnostics.SetPendingWork(0);
+    diagnostics.CheckFinalTransportIdentityOrFatal(FatalSnapshot());
 }
 
 ExactClockStatus JudgementScheduler::ResolveUnresolvedPrefixOrFatal(
@@ -479,6 +610,9 @@ ExactClockStatus JudgementScheduler::ResolveUnresolvedPrefixOrFatal(
             : resolved.closed_frontier_seconds;
         if (resolved.endpoint_anchor_sequence != 0) {
             last_anchor_sequence_ = resolved.endpoint_anchor_sequence;
+        }
+        if (resolved.endpoint_anchor_position) {
+            last_endpoint_position_ = resolved.endpoint_anchor_position;
         }
         if (resolved.checked_arithmetic_failure) {
             Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
@@ -528,6 +662,8 @@ ExactClockStatus JudgementScheduler::ResolveUnresolvedPrefixOrFatal(
                 .judgement_seconds = *resolved.judgement_seconds,
             }));
             IncrementOrFatal(pending_event_count_);
+            JudgementDiagnostics().ObserveEventBacklog(
+                pending_event_count_);
         }
         PopUnresolved();
     }
@@ -611,7 +747,7 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
     JudgementClockResult current{};
     bool can_use_result{};
     bool resolved_ready_allowed{};
-    if (probe.group2_playing) {
+    if (probe.group2_cursor_selected) {
         if (selected == nullptr || !probe.group2_observation) {
             Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
         }
@@ -620,6 +756,7 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
             resolved_ready_allowed = true;
             [[fallthrough]];
         case gc::audio::GameplayAudioCursorState::Pending:
+        case gc::audio::GameplayAudioCursorState::Inactive:
             IncrementOrFatal(counters.exact_clock_reads);
             last_qpc_ = probe.now_qpc;
             current = clock_resolver_.ResolveCurrentQpc(
@@ -630,8 +767,6 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
                 left_epoch_scratch_);
             can_use_result = true;
             break;
-        case gc::audio::GameplayAudioCursorState::Inactive:
-            Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
         }
     } else if (last_selected_buffer_instance_id_ != 0) {
         for (const auto& observed :
@@ -665,6 +800,9 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
         : current.closed_frontier_seconds;
     if (current.endpoint_anchor_sequence != 0) {
         last_anchor_sequence_ = current.endpoint_anchor_sequence;
+    }
+    if (current.endpoint_anchor_position) {
+        last_endpoint_position_ = current.endpoint_anchor_position;
     }
     if (current.checked_arithmetic_failure) {
         Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
@@ -708,6 +846,18 @@ void JudgementScheduler::SetReadyHorizonOrFatal(
     if (!has_committed_boundary_index_) {
         Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
     }
+    if (closed_frontier) {
+        if (!last_closed_frontier_ ||
+            last_closed_frontier_->Compare(ready) != 0) {
+            IncrementOrFatal(JudgementDiagnostics().stage_counters()
+                                 .closed_frontier_selections);
+            last_closed_frontier_ = ready;
+        }
+        outer_closed_frontier_ = ready;
+    } else if (frozen_j_ && ready.Compare(*frozen_j_) > 0) {
+        frozen_j_.reset();
+    }
+    MarkReadyOverloadOrFatal(ready);
     const auto scaled = ready.Multiply(60, 1);
     const auto target = scaled ? scaled->Floor() :
         std::expected<std::int64_t, gc::timing::RationalError>(
@@ -735,6 +885,74 @@ void JudgementScheduler::SetReadyHorizonOrFatal(
     outer_uses_closed_frontier_ = closed_frontier;
 }
 
+void JudgementScheduler::MarkReadyOverloadOrFatal(
+    const CheckedRational& ready) noexcept {
+    const auto ready_count = history_.CountResolvedAtOrBefore(
+        next_delivery_sequence_, ready);
+    if (!ready_count) {
+        Fatal(HistoryErrorReason(ready_count.error()));
+    }
+    const auto required_marked = *ready_count > kProtectedReadyEventCount
+        ? *ready_count - kProtectedReadyEventCount
+        : 0;
+    if (marked_overload_count_ > required_marked) {
+        Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+    }
+    const auto additional = required_marked - marked_overload_count_;
+    if (additional > (std::numeric_limits<std::uint64_t>::max)() -
+            marked_overload_count_) {
+        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+    }
+    marked_overload_count_ += additional;
+}
+
+void JudgementScheduler::ConsumeMarkedOverloadOrFatal(
+    const ResolvedGameplayTransition& event) noexcept {
+    if (marked_overload_count_ == 0 || pending_event_count_ == 0 ||
+        event.transport.sequence ==
+            (std::numeric_limits<std::uint64_t>::max)()) {
+        Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+    }
+    ApplyHistoryResultOrFatal(history_.ConvertResolvedToBaselineOnly(
+        event.transport.sequence, BaselineOnlyReason::Overload));
+    next_delivery_sequence_ = event.transport.sequence + 1;
+    --pending_event_count_;
+    --marked_overload_count_;
+
+    auto& counters = JudgementDiagnostics().stage_counters();
+    const bool first_drop = counters.overload_drops == 0;
+    IncrementOrFatal(counters.overload_drops);
+    if (first_drop) {
+        counters.first_overload_drop_sequence = event.transport.sequence;
+    }
+    counters.last_overload_drop_sequence = event.transport.sequence;
+    JudgementDiagnostics().SetPendingWork(PendingWorkCount());
+}
+
+void JudgementScheduler::UpdateFrozenCoordinateOrFatal() noexcept {
+    if (!outer_closed_frontier_) {
+        return;
+    }
+    if (!has_committed_boundary_index_ ||
+        committed_boundary_index_ ==
+            (std::numeric_limits<std::int64_t>::max)()) {
+        Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
+    }
+    const auto* event = history_.FirstResolvedAtOrAfter(
+        next_delivery_sequence_);
+    const bool event_due = event != nullptr &&
+        event->judgement_seconds.Compare(*outer_closed_frontier_) <= 0;
+    const auto boundary = BoundaryAt(committed_boundary_index_ + 1);
+    if (!boundary) {
+        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+    }
+    const bool boundary_due =
+        boundary->Compare(*outer_closed_frontier_) <= 0;
+    if (!event_due && !boundary_due) {
+        frozen_j_ = *outer_closed_frontier_;
+    }
+}
+
 std::optional<ScheduledJudgementScope>
 JudgementScheduler::NextScope() noexcept {
     if (!outer_prepared_ || !stage_.active() || !outer_horizon_) {
@@ -743,39 +961,56 @@ JudgementScheduler::NextScope() noexcept {
     if (outstanding_scope_) {
         return outstanding_scope_;
     }
+    if (outer_event_scope_count_ != 0 ||
+        outer_heartbeat_scope_count_ >= 3) {
+        return std::nullopt;
+    }
     if (!has_committed_boundary_index_ ||
         committed_boundary_index_ ==
             (std::numeric_limits<std::int64_t>::max)()) {
         Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
     }
 
-    const auto boundary_index = committed_boundary_index_ + 1;
-    const auto boundary = BoundaryAt(boundary_index);
-    if (!boundary) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    const auto* event = history_.FirstResolvedAtOrAfter(
-        next_delivery_sequence_);
-    const bool event_due = event != nullptr &&
-        event->judgement_seconds.Compare(*outer_horizon_) <= 0;
-    const bool boundary_due = boundary->Compare(*outer_horizon_) <= 0;
-    if (!event_due && !boundary_due) {
-        return std::nullopt;
-    }
+    for (;;) {
+        const auto boundary_index = committed_boundary_index_ + 1;
+        const auto boundary = BoundaryAt(boundary_index);
+        if (!boundary) {
+            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+        }
+        const auto* event = history_.FirstResolvedAtOrAfter(
+            next_delivery_sequence_);
+        const bool event_due = event != nullptr &&
+            event->judgement_seconds.Compare(*outer_horizon_) <= 0;
+        const bool boundary_due = boundary->Compare(*outer_horizon_) <= 0;
+        if (!event_due && !boundary_due) {
+            return std::nullopt;
+        }
 
-    std::optional<ScheduledJudgementScope> result;
-    if (event_due &&
-        (!boundary_due ||
-         event->judgement_seconds.Compare(*boundary) <= 0)) {
-        result = MakeEventScope(*event, *boundary);
-    } else {
-        result = MakeHeartbeatScope(*boundary);
+        const bool event_is_next = event_due &&
+            (!boundary_due ||
+             event->judgement_seconds.Compare(*boundary) <= 0);
+        if (event_is_next && marked_overload_count_ != 0) {
+            ConsumeMarkedOverloadOrFatal(*event);
+            continue;
+        }
+        if (event_is_next && outer_heartbeat_scope_count_ != 0) {
+            if (!outer_event_barrier_recorded_) {
+                IncrementOrFatal(JudgementDiagnostics().stage_counters()
+                                     .event_barrier_deferrals);
+                outer_event_barrier_recorded_ = true;
+            }
+            return std::nullopt;
+        }
+
+        std::optional<ScheduledJudgementScope> result = event_is_next
+            ? MakeEventScope(*event, *boundary)
+            : MakeHeartbeatScope(*boundary);
+        if (!result) {
+            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+        }
+        outstanding_scope_ = *result;
+        return result;
     }
-    if (!result) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    outstanding_scope_ = *result;
-    return result;
 }
 
 std::optional<ScheduledJudgementScope>
@@ -850,6 +1085,7 @@ void JudgementScheduler::CommitScope(
         next_delivery_sequence_ = scope.event->transport.sequence + 1;
         --pending_event_count_;
         IncrementOrFatal(counters.event_scopes);
+        IncrementOrFatal(outer_event_scope_count_);
         if (outer_now_qpc_ >= scope.event->transport.qpc_ticks) {
             diagnostics.ObserveDeliveryDelayQpc(
                 static_cast<std::uint64_t>(
@@ -857,6 +1093,7 @@ void JudgementScheduler::CommitScope(
         }
     } else {
         IncrementOrFatal(counters.heartbeat_scopes);
+        IncrementOrFatal(outer_heartbeat_scope_count_);
     }
 
     diagnostics.CheckAndRecordCommittedOrderOrFatal(
@@ -897,19 +1134,37 @@ void JudgementScheduler::FinishOuterCall() noexcept {
     }
     auto& diagnostics = JudgementDiagnostics();
     if (outer_scope_count_ != 0) {
-        diagnostics.RecordBatch(outer_scope_count_);
+        auto& counters = diagnostics.stage_counters();
+        if (outer_event_scope_count_ == 1 &&
+            outer_heartbeat_scope_count_ == 0) {
+            IncrementOrFatal(counters.event_only_batches);
+        } else if (outer_event_scope_count_ == 0 &&
+                   outer_heartbeat_scope_count_ >= 1 &&
+                   outer_heartbeat_scope_count_ <= 3) {
+            IncrementOrFatal(counters.heartbeat_only_batches);
+        } else {
+            IncrementOrFatal(counters.mixed_event_batches);
+            Fatal(AbsoluteJudgementFatalReason::NativeCallCountMismatch);
+        }
+        diagnostics.RecordBatch(outer_scope_count_, FatalSnapshot());
         if (outer_uses_closed_frontier_) {
             IncrementOrFatal(
                 diagnostics.stage_counters().closed_frontier_catchups);
         }
+        diagnostics.CheckCompletedBatchInvariantOrFatal(FatalSnapshot());
     }
+    UpdateFrozenCoordinateOrFatal();
     diagnostics.ObserveBacklog(PendingWorkCount());
     diagnostics.SetPendingWork(PendingWorkCount());
     diagnostics.MaybeLogFiveSecondSummary(RuntimeSnapshot());
     outer_horizon_.reset();
     outer_scope_count_ = 0;
+    outer_event_scope_count_ = 0;
+    outer_heartbeat_scope_count_ = 0;
     outer_prepared_ = false;
     outer_uses_closed_frontier_ = false;
+    outer_event_barrier_recorded_ = false;
+    outer_closed_frontier_.reset();
 }
 
 void JudgementScheduler::CheckNativeCallInvariantOrFatal() const noexcept {
@@ -921,6 +1176,19 @@ JudgementScheduler::CheckAndRecordNativeScoreCountersOrFatal(
     const AbsoluteJudgementNativeScoreCounters& counters) const noexcept {
     return JudgementDiagnostics().CheckAndRecordNativeScoreCountersOrFatal(
         counters, FatalSnapshot());
+}
+
+void JudgementScheduler::AccumulateQueryCountersOrFatal(
+    const AbsoluteJudgementQueryCounters& counters) const noexcept {
+    JudgementDiagnostics().AccumulateQueryCountersOrFatal(
+        counters, FatalSnapshot());
+}
+
+void JudgementScheduler::RecordTransientPublicationsOrFatal(
+    const AbsoluteJudgementTransientPublications& publications)
+    const noexcept {
+    JudgementDiagnostics().RecordTransientPublicationsOrFatal(
+        publications, FatalSnapshot());
 }
 
 [[noreturn]] void JudgementScheduler::FailActiveStage(
@@ -1041,10 +1309,14 @@ void JudgementScheduler::FailForClockResult(
 AbsoluteJudgementRuntimeSnapshot
 JudgementScheduler::RuntimeSnapshot() const noexcept {
     return {
+        .last_endpoint_anchor_sequence = last_anchor_sequence_,
+        .last_endpoint_position = last_endpoint_position_,
         .last_output_frame = last_output_frame_,
         .last_source_frame = last_source_frame_,
         .last_qpc = last_qpc_,
         .last_j = last_j_,
+        .last_closed_frontier = last_closed_frontier_,
+        .frozen_j = frozen_j_,
         .committed_boundary = has_committed_boundary_index_
             ? committed_boundary_index_
             : 0,

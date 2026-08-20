@@ -16,7 +16,7 @@ namespace gc::absolute_judgement {
 
 struct AbsoluteJudgementOuterProbe {
     NativeJudgementIdentity native{};
-    bool group2_playing{};
+    bool group2_cursor_selected{};
     std::optional<gc::audio::GameplayAudioCursorObservation>
         group2_observation;
     std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint;
@@ -53,11 +53,17 @@ public:
     [[nodiscard]] AbsoluteJudgementScoreDeltas
     CheckAndRecordNativeScoreCountersOrFatal(
         const AbsoluteJudgementNativeScoreCounters& counters) const noexcept;
+    void AccumulateQueryCountersOrFatal(
+        const AbsoluteJudgementQueryCounters& counters) const noexcept;
+    void RecordTransientPublicationsOrFatal(
+        const AbsoluteJudgementTransientPublications& publications)
+        const noexcept;
     [[noreturn]] void FailActiveStage(
         AbsoluteJudgementFatalReason reason) const noexcept;
 
 private:
     static constexpr std::size_t kDrainBatchCapacity = 1024;
+    static constexpr std::uint64_t kProtectedReadyEventCount = 32;
 
     void ClearStageOwnedState() noexcept;
     void ValidateStageBindingOrFatal(
@@ -67,6 +73,7 @@ private:
     [[nodiscard]] gc::audio::ExactClockStatus
     UpdatePlaybackDiagnostics() noexcept;
     void DrainTransportOrFatal() noexcept;
+    void AccountCleanupDropsOrFatal() noexcept;
     [[nodiscard]] gc::audio::ExactClockStatus
     ResolveUnresolvedPrefixOrFatal(
         gc::audio::ExactClockStatus validation_status) noexcept;
@@ -78,6 +85,11 @@ private:
     void SetReadyHorizonOrFatal(
         const gc::timing::CheckedRational& ready,
         bool closed_frontier) noexcept;
+    void MarkReadyOverloadOrFatal(
+        const gc::timing::CheckedRational& ready) noexcept;
+    void ConsumeMarkedOverloadOrFatal(
+        const ResolvedGameplayTransition& event) noexcept;
+    void UpdateFrozenCoordinateOrFatal() noexcept;
 
     [[nodiscard]] std::uint64_t CurrentHistoryPrefixEnd() const noexcept;
     [[nodiscard]] std::optional<ScheduledJudgementScope>
@@ -134,8 +146,12 @@ private:
     std::uint64_t next_drain_sequence_{};
     std::uint64_t next_delivery_sequence_{};
     std::uint64_t pending_event_count_{};
+    std::uint64_t marked_overload_count_{};
     std::uint64_t last_selected_buffer_instance_id_{};
     std::uint64_t accumulated_clock_waits_{};
+    std::uint64_t endpoint_publication_baseline_{};
+    std::uint64_t last_endpoint_publication_count_{};
+    bool has_endpoint_publication_baseline_{};
 
     std::optional<JudgementScopeCoordinate> last_resolved_coordinate_;
     std::optional<JudgementScopeCoordinate> committed_frontier_;
@@ -146,13 +162,20 @@ private:
     std::optional<gc::timing::CheckedRational> outer_horizon_;
     std::optional<ScheduledJudgementScope> outstanding_scope_;
     std::uint64_t outer_scope_count_{};
+    std::uint64_t outer_event_scope_count_{};
+    std::uint64_t outer_heartbeat_scope_count_{};
     bool outer_prepared_{};
     bool outer_uses_closed_frontier_{};
+    bool outer_event_barrier_recorded_{};
+    std::optional<gc::timing::CheckedRational> outer_closed_frontier_;
 
     std::optional<gc::timing::CheckedRational> last_output_frame_;
     std::optional<gc::timing::CheckedRational> last_source_frame_;
     std::optional<gc::timing::CheckedRational> last_j_;
+    std::optional<gc::timing::CheckedRational> last_closed_frontier_;
+    std::optional<gc::timing::CheckedRational> frozen_j_;
     std::uint64_t last_anchor_sequence_{};
+    std::optional<std::uint64_t> last_endpoint_position_;
     std::int64_t outer_now_qpc_{};
     std::int64_t last_qpc_{};
 };

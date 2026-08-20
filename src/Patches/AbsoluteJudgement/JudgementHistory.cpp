@@ -146,6 +146,83 @@ JudgementHistory::ApplyBaselineOnly(
     return {};
 }
 
+std::expected<std::uint64_t, JudgementHistoryError>
+JudgementHistory::CountResolvedAtOrBefore(
+    const std::uint64_t first_sequence,
+    const gc::timing::CheckedRational& ready) const noexcept
+{
+    if (!initialized_)
+    {
+        return std::unexpected(JudgementHistoryError::NotInitialized);
+    }
+    if (first_sequence < base_next_sequence_ ||
+        first_sequence > next_sequence_)
+    {
+        return std::unexpected(JudgementHistoryError::HistoryLost);
+    }
+
+    std::uint64_t count{};
+    for (std::size_t offset = 0; offset < size_; ++offset)
+    {
+        const RetainedEntry& entry = EntryAt(offset);
+        if (!entry.resolved ||
+            entry.transition.transport.sequence < first_sequence)
+        {
+            continue;
+        }
+        if (entry.transition.judgement_seconds.Compare(ready) > 0)
+        {
+            break;
+        }
+        if (count == (std::numeric_limits<std::uint64_t>::max)())
+        {
+            return std::unexpected(
+                JudgementHistoryError::CheckedArithmeticFailure);
+        }
+        ++count;
+    }
+    return count;
+}
+
+std::expected<void, JudgementHistoryError>
+JudgementHistory::ConvertResolvedToBaselineOnly(
+    const std::uint64_t sequence,
+    const BaselineOnlyReason reason) noexcept
+{
+    if (!initialized_)
+    {
+        return std::unexpected(JudgementHistoryError::NotInitialized);
+    }
+    if (reason != BaselineOnlyReason::Overload ||
+        sequence < base_next_sequence_ || sequence >= next_sequence_)
+    {
+        return std::unexpected(JudgementHistoryError::HistoryLost);
+    }
+
+    for (std::size_t offset = 0; offset < size_; ++offset)
+    {
+        RetainedEntry& entry = EntryAt(offset);
+        const auto entry_sequence = entry.transition.transport.sequence;
+        if (entry_sequence > sequence)
+        {
+            return std::unexpected(JudgementHistoryError::HistoryLost);
+        }
+        if (entry_sequence != sequence)
+        {
+            continue;
+        }
+        if (!entry.resolved)
+        {
+            return std::unexpected(
+                JudgementHistoryError::TransportStateMismatch);
+        }
+        entry.resolved = false;
+        entry.baseline_reason = reason;
+        return {};
+    }
+    return std::unexpected(JudgementHistoryError::HistoryLost);
+}
+
 std::expected<void, JudgementHistoryError> JudgementHistory::PruneBefore(
     const gc::timing::CheckedRational& earliest_query_time,
     const std::uint64_t earliest_history_prefix_end_sequence) noexcept

@@ -61,6 +61,20 @@ using namespace native_abi;
     }
 }
 
+[[nodiscard]] bool ReadU8Safe(
+    const std::uintptr_t address,
+    std::uint8_t* const value) noexcept {
+    if (address == 0 || value == nullptr) {
+        return false;
+    }
+    __try {
+        *value = *reinterpret_cast<volatile const std::uint8_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 [[nodiscard]] bool ReadFieldU32Safe(
     const std::uintptr_t base,
     const std::size_t offset,
@@ -68,6 +82,14 @@ using namespace native_abi;
     std::uintptr_t address{};
     return AddAddress(base, offset, &address) &&
         ReadU32Safe(address, value);
+}
+
+[[nodiscard]] bool ReadFieldU8Safe(
+    const std::uintptr_t base,
+    const std::size_t offset,
+    std::uint8_t* const value) noexcept {
+    std::uintptr_t address{};
+    return AddAddress(base, offset, &address) && ReadU8Safe(address, value);
 }
 
 [[nodiscard]] bool ResolvePointerCollectionElementSafe(
@@ -212,7 +234,7 @@ public:
         const auto native = ResolveNativeIdentityOrFatal(context);
 
         std::optional<gc::audio::GameplayAudioCursorObservation> observation;
-        bool group2_playing{};
+        bool group2_cursor_selected{};
         {
             gc::audio::ScopedGameplayAudioCursorQuery cursor_query;
             const auto get_sound_manager = reinterpret_cast<AccessorFn>(
@@ -226,8 +248,8 @@ public:
             const int cursor_sign = get_group_cursor(
                 sound_manager, kGameplaySoundGroup);
             observation = cursor_query.Consume();
-            group2_playing = cursor_sign >= 0;
-            if (!group2_playing) {
+            group2_cursor_selected = cursor_sign >= 0;
+            if (!group2_cursor_selected) {
                 observation.reset();
             }
         }
@@ -240,7 +262,7 @@ public:
 
         AbsoluteJudgementOuterProbe probe{
             .native = native,
-            .group2_playing = group2_playing,
+            .group2_cursor_selected = group2_cursor_selected,
             .group2_observation = std::move(observation),
             .endpoint = std::move(endpoint),
             .now_qpc = now.QuadPart,
@@ -407,6 +429,7 @@ private:
 
         AbsoluteJudgementQueryCounters scope_queries{};
         AbsoluteJudgementScoreDeltas score_deltas{};
+        AbsoluteJudgementTransientPublications transient_publications{};
         {
             ScopedJudgementQueryView query_view({
                 .stage_generation = native.stage_generation,
@@ -454,11 +477,37 @@ private:
             IncrementOrFatal(
                 JudgementDiagnostics().stage_counters().score_calls);
 
+            std::uint8_t arrange{};
+            std::uint8_t left_free_tap{};
+            std::uint8_t right_free_tap{};
+            if (!ReadFieldU8Safe(
+                    native.judgement_state,
+                    kJudgementArrangePublicationOffset,
+                    &arrange) ||
+                !ReadFieldU8Safe(
+                    native.judgement_state,
+                    kJudgementLeftFreeTapPublicationOffset,
+                    &left_free_tap) ||
+                !ReadFieldU8Safe(
+                    native.judgement_state,
+                    kJudgementRightFreeTapPublicationOffset,
+                    &right_free_tap)) {
+                Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            }
+            transient_publications = {
+                .arrange = arrange != 0,
+                .left_free_tap = left_free_tap != 0,
+                .right_free_tap = right_free_tap != 0,
+            };
+
             const auto score_after = ReadScoreCountersOrFatal(
                 native.score_state);
             score_deltas =
                 scheduler_.CheckAndRecordNativeScoreCountersOrFatal(
                     score_after);
+            scheduler_.AccumulateQueryCountersOrFatal(scope_queries);
+            scheduler_.RecordTransientPublicationsOrFatal(
+                transient_publications);
         }
 
         scheduler_.CommitScope(scope);
@@ -509,6 +558,16 @@ private:
             .recognition_completed = true,
             .score_completed = true,
             .score_deltas = score_deltas,
+            .transient_publications = transient_publications,
+            .batch_kind = scope.kind == JudgementScopeKind::Event
+                ? AbsoluteJudgementBatchKind::EventOnly
+                : AbsoluteJudgementBatchKind::HeartbeatOnly,
+            .isolation_disposition =
+                scope.kind == JudgementScopeKind::Event
+                    ? AbsoluteJudgementEventIsolationDisposition::
+                          EventEndsBatch
+                    : AbsoluteJudgementEventIsolationDisposition::
+                          HeartbeatOnlyBatch,
             .boundary_committed = scope.commits_boundary,
             .committed_boundary =
                 scheduler_.committed_boundary_index().value_or(0),

@@ -30,6 +30,7 @@ struct ExactOutputClockResult {
     std::optional<gc::timing::CheckedRational> output_frame;
     std::uint64_t submitted_output_tail{};
     std::uint64_t anchor_sequence{};
+    std::optional<std::uint64_t> anchor_endpoint_position;
 };
 
 } // namespace gc::audio

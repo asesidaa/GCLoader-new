@@ -34,6 +34,7 @@ public:
         std::int64_t raw_qpc_ticks) const noexcept;
     [[nodiscard]] std::uint64_t endpoint_generation() const noexcept;
     [[nodiscard]] std::int64_t qpc_frequency() const noexcept;
+    [[nodiscard]] std::uint64_t publication_count() const noexcept;
 
 private:
     struct Slot;

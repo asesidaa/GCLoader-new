@@ -26,32 +26,6 @@ std::uint64_t SubtractMonotonic(
     return value - baseline;
 }
 
-AbsoluteJudgementCounterSnapshot LoadSharedAbsolute(
-    const AbsoluteJudgementSharedCounters& shared) noexcept {
-    AbsoluteJudgementCounterSnapshot result{};
-    result.transport_records =
-        shared.transport_records.load(std::memory_order_relaxed);
-    result.transport_rise_masks =
-        shared.transport_rise_masks.load(std::memory_order_relaxed);
-    result.transport_fall_masks =
-        shared.transport_fall_masks.load(std::memory_order_relaxed);
-    result.transport_evictions =
-        shared.transport_evictions.load(std::memory_order_relaxed);
-    result.endpoint_anchors =
-        shared.endpoint_anchors.load(std::memory_order_relaxed);
-    result.playback_epochs =
-        shared.playback_epochs.load(std::memory_order_relaxed);
-    result.playback_play_epochs =
-        shared.playback_play_epochs.load(std::memory_order_relaxed);
-    result.playback_seek_epochs =
-        shared.playback_seek_epochs.load(std::memory_order_relaxed);
-    result.history_errors =
-        shared.history_errors.load(std::memory_order_relaxed);
-    result.discontinuity_errors =
-        shared.discontinuity_errors.load(std::memory_order_relaxed);
-    return result;
-}
-
 AbsoluteJudgementQueryCounters SubtractQueries(
     const AbsoluteJudgementQueryCounters& value,
     const AbsoluteJudgementQueryCounters& baseline) noexcept {
@@ -92,6 +66,18 @@ AbsoluteJudgementScoreDeltas SubtractScoreDeltas(
     };
 }
 
+AbsoluteJudgementTransientPublicationCounts SubtractTransientPublications(
+    const AbsoluteJudgementTransientPublicationCounts& value,
+    const AbsoluteJudgementTransientPublicationCounts& baseline) noexcept {
+    return {
+        .arrange = SubtractMonotonic(value.arrange, baseline.arrange),
+        .left_free_tap = SubtractMonotonic(
+            value.left_free_tap, baseline.left_free_tap),
+        .right_free_tap = SubtractMonotonic(
+            value.right_free_tap, baseline.right_free_tap),
+    };
+}
+
 AbsoluteJudgementCounterSnapshot SubtractCounters(
     const AbsoluteJudgementCounterSnapshot& value,
     const AbsoluteJudgementCounterSnapshot& baseline) noexcept {
@@ -101,26 +87,35 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     GC_SUBTRACT_COUNTER(native_stage_opens);
     GC_SUBTRACT_COUNTER(absolute_stage_activations);
     GC_SUBTRACT_COUNTER(native_stage_ends);
-    GC_SUBTRACT_COUNTER(transport_records);
-    GC_SUBTRACT_COUNTER(transport_rise_masks);
-    GC_SUBTRACT_COUNTER(transport_fall_masks);
+    GC_SUBTRACT_COUNTER(transport_records_drained);
+    GC_SUBTRACT_COUNTER(transport_rising_controls);
+    GC_SUBTRACT_COUNTER(transport_falling_controls);
     result.transport_pending_depth = value.transport_pending_depth;
     GC_SUBTRACT_COUNTER(late_records);
     GC_SUBTRACT_COUNTER(outside_playback_baseline_records);
-    GC_SUBTRACT_COUNTER(transport_evictions);
     GC_SUBTRACT_COUNTER(sequence_errors);
+    GC_SUBTRACT_COUNTER(post_cutoff_records);
+    GC_SUBTRACT_COUNTER(overload_drops);
+    GC_SUBTRACT_COUNTER(cleanup_drops);
+    result.first_overload_drop_sequence =
+        value.first_overload_drop_sequence;
+    result.last_overload_drop_sequence = value.last_overload_drop_sequence;
     GC_SUBTRACT_COUNTER(exact_clock_reads);
     GC_SUBTRACT_COUNTER(resolved_clock_reads);
     GC_SUBTRACT_COUNTER(unavailable_clock_reads);
-    GC_SUBTRACT_COUNTER(endpoint_anchors);
+    result.endpoint_publication_count = value.endpoint_publication_count;
+    GC_SUBTRACT_COUNTER(endpoint_stage_publications);
     GC_SUBTRACT_COUNTER(playback_epochs);
     GC_SUBTRACT_COUNTER(playback_play_epochs);
     GC_SUBTRACT_COUNTER(playback_seek_epochs);
-    GC_SUBTRACT_COUNTER(history_errors);
-    GC_SUBTRACT_COUNTER(discontinuity_errors);
+    GC_SUBTRACT_COUNTER(closed_frontier_selections);
     GC_SUBTRACT_COUNTER(outer_calls);
     GC_SUBTRACT_COUNTER(event_scopes);
     GC_SUBTRACT_COUNTER(heartbeat_scopes);
+    GC_SUBTRACT_COUNTER(event_only_batches);
+    GC_SUBTRACT_COUNTER(heartbeat_only_batches);
+    GC_SUBTRACT_COUNTER(mixed_event_batches);
+    GC_SUBTRACT_COUNTER(event_barrier_deferrals);
     GC_SUBTRACT_COUNTER(equal_boundary_substitutions);
     GC_SUBTRACT_COUNTER(committed_boundaries);
     GC_SUBTRACT_COUNTER(closed_frontier_catchups);
@@ -132,6 +127,9 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     result.queries = SubtractQueries(value.queries, baseline.queries);
     result.score_deltas =
         SubtractScoreDeltas(value.score_deltas, baseline.score_deltas);
+    result.transient_publications = SubtractTransientPublications(
+        value.transient_publications,
+        baseline.transient_publications);
     return result;
 }
 
@@ -139,6 +137,26 @@ const char* ScopeKindName(AbsoluteJudgementScopeKind kind) noexcept {
     switch (kind) {
     case AbsoluteJudgementScopeKind::Event: return "event";
     case AbsoluteJudgementScopeKind::Heartbeat: return "heartbeat";
+    }
+    return "unknown";
+}
+
+const char* BatchKindName(AbsoluteJudgementBatchKind kind) noexcept {
+    switch (kind) {
+    case AbsoluteJudgementBatchKind::EventOnly: return "event_only";
+    case AbsoluteJudgementBatchKind::HeartbeatOnly:
+        return "heartbeat_only";
+    }
+    return "unknown";
+}
+
+const char* IsolationDispositionName(
+    AbsoluteJudgementEventIsolationDisposition disposition) noexcept {
+    switch (disposition) {
+    case AbsoluteJudgementEventIsolationDisposition::EventEndsBatch:
+        return "event_ends_batch";
+    case AbsoluteJudgementEventIsolationDisposition::HeartbeatOnlyBatch:
+        return "heartbeat_only_batch";
     }
     return "unknown";
 }
@@ -285,6 +303,22 @@ void AppendScoreDeltas(
         deltas.great);
 }
 
+void AppendTransientPublicationCounts(
+    std::string& message,
+    std::string_view prefix,
+    const AbsoluteJudgementTransientPublicationCounts& counts) {
+    std::format_to(
+        std::back_inserter(message),
+        " {}transient_arrange={} {}transient_left_free_tap={}"
+        " {}transient_right_free_tap={}",
+        prefix,
+        counts.arrange,
+        prefix,
+        counts.left_free_tap,
+        prefix,
+        counts.right_free_tap);
+}
+
 void AppendHistories(
     std::string& message,
     std::span<const AbsoluteJudgementPlaybackHistoryDiagnostic> histories) {
@@ -320,11 +354,14 @@ void AppendCounters(
     std::format_to(
         std::back_inserter(message),
         " {}native_stage_opens={} {}absolute_stage_activations={}"
-        " {}native_stage_ends={} {}transport_records={}"
-        " {}transport_rise_masks={} {}transport_fall_masks={}"
+        " {}native_stage_ends={} {}transport_records_drained={}"
+        " {}transport_rising_controls={} {}transport_falling_controls={}"
         " {}transport_pending={} {}transport_max_depth={}"
         " {}late_records={} {}outside_playback_baseline_records={}"
-        " {}transport_evictions={} {}sequence_errors={}",
+        " {}sequence_errors={} {}post_cutoff_records={}"
+        " {}overload_drops={} {}cleanup_drops={}"
+        " {}first_overload_drop_sequence={}"
+        " {}last_overload_drop_sequence={}",
         prefix,
         counters.native_stage_opens,
         prefix,
@@ -332,11 +369,11 @@ void AppendCounters(
         prefix,
         counters.native_stage_ends,
         prefix,
-        counters.transport_records,
+        counters.transport_records_drained,
         prefix,
-        counters.transport_rise_masks,
+        counters.transport_rising_controls,
         prefix,
-        counters.transport_fall_masks,
+        counters.transport_falling_controls,
         prefix,
         counters.transport_pending_depth,
         prefix,
@@ -346,15 +383,24 @@ void AppendCounters(
         prefix,
         counters.outside_playback_baseline_records,
         prefix,
-        counters.transport_evictions,
+        counters.sequence_errors,
         prefix,
-        counters.sequence_errors);
+        counters.post_cutoff_records,
+        prefix,
+        counters.overload_drops,
+        prefix,
+        counters.cleanup_drops,
+        prefix,
+        counters.first_overload_drop_sequence,
+        prefix,
+        counters.last_overload_drop_sequence);
     std::format_to(
         std::back_inserter(message),
         " {}clock_reads={} {}clock_resolved={} {}clock_unavailable={}"
-        " {}endpoint_anchors={} {}playback_epochs={}"
+        " {}endpoint_publication_count={}"
+        " {}endpoint_stage_publications={} {}playback_epochs={}"
         " {}playback_play_epochs={} {}playback_seek_epochs={}"
-        " {}history_errors={} {}discontinuity_errors={}"
+        " {}closed_frontier_selections={}"
         " {}rounded_fallback=0",
         prefix,
         counters.exact_clock_reads,
@@ -363,7 +409,9 @@ void AppendCounters(
         prefix,
         counters.unavailable_clock_reads,
         prefix,
-        counters.endpoint_anchors,
+        counters.endpoint_publication_count,
+        prefix,
+        counters.endpoint_stage_publications,
         prefix,
         counters.playback_epochs,
         prefix,
@@ -371,16 +419,17 @@ void AppendCounters(
         prefix,
         counters.playback_seek_epochs,
         prefix,
-        counters.history_errors,
-        prefix,
-        counters.discontinuity_errors,
+        counters.closed_frontier_selections,
         prefix);
     std::format_to(
         std::back_inserter(message),
         " {}outer_calls={} {}event_scopes={} {}heartbeat_scopes={}"
+        " {}event_only_batches={} {}heartbeat_only_batches={}"
+        " {}mixed_event_batches={} {}event_barrier_deferrals={}"
         " {}equal_boundary_substitutions={} {}committed_boundaries={}"
         " {}closed_frontier_catchups={} {}batches={}"
         " {}maximum_batch={} {}maximum_backlog={}"
+        " {}maximum_event_backlog={}"
         " {}maximum_delivery_delay_qpc={} {}pending_work={}"
         " {}recognition_calls={} {}score_calls={}",
         prefix,
@@ -389,6 +438,14 @@ void AppendCounters(
         counters.event_scopes,
         prefix,
         counters.heartbeat_scopes,
+        prefix,
+        counters.event_only_batches,
+        prefix,
+        counters.heartbeat_only_batches,
+        prefix,
+        counters.mixed_event_batches,
+        prefix,
+        counters.event_barrier_deferrals,
         prefix,
         counters.equal_boundary_substitutions,
         prefix,
@@ -402,6 +459,8 @@ void AppendCounters(
         prefix,
         counters.maximum_backlog,
         prefix,
+        counters.maximum_event_backlog,
+        prefix,
         counters.maximum_delivery_delay_qpc,
         prefix,
         counters.pending_work,
@@ -411,6 +470,8 @@ void AppendCounters(
         counters.score_calls);
     AppendQueries(message, prefix, counters.queries);
     AppendScoreDeltas(message, prefix, counters.score_deltas);
+    AppendTransientPublicationCounts(
+        message, prefix, counters.transient_publications);
 }
 
 void AppendRuntime(
@@ -418,13 +479,26 @@ void AppendRuntime(
     const AbsoluteJudgementRuntimeSnapshot& runtime) {
     std::format_to(
         std::back_inserter(message),
-        " last_endpoint_position={}",
-        runtime.last_endpoint_position);
+        " last_endpoint_anchor_sequence={}",
+        runtime.last_endpoint_anchor_sequence);
+    if (runtime.last_endpoint_position) {
+        std::format_to(
+            std::back_inserter(message),
+            " last_endpoint_position={}",
+            *runtime.last_endpoint_position);
+    } else {
+        std::format_to(
+            std::back_inserter(message),
+            " last_endpoint_position=none");
+    }
     AppendRational(message, "last_output_frame", runtime.last_output_frame);
     AppendRational(message, "last_source_frame", runtime.last_source_frame);
     std::format_to(
         std::back_inserter(message), " last_qpc={}", runtime.last_qpc);
     AppendRational(message, "last_j", runtime.last_j);
+    AppendRational(
+        message, "last_closed_frontier", runtime.last_closed_frontier);
+    AppendRational(message, "frozen_j", runtime.frozen_j);
     std::format_to(
         std::back_inserter(message),
         " committed_boundary={} pending_work={} last_sequence={}"
@@ -446,11 +520,6 @@ AbsoluteJudgementDiagnostics& JudgementDiagnostics() noexcept {
     return diagnostics;
 }
 
-AbsoluteJudgementSharedCounters&
-AbsoluteJudgementDiagnostics::shared_counters() noexcept {
-    return shared_;
-}
-
 AbsoluteJudgementStageCounters&
 AbsoluteJudgementDiagnostics::stage_counters() noexcept {
     return stage_;
@@ -465,13 +534,25 @@ void AbsoluteJudgementDiagnostics::ObserveTransportPendingDepth(
         (std::max)(interval_maxima_.transport_depth, depth);
 }
 
-void AbsoluteJudgementDiagnostics::RecordBatch(std::uint64_t size) noexcept {
+void AbsoluteJudgementDiagnostics::RecordBatch(
+    const std::uint64_t size,
+    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
     if (stage_.batches == (std::numeric_limits<std::uint64_t>::max)()) {
-        std::abort();
+        FatalActiveStage(
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            snapshot);
     }
     ++stage_.batches;
     stage_.maximum_batch = (std::max)(stage_.maximum_batch, size);
     interval_maxima_.batch = (std::max)(interval_maxima_.batch, size);
+}
+
+void AbsoluteJudgementDiagnostics::ObserveEventBacklog(
+    const std::uint64_t depth) noexcept {
+    stage_.maximum_event_backlog =
+        (std::max)(stage_.maximum_event_backlog, depth);
+    interval_maxima_.event_backlog =
+        (std::max)(interval_maxima_.event_backlog, depth);
 }
 
 void AbsoluteJudgementDiagnostics::ObserveBacklog(
@@ -496,63 +577,59 @@ void AbsoluteJudgementDiagnostics::SetPendingWork(
 
 AbsoluteJudgementCounterSnapshot
 AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
-    const auto shared = LoadSharedAbsolute(shared_);
-    AbsoluteJudgementCounterSnapshot result{};
-    result.native_stage_opens = stage_.native_stage_opens;
-    result.absolute_stage_activations = stage_.absolute_stage_activations;
-    result.native_stage_ends = stage_.native_stage_ends;
-    result.transport_records = SubtractMonotonic(
-        shared.transport_records, shared_stage_baseline_.transport_records);
-    result.transport_rise_masks = SubtractMonotonic(
-        shared.transport_rise_masks,
-        shared_stage_baseline_.transport_rise_masks);
-    result.transport_fall_masks = SubtractMonotonic(
-        shared.transport_fall_masks,
-        shared_stage_baseline_.transport_fall_masks);
-    result.transport_pending_depth = stage_.transport_pending_depth;
-    result.transport_max_depth = stage_.transport_max_depth;
-    result.late_records = stage_.late_records;
-    result.outside_playback_baseline_records =
-        stage_.outside_playback_baseline_records;
-    result.transport_evictions = SubtractMonotonic(
-        shared.transport_evictions,
-        shared_stage_baseline_.transport_evictions);
-    result.sequence_errors = stage_.sequence_errors;
-    result.exact_clock_reads = stage_.exact_clock_reads;
-    result.resolved_clock_reads = stage_.resolved_clock_reads;
-    result.unavailable_clock_reads = stage_.unavailable_clock_reads;
-    result.endpoint_anchors = SubtractMonotonic(
-        shared.endpoint_anchors, shared_stage_baseline_.endpoint_anchors);
-    result.playback_epochs = SubtractMonotonic(
-        shared.playback_epochs, shared_stage_baseline_.playback_epochs);
-    result.playback_play_epochs = SubtractMonotonic(
-        shared.playback_play_epochs,
-        shared_stage_baseline_.playback_play_epochs);
-    result.playback_seek_epochs = SubtractMonotonic(
-        shared.playback_seek_epochs,
-        shared_stage_baseline_.playback_seek_epochs);
-    result.history_errors = SubtractMonotonic(
-        shared.history_errors, shared_stage_baseline_.history_errors);
-    result.discontinuity_errors = SubtractMonotonic(
-        shared.discontinuity_errors,
-        shared_stage_baseline_.discontinuity_errors);
-    result.outer_calls = stage_.outer_calls;
-    result.event_scopes = stage_.event_scopes;
-    result.heartbeat_scopes = stage_.heartbeat_scopes;
-    result.equal_boundary_substitutions =
-        stage_.equal_boundary_substitutions;
-    result.committed_boundaries = stage_.committed_boundaries;
-    result.closed_frontier_catchups = stage_.closed_frontier_catchups;
-    result.batches = stage_.batches;
-    result.maximum_batch = stage_.maximum_batch;
-    result.maximum_backlog = stage_.maximum_backlog;
-    result.maximum_delivery_delay_qpc = stage_.maximum_delivery_delay_qpc;
-    result.pending_work = stage_.pending_work;
-    result.recognition_calls = stage_.recognition_calls;
-    result.score_calls = stage_.score_calls;
-    result.queries = stage_.queries;
-    result.score_deltas = stage_.score_deltas;
-    return result;
+    return {
+        .native_stage_opens = stage_.native_stage_opens,
+        .absolute_stage_activations = stage_.absolute_stage_activations,
+        .native_stage_ends = stage_.native_stage_ends,
+        .transport_records_drained = stage_.transport_records_drained,
+        .transport_rising_controls = stage_.transport_rising_controls,
+        .transport_falling_controls = stage_.transport_falling_controls,
+        .transport_pending_depth = stage_.transport_pending_depth,
+        .transport_max_depth = stage_.transport_max_depth,
+        .late_records = stage_.late_records,
+        .outside_playback_baseline_records =
+            stage_.outside_playback_baseline_records,
+        .sequence_errors = stage_.sequence_errors,
+        .post_cutoff_records = stage_.post_cutoff_records,
+        .overload_drops = stage_.overload_drops,
+        .cleanup_drops = stage_.cleanup_drops,
+        .first_overload_drop_sequence =
+            stage_.first_overload_drop_sequence,
+        .last_overload_drop_sequence =
+            stage_.last_overload_drop_sequence,
+        .exact_clock_reads = stage_.exact_clock_reads,
+        .resolved_clock_reads = stage_.resolved_clock_reads,
+        .unavailable_clock_reads = stage_.unavailable_clock_reads,
+        .endpoint_publication_count = stage_.endpoint_publication_count,
+        .endpoint_stage_publications = stage_.endpoint_stage_publications,
+        .playback_epochs = stage_.playback_epochs,
+        .playback_play_epochs = stage_.playback_play_epochs,
+        .playback_seek_epochs = stage_.playback_seek_epochs,
+        .closed_frontier_selections = stage_.closed_frontier_selections,
+        .outer_calls = stage_.outer_calls,
+        .event_scopes = stage_.event_scopes,
+        .heartbeat_scopes = stage_.heartbeat_scopes,
+        .event_only_batches = stage_.event_only_batches,
+        .heartbeat_only_batches = stage_.heartbeat_only_batches,
+        .mixed_event_batches = stage_.mixed_event_batches,
+        .event_barrier_deferrals = stage_.event_barrier_deferrals,
+        .equal_boundary_substitutions =
+            stage_.equal_boundary_substitutions,
+        .committed_boundaries = stage_.committed_boundaries,
+        .closed_frontier_catchups = stage_.closed_frontier_catchups,
+        .batches = stage_.batches,
+        .maximum_batch = stage_.maximum_batch,
+        .maximum_backlog = stage_.maximum_backlog,
+        .maximum_event_backlog = stage_.maximum_event_backlog,
+        .maximum_delivery_delay_qpc =
+            stage_.maximum_delivery_delay_qpc,
+        .pending_work = stage_.pending_work,
+        .recognition_calls = stage_.recognition_calls,
+        .score_calls = stage_.score_calls,
+        .queries = stage_.queries,
+        .score_deltas = stage_.score_deltas,
+        .transient_publications = stage_.transient_publications,
+    };
 }
 
 AbsoluteJudgementCounterSnapshot
@@ -562,6 +639,7 @@ AbsoluteJudgementDiagnostics::SnapshotIntervalCounters(
     interval.transport_max_depth = interval_maxima_.transport_depth;
     interval.maximum_batch = interval_maxima_.batch;
     interval.maximum_backlog = interval_maxima_.backlog;
+    interval.maximum_event_backlog = interval_maxima_.event_backlog;
     interval.maximum_delivery_delay_qpc =
         interval_maxima_.delivery_delay_qpc;
     return interval;
@@ -574,7 +652,6 @@ void AbsoluteJudgementDiagnostics::ResetIntervalMaxima() noexcept {
 void AbsoluteJudgementDiagnostics::ResetStageState() noexcept {
     stage_ = {};
     ResetIntervalMaxima();
-    shared_stage_baseline_ = LoadSharedAbsolute(shared_);
     last_summary_ = {};
     last_committed_time_.reset();
     last_committed_sequence_ = 0;
@@ -745,7 +822,15 @@ void AbsoluteJudgementDiagnostics::LogScopeVerbose(
     AppendScoreDeltas(message, "", record.score_deltas);
     std::format_to(
         std::back_inserter(message),
-        " boundary_committed={} committed_boundary={} remaining_backlog={}",
+        " transient_arrange={} transient_left_free_tap={}"
+        " transient_right_free_tap={} batch_kind={}"
+        " isolation_disposition={} boundary_committed={}"
+        " committed_boundary={} remaining_backlog={}",
+        record.transient_publications.arrange ? 1 : 0,
+        record.transient_publications.left_free_tap ? 1 : 0,
+        record.transient_publications.right_free_tap ? 1 : 0,
+        BatchKindName(record.batch_kind),
+        IsolationDispositionName(record.isolation_disposition),
         record.boundary_committed ? 1 : 0,
         record.committed_boundary,
         record.remaining_backlog);
@@ -768,6 +853,91 @@ void AbsoluteJudgementDiagnostics::CheckNativeCallInvariantOrFatal(
             AbsoluteJudgementFatalReason::NativeCallCountMismatch,
             snapshot);
     }
+}
+
+void AbsoluteJudgementDiagnostics::CheckCompletedBatchInvariantOrFatal(
+    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
+    if (stage_.event_scopes != stage_.event_only_batches ||
+        stage_.mixed_event_batches != 0) {
+        FatalActiveStage(
+            AbsoluteJudgementFatalReason::NativeCallCountMismatch,
+            snapshot);
+    }
+}
+
+void AbsoluteJudgementDiagnostics::CheckFinalTransportIdentityOrFatal(
+    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
+    std::uint64_t classified{};
+    const auto add = [&classified](const std::uint64_t value) noexcept {
+        if (value > (std::numeric_limits<std::uint64_t>::max)() -
+                classified) {
+            return false;
+        }
+        classified += value;
+        return true;
+    };
+    if (!add(stage_.event_scopes) ||
+        !add(stage_.outside_playback_baseline_records) ||
+        !add(stage_.late_records) ||
+        !add(stage_.overload_drops) ||
+        !add(stage_.cleanup_drops)) {
+        FatalActiveStage(
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            snapshot);
+    }
+    if (stage_.post_cutoff_records != classified) {
+        FatalActiveStage(
+            AbsoluteJudgementFatalReason::TransportSequenceError,
+            snapshot);
+    }
+}
+
+void AbsoluteJudgementDiagnostics::AccumulateQueryCountersOrFatal(
+    const AbsoluteJudgementQueryCounters& counters,
+    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
+    const auto add = [&snapshot](std::uint64_t& total,
+                                 const std::uint64_t value) noexcept {
+        if (value > (std::numeric_limits<std::uint64_t>::max)() - total) {
+            FatalActiveStage(
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                snapshot);
+        }
+        total += value;
+    };
+    add(stage_.queries.pressed_calls, counters.pressed_calls);
+    add(stage_.queries.pressed_true, counters.pressed_true);
+    add(stage_.queries.held_calls, counters.held_calls);
+    add(stage_.queries.held_true, counters.held_true);
+    add(stage_.queries.released_calls, counters.released_calls);
+    add(stage_.queries.released_true, counters.released_true);
+    add(stage_.queries.direction_calls, counters.direction_calls);
+    add(stage_.queries.direction_nonzero, counters.direction_nonzero);
+    add(stage_.queries.held_age_calls, counters.held_age_calls);
+    add(stage_.queries.held_age_one, counters.held_age_one);
+    add(stage_.queries.held_age_two_plus, counters.held_age_two_plus);
+}
+
+void AbsoluteJudgementDiagnostics::RecordTransientPublicationsOrFatal(
+    const AbsoluteJudgementTransientPublications& publications,
+    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
+    const auto increment = [&snapshot](std::uint64_t& total,
+                                       const bool published) noexcept {
+        if (!published) {
+            return;
+        }
+        if (total == (std::numeric_limits<std::uint64_t>::max)()) {
+            FatalActiveStage(
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                snapshot);
+        }
+        ++total;
+    };
+    increment(
+        stage_.transient_publications.arrange, publications.arrange);
+    increment(stage_.transient_publications.left_free_tap,
+              publications.left_free_tap);
+    increment(stage_.transient_publications.right_free_tap,
+              publications.right_free_tap);
 }
 
 void AbsoluteJudgementDiagnostics::CheckAndRecordCommittedOrderOrFatal(

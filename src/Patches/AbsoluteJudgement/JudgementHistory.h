@@ -29,6 +29,7 @@ struct JudgementScopeCoordinate {
 enum class BaselineOnlyReason : std::uint8_t {
     OutsidePlayback,
     AcceptedLate,
+    Overload,
 };
 
 enum class JudgementScopeKind : std::uint8_t {
@@ -64,6 +65,13 @@ public:
     [[nodiscard]] std::expected<void, JudgementHistoryError>
     ApplyBaselineOnly(const gc::input::GameplayTransitionRecord& transition,
                       BaselineOnlyReason reason) noexcept;
+    [[nodiscard]] std::expected<std::uint64_t, JudgementHistoryError>
+    CountResolvedAtOrBefore(
+        std::uint64_t first_sequence,
+        const gc::timing::CheckedRational& ready) const noexcept;
+    [[nodiscard]] std::expected<void, JudgementHistoryError>
+    ConvertResolvedToBaselineOnly(std::uint64_t sequence,
+                                  BaselineOnlyReason reason) noexcept;
 
     // earliest_query_time is the oldest exact time any pending or future
     // scope can request, including relative-frame translation. The exclusive

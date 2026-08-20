@@ -98,20 +98,26 @@ struct AbsoluteJudgementQueryCounters {
     std::uint64_t held_age_two_plus{};
 };
 
-// These fields may be incremented by their producing input/audio thread while
-// the game thread snapshots them. All other stage counters below are owned by
-// the game thread and intentionally remain plain integers.
-struct AbsoluteJudgementSharedCounters {
-    std::atomic_uint64_t transport_records{};
-    std::atomic_uint64_t transport_rise_masks{};
-    std::atomic_uint64_t transport_fall_masks{};
-    std::atomic_uint64_t transport_evictions{};
-    std::atomic_uint64_t endpoint_anchors{};
-    std::atomic_uint64_t playback_epochs{};
-    std::atomic_uint64_t playback_play_epochs{};
-    std::atomic_uint64_t playback_seek_epochs{};
-    std::atomic_uint64_t history_errors{};
-    std::atomic_uint64_t discontinuity_errors{};
+struct AbsoluteJudgementTransientPublications {
+    bool arrange{};
+    bool left_free_tap{};
+    bool right_free_tap{};
+};
+
+struct AbsoluteJudgementTransientPublicationCounts {
+    std::uint64_t arrange{};
+    std::uint64_t left_free_tap{};
+    std::uint64_t right_free_tap{};
+};
+
+enum class AbsoluteJudgementBatchKind : std::uint8_t {
+    EventOnly,
+    HeartbeatOnly,
+};
+
+enum class AbsoluteJudgementEventIsolationDisposition : std::uint8_t {
+    EventEndsBatch,
+    HeartbeatOnlyBatch,
 };
 
 struct AbsoluteJudgementStageCounters {
@@ -119,25 +125,44 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t absolute_stage_activations{};
     std::uint64_t native_stage_ends{};
 
+    std::uint64_t transport_records_drained{};
+    std::uint64_t transport_rising_controls{};
+    std::uint64_t transport_falling_controls{};
     std::uint64_t transport_pending_depth{};
     std::uint64_t transport_max_depth{};
     std::uint64_t late_records{};
     std::uint64_t outside_playback_baseline_records{};
     std::uint64_t sequence_errors{};
+    std::uint64_t post_cutoff_records{};
+    std::uint64_t overload_drops{};
+    std::uint64_t cleanup_drops{};
+    std::uint64_t first_overload_drop_sequence{};
+    std::uint64_t last_overload_drop_sequence{};
 
     std::uint64_t exact_clock_reads{};
     std::uint64_t resolved_clock_reads{};
     std::uint64_t unavailable_clock_reads{};
+    std::uint64_t endpoint_publication_count{};
+    std::uint64_t endpoint_stage_publications{};
+    std::uint64_t playback_epochs{};
+    std::uint64_t playback_play_epochs{};
+    std::uint64_t playback_seek_epochs{};
+    std::uint64_t closed_frontier_selections{};
 
     std::uint64_t outer_calls{};
     std::uint64_t event_scopes{};
     std::uint64_t heartbeat_scopes{};
+    std::uint64_t event_only_batches{};
+    std::uint64_t heartbeat_only_batches{};
+    std::uint64_t mixed_event_batches{};
+    std::uint64_t event_barrier_deferrals{};
     std::uint64_t equal_boundary_substitutions{};
     std::uint64_t committed_boundaries{};
     std::uint64_t closed_frontier_catchups{};
     std::uint64_t batches{};
     std::uint64_t maximum_batch{};
     std::uint64_t maximum_backlog{};
+    std::uint64_t maximum_event_backlog{};
     std::uint64_t maximum_delivery_delay_qpc{};
     std::uint64_t pending_work{};
 
@@ -145,6 +170,7 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t score_calls{};
     AbsoluteJudgementQueryCounters queries{};
     AbsoluteJudgementScoreDeltas score_deltas{};
+    AbsoluteJudgementTransientPublicationCounts transient_publications{};
 };
 
 struct AbsoluteJudgementCounterSnapshot {
@@ -152,35 +178,44 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t absolute_stage_activations{};
     std::uint64_t native_stage_ends{};
 
-    std::uint64_t transport_records{};
-    std::uint64_t transport_rise_masks{};
-    std::uint64_t transport_fall_masks{};
+    std::uint64_t transport_records_drained{};
+    std::uint64_t transport_rising_controls{};
+    std::uint64_t transport_falling_controls{};
     std::uint64_t transport_pending_depth{};
     std::uint64_t transport_max_depth{};
     std::uint64_t late_records{};
     std::uint64_t outside_playback_baseline_records{};
-    std::uint64_t transport_evictions{};
     std::uint64_t sequence_errors{};
+    std::uint64_t post_cutoff_records{};
+    std::uint64_t overload_drops{};
+    std::uint64_t cleanup_drops{};
+    std::uint64_t first_overload_drop_sequence{};
+    std::uint64_t last_overload_drop_sequence{};
 
     std::uint64_t exact_clock_reads{};
     std::uint64_t resolved_clock_reads{};
     std::uint64_t unavailable_clock_reads{};
-    std::uint64_t endpoint_anchors{};
+    std::uint64_t endpoint_publication_count{};
+    std::uint64_t endpoint_stage_publications{};
     std::uint64_t playback_epochs{};
     std::uint64_t playback_play_epochs{};
     std::uint64_t playback_seek_epochs{};
-    std::uint64_t history_errors{};
-    std::uint64_t discontinuity_errors{};
+    std::uint64_t closed_frontier_selections{};
 
     std::uint64_t outer_calls{};
     std::uint64_t event_scopes{};
     std::uint64_t heartbeat_scopes{};
+    std::uint64_t event_only_batches{};
+    std::uint64_t heartbeat_only_batches{};
+    std::uint64_t mixed_event_batches{};
+    std::uint64_t event_barrier_deferrals{};
     std::uint64_t equal_boundary_substitutions{};
     std::uint64_t committed_boundaries{};
     std::uint64_t closed_frontier_catchups{};
     std::uint64_t batches{};
     std::uint64_t maximum_batch{};
     std::uint64_t maximum_backlog{};
+    std::uint64_t maximum_event_backlog{};
     std::uint64_t maximum_delivery_delay_qpc{};
     std::uint64_t pending_work{};
 
@@ -188,14 +223,18 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t score_calls{};
     AbsoluteJudgementQueryCounters queries{};
     AbsoluteJudgementScoreDeltas score_deltas{};
+    AbsoluteJudgementTransientPublicationCounts transient_publications{};
 };
 
 struct AbsoluteJudgementRuntimeSnapshot {
-    std::uint64_t last_endpoint_position{};
+    std::uint64_t last_endpoint_anchor_sequence{};
+    std::optional<std::uint64_t> last_endpoint_position;
     std::optional<gc::timing::CheckedRational> last_output_frame;
     std::optional<gc::timing::CheckedRational> last_source_frame;
     std::int64_t last_qpc{};
     std::optional<gc::timing::CheckedRational> last_j;
+    std::optional<gc::timing::CheckedRational> last_closed_frontier;
+    std::optional<gc::timing::CheckedRational> frozen_j;
     std::int64_t committed_boundary{};
     std::uint64_t pending_work{};
     std::uint64_t last_sequence{};
@@ -265,6 +304,9 @@ struct AbsoluteJudgementScopeRecord {
     bool recognition_completed{};
     bool score_completed{};
     AbsoluteJudgementScoreDeltas score_deltas{};
+    AbsoluteJudgementTransientPublications transient_publications{};
+    AbsoluteJudgementBatchKind batch_kind{};
+    AbsoluteJudgementEventIsolationDisposition isolation_disposition{};
     bool boundary_committed{};
     std::int64_t committed_boundary{};
     std::uint64_t remaining_backlog{};
@@ -287,14 +329,16 @@ struct AbsoluteJudgementFatalSnapshot {
 
 class AbsoluteJudgementDiagnostics final {
 public:
-    [[nodiscard]] AbsoluteJudgementSharedCounters& shared_counters() noexcept;
     [[nodiscard]] AbsoluteJudgementStageCounters& stage_counters() noexcept;
     [[nodiscard]] AbsoluteJudgementCounterSnapshot SnapshotCounters()
         const noexcept;
 
     void ObserveTransportPendingDepth(std::uint64_t depth) noexcept;
-    void RecordBatch(std::uint64_t size) noexcept;
+    void RecordBatch(
+        std::uint64_t size,
+        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
     void ObserveBacklog(std::uint64_t depth) noexcept;
+    void ObserveEventBacklog(std::uint64_t depth) noexcept;
     void ObserveDeliveryDelayQpc(std::uint64_t delay) noexcept;
     void SetPendingWork(std::uint64_t count) noexcept;
     void SetStartupTargetFps(std::uint32_t target_fps) noexcept;
@@ -313,6 +357,16 @@ public:
         const AbsoluteJudgementScopeRecord& record) noexcept;
 
     void CheckNativeCallInvariantOrFatal(
+        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    void CheckCompletedBatchInvariantOrFatal(
+        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    void CheckFinalTransportIdentityOrFatal(
+        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    void AccumulateQueryCountersOrFatal(
+        const AbsoluteJudgementQueryCounters& counters,
+        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    void RecordTransientPublicationsOrFatal(
+        const AbsoluteJudgementTransientPublications& publications,
         const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
     void CheckAndRecordCommittedOrderOrFatal(
         const gc::timing::CheckedRational& time,
@@ -349,13 +403,12 @@ private:
         std::uint64_t transport_depth{};
         std::uint64_t batch{};
         std::uint64_t backlog{};
+        std::uint64_t event_backlog{};
         std::uint64_t delivery_delay_qpc{};
     };
 
-    AbsoluteJudgementSharedCounters shared_{};
     AbsoluteJudgementStageCounters stage_{};
     IntervalMaxima interval_maxima_{};
-    AbsoluteJudgementCounterSnapshot shared_stage_baseline_{};
     AbsoluteJudgementCounterSnapshot last_summary_{};
     std::atomic<AbsoluteJudgementFatalReason> first_fatal_reason_{
         AbsoluteJudgementFatalReason::None};

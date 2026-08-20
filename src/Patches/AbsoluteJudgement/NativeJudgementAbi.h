@@ -73,6 +73,9 @@ inline constexpr std::size_t kScoreMissOffset = 120;
 inline constexpr std::size_t kScoreGoodOffset = 124;
 inline constexpr std::size_t kScoreCoolOffset = 128;
 inline constexpr std::size_t kScoreGreatOffset = 132;
+inline constexpr std::size_t kJudgementArrangePublicationOffset = 0xAA;
+inline constexpr std::size_t kJudgementLeftFreeTapPublicationOffset = 0xED;
+inline constexpr std::size_t kJudgementRightFreeTapPublicationOffset = 0xEE;
 inline constexpr int kGameplaySoundGroup = 2;
 
 using RecognitionFn = void(__thiscall*)(void*, int, int);

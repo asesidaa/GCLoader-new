@@ -127,13 +127,16 @@ ExactOutputClockResult Result(
     ExactClockStatus status,
     std::uint64_t endpoint_generation,
     std::uint64_t submitted_output_tail = 0,
-    std::uint64_t anchor_sequence = 0) noexcept {
+    std::uint64_t anchor_sequence = 0,
+    std::optional<std::uint64_t> anchor_endpoint_position =
+        std::nullopt) noexcept {
     return {
-        status,
-        endpoint_generation,
-        std::nullopt,
-        submitted_output_tail,
-        anchor_sequence,
+        .status = status,
+        .endpoint_generation = endpoint_generation,
+        .output_frame = std::nullopt,
+        .submitted_output_tail = submitted_output_tail,
+        .anchor_sequence = anchor_sequence,
+        .anchor_endpoint_position = anchor_endpoint_position,
     };
 }
 
@@ -373,7 +376,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
                 ExactClockStatus::Discontinuous,
                 endpoint_generation_,
                 latest_tail,
-                anchor.sequence);
+                anchor.sequence,
+                anchor.endpoint_position);
         }
         if (!oldest.has_value()) {
             latest_tail = anchor.submitted_output_tail;
@@ -387,7 +391,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
                 ExactClockStatus::Discontinuous,
                 endpoint_generation_,
                 latest_tail,
-                anchor.sequence);
+                anchor.sequence,
+                anchor.endpoint_position);
         }
         if (*comparison >= 0 && !selected.has_value()) {
             selected = anchor;
@@ -400,7 +405,10 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             latest_tail,
-            selected ? selected->sequence : 0);
+            selected ? selected->sequence : 0,
+            selected ? std::optional<std::uint64_t>(
+                           selected->endpoint_position)
+                     : std::nullopt);
     }
     if (!selected.has_value()) {
         if (unstable) {
@@ -417,7 +425,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
                     ExactClockStatus::HistoryLost,
                     endpoint_generation_,
                     latest_tail,
-                    oldest->sequence);
+                    oldest->sequence,
+                    oldest->endpoint_position);
             }
         }
         return Result(
@@ -434,7 +443,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
 
     const auto clock_delta = delta_seconds->Multiply(
@@ -448,7 +458,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
 
     const auto endpoint_offset =
@@ -460,7 +471,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
     const auto output_offset = endpoint_offset->Multiply(
         static_cast<std::int64_t>(anchor.mapping.output_sample_rate),
@@ -473,7 +485,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
     const auto output_frame =
         gc::timing::CheckedRational::Whole(
@@ -487,14 +500,16 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
     if (invalidated_.load(kExactClockAtomicOrder)) {
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
 
     if (anchor.submitted_output_tail == 0 ||
@@ -505,15 +520,17 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             ExactClockStatus::Pending,
             endpoint_generation_,
             anchor.submitted_output_tail,
-            anchor.sequence);
+            anchor.sequence,
+            anchor.endpoint_position);
     }
 
     return {
-        ExactClockStatus::Resolved,
-        endpoint_generation_,
-        *output_frame,
-        anchor.submitted_output_tail,
-        anchor.sequence,
+        .status = ExactClockStatus::Resolved,
+        .endpoint_generation = endpoint_generation_,
+        .output_frame = *output_frame,
+        .submitted_output_tail = anchor.submitted_output_tail,
+        .anchor_sequence = anchor.sequence,
+        .anchor_endpoint_position = anchor.endpoint_position,
     };
 }
 
@@ -523,6 +540,10 @@ std::uint64_t ExactWasapiClock::endpoint_generation() const noexcept {
 
 std::int64_t ExactWasapiClock::qpc_frequency() const noexcept {
     return qpc_frequency_;
+}
+
+std::uint64_t ExactWasapiClock::publication_count() const noexcept {
+    return published_count_.load(kExactClockAtomicOrder);
 }
 
 std::shared_ptr<const ExactWasapiClock>

@@ -265,12 +265,17 @@ JudgementClockResult EndpointFailure(
     const gc::audio::ExactOutputClockResult& endpoint) noexcept {
     if (endpoint.status == ExactClockStatus::Resolved &&
         !endpoint.output_frame) {
-        return {.status = ExactClockStatus::Discontinuous};
+        return {
+            .status = ExactClockStatus::Discontinuous,
+            .endpoint_anchor_sequence = endpoint.anchor_sequence,
+            .endpoint_anchor_position = endpoint.anchor_endpoint_position,
+        };
     }
     return {
         .status = endpoint.status,
         .output_frame = endpoint.output_frame,
         .endpoint_anchor_sequence = endpoint.anchor_sequence,
+        .endpoint_anchor_position = endpoint.anchor_endpoint_position,
     };
 }
 
@@ -532,6 +537,7 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             .status = ExactClockStatus::Pending,
             .output_frame = endpoint.output_frame,
             .endpoint_anchor_sequence = endpoint.anchor_sequence,
+            .endpoint_anchor_position = endpoint.anchor_endpoint_position,
         };
     }
 
@@ -539,6 +545,7 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
         .status = ExactClockStatus::OutsidePlayback,
         .output_frame = endpoint.output_frame,
         .endpoint_anchor_sequence = endpoint.anchor_sequence,
+        .endpoint_anchor_position = endpoint.anchor_endpoint_position,
     };
     bool has_resolved{};
     bool has_pending{};
@@ -551,6 +558,8 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             game_time_offset_ms,
             scratch);
         candidate.endpoint_anchor_sequence = endpoint.anchor_sequence;
+        candidate.endpoint_anchor_position =
+            endpoint.anchor_endpoint_position;
         if (candidate.checked_arithmetic_failure) {
             return candidate;
         }
@@ -580,6 +589,8 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             return {
                 .status = ExactClockStatus::Discontinuous,
                 .endpoint_anchor_sequence = endpoint.anchor_sequence,
+                .endpoint_anchor_position =
+                    endpoint.anchor_endpoint_position,
             };
         }
         if (!has_resolved) {
@@ -592,6 +603,7 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             .status = ExactClockStatus::Pending,
             .output_frame = endpoint.output_frame,
             .endpoint_anchor_sequence = endpoint.anchor_sequence,
+            .endpoint_anchor_position = endpoint.anchor_endpoint_position,
         };
     }
     if (has_unavailable) {
@@ -599,6 +611,7 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             .status = ExactClockStatus::TemporarilyUnavailable,
             .output_frame = endpoint.output_frame,
             .endpoint_anchor_sequence = endpoint.anchor_sequence,
+            .endpoint_anchor_position = endpoint.anchor_endpoint_position,
         };
     }
     if (other_status) {
@@ -606,6 +619,7 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             .status = *other_status,
             .output_frame = endpoint.output_frame,
             .endpoint_anchor_sequence = endpoint.anchor_sequence,
+            .endpoint_anchor_position = endpoint.anchor_endpoint_position,
         };
     }
     return resolved;
@@ -640,6 +654,7 @@ JudgementClockResult JudgementClockResolver::ResolveCurrentQpc(
         game_time_offset_ms,
         scratch);
     result.endpoint_anchor_sequence = endpoint.anchor_sequence;
+    result.endpoint_anchor_position = endpoint.anchor_endpoint_position;
     return result;
 }
 
