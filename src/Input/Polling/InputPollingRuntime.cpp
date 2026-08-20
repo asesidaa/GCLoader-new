@@ -23,6 +23,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <expected>
 #include <iomanip>
 #include <memory>
@@ -194,6 +195,8 @@ public:
 
         const auto& manager = ConfigManager::instance();
         poll_hz_ = manager.GetInputPollHertz();
+        absolute_publication_enabled_ =
+            manager.GetEnableAbsoluteTimeJudgement();
         input_mode_ = manager.GetInputMode();
         press_percent_ = manager.GetAxisPressThresholdPercent();
         release_percent_ = manager.GetAxisReleaseThresholdPercent();
@@ -253,6 +256,8 @@ public:
 
         InitializeController();
         mapper_->ClearAll();
+        BeginGameplayTransitionEpoch(GameplayMaskFromFastIo(0));
+        gameplay_epoch_begun_ = true;
         Publish();
         CheckForeground();
         return {};
@@ -382,6 +387,12 @@ public:
             if (mapper_)
             {
                 mapper_->ClearAll();
+                Publish();
+            }
+            if (gameplay_epoch_begun_)
+            {
+                gameplay_epoch_begun_ = false;
+                EndGameplayTransitionEpoch();
             }
             if (evaluator_)
             {
@@ -404,6 +415,11 @@ public:
         }
         catch (...)
         {
+            if (gameplay_epoch_begun_)
+            {
+                gameplay_epoch_begun_ = false;
+                EndGameplayTransitionEpoch();
+            }
             g_published_input.store(0, std::memory_order_release);
         }
     }
@@ -620,10 +636,21 @@ private:
     void Publish()
     {
         const std::uint32_t next = mapper_ ? mapper_->GetInput() : 0;
+        LARGE_INTEGER observed_qpc_ticks{};
+        if (absolute_publication_enabled_ &&
+            !QueryPerformanceCounter(&observed_qpc_ticks))
+        {
+            std::abort();
+        }
         const std::uint32_t previous =
             g_published_input.exchange(next, std::memory_order_acq_rel);
         if (previous != next)
         {
+            if (absolute_publication_enabled_)
+            {
+                PublishGameplayTransition(
+                    previous, next, observed_qpc_ticks.QuadPart);
+            }
             PLOG_DEBUG << "Input snapshot fastio=0x" << std::hex << next
                        << std::dec;
         }
@@ -672,6 +699,8 @@ private:
     std::uint32_t press_percent_{50};
     std::uint32_t release_percent_{40};
     InputMode input_mode_{InputMode::Keyboard};
+    bool absolute_publication_enabled_{};
+    bool gameplay_epoch_begun_{};
     bool raw_match_state_logged_{};
     bool shut_down_{};
 };

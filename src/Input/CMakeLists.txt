@@ -21,6 +21,7 @@ target_link_libraries(gc_input_win32 PUBLIC
 
 add_library(gc_input STATIC
         Polling/ForegroundPolicy.cpp
+        Polling/GameplayTransitionJournal.cpp
         Polling/InputMapper.cpp
         Polling/InputPollingRuntime.cpp
         Polling/InputSnapshotState.cpp

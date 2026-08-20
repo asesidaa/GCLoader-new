@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Input/Polling/GameplayTransitionJournal.h"
+
 #include <cstdint>
 #include <string>
 
