@@ -42,11 +42,17 @@ public:
     [[nodiscard]] const NativeJudgementIdentity& native_identity()
         const noexcept;
     [[nodiscard]] const JudgementHistory& history() const noexcept;
+    [[nodiscard]] std::optional<std::int64_t>
+    committed_boundary_index() const noexcept;
 
     void PrepareOuterCall(const AbsoluteJudgementOuterProbe&);
     std::optional<ScheduledJudgementScope> NextScope() noexcept;
     void CommitScope(const ScheduledJudgementScope&) noexcept;
     void FinishOuterCall() noexcept;
+    void CheckNativeCallInvariantOrFatal() const noexcept;
+    [[nodiscard]] AbsoluteJudgementScoreDeltas
+    CheckAndRecordNativeScoreCountersOrFatal(
+        const AbsoluteJudgementNativeScoreCounters& counters) const noexcept;
     [[noreturn]] void FailActiveStage(
         AbsoluteJudgementFatalReason reason) const noexcept;
 

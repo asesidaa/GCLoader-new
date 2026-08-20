@@ -148,6 +148,14 @@ const JudgementHistory& JudgementScheduler::history() const noexcept {
     return history_;
 }
 
+std::optional<std::int64_t>
+JudgementScheduler::committed_boundary_index() const noexcept {
+    if (!has_committed_boundary_index_) {
+        return std::nullopt;
+    }
+    return committed_boundary_index_;
+}
+
 void JudgementScheduler::ClearStageOwnedState() noexcept {
     clock_binding_.endpoint_generation = 0;
     clock_binding_.endpoint.reset();
@@ -895,6 +903,17 @@ void JudgementScheduler::FinishOuterCall() noexcept {
     outer_scope_count_ = 0;
     outer_prepared_ = false;
     outer_uses_closed_frontier_ = false;
+}
+
+void JudgementScheduler::CheckNativeCallInvariantOrFatal() const noexcept {
+    JudgementDiagnostics().CheckNativeCallInvariantOrFatal(FatalSnapshot());
+}
+
+AbsoluteJudgementScoreDeltas
+JudgementScheduler::CheckAndRecordNativeScoreCountersOrFatal(
+    const AbsoluteJudgementNativeScoreCounters& counters) const noexcept {
+    return JudgementDiagnostics().CheckAndRecordNativeScoreCountersOrFatal(
+        counters, FatalSnapshot());
 }
 
 [[noreturn]] void JudgementScheduler::FailActiveStage(

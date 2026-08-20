@@ -1,5 +1,7 @@
 add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
+        AbsoluteJudgement/AbsoluteJudgementPatch.cpp
+        AbsoluteJudgement/AbsoluteJudgementRuntime.cpp
         AbsoluteJudgement/JudgementClockResolver.cpp
         AbsoluteJudgement/JudgementHistory.cpp
         AbsoluteJudgement/JudgementScheduler.cpp
@@ -30,6 +32,7 @@ target_link_libraries(gc_runtime_patches PUBLIC
         gc_config
         gc_input
         gc_logging
+        gc_system_path
         gc_timing
         safetyhook::safetyhook
 )

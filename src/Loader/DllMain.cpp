@@ -14,6 +14,7 @@
 #include "Rfid/Feature.h"
 #include "Patches/GameCompatibility/GameBinaryPatch.h"
 #include "Patches/GameCompatibility/GameBinaryPatchDiagnostics.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
@@ -398,6 +399,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                         << "AudioPatch: fail-closed DLL attach";
                     return FALSE;
                 }
+
+                gc::absolute_judgement::
+                    InitializeAbsoluteJudgementOrFatal();
 
                 if (!system_root) {
                     PLOG_ERROR
