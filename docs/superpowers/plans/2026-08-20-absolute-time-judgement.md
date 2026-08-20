@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Complete implementation plan; execution requires separate user authorization.
+
 **Goal:** Build an opt-in WASAPI-exclusive judgement path that feeds every successfully observed physical transition to native recognition/score at its exact audio-derived song time, with render-independent results at 60, 144, 165, and 240 FPS.
 
 **Architecture:** Keep the current input worker/FastIO path, existing high-FPS framerate/shared-`Tune` hooks, and all native note policy. Use the audited `CTuneGameManager` state-construction/cleanup pair as the explicit stage boundary. Add a gameplay-only QPC transition journal, exact WASAPI endpoint and multi-epoch playback history, retained causal history, and a private event/60-Hz-heartbeat scheduler that replaces only the native uniform judgement loop and answers five lower CBooster queries inside immutable scopes.
@@ -54,11 +56,12 @@
 
 ### Exact arithmetic
 
-- Create `src/Timing/CheckedRational.{h,cpp}`: normalized signed rational, overflow-checked arithmetic, exact compare/floor/truncation.
+- Create `src/Timing/CheckedRational.{h,cpp}`: normalized signed rational, overflow-checked arithmetic, exact compare/floor/ceil/truncation.
 - Create `src/Timing/CMakeLists.txt` and modify `src/CMakeLists.txt`: `gc_timing` library used by audio and judgement.
 
 ### WASAPI and playback authority
 
+- Create `src/Audio/ExactAudioTime.h`: statuses and shared exact-audio identity types without circular ownership.
 - Create `src/Audio/Wasapi/ExactWasapiClock.h`: anchor/status/provider/registry contracts.
 - Create `src/Audio/Wasapi/ExactWasapiClock.cpp`: preallocated SPSC anchor history and exact QPC projection.
 - Modify `src/Audio/AudioPatch.cpp` and `src/Audio/AudioPatchInternal.h`: pass the startup-only exact-provider enable bit into WASAPI engine creation.
@@ -71,7 +74,7 @@
 
 ### Judgement feature
 
-- Create `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.{h,cpp}`: lifecycle, counters, summaries, Verbose scope records, first-fatal latch/snapshot.
+- Create `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.{h,cpp}`: stage-open/activation/end records, counters, summaries, Verbose scope records, first-fatal latch/snapshot.
 - Modify `src/Logging/SessionLog.{h,cpp}` and `src/Loader/DllMain.cpp`: explicit active-log flush used by the fatal path.
 - Create `src/Patches/AbsoluteJudgement/JudgementHistory.{h,cpp}`: retained resolved transitions and logical query algebra.
 - Create `src/Patches/AbsoluteJudgement/JudgementScope.{h,cpp}`: immutable TLS scope and five query entry points.
@@ -238,9 +241,23 @@ struct GameplayTransitionStatus {
     std::int64_t qpc_frequency{};
 };
 
+struct GameplayTransitionCutoff {
+    std::uint64_t transport_epoch{};
+    std::uint64_t first_stage_sequence{};
+    std::uint64_t eviction_count{};
+    GameplayHeldMask held_baseline{};
+    std::int64_t qpc_frequency{};
+};
+
 bool PrepareGameplayTransitionTransport(bool enabled) noexcept;
 void BeginGameplayTransitionEpoch(GameplayHeldMask baseline) noexcept;
 void EndGameplayTransitionEpoch() noexcept;
+bool CaptureGameplayTransitionCutoff(
+    GameplayTransitionCutoff* output) noexcept;
+void PublishGameplayTransition(
+    std::uint32_t previous_fastio,
+    std::uint32_t next_fastio,
+    std::int64_t observed_qpc_ticks) noexcept;
 std::size_t DrainGameplayTransitions(
     std::span<GameplayTransitionRecord> output,
     GameplayTransitionStatus* status) noexcept;
@@ -289,26 +306,35 @@ valid history.
 
 - [ ] **Step 3: Build records only for the ten gameplay controls**
 
-Use the shared FastIO array to project `previous_fastio` and `next_fastio`. When the two 10-bit masks are equal, publish no record even if a service/system bit changed. Otherwise query QPC once and store:
+Use the shared FastIO array to project `previous_fastio` and `next_fastio`. When the two 10-bit masks are equal, publish no record even if a service/system bit changed. The worker samples QPC once immediately before its aggregate exchange whenever absolute publication is armed, then passes that captured value to the journal after the exchange. Store:
 
 ```cpp
 record.rising = next & ~previous;
 record.falling = previous & ~next;
 ```
 
-Keep a multi-bit snapshot change in one record. Push after the existing aggregate exchange so the accepted rare aggregate/journal handoff window remains explicit rather than hidden by a new watermark protocol.
+Keep a multi-bit snapshot change in one record. Push after the existing aggregate exchange so the accepted rare aggregate/journal handoff window remains explicit rather than hidden by a new watermark protocol. Sampling QPC before that exchange means a producer delay can make the record arrive late, but cannot silently retimestamp the physical observation to the end of the delay. Check `QueryPerformanceCounter` once and hard-abort on failure; do not add another clock or retry.
 
 - [ ] **Step 4: Bind epochs to the real input worker lifecycle**
 
-After the worker initializes its mapper and clears state, call `BeginGameplayTransitionEpoch(GameplayMaskFromFastIo(0))` before the initial `Publish()`. In `Shutdown`, end the epoch after publishing the final cleared aggregate. A new first open gets a new epoch; additional reference-counted opens do not.
+After the worker initializes its mapper and clears state, call `BeginGameplayTransitionEpoch(GameplayMaskFromFastIo(0))` before the initial `Publish()`. In `Shutdown`, replace the direct aggregate clear with `mapper_->ClearAll(); Publish();`, then call `EndGameplayTransitionEpoch()` after that final cleared record. Ensure every normal and exception shutdown path ends an armed epoch exactly once before any outer defensive zero store. A new first open gets a new epoch; additional reference-counted opens do not.
 
 - [ ] **Step 5: Extend `Publish()` without changing FastIO**
 
-Retain the existing `g_published_input.exchange(next, acq_rel)` as the FastIO authority. On `previous != next`, call the journal publisher with both snapshots. Keep the existing Debug snapshot log; add no per-transition Info log.
+Retain the existing `g_published_input.exchange(next, acq_rel)` as the FastIO authority. Cache the startup-only feature bit in the worker; when armed, capture QPC immediately before that exchange. On `previous != next`, call the journal publisher with both snapshots and that pre-exchange timestamp. Keep the existing Debug snapshot log; add no per-transition Info log.
 
 - [ ] **Step 6: Add bounded drain/status access**
 
 `DrainGameplayTransitions` copies up to the caller's span in strict sequence order and returns one status snapshot taken under the same mutex. It never discards additional queued records. The scheduler will repeatedly drain fixed-size batches in Task 8.
+
+`CaptureGameplayTransitionCutoff` is the sole stage-start cutoff operation. Under
+the same mutex it requires enabled/active transport, returns epoch,
+`first_stage_sequence = next_sequence`, current held baseline, QPC frequency,
+and current eviction count, then discards the queued pre-stage prefix. A record
+whose aggregate exchange won the race but whose journal push has not yet taken
+the mutex arrives after the cutoff and follows the explicitly accepted late
+record rule. Task 8 checks the Boolean once and enters the active-stage fatal
+path on false; there is no retry state.
 
 - [ ] **Step 7: Review transport invariants against current source**
 
@@ -379,6 +405,8 @@ public:
     [[nodiscard]] std::expected<std::int64_t, RationalError>
         Floor() const noexcept;
     [[nodiscard]] std::expected<std::int64_t, RationalError>
+        Ceil() const noexcept;
+    [[nodiscard]] std::expected<std::int64_t, RationalError>
         Truncate() const noexcept;
 };
 }
@@ -388,7 +416,13 @@ public:
 
 - [ ] **Step 1: Lock representation invariants**
 
-Every constructed value has denominator greater than zero and is reduced by `gcd(abs(numerator), denominator)`. Reject the one unrepresentable magnitude (`INT64_MIN` absolute value) rather than invoking signed overflow. Zero is canonical `0/1`.
+Every constructed value has denominator greater than zero and is reduced by the
+GCD of the numerator's unsigned magnitude and the denominator. Compute negative
+magnitude in unsigned arithmetic so `INT64_MIN` is valid and never negated in
+the signed domain. Reapply the sign with an explicit `2^63 -> INT64_MIN` case;
+all other negative magnitudes must fit below `2^63`. Zero is canonical `0/1`.
+`Whole` therefore accepts every `int64_t` value without contradicting the
+normalization invariant.
 
 - [ ] **Step 2: Implement overflow-free comparison**
 
@@ -400,7 +434,7 @@ For multiplication, cancel numerator/denominator factors with `gcd` before check
 
 - [ ] **Step 4: Implement signed projections explicitly**
 
-`Truncate()` uses C++ signed division (toward zero). `Floor()` returns the quotient unchanged for nonnegative/exact values and subtracts one only when a negative value has a nonzero remainder. This distinction is required for negative pre-song `native_ms` versus signed heartbeat/frame index.
+`Truncate()` uses C++ signed division (toward zero). `Floor()` returns the quotient unchanged for nonnegative/exact values and subtracts one only when a negative value has a nonzero remainder. `Ceil()` is the exact symmetric operation: add one only for a positive non-integral value. These distinctions are required for negative pre-song `native_ms`, signed heartbeat/frame indices, and the first boundary at or after a playback origin.
 
 - [ ] **Step 5: Record the formal review note in source**
 
@@ -430,6 +464,7 @@ git commit -m "Add checked rational timing arithmetic"
 
 **Files:**
 
+- Create: `src/Audio/ExactAudioTime.h`
 - Create: `src/Audio/Wasapi/ExactWasapiClock.h`
 - Create: `src/Audio/Wasapi/ExactWasapiClock.cpp`
 - Modify: `src/Audio/AudioPatch.cpp`
@@ -485,14 +520,22 @@ public:
         std::uint32_t output_sample_rate,
         std::uint64_t clock_frequency,
         std::int64_t qpc_frequency,
-        REFERENCE_TIME actual_period_100ns) noexcept;
+        std::uint32_t period_frames) noexcept;
     void Publish(const ExactWasapiAnchor&) noexcept;
     void Invalidate() noexcept;
     ExactOutputClockResult ResolveQpc(std::int64_t raw_qpc_ticks) const noexcept;
+    [[nodiscard]] std::uint64_t endpoint_generation() const noexcept;
+    [[nodiscard]] std::int64_t qpc_frequency() const noexcept;
 };
 
 std::shared_ptr<const ExactWasapiClock> AcquireExactWasapiClock() noexcept;
 ```
+
+Place `ExactClockStatus` and `EndpointClockMapping` in
+`src/Audio/ExactAudioTime.h`. Both the existing mapper/timeline header and the
+new WASAPI provider include that one dependency; neither includes the other.
+This prevents a circular `AudioCursorTimeline`/`ExactWasapiClock` ownership
+relationship.
 
 `output_frame` is engaged only for `Resolved`; every other status carries
 `std::nullopt`. Do not default-construct a fake zero frame.
@@ -512,10 +555,15 @@ calls remain on their old path.
 When true, `ExactWasapiClock::Create` computes:
 
 ```cpp
-capacity = ceil(60 seconds / actual_period) + 2;
+capacity = ceil(60 * output_sample_rate / period_frames) + 2;
 ```
 
-using checked integer arithmetic and allocates all slots once before `RenderLoop`. Each slot uses a seqlock generation plus scalar atomics so the audio thread is the sole writer and the game thread never waits. Creation failure prevents enabled-mode capability from becoming usable; it never allocates inside the render loop.
+using checked integer arithmetic directly from the endpoint's validated frame
+period and sample rate; do not round through `REFERENCE_TIME`. Allocate all
+slots once before `RenderLoop`. Each slot uses a seqlock generation plus scalar
+atomics so the audio thread is the sole writer and the game thread never waits.
+Creation failure prevents enabled-mode capability from becoming usable; it
+never allocates inside the render loop.
 
 - [ ] **Step 3: Implement exact QPC-domain comparison and delta**
 
@@ -532,7 +580,6 @@ Require `0 <= output(q) < submitted_output_tail`. A value at/after the tail is `
 
 - [ ] **Step 4: Implement explicit provider statuses**
 
-- no registered active provider: `NoPlayback`;
 - no anchor old enough or projected output not submitted yet: `Pending`;
 - one stable same-generation projection inside tail: `Resolved`;
 - a bounded reader attempt cannot obtain a coherent same-generation
@@ -540,9 +587,11 @@ Require `0 <= output(q) < submitted_output_tail`. A value at/after the tail is `
 - required input QPC older than the oldest retained same-generation anchor: `HistoryLost`;
 - invalidated/replaced generation or decreasing anchor identity: `Discontinuous`.
 
-`ExactWasapiClock` itself never returns `OutsidePlayback`; that shared status is
-reserved for the voice-history resolver in Task 5 after endpoint output `O` is
-known exactly.
+`ExactWasapiClock` itself never returns `NoPlayback` or `OutsidePlayback`;
+those shared statuses are reserved for the native group-2 probe and the
+voice-history resolver respectively. `AcquireExactWasapiClock()` returning null
+after enabled audio startup is a caller-level capability/invariant failure, not
+a state on which a native stage waits.
 
 Do not return the last output frame for any non-Resolved status.
 
@@ -552,7 +601,14 @@ The engine owns a `shared_ptr<ExactWasapiClock>`; the process registry holds onl
 
 - [ ] **Step 6: Publish only after successful output commit**
 
-In `ExclusiveAudioEngine::AudioThreadMain`, create/register the provider after endpoint/mixer/mapper initialization and before `Start`. In `RenderLoop`, after `SubmitPcm16` and `pacing_tracker_->Commit(decision)` succeed, publish raw `clock.position`, `clock.qpc_100ns`, mapper identity, and `submitted_tail`. Keep the existing `WasapiPresentedOutputClock::Publish` call unchanged beside it.
+In `ExclusiveAudioEngine::AudioThreadMain`, pass the already validated endpoint
+period frames and output rate directly, then create/register the provider after
+endpoint/mixer/mapper initialization and before `Start`. This registration is
+complete before the engine signals successful initialization. In `RenderLoop`,
+after `SubmitPcm16` and `pacing_tracker_->Commit(decision)` succeed, publish raw
+`clock.position`, `clock.qpc_100ns`, mapper identity, and `submitted_tail`.
+Keep the existing `WasapiPresentedOutputClock::Publish` call unchanged beside
+it.
 
 On a failed `ReadClock`, publish the failure context before following the
 existing audio runtime-fatal path. Do not make the WASAPI render loop retry for
@@ -563,6 +619,9 @@ successful audio-thread publication path.
 - [ ] **Step 7: Confirm the old clock is not repurposed**
 
 Inspect the diff and verify `PresentedClockPublication::Project`, its monotonic last-value behavior, `WasapiPresentedOutputClock::CurrentOutputFrame`, and the existing 32-span resolution are unchanged. The new provider is a side-by-side authority used only by absolute judgement.
+
+Link `gc_audio` publicly to `gc_timing`; do not copy rational helpers into the
+audio target.
 
 - [ ] **Step 8: Build**
 
@@ -575,7 +634,7 @@ Expected evidence: audio/provider code compiles and the existing facade still li
 - [ ] **Step 9: Commit**
 
 ```powershell
-git add -- src/Audio/Wasapi/ExactWasapiClock.h src/Audio/Wasapi/ExactWasapiClock.cpp src/Audio/AudioPatch.cpp src/Audio/AudioPatchInternal.h src/Audio/Mixer/AudioCursorTimeline.h src/Audio/Mixer/AudioCursorTimeline.cpp src/Audio/Wasapi/ExclusiveAudioEngine.h src/Audio/Wasapi/ExclusiveAudioEngine.cpp src/Audio/CMakeLists.txt
+git add -- src/Audio/ExactAudioTime.h src/Audio/Wasapi/ExactWasapiClock.h src/Audio/Wasapi/ExactWasapiClock.cpp src/Audio/AudioPatch.cpp src/Audio/AudioPatchInternal.h src/Audio/Mixer/AudioCursorTimeline.h src/Audio/Mixer/AudioCursorTimeline.cpp src/Audio/Wasapi/ExclusiveAudioEngine.h src/Audio/Wasapi/ExclusiveAudioEngine.cpp src/Audio/CMakeLists.txt
 git commit -m "Publish exact WASAPI clock history"
 ```
 
@@ -588,6 +647,8 @@ git commit -m "Publish exact WASAPI clock history"
 - Modify: `src/Audio/Mixer/AudioCursorTimeline.h`
 - Modify: `src/Audio/Mixer/AudioCursorTimeline.cpp`
 - Modify: `src/Audio/Mixer/MiniaudioMixer.cpp`
+- Modify: `src/Audio/Wasapi/ExclusiveAudioEngine.h`
+- Modify: `src/Audio/Wasapi/ExclusiveAudioEngine.cpp`
 - Modify: `src/Audio/DirectSound/GameplayAudioCursorObservation.h`
 - Modify: `src/Audio/DirectSound/GameplayAudioCursorObservation.cpp`
 - Modify: `src/Audio/DirectSound/DirectSoundFacade.h`
@@ -603,8 +664,15 @@ enum class ExactPlaybackOrigin : std::uint8_t {
     Seek,
 };
 
+enum class ExactPlaybackClosure : std::uint8_t {
+    LaterEpoch,
+    NaturalEnd,
+    WriterQuiescedRelease,
+};
+
 struct ExactPlaybackEpoch {
     std::uint64_t buffer_instance_id{};
+    std::uint64_t endpoint_generation{};
     std::uint64_t playback_generation{};
     ExactPlaybackOrigin origin{};
     std::uint64_t output_origin{}; // O0
@@ -612,37 +680,74 @@ struct ExactPlaybackEpoch {
     std::uint32_t output_rate{};   // Fo
     std::uint32_t source_rate{};   // Fs
     std::uint64_t mapped_output_tail{};
+    std::optional<ExactPlaybackClosure> closure;
+    std::optional<gc::timing::CheckedRational> closed_source_tail;
+};
+
+struct ExactSourceCoordinate {
+    gc::timing::CheckedRational source_frame;
+    std::uint32_t source_rate{};
 };
 
 struct ExactSourceFrameResult {
     ExactClockStatus status{};
     std::uint64_t buffer_instance_id{};
     std::uint64_t playback_generation{};
-    std::optional<gc::timing::CheckedRational> source_frame;
+    std::optional<ExactSourceCoordinate> resolved;
+    std::optional<ExactSourceCoordinate> closed_frontier;
 };
+
+struct ExactPlaybackHistoryStatus {
+    ExactClockStatus status{};
+    std::uint64_t publication_sequence{};
+    bool prefix_evicted{};
+};
+
+// New AudioCursorTimeline members:
+ExactSourceFrameResult ResolveExactSourceFrame(
+    const gc::timing::CheckedRational& output) const noexcept;
+std::size_t CopyExactPlaybackEpochs(
+    std::span<ExactPlaybackEpoch> output,
+    ExactPlaybackHistoryStatus* status) const noexcept;
 ```
 
-`source_frame` is engaged only for `Resolved`; every other status carries
-`std::nullopt`. Do not expose a fake zero source position.
+`resolved` is engaged only for `Resolved`; every other status carries
+`std::nullopt`. `closed_frontier` is engaged only for
+`OutsidePlayback` when a preceding epoch tail is exactly closed; it is absent
+before the first origin and for every other status. Do not expose a fake zero
+source position or a last-known-current value.
 
 `AudioCursorTimeline::ResolveExactSourceFrame(output)` selects the retained
 epoch whose coverage contains `output`, then applies
 `S(O) = S0 + (O-O0)*Fs/Fo` only within that epoch's published mapped tail.
+`CopyExactPlaybackEpochs(span, status)` copies one bounded coherent snapshot
+into caller-owned 256-entry scratch storage. It returns the copied count plus
+publication sequence/prefix-eviction state, reports `Pending` before the first
+epoch and `TemporarilyUnavailable` after a bounded failed coherent read, and
+never allocates. Task 8 uses this snapshot for first-origin binding, exact
+overlap validation, and diagnostics; it never reaches into ring slots directly.
 
 - [ ] **Step 1: Add an independent exact epoch history**
 
-Inside `AudioCursorTimeline`, add a separate preallocated 256-slot exact epoch
-ring for `VoiceUsage::GameplayNativeCandidate` voices when absolute judgement
-is enabled. E-040 proves the game's periodic seek-request cadence is once per
-three seconds (and E-041 suppresses the harmless in-margin requests), so 256
-epochs retain far beyond the required 60 seconds without allocating a
-large ring for every ordinary sound-effect buffer. A new playback generation
-claims one slot; subsequent render spans for that generation monotonically
-extend that slot's tail in place. The audio thread is the sole mapped-epoch
-writer and readers use bounded coherent reads. Expose oldest/newest exact
-output coverage so any exceptional faster-generation eviction is explicit
-`HistoryLost`. Do not increase or reinterpret `kRenderSpanCapacity = 32`;
-existing DirectSound cursor resolution continues to use the old spans.
+Inside `AudioCursorTimeline`, add a separately optional, preallocated 256-slot
+exact epoch ring. Assign the secondary buffer's process-unique ID before voice
+creation. When the feature is enabled, `ExclusiveAudioEngine::CreateVoice`
+configures the ring exactly once with that ID and the active exact endpoint
+generation, but only for `VoiceUsage::GameplayNativeCandidate`; general voices
+keep no exact ring. Check that expected-success operation once and enter the
+existing audio fatal path if it fails. Do not retry and do not fall back to a
+rounded/general history.
+
+E-040 proves the game's periodic seek-request cadence is once per three seconds
+(and E-041 suppresses the harmless in-margin requests), so 256 epochs retain
+far beyond the required 60 seconds without allocating a large ring for every
+ordinary sound-effect buffer. A new playback generation claims one slot;
+subsequent render spans for that generation monotonically extend that slot's
+tail in place. The audio thread is the sole origin/tail/natural-end writer and
+readers use bounded coherent reads. Expose oldest/newest exact output coverage
+so any exceptional faster-generation eviction is explicit `HistoryLost`. Do
+not increase or reinterpret `kRenderSpanCapacity = 32`; existing DirectSound
+cursor resolution continues to use the old spans.
 
 - [ ] **Step 2: Publish the cumulative mixer origin and tail**
 
@@ -658,12 +763,36 @@ S0               = voice.epoch_source_start
 Carry `ExactPlaybackOrigin::Play` through the existing play mailbox and
 `ExactPlaybackOrigin::Seek` through the existing seek mailbox. The first
 successfully represented span for a generation publishes
-`(buffer ID,generation,origin,O0,S0,Fo,Fs)`; later spans extend its
-`mapped_output_tail`. The first span of a later generation closes the prior
-epoch's output coverage at that exact global output boundary. A changed
-origin/rate inside one generation invalidates the history rather than silently
-replacing it. `Stop`, Release, and natural drain stop extending coverage but do
-not publish a stage-end event.
+`(buffer ID,endpoint generation,playback generation,origin,O0,S0,Fo,Fs)`;
+later spans extend its `mapped_output_tail`. The first span of a later
+generation closes the prior epoch's output coverage at that exact global output
+boundary. A changed identity/origin/rate inside one generation invalidates the
+history rather than silently replacing it. `Stop` stops future extension but
+does not guess a cross-thread closing tail. A later epoch closes the prior
+generation at its stable mapped tail. Natural drain is observed by the
+audio-thread writer and publishes the exact source-length coordinate in
+`closed_source_tail` at its final output tail; do not derive that terminal
+source value by rounding a resampler ratio.
+
+For buffer Release, replace the default destructor with an explicit order:
+destroy/reset `MixerVoice` first, require that the existing miniaudio node
+destruction has quiesced the render writer, then call
+`AudioCursorTimeline::CloseExactWriterAfterQuiescence()` to close the last
+stable mapped tail with `WriterQuiescedRelease`. This call is forbidden while
+the voice still exists. It transfers sole-writer ownership only after
+quiescence, so it adds no audio-thread lock. No closure publishes a native
+stage-end event.
+
+Record the pinned miniaudio proof beside that call: `ma_node_uninit` first
+performs full detach, and its source states that detach waits for local node
+processing to finish before uninitialization continues. Recheck the resolved
+dependency source during implementation; this is the writer-quiescence
+authority, not a timing delay or test fixture.
+
+For an enabled exact candidate, check every origin/tail/closure publication
+once. Failure enters the existing audio runtime-fatal path immediately; the
+renderer never continues while omitting exact history or retries with the
+legacy 32-span result.
 
 - [ ] **Step 3: Resolve source position exactly**
 
@@ -676,24 +805,36 @@ with no span yet is `Pending`; output older than retained coverage is
 `HistoryLost`; overlapping epochs that disagree are `Discontinuous`.
 
 Return `OutsidePlayback` only when complete retained history proves that
-`output` is before the first-ever epoch origin or in a closed gap between
-epochs. Return `Pending` when an unclosed current epoch may still extend over
-`output`. Track whether the retained prefix has ever been evicted so an output
-before the oldest retained epoch becomes `HistoryLost`, never a false
-`OutsidePlayback`.
+`output` is before the first-ever epoch origin, in a gap bounded by two retained
+origins, or at/after an audio-thread natural-end tail. Return `Pending` when an
+unclosed current epoch may still extend over `output`, including after a
+control-thread Stop with no later bounding origin or writer-quiesced Release.
+Track whether the
+retained prefix has ever been evicted so an output before the oldest retained
+epoch becomes `HistoryLost`, never a false `OutsidePlayback`.
+
+For an outside coordinate after at least one exactly closed epoch, also return
+that immediately preceding epoch's exact source-frame tail/rate as
+`closed_frontier`. Historical event resolution uses only the outside
+status and remains baseline-only. Task 8 may use the frontier only as a fixed
+current-ready catch-up limit; it must never turn the outside input itself into
+an event or advance beyond the closed tail.
 
 - [ ] **Step 4: Give every secondary buffer a non-reusable identity**
 
 Add `buffer_instance_id_` initialized from a process-wide monotonic atomic in
 `SecondarySoundBuffer::Create`. Zero and wrap take the always-on fatal path.
 The ID identifies one lifetime-safe audio history only; it is not a stage
-identity. Do not use `this` pointer as identity.
+identity. Do not use `this` pointer as identity. In enabled exact mode, change
+`NextPlaybackGeneration` exhaustion from its legacy wrap-to-one behavior to the
+same fatal identity rule; no retained epoch may reuse a generation.
 
 - [ ] **Step 5: Preserve the native getter's existing channel authority**
 
 Extend `GameplayAudioCursorState` with `Pending`. Extend
-`GameplayAudioCursorObservation` with `buffer_instance_id`, current origin,
-and a `std::shared_ptr<AudioCursorTimeline> exact_history`. Keep
+`GameplayAudioCursorObservation` with `buffer_instance_id`, endpoint
+generation, current origin, and a
+`std::shared_ptr<AudioCursorTimeline> exact_history`. Keep
 `ScopedGameplayAudioCursorQuery::Consume()` and its current overwrite semantics
 unchanged: it continues to return the observation associated with the native
 group getter's chosen/returned cursor. Do not enumerate every active group-2
@@ -710,26 +851,34 @@ millisecond magnitude in the new resolver.
 - [ ] **Step 6: Publish only active/draining exact candidates**
 
 In `ResolveCurrentSourceFrameLocked`, retain all existing legacy return values.
-Every scoped observation includes the instance ID and lifetime-safe history
-handle. Publish `Pending` when the current generation has not rendered its
-first exact epoch, `Exact` when current output resolves, and `Inactive` when the
-voice is neither mixing nor audibly draining. Both Play and Seek generations
-can publish `Exact`. Existing framerate code remains unchanged and may continue
-its own rounded compatibility behavior; the new judgement resolver never uses
-that rounded result.
+For every scoped native-cursor path, publish the exact observation independently
+of whether the legacy current output/frame or the 32-span compatibility lookup
+succeeds. Every observation includes the instance ID, endpoint generation, and
+lifetime-safe history handle. Publish `Pending` when exact history exists but
+the current compatibility query cannot yet identify a represented epoch,
+`Exact` when current output resolves, and `Inactive` when the voice is neither
+mixing nor audibly draining. Both Play and Seek generations can publish
+`Exact`. Existing framerate code remains source-unchanged and may continue its
+own rounded compatibility behavior; the new judgement resolver never uses that
+rounded result.
 
 - [ ] **Step 7: Review binding cases**
 
 Establish from the source diff:
 
-- no exact group-2 observation yields `NoPlayback` while the native stage
-  remains open;
+- a negative native group-2 result yields `NoPlayback` and requires no exact
+  observation;
+- a nonnegative native group-2 result requires one exact observation with a
+  non-null history handle and the active endpoint generation, otherwise the
+  enabled active-stage path is fatal;
 - Pending withholds recognition without starting a timer;
 - Play and Seek generations resolve through the same retained audio history and
   neither changes native stage generation;
 - the two native stage-BGM channels are not treated as an ambiguity merely
   because they exist;
-- Stop/drain/Release makes audio inactive but does not close native stage; and
+- Stop/drain/Release never closes native stage; only a later epoch,
+  audio-thread natural end, or Release after writer quiescence proves a closed
+  playback tail; and
 - `HookGameplaySongClock` still calls legacy `Consume()` without source change.
 
 - [ ] **Step 8: Build**
@@ -743,7 +892,7 @@ Expected evidence: the new publication and backward-compatible query API compile
 - [ ] **Step 9: Commit**
 
 ```powershell
-git add -- src/Audio/Mixer/AudioCursorTimeline.h src/Audio/Mixer/AudioCursorTimeline.cpp src/Audio/Mixer/MiniaudioMixer.cpp src/Audio/DirectSound/GameplayAudioCursorObservation.h src/Audio/DirectSound/GameplayAudioCursorObservation.cpp src/Audio/DirectSound/DirectSoundFacade.h src/Audio/DirectSound/DirectSoundFacade.cpp
+git add -- src/Audio/Mixer/AudioCursorTimeline.h src/Audio/Mixer/AudioCursorTimeline.cpp src/Audio/Mixer/MiniaudioMixer.cpp src/Audio/Wasapi/ExclusiveAudioEngine.h src/Audio/Wasapi/ExclusiveAudioEngine.cpp src/Audio/DirectSound/GameplayAudioCursorObservation.h src/Audio/DirectSound/GameplayAudioCursorObservation.cpp src/Audio/DirectSound/DirectSoundFacade.h src/Audio/DirectSound/DirectSoundFacade.cpp
 git commit -m "Publish exact gameplay playback history"
 ```
 
@@ -762,7 +911,7 @@ git commit -m "Publish exact gameplay playback history"
 
 **Interfaces:**
 
-- Produces `AbsoluteJudgementDiagnostics& JudgementDiagnostics() noexcept` with startup/stage/scope/query/clock/transport/score counters, five-second summary scheduling, and:
+- Produces `AbsoluteJudgementDiagnostics& JudgementDiagnostics() noexcept` with startup/stage/scope/query/clock/transport/score counters, roughly five-second diagnostic summary scheduling, and:
 
 ```cpp
 [[noreturn]] void FatalActiveStage(
@@ -775,22 +924,28 @@ git commit -m "Publish exact gameplay playback history"
 
 - [ ] **Step 1: Define monotonic counter groups**
 
-Define exact fields from spec section 14 for native stage begin/end, transport,
-endpoint/playback epochs including Play-versus-Seek counts, schedule, native
+Define exact fields from spec section 14 for native stage open/activation/end,
+transport, endpoint/playback epochs including Play-versus-Seek counts, schedule, native
 execution, five queries, score deltas, late/eviction/error counts, and maximum
-backlog/delivery delay. Include an `outside_playback_baseline_records` counter
-separate from accepted late records. Use atomics only for fields written across
+backlog/delivery delay. Include `outside_playback_baseline_records` and
+`closed_frontier_catchups` counters separate from accepted late records. Use atomics only for fields written across
 input/audio/game threads; keep game-thread stage counters plain inside the
 diagnostics owner.
 
 - [ ] **Step 2: Define lifecycle records and summary cadence**
 
-Add methods `LogStartup`, `LogStageBegin`, `MaybeLogFiveSecondSummary`, and
-`LogStageEnd`. `Info` emits only those records. Include `sites`, backend, FPS,
-input rate, loader stage generation, native manager, endpoint/input
-generations, observed buffer histories and Play/Seek epoch counts,
-cutoff/baseline/safe values, and every required counter. Hard-code
-`rounded_fallback=0` in the schema and never increment a fallback counter.
+Add methods `LogStartup`, `LogNativeStageOpen`,
+`LogAbsoluteStageActivation`, `MaybeLogFiveSecondSummary`, and
+`LogNativeStageEnd`. `Info` emits only those records. The open record contains
+the loader generation, native manager, input generation, atomic cutoff/first
+eligible sequence, held baseline, and transport-fault baseline. The activation
+record adds the complete native state identity, endpoint generation, every
+observed authoritative buffer-history ID and its Play/Seek epoch counts, exact
+origin/rates, initial `J`, committed-boundary seed, offset, safe values, and
+accumulated waits. Summaries/end contain every required counter. Hard-code
+`rounded_fallback=0` in the schema and never increment a fallback counter. The
+roughly five-second check is diagnostics only and never drives lifecycle,
+waiting, or failure.
 
 - [ ] **Step 3: Define Verbose scope records**
 
@@ -824,6 +979,9 @@ nondecreasing native score counters
 ```
 
 Each helper either records success or enters the shared fatal path; no warning-only invariant exists.
+
+Add the diagnostics source files to `gc_runtime_patches` and link that target
+explicitly to `gc_logging` for the flush API.
 
 - [ ] **Step 7: Build**
 
@@ -867,6 +1025,11 @@ struct JudgementScopeCoordinate {
     std::uint64_t sequence{};
 };
 
+enum class BaselineOnlyReason : std::uint8_t {
+    OutsidePlayback,
+    AcceptedLate,
+};
+
 enum class JudgementScopeKind : std::uint8_t {
     Event,
     Heartbeat,
@@ -879,8 +1042,9 @@ public:
                gc::input::GameplayHeldMask baseline) noexcept;
     std::expected<void, JudgementHistoryError> Append(
         const ResolvedGameplayTransition&) noexcept;
-    void ApplyLateBaselineOnly(
-        const gc::input::GameplayTransitionRecord&) noexcept;
+    std::expected<void, JudgementHistoryError> ApplyBaselineOnly(
+        const gc::input::GameplayTransitionRecord&,
+        BaselineOnlyReason) noexcept;
     // Pure logical queries used only by JudgementScope.
 };
 
@@ -894,7 +1058,18 @@ public:
 
 - [ ] **Step 1: Use bounded retained storage**
 
-Store at most 65,536 resolved records in a preallocated ring. Append requires exact nondecreasing `(time,sequence)` order and consecutive transport sequence. Do not overwrite: capacity exhaustion is `HistoryLost`. Prune only records older than every pending scope and every supported relative query. Before removing a prefix, fold it into a compact causal base containing the ordinary held mask plus each logical control's most recent false-to-true coordinate/freshness state. This preserves arbitrarily old holds and exact held age without retaining every old transition. Keep the full event suffix required by inclusive `4Q` paired lookback; never prune an event that a current or future scope can still address.
+Store at most 65,536 resolved records in a preallocated ring. `Append` requires
+exact nondecreasing `(time,sequence)` order. Both `Append` and
+`ApplyBaselineOnly` consume exactly the next transport sequence; this preserves
+continuity even though an `OutsidePlayback` or accepted-late record intentionally
+creates no resolved event entry. Do not overwrite: capacity exhaustion is
+`HistoryLost`. Prune only records older than every pending scope and every
+supported relative query. Before removing a prefix, fold it into a compact
+causal base containing the ordinary held mask plus each logical control's most
+recent false-to-true coordinate/freshness state. This preserves arbitrarily old
+holds and exact held age without retaining every old transition. Keep the full
+event suffix required by inclusive `4Q` paired lookback; never prune an event
+that a current or future scope can still address.
 
 - [ ] **Step 2: Implement ordinary and logical held predicates**
 
@@ -923,17 +1098,26 @@ return max(2,A_time) in every later held scope
 return 0 when not held
 ```
 
-Pre-held baseline has no rise and returns at least 2. Equal-time later sequence sees an earlier rise as age 2; a genuine release/repress record creates a new age 1.
+Pre-held baseline has no accepted rise coordinate and returns stale age `5`,
+the first value outside the native `<=4` direction window. Equal-time later
+sequence sees an earlier accepted rise as age 2; a genuine release/repress
+record creates a new age 1.
 
-`ApplyLateBaselineOnly` folds `held_after` into that same causal base. A late
-false-to-true change is marked already-held/never-fresh (age at least 2) and is
-not inserted into the paired-edge suffix; a late true-to-false change clears
-the logical held state. A later on-time release or repress remains an ordinary
-current event. This is the exact accepted handoff miss, not replay.
+`ApplyBaselineOnly` folds `held_after` into that same causal base and records
+whether the reason was `OutsidePlayback` or `AcceptedLate`. A false-to-true
+change is marked already-held/never-fresh (age 5) and is not inserted
+into the paired-edge suffix; a true-to-false change clears the logical held
+state. A later on-time release or repress remains an ordinary current event.
+This is the exact baseline rule for pre-playback input and the accepted handoff
+miss, not replay.
 
 - [ ] **Step 5: Implement relative frame translation**
 
 For held/direction requests, checked-subtract `requested_frame - scope.native_frame`, then query at `scope_time + delta*Q`. Reject an active-scope pressed/released request for any frame other than `scope.native_frame`; the audit proves ordinary consumers request current and paired history is implemented internally.
+
+Here `Reject` means return the scope layer's `InvariantFailure` disposition so
+the owning hook enters the active-stage fatal path; it never fabricates false
+or trampolines into the native ring.
 
 - [ ] **Step 6: Reproduce only the audited direction mask primitive**
 
@@ -958,6 +1142,10 @@ The RAII scope stores stage generation, expected CBooster pointer, game-thread I
 - [ ] **Step 8: Review against the completed native audit**
 
 Read, without regenerating, E-045/E-046 and the retained `audit-input-helper-decompile-2026-08-17.txt`. Check each algebra branch against the recorded CBooster code and record the artifact paths in source comments. Do not create expected-value fixtures from this implementation.
+
+In `src/Patches/CMakeLists.txt`, link the runtime-patch target explicitly to
+`gc_input` and `gc_timing`; do not duplicate the journal or rational types in
+the patch target.
 
 - [ ] **Step 9: Build**
 
@@ -1006,11 +1194,25 @@ struct NativeJudgementIdentity {
     std::int32_t slide_hold_safe_frame{};
 };
 
+struct ObservedPlaybackHistory {
+    std::uint64_t buffer_instance_id{};
+    std::uint64_t endpoint_generation{};
+    std::uint64_t last_validated_publication{};
+    std::shared_ptr<gc::audio::AudioCursorTimeline> history;
+};
+
 struct JudgementClockBinding {
     std::uint64_t endpoint_generation{};
     std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint;
-    std::array<std::shared_ptr<gc::audio::AudioCursorTimeline>, 2>
-        observed_stage_bgm_histories;
+    std::vector<ObservedPlaybackHistory> observed_stage_bgm_histories;
+};
+
+struct AbsoluteJudgementOuterProbe {
+    NativeJudgementIdentity native{};
+    bool group2_playing{};
+    std::optional<GameplayAudioCursorObservation> group2_observation;
+    std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint;
+    std::int64_t now_qpc{};
 };
 
 struct ScheduledJudgementScope {
@@ -1026,10 +1228,8 @@ class JudgementScheduler final {
 public:
     void BeginNativeStage(std::uintptr_t tune_manager) noexcept;
     void EndNativeStage(std::uintptr_t tune_manager) noexcept;
-    PrepareOuterResult PrepareOuterCall(
-        const NativeJudgementIdentity&,
-        const std::optional<GameplayAudioCursorObservation>&,
-        std::int64_t now_qpc) noexcept;
+    [[nodiscard]] bool NativeStageOpen() const noexcept;
+    void PrepareOuterCall(const AbsoluteJudgementOuterProbe&) noexcept;
     std::optional<ScheduledJudgementScope> NextScope() noexcept;
     void CommitScope(const ScheduledJudgementScope&) noexcept;
     void FinishOuterCall() noexcept;
@@ -1049,10 +1249,34 @@ J = R + GameTimeOffset/1000 seconds
 
 Require matching endpoint generation and output inside both the submitted tail
 and one retained authoritative playback epoch. The current observation may
-introduce either of the two audited stage-BGM history handles; historical
-resolution remains valid through earlier retained Play/Seek epochs. Return the
-explicit provider status unchanged; never floor source frames or use the
-legacy group-cursor millisecond return.
+introduce any newly observed authoritative stage-BGM history handle. Register
+it once by process-unique buffer instance ID and retain it through native
+cleanup; historical resolution remains valid through every earlier retained
+Play/Seek epoch. The audited two-channel native group limits current channel
+choice, not buffer lifetimes over the stage, so there is no two-history cap.
+If multiple retained histories cover the same endpoint output, map all of them
+to exact source seconds: agreement is one coordinate, disagreement is
+`Discontinuous`. Return every explicit provider status without substitution;
+never floor source frames or use the legacy group-cursor millisecond return.
+
+Use the spec's explicit historical-status precedence: any
+`Discontinuous`/`HistoryLost` fails, any `Pending` blocks, otherwise
+all `Resolved` values must agree and win over proven `OutsidePlayback`; all
+outside yields `OutsidePlayback`. Current ready time uses only the exact history
+selected by that outer call's native group getter. When a newly observed
+history or epoch publication appears, compare its affine source-time mapping
+over every overlapping global-output interval with all other stage-retained
+histories. Equal slope and value at one overlap point prove agreement across
+that interval; any difference is `Discontinuous`. Track the last validated
+publication per history and repeat before using newer epochs. This validates
+the mappings themselves even after individual committed events are pruned;
+late discovery of disagreement is still fatal.
+
+Use two scheduler-owned `std::array<ExactPlaybackEpoch, 256>` scratch buffers
+and `CopyExactPlaybackEpochs` for nested comparisons; reuse them for every
+history pair. A temporarily incoherent snapshot freezes the outer call. Any
+exact-epoch prefix eviction during an open stage is `HistoryLost`. Do not cache
+raw ring pointers or allocate per comparison.
 
 - [ ] **Step 2: Derive both native arguments from `J`**
 
@@ -1067,9 +1291,14 @@ Require each result to fit signed 32-bit. Distinct exact/sequence scopes stay di
 
 `BeginNativeStage(tune_manager)` is called only after the original native
 initializer at RVA `0x2629A0` returns true. It increments a process-local stage
-generation and resets every prior stage field. Under the journal lock, take the
-transport epoch, cutoff sequence, and `published_held` baseline in one status
-snapshot, then discard through that cutoff. Do not pair a separately read
+generation and resets every prior stage field. Call
+`CaptureGameplayTransitionCutoff()` exactly once. That single journal-locked
+operation returns the transport epoch, `first_stage_sequence`, held baseline,
+QPC frequency, and transport eviction/fault count, then discards the pre-stage
+queued prefix. Store the returned fault count as the stage baseline; only a
+later change is stage-local loss. Failure means the required enabled input
+transport is absent and enters the active-stage fatal path immediately, with no
+retry or alternate snapshot. Do not pair a separately read
 `ReadPublishedInput()` value with the cutoff.
 
 Record the audited caller proof beside the hook: the state machine invokes RVA
@@ -1077,16 +1306,20 @@ Record the audited caller proof beside the hook: the state machine invokes RVA
 state `6`. The hook therefore observes one successful native transition per
 stage rather than inferring lifecycle from time or audio.
 
-While the stage is open but the first exact BGM epoch is unavailable, retain
-post-cutoff input records in sequence. Once history exists, project each record
-to endpoint output first. Apply only records proven `OutsidePlayback` to the
-held baseline, with no edge, paired companion, freshness, or scope; keep a
-`Pending` predecessor retained because later publication may cover it. Once
-the current clock resolves through the first epoch, let `J_begin` be that
-epoch's exact origin coordinate and initialize committed boundary
-`c = floor(J_begin/Q)-1`. The seeded baseline has no edge and held age at least
-2. No stock recognition may run between successful native stage begin and this
-activation.
+While the stage is open but the first exact BGM epoch is unavailable, drain
+post-cutoff records into a separate preallocated unresolved-record queue in
+strict sequence; do not put raw QPC records into `JudgementHistory`. Once exact
+history exists, project the unresolved prefix to endpoint output first. Apply
+only records proven `OutsidePlayback` to the held baseline, with no edge,
+paired companion, freshness, or scope; keep a `Pending` predecessor retained
+because later publication may cover it. Once the first authoritative epoch
+origin and immutable endpoint/native/input binding are exact, let `J_begin` be
+that epoch's origin coordinate and initialize committed boundary
+`c = ceil(J_begin/Q)-1`. Current output may still be before the origin;
+activation itself emits no scope. This emits a boundary
+exactly at the origin but never invents one before a non-boundary origin. The
+seeded baseline has no edge and stale held age 5. No stock recognition may
+run between successful native stage begin and this activation.
 
 `EndNativeStage(tune_manager)` is called at entry to native cleanup RVA
 `0x262080`. It emits the final summary and clears every stage-owned field.
@@ -1097,20 +1330,64 @@ begin always creates a new stage generation even if all addresses repeat.
 
 Activation requires an open loader stage generation, the same
 Tune-manager/Tune/judgement/score/booster/player identities, the same
-endpoint/input generations, unchanged `GameTimeOffset`, and both live safe
-values exactly zero. No observation is `NoPlayback`; a current generation with
-no rendered epoch is `Pending`; both withhold recognition while coverage is
-retained. A Play or Seek generation, stop/drain, or the native getter choosing
-the other audited BGM channel does not alter stage generation. Register at most
-the two lifetime-safe BGM histories proven by E-040 and resolve only through
-their exact output coverage; a third history or conflicting overlap is a clock
-authority failure, not a lifecycle decision.
+endpoint/input generations, the same positive cutoff/endpoint QPC frequency,
+unchanged `GameTimeOffset`, and both live safe values exactly zero. Apply this
+outer-probe truth table without timeout:
+
+- negative group-2 sign (`group2_playing=false`) is `NoPlayback`; it introduces
+  no new history, but the scheduler still checks the last native-selected
+  retained history for a newly proven closed frontier and may finish bounded
+  catch-up through that exact tail;
+- nonnegative sign requires one consumed observation with non-null exact
+  history and the current endpoint generation; absence/mismatch is fatal;
+- `Pending` exact voice coverage yields no scopes; it may complete activation
+  only when an exact first epoch origin already exists;
+- current endpoint output proven `OutsidePlayback` uses its exact
+  `closed_frontier`, if present, as a fixed catch-up horizon and then yields no
+  more scopes until the same coordinate chain enters retained playback
+  coverage; before the first origin it has no frontier and yields none, but an
+  already published exact first origin may still complete stage activation;
+- `TemporarilyUnavailable` freezes work with retained state;
+- `Resolved` permits ready-time scheduling and completes activation once the
+  first exact origin exists; and
+- `HistoryLost` or `Discontinuous` is fatal once the native stage is open.
+
+A Play or Seek generation, stop/drain, or the native getter choosing the other
+audited BGM channel does not alter stage generation. On each nonnegative
+observation, register a newly seen lifetime-safe history by buffer instance ID
+on the game thread and retain it until native cleanup. The vector may grow
+there; allocation failure is fatal. There is no two-history lifetime cap.
+Resolve only through exact output coverage; overlapping histories must produce
+the same exact source-seconds coordinate or the result is `Discontinuous`.
+
+These bullets govern only the current delivery horizon. Every outer call still
+drains and classifies post-cutoff transport in sequence using retained endpoint
+and voice history, so input inside prior exact coverage is not stranded merely
+because group 2 has since become `NoPlayback`.
 
 - [ ] **Step 5: Drain and resolve transport in sequence**
 
-Drain fixed 1024-record batches until the transport queue is empty, verify epoch/sequence/eviction, and append records to retained history only after their QPC maps `Resolved`. Keep `Pending` records in sequence; do not resolve/deliver later records around one pending predecessor. Apply a proven `OutsidePlayback` record in sequence to the held baseline only, increment `outside_playback_baseline_records`, and expose no edge or scope.
+Drain fixed 1024-record batches until the transport queue is empty, verify the
+captured epoch, consecutive sequence from `first_stage_sequence`, and unchanged
+stage-local eviction/fault count, and append raw records to the separate
+preallocated unresolved queue. Resolve only its prefix in sequence. Move a
+record into `JudgementHistory` only after its QPC maps `Resolved`; keep a
+`Pending` predecessor in the raw queue and do not resolve/deliver later records
+around it. Apply a proven `OutsidePlayback` prefix record in sequence to the
+held baseline only, increment `outside_playback_baseline_records`, and expose no
+edge or scope. Capacity exhaustion in either queue is fatal rather than a drop.
 
-If a newly resolved coordinate is at or before the committed delivery frontier, call `ApplyLateBaselineOnly`, increment `late_records`, and expose no scope/edge/freshness. Unknown sequence loss or eviction is fatal.
+For each resolved record, require its exact coordinate to be nondecreasing
+against every earlier-sequence retained record. Equal exact time is ordered by
+transport sequence. A backward seek is acceptable only if this event ordering
+and the committed delivery frontier both remain valid.
+
+If a newly resolved `(time,sequence)` sorts behind the committed delivery
+frontier under the rule below, call
+`ApplyBaselineOnly(..., AcceptedLate)`, increment `late_records`, and expose no
+scope/edge/freshness. A proven outside-playback prefix uses
+`ApplyBaselineOnly(..., OutsidePlayback)`. Unknown sequence loss or eviction is
+fatal.
 
 Represent the frontier as exact time, last event sequence at that time, and a
 `boundary_committed` flag. An ordinary event permits a higher later sequence
@@ -1143,11 +1420,17 @@ Do not cap event count and do not split an equal-time group. Events beyond the h
 - [ ] **Step 8: Handle unavailability and end state**
 
 `TemporarilyUnavailable` freezes horizon and retains work with zero scopes.
-Render lag or a forward seek with advancing exact time performs bounded
+An exact closed frontier remains a fixed ready coordinate across as many
+at-most-three-boundary outer calls as are needed; after catch-up it produces
+zero scopes and never follows the endpoint beyond the tail. Render lag or a
+forward seek with advancing exact time performs bounded
 catch-up. Play/Seek generation changes resolve through the multi-epoch history.
-If a new epoch would place ready time behind the committed frontier, or exact
+A backward seek is accepted only when its ready coordinate remains at/after the
+committed frontier and every later-sequence resolved event remains at/after all
+earlier-sequence retained events. If either ordering would reverse, or exact
 coverage is lost/conflicting, return `Discontinuous`/`HistoryLost` and take the
-active fatal path because already-issued native work cannot be undone.
+active fatal path because already-issued native work and physical order cannot
+both be undone.
 
 Audio inactivity does not end the stage. Only `EndNativeStage` from native
 cleanup emits the end summary and clears pending work, history, cutoff,
@@ -1303,14 +1586,24 @@ When `JudgementScope` is inactive, each calls its own `InlineHook::unsafe_thisca
 
 - [ ] **Step 5: Resolve one native stage probe at the loop seam**
 
-At RVA `0x240239`, read Tune from `[EBP-0x32C]`, resolve player through `GetGlobal()+0xCB4`, read judgement/score vector elements, resolve the input manager's booster, call the audited config accessor, and read `GameTimeOffset`, `HoldSafeFrame`, and `SlideHoldSafeFrame`. Guard every pointer/read with SEH-safe helpers.
+At RVA `0x240239`, first query `NativeStageOpen()`. If false, return from the
+handler without reading a gameplay identity or changing the hook context. If
+true, read Tune from `[EBP-0x32C]`, resolve player through
+`GetGlobal()+0xCB4`, read judgement/score vector elements, resolve the input
+manager's booster, call the audited config accessor, and read
+`GameTimeOffset`, `HoldSafeFrame`, and `SlideHoldSafeFrame`. Guard every
+pointer/read with SEH-safe helpers.
 
 Open `ScopedGameplayAudioCursorQuery`, call the group-2 cursor getter once,
-use only its sign (`< 0` means `NoPlayback`), then consume the existing
-`Consume()` observation with its added exact-history handle. Ignore the
-nonnegative rounded magnitude for absolute judgement. Acquire
-the registered exact WASAPI endpoint and current QPC once. These values form
-`PrepareOuterCall` input.
+use only its sign, then consume the existing `Consume()` observation with its
+added exact-history handle. A negative sign sets `group2_playing=false` and
+discards any incidental failed observation. A nonnegative sign sets it true and
+passes the consumed observation for mandatory validation. Ignore the
+nonnegative rounded magnitude for absolute judgement. Acquire the registered
+exact WASAPI endpoint and current QPC once; check QPC failure once and take the
+fatal path with no alternate clock. Package native identity, group sign,
+observation, endpoint handle, and QPC into one
+`AbsoluteJudgementOuterProbe` for `PrepareOuterCall`.
 
 - [ ] **Step 6: Invoke the native pair under one immutable scope**
 
@@ -1326,10 +1619,17 @@ For every `NextScope()` result:
 
 Queries remain pure throughout both calls. No descriptor/note routing is added.
 
-- [ ] **Step 7: Skip only the native uniform loop**
+- [ ] **Step 7: Skip only the native uniform loop while the explicit stage is open**
 
-After all due scopes, or after a stage-open/temporary-unavailable outer call
-with zero scopes, call `FinishOuterCall()` and set:
+If no successful native stage is open, leave the loop-guard context untouched;
+the original native code remains responsible outside gameplay-stage ownership,
+and the five query hooks are inactive trampolines. This is not an active-stage
+fallback and uses no timer or heuristic.
+
+When a native stage is open, after all due scopes (including any fixed
+closed-frontier catch-up), or after an explicit zero-scope state such as
+pre-origin `NoPlayback`/`OutsidePlayback`, `Pending`, or
+`TemporarilyUnavailable`, call `FinishOuterCall()` and set:
 
 ```cpp
 context.eip = static_cast<std::uint32_t>(
@@ -1337,6 +1637,10 @@ context.eip = static_cast<std::uint32_t>(
 ```
 
 This bypasses the native `m=1..Tune+0x14` loop while running the original once-per-update tail exactly once. Do not write Tune or invoke the native input capture/fill methods.
+
+Thus no stock CBooster judgement can run between the successful native begin
+and native cleanup, even before absolute activation. Any stage-open identity or
+clock failure is fatal instead of falling through.
 
 - [ ] **Step 8: Wire startup in the game process only**
 
@@ -1351,15 +1655,21 @@ In `DllMain`, after `AudioPatchInit()` succeeds and before `FrameratePatchInit(.
 
 On enabled failure, publish a startup fatal and terminate; control does not return to `DllMain`. Do not initialize in the NESYS process. Leave the later Framerate and Switch init calls and source files unchanged.
 
+Add all AbsoluteJudgement sources to `gc_runtime_patches` and link the target
+explicitly to `gc_system_path`; its existing and Task 7 dependencies supply
+audio, config, input, timing, logging, and SafetyHook.
+
 - [ ] **Step 9: Make active exceptions fail closed**
 
 All eight handlers are `noexcept`. Catch internal exceptions at their boundary.
-Before a native stage is active, a creation/preflight problem is startup fatal. Once
-active, arithmetic, provider, sequence, clock-authority, native-identity, or
-native-call invariant failure routes to `FatalActiveStage`; no handler
-returns a fabricated input or silently resumes stock recognition. An ordinary
-zero stage-begin result and cleanup without an open stage retain their explicit
-nonfatal meanings.
+During process installation, before any successful native stage begin, a
+creation/preflight problem is startup fatal. From successful native begin
+through matching cleanup—including the no-scope interval before absolute
+activation—arithmetic, provider, sequence, clock-authority, native-identity, or
+native-call invariant failure routes to `FatalActiveStage`; no handler returns
+a fabricated input or silently resumes stock recognition. An ordinary zero
+stage-begin result, an explicit no-scope provider status, and cleanup without an
+open stage retain their nonfatal meanings.
 
 - [ ] **Step 10: Build and inspect x86 cleanup**
 
@@ -1447,7 +1757,11 @@ Confirm:
 
 - WASAPI successful render publication performs no allocation, lock, wait, or logging;
 - input publication uses only its bounded mutex/ring and no allocation;
-- game-thread history/scheduler storage is preallocated before activation;
+- game-thread unresolved/resolved history and scope-scheduler storage is
+  preallocated before activation;
+- the authoritative-history vector may grow only on the game thread when a new
+  buffer instance is first observed, never inside scope delivery; allocation
+  failure is fatal rather than a two-history cap or fallback;
 - no per-scope Info logging occurs; and
 - provider handles make engine/timeline lifetime explicit.
 
@@ -1519,14 +1833,15 @@ audio_backend = 'wasapi_exclusive'
 enable_absolute_time_judgement = true
 ```
 
-Retain the operator's target FPS and WASAPI buffer setting for each run. Confirm live game `HoldSafeFrame`/`SlideHoldSafeFrame` through the feature's stage-begin log; do not edit those values through this task.
+Retain the operator's target FPS and WASAPI buffer setting for each run. Confirm live game `HoldSafeFrame`/`SlideHoldSafeFrame` through the feature's absolute-stage-activation log; do not edit those values through this task.
 
 - [ ] **Step 3: Gate A — 240 FPS with no input**
 
 Run one ordinary full chart without touching controls. Required result:
 
-- `mode=absolute sites=8`, one explicit native stage generation, unique
-  endpoint/input generations, and exact playback-epoch coverage;
+- `mode=absolute sites=8`, one native-stage-open record, one matching
+  absolute-stage-activation record, unique endpoint/input generations, and
+  exact playback-epoch coverage;
 - heartbeat scopes, recognition calls, score calls, and native MISS deltas advance;
 - `recognition == score == scopes` in each summary;
 - the song reaches normal result/lifecycle; and
@@ -1548,12 +1863,13 @@ The logged `native_ms` must equal truncation of event `J`, not delivery/outer ti
 - [ ] **Step 5: Gate C — two consecutive native stages without restart**
 
 Complete two ordinary charts in the same game process. Require exactly one
-successful native stage-begin and one matching cleanup per chart, strictly
+successful native-stage-open, one absolute-stage-activation, and one matching
+cleanup per chart, strictly
 increasing loader stage generation, and zero history/frontier/input-age state
 carried from the first stage into the second. Native manager, judgement, score,
 buffer, or voice addresses may repeat without affecting the result. Playback
 Play/Seek generation counts may change within either chart without creating a
-stage begin/end record. This is lifecycle acceptance, not an input replay or
+native-stage-open/end record. This is lifecycle acceptance, not an input replay or
 same-result oracle.
 
 - [ ] **Step 6: Cover rapid, paired, direction, and long-form mechanics**
@@ -1618,7 +1934,7 @@ If runtime evidence finds a source defect, return to the relevant implementation
 - [ ] Runtime deployment was explicitly authorized before Task 11.
 - [ ] 240-FPS no-input and real-input gates pass before broad testing.
 - [ ] Two consecutive charts in one process show one explicit begin/end pair
-  per native stage and no cross-stage state.
+  plus one activation per native stage and no cross-stage state.
 - [ ] Actual mechanics/types and full-song 60/144/165/240 runs pass.
 - [ ] Full-song 144/165 summaries prove zero accumulated boundary drift.
 - [ ] Final report keeps build/static, structural runtime, and actual game evidence separate.
