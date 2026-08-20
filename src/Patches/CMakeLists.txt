@@ -1,7 +1,10 @@
 add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
+        AbsoluteJudgement/JudgementClockResolver.cpp
         AbsoluteJudgement/JudgementHistory.cpp
+        AbsoluteJudgement/JudgementScheduler.cpp
         AbsoluteJudgement/JudgementScope.cpp
+        AbsoluteJudgement/JudgementStage.cpp
         GameCompatibility/GameBinaryPatch.cpp
         GameCompatibility/GameBinaryPatchDiagnostics.cpp
         Framerate/FramerateAuthoredClock.cpp
