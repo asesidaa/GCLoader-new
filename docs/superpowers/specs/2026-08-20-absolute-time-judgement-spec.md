@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-20
 
-**Status:** Complete design contract; implementation not authorized
+**Status:** Implemented baseline; 2026-08-21 runtime-correction design approved;
+correction implementation not yet authorized
 
 **Initial backend:** WASAPI exclusive only
 **Configuration:** `[experimental] enable_absolute_time_judgement = false`
@@ -37,7 +38,16 @@ document supersedes it wherever the two differ:
 - [failed-attempt index](../failed/2026-08-high-fps-input-judgement/README.md)
 - [last runtime failure diagnosis](2026-08-19-absolute-time-judgement-driver-runtime-failure-diagnosis.md)
 
-There are no unresolved high-level design questions at publication time.
+The first 240-FPS runtime run of the implementation produced materially better
+judgement but exposed two specification omissions: loader-added event scopes
+could erase native transient output before the once-per-update tail consumed
+it, and an exact naturally drained BGM was incorrectly classified as a native
+state mismatch. The same run proved that several required Info counters had no
+producer. Section 19 records the approved 2026-08-21 correction closure. The
+retained diagnosis and discussion evidence is under
+`.superpowers/sdd/2026-08-20-absolute-time-judgement/runtime-evidence/`.
+
+There are no unresolved high-level correction questions at this amendment.
 
 ## 2. Required outcome
 
@@ -58,10 +68,19 @@ event scopes plus native-cadence heartbeat scopes. It does not run the entire
 input or gameplay pipeline at 1000 Hz and does not redefine the game's global
 frame unit.
 
-The guarantee excludes only an explicitly accepted transition that the input
-transport does not successfully publish before judgement commits past its
-time. Unknown history loss, corruption, clock discontinuity, or mixed
-judgement histories are fatal rather than additional exceptions.
+The guarantee has three explicit, counted exceptions:
+
+1. a transition that the input transport does not successfully publish before
+   judgement commits past its time follows the accepted late-record rule;
+2. when more than 32 ready, undelivered event records exist, the oldest excess
+   event is deliberately consumed baseline-only at its chronological turn; and
+3. native cleanup counts and discards any event that still cannot be delivered
+   before the stage-owned native state is destroyed.
+
+The latter two are overload shedding, not retimestamping or fallback. Ordinary
+accepted gameplay requires both drop counts to remain zero. Unknown history
+loss, corruption, clock discontinuity, or mixed judgement histories remain
+fatal rather than additional exceptions.
 
 ## 3. Non-goals and ownership boundaries
 
@@ -450,8 +469,11 @@ voices and invent a second selection policy. The presence of the game's two
 stage-BGM channels is not ambiguity. A negative native getter result is
 `NoPlayback`; an observed generation whose first mixer span is not yet
 published is `Pending`. Neither condition starts, ends, or times out a native
-stage. A nonnegative native result without the successful call's exact
-observation is an invariant failure, not `NoPlayback`.
+stage. A nonnegative native result means that the getter selected and returned
+a cursor; it does not prove that the selected DirectSound voice is still
+mixing. The successful call's exact observation supplies that state. A
+nonnegative result without that observation is an invariant failure, not
+`NoPlayback`.
 
 The supported binary makes that choice concrete at VA `0x6122B0`: it builds
 the requested group's ordered channel list, calls the channel cursor method
@@ -461,11 +483,13 @@ the channel that supplies the native return value. The existing scoped
 single-observation overwrite behavior is sufficient because the loop does not
 continue after success.
 
-Preserve the native return's sign as the playing/no-playback decision: a
-negative result is `NoPlayback` and discards any incidental unsuccessful
-observation. For a nonnegative result, ignore the rounded millisecond magnitude
-and use only the successful call's exact history observation. The rounded value
-is never a judgement timestamp or fallback.
+Preserve the native return's sign as the cursor-selection decision: a negative
+result is `NoPlayback` and discards any incidental unsuccessful observation.
+For a nonnegative result, ignore the rounded millisecond magnitude and use only
+the successful call's exact history observation. `Exact` permits current ready
+time, `Pending` withholds work, and `Inactive` resolves the retained history for
+a proven closed frontier. The rounded value is never a judgement timestamp,
+proof of active mixing, or fallback.
 
 The stage retains every authoritative history handle it has observed until
 native cleanup. This lets input predating a seek resolve through the old epoch
@@ -575,11 +599,11 @@ the first recognition step:
 - live `HoldSafeFrame` and `SlideHoldSafeFrame`, both exactly zero; and
 - WASAPI endpoint generation plus the authoritative group-2 exact history.
 
-If group 2 is not playing or its first exact mapping is still pending, withhold
-recognition and retain input in sequence. There is no timeout, inactivity
-counter, render count, or pointer-reuse heuristic. Do not classify a retained
-record as pre-audio merely because it arrived before the first epoch was
-published.
+If group 2 has no selected cursor or its first exact mapping is still pending,
+withhold recognition and retain input in sequence. There is no timeout,
+inactivity counter, render count, or pointer-reuse heuristic. Do not classify a
+retained record as pre-audio merely because it arrived before the first epoch
+was published.
 
 Once exact history exists, first project each retained QPC to endpoint output
 `O`. A record that resolves inside an epoch follows the normal event path. A
@@ -597,17 +621,20 @@ that origin; activation itself emits no work. A generation with no first epoch
 remains `Pending`. Activation is forbidden if stock CBooster judgement somehow
 ran after this stage's successful begin.
 
-Native group-2 `NoPlayback`, coherent voice-history `Pending`, and a current
-endpoint coordinate proven `OutsidePlayback` do not change lifecycle. Before
-withholding scopes, the scheduler drains any newly proven closed frontier from
-the last native-selected authoritative history through the ordinary bounded
-catch-up rule; it never advances beyond that frontier. This covers a bounded
-Play/Seek gap or the suffix after natural drain without skipping the final due
-heartbeat. Before the first playback origin there is no frontier and no scope.
-The same coordinate chain is reevaluated on the next outer call without a
-timeout. An absent exact WASAPI provider, an inactive input transport at the
-native begin cutoff, a nonnegative native group-2 result without its scoped
-exact-history handle, or an endpoint/input generation replacement is an
+Native group-2 `NoPlayback`, coherent voice-history `Pending`, exact
+`Inactive`, and a current endpoint coordinate proven `OutsidePlayback` do not
+change lifecycle. For `Inactive`, retain the history selected by that
+nonnegative native call and run the ordinary exact resolver; do not reinterpret
+the returned cursor as proof of active mixing. Before withholding scopes, the
+scheduler drains any newly proven closed frontier from the last native-selected
+authoritative history through the ordinary bounded catch-up rule; it never
+advances beyond that frontier. This covers a bounded Play/Seek gap or the suffix
+after natural drain without skipping final due work. Before the first playback
+origin there is no frontier and no scope. An unproven Stop tail remains
+`Pending`. The same coordinate chain is reevaluated on the next outer call
+without a timeout. An absent exact WASAPI provider, an inactive input transport
+at the native begin cutoff, a nonnegative native group-2 result without its
+scoped exact-history handle, or an endpoint/input generation replacement is an
 invariant failure. None is converted into a timed wait or a stock fallback.
 
 While active, native receiver/state identities, `GameTimeOffset`, the zero safe
@@ -620,12 +647,13 @@ not a deadline, decides whether exact resolution remains possible.
 ### 8.4 Native stage end
 
 Hook `CTuneGameManager_Cleanup` at VA `0x662080` / RVA `0x262080`. At function
-entry, end the matching loader stage, emit its final summary, and clear pending
-scopes, retained input/audio history handles, bindings, cutoff, and private
-indices before calling the original cleanup. Cleanup before any successful
-stage begin is an idempotent no-op for this feature. A later successful native
-construction always starts a fresh loader stage even when every native or audio
-address is reused.
+entry, end the matching loader stage, count any remaining undelivered events as
+explicit cleanup drops, emit the final summary, and clear pending scopes,
+retained input/audio history handles, bindings, cutoff, and private indices
+before calling the original cleanup. Cleanup before any successful stage begin
+is an idempotent no-op for this feature. A later successful native construction
+always starts a fresh loader stage even when every native or audio address is
+reused.
 
 Stage lifecycle itself is never inferred and never becomes fatal. `Play`,
 `Stop`, natural drain, buffer Release, `SetCurrentPosition`, and playback
@@ -760,6 +788,19 @@ object's audited counters at decimal offsets `+120/+124/+128/+132`
 MISS/GOOD/COOL/GREAT diagnostics. No score hook and no loader grade policy is
 introduced.
 
+Native recognition clears and republishes transient judgement-state fields
+that the original outer tail later consumes for sounds and effects. The loader
+must therefore preserve a native publication interval, not merely a
+recognition/score call pair. Every loader-added event scope is the only native
+recognition call between two executions of the original tail. It may not share
+that interval with an earlier heartbeat, a later heartbeat, or another event.
+This rule is general and must not be implemented by saving or OR-merging only
+the currently known sound bytes.
+
+A pure heartbeat batch remains permitted. Those scopes replace iterations the
+original uniform native loop itself would execute during ordinary authored
+catch-up, so their existing last-publication behavior remains native-owned.
+
 ## 11. Private scheduler
 
 The scheduler replaces only the native uniform judgement loop at
@@ -777,16 +818,19 @@ into an open absolute stage. No timer or inference chooses between the paths.
 
 There are exactly two scope types:
 
-1. one event scope for every retained, resolved transition; and
+1. one event scope for every retained, resolved transition that remains
+   eligible after explicit overload shedding; and
 2. one heartbeat scope at every exact boundary `B_n=nQ` not represented by one
    or more event scopes at exactly `B_n`.
 
 Merge by `(exact_time, sequence)`. An atomic record with multiple changed bits
 is one scope. Same-time records remain separate scopes in sequence order. If
-one or more events occur exactly at a heartbeat boundary, run all equal-time
-event scopes and commit that boundary after the final one; do not add a
-redundant no-edge heartbeat. This lets the last equal-time scope see the full
-group while preserving causal facts for earlier records.
+one or more events occur exactly at a heartbeat boundary, commit that boundary
+after the final same-time event and do not add a redundant no-edge heartbeat.
+Event isolation may deliver those separate same-time records across successive
+outer calls; this does not change their exact time, sequence order, or the rule
+that only the final record commits the boundary. A multi-bit atomic record is
+never split.
 
 Every scope calls original recognition and then original score exactly once.
 Extra recognition happens only for real transitions. A held key without a new
@@ -799,8 +843,12 @@ an intentional, render-independent consequence of avoiding loader note-policy
 reimplementation. Only zero release-grace configurations are supported to
 remove the known per-call countdown conflict.
 
-After all due scopes, resume the original outer once-per-update tail exactly
-once. Event count never becomes a `Tune` step count.
+Every open-stage outer call still resumes the original outer tail exactly once.
+The scheduler ends the current batch before executing a due event if one or
+more heartbeat scopes have already run. If an event is the first native scope,
+it runs alone and immediately ends the batch. All later due work remains at its
+original coordinate for a later outer call. Event count never becomes a `Tune`
+step count.
 
 ### 11.2 Ready time and catch-up
 
@@ -821,15 +869,39 @@ boundaries (`3Q = 50 ms`) in one outer call:
 - if `target-c > 3`, delivery horizon is `B_(c+3)`;
 - otherwise delivery horizon is exact `ready`.
 
-The second rule means an event may run before the next heartbeat in ordinary
-high-FPS play. The first bounds native authored catch-up after a hitch without
-discarding anything.
+The second rule means an event may become ready before the next heartbeat in
+ordinary high-FPS play. The first bounds native authored catch-up after a hitch.
+Neither horizon rule overrides event isolation or the explicit overload-drop
+policy below.
 
-Within the selected horizon, deliver every event and boundary, with no semantic
-cap on the number of event scopes and without splitting an equal-time group.
-Events beyond the horizon stay pending. Boundaries are derived from integer
-indices and require no queue entries. A ten-boundary hitch is delivered in
-successive at-most-three-boundary batches; it is not collapsed to three.
+Within the selected horizon, a batch is exactly one of:
+
+- one event scope and no other native recognition call; or
+- one to three heartbeat scopes and no event scope.
+
+If heartbeats have run and the next merged unit is an event, defer that event
+before installing its scope. If an event runs, defer everything after it. A
+ten-boundary hitch is still delivered in successive at-most-three-heartbeat
+batches; it is not collapsed to three. Events and boundaries beyond the batch
+remain pending at their exact coordinates.
+
+Protect the newest 32 ready, undelivered event records from overload shedding.
+When another ready event makes older events excess, mark the oldest excess
+events for dropping. Do not apply their `held_after` state immediately: each
+marked event remains in exact order until it becomes the next chronological
+unit, after all earlier heartbeats/events and before all later ones. At that
+point consume it baseline-only with reason `Overload`, advance its transport
+sequence, expose no edge/freshness/scope/sound/effect, and continue. A dropped
+unit performs no native recognition and therefore creates no publication
+barrier. This protects current physical input without letting a future held
+state leak into an earlier heartbeat.
+
+At explicit native cleanup, count and discard any remaining undelivered event
+records. Neither overload nor cleanup dropping is fatal. Do not infer
+press/release pairs, merge controls, retimestamp a record, or let stage-owned
+held/edge state cross cleanup. The large transport and exact-history capacities
+remain independent proof-retention bounds; unknown eviction or history loss is
+still fatal rather than relabeled as overload shedding.
 
 The scheduler obtains one exact current-ready/group-2 observation per outer
 judgement call. Normal ready time is the current resolved coordinate. When
@@ -871,22 +943,24 @@ journal retains:
 10,044.800 ms  press A again
 ```
 
-When rendering resumes at ready time `10,200.000 ms`, the first three-boundary
-batch is:
+When rendering resumes at ready time `10,200.000 ms`, event barriers split the
+ready work across successive outer updates and original-tail executions:
 
 ```text
-10,016.667  heartbeat, no edge
-10,023.400  first A press
-10,031.000  A release
-10,033.333  heartbeat, no edge
-10,044.800  second A press
-10,050.000  heartbeat, no edge
+outer 1: 10,016.667  heartbeat, no edge; stop before the first event; tail
+outer 2: 10,023.400  first A press only; tail
+outer 3: 10,031.000  A release only; tail
+outer 4: 10,033.333  heartbeat, no edge; stop before the next event; tail
+outer 5: 10,044.800  second A press only; tail
+outer 6: 10,050.000, 10,066.667, 10,083.333  heartbeat-only catch-up; tail
 ```
 
 Later outer updates deliver the remaining boundaries through `10,200.000 ms`.
-The two presses remain distinct and nothing is retimestamped to resume time.
-The 50-ms limit bounds authored heartbeat catch-up per outer call; it is not an
-input fusion window.
+The two presses remain distinct, each event's transient native publications are
+consumed by the immediately following original tail, and nothing is
+retimestamped to resume time. The 50-ms limit bounds heartbeat-only authored
+catch-up per outer call; it is neither an input fusion window nor permission to
+mix event and heartbeat scopes in one tail batch.
 
 ## 12. Configuration and backend policy
 
@@ -924,9 +998,12 @@ and acceptance, not a configuration bypass.
 Expected nonfatal states are limited to:
 
 - a native stage that is open while group 2 is `NoPlayback`, voice history is
-  `Pending`, or current exact output is proven `OutsidePlayback`;
+  `Pending`/`Inactive`, or current exact output is proven `OutsidePlayback`;
 - a proven `OutsidePlayback` transition applied only to the held baseline;
-- native cleanup, which closes the stage immediately without a timer;
+- overload shedding after more than 32 ready event records, with each oldest
+  excess edge consumed baseline-only at its chronological turn;
+- native cleanup, which counts/discards remaining undelivered events and closes
+  the stage immediately without a timer;
 - temporary coherent-publication unavailability while retained history is
   intact;
 - an ordinary `Play`, `SetCurrentPosition`, stop, drain, or playback-generation
@@ -951,15 +1028,22 @@ also appropriate when it preserves cleaner ownership. A plain C/C++ `assert()`
 is insufficient because Release builds may compile it out; the check and
 termination must be active in both Debug and Release. This rule applies to
 unlikely setup/invariant results, not to expected operational states such as
-stage-open `NoPlayback`/`Pending`/current `OutsidePlayback` or coherent
-`TemporarilyUnavailable`, which retain their explicit status semantics.
+stage-open `NoPlayback`/`Pending`/`Inactive`/current `OutsidePlayback`, coherent
+`TemporarilyUnavailable`, or explicit overload/cleanup dropping, which retain
+their defined status semantics.
 
-Every installed native hook handler remains `noexcept` and catches all internal
-exceptions before returning across the ABI. An internal helper that may allocate
-must either be allowed to throw only as far as that immediate handler boundary,
-or catch locally and enter the same fatal path; it must not be marked `noexcept`
-while depending on an outer catch. This is a terminal invariant rule, not an
-error-recovery mechanism.
+Every installed native hook handler remains `noexcept`, but broad defensive
+`try`/`catch` is forbidden. The only authorized new exception boundary is the
+allocation-capable native loop-hook boundary described in Section 7: map
+`std::bad_alloc` to `StorageAllocationFailure`, map any other unexpected
+exception to `UnexpectedInternalException`, and enter the one-way active-stage
+fatal path. Other new hook paths must be nonthrowing rather than wrapping normal
+control flow in catches. No exception is swallowed, retried, or converted into
+fallback behavior, and no exception crosses the native ABI.
+
+New formatting in this feature uses C++23 `std::format`/`std::format_to`. Do not
+introduce `std::ostringstream`, `std::wostringstream`, or another string-stream
+formatting path.
 
 The eight sites are preflighted together and are never exposed as a
 partial operational mode. If installation fails, startup terminates; there is
@@ -991,8 +1075,8 @@ On the first active-stage fatal condition:
 2. stop issuing native recognition immediately;
 3. emit and flush one structured snapshot containing mode/FPS, every stage
    identity/generation, last anchor and exact `J`, committed boundary, pending
-   work, last sequence, held mask, late/eviction counts, offsets, safe values,
-   and native call/query/score counters; and
+   work, last sequence, held mask, late/drop/eviction counts, offsets, safe
+   values, and native call/query/score/publication counters; and
 4. terminate the game through one shared terminal fatal path after that single
    best-effort synchronous flush.
 
@@ -1027,22 +1111,43 @@ explicit native stage can open before any BGM epoch exists.
 
 Periodic/end summaries include interval and cumulative counters for:
 
-- transport records, rise/fall masks, pending/max depth, late records,
-  outside-playback baseline-only records, evictions, and sequence errors;
-- exact/resolved/unavailable clock reads, endpoint and playback-epoch counts,
-  last endpoint/output/source/QPC and `J`, history/discontinuity errors, and
-  zero rounded fallback;
-- outer calls, event/heartbeat scopes, equal-boundary substitutions, committed
-  boundaries, closed-frontier catch-ups, batches, maximum
-  batch/backlog/delivery delay, and pending work;
+- transport records actually drained, rising/falling control-bit counts,
+  pending/max depth, late records, outside-playback baseline-only records,
+  overload drops, cleanup drops, evictions, and sequence errors. One record
+  that raises two controls increments records by one and rising controls by two;
+- exact/resolved/unavailable clock reads, real endpoint publication
+  sequence/count, real retained Play/Seek epoch counts, actual last
+  endpoint/output/source/QPC and `J`, closed-frontier selections, final frozen
+  coordinate, history/discontinuity errors, and zero rounded fallback;
+- outer calls, event/heartbeat scopes, event-only batches, heartbeat-only
+  batches, mixed event batches, event-barrier deferrals, equal-boundary
+  substitutions, committed boundaries, closed-frontier catch-ups, maximum
+  event backlog/batch/delivery delay, and pending work;
 - recognition and score calls;
 - all five query call counts and true/nonzero counts, including age-1 versus
-  age-2-plus; and
-- native MISS/GOOD/COOL/GREAT counter deltas.
+  age-2-plus. The already-collected per-scope values must be checked-added into
+  the stage totals rather than discarded after Verbose formatting;
+- native MISS/GOOD/COOL/GREAT counter deltas; and
+- raw aggregate counts of the audited native transient sound publications,
+  including arrange, left free-tap, and right free-tap requests observed after
+  the native pair and before returning to the original tail.
 
-The checked invariant is:
+Remove a summary field if no truthful owner/publication source exists. A
+declared atomic with no writer or a default-zero snapshot member is not
+observability and must not remain in the output.
+
+The checked invariants are:
 
 `recognition_calls == score_calls == event_scopes + heartbeat_scopes`.
+
+`event_scopes == event_only_batches`.
+
+`mixed_event_batches == 0`.
+
+At final summary, every post-cutoff transport record must be explained as an
+event scope, outside-playback baseline-only record, accepted-late record,
+overload drop, cleanup drop, or still-pending record. Ordinary accepted stage
+completion has no pending record.
 
 ### 14.2 Verbose scope records
 
@@ -1055,11 +1160,14 @@ after each delivered scope containing:
 - held-before/after and rise/fall masks;
 - actual query calls/results and held-age classes seen in the scope;
 - recognition/score completion and four score-counter deltas; and
-- boundary commitment and remaining backlog.
+- boundary commitment, event-isolation/batch disposition, remaining backlog,
+  and the raw audited transient publication bits observed immediately before
+  returning to the original native tail.
 
 Verbose logging is diagnostic, not performance acceptance. Always-on counters
-must be sufficient to identify `journal -> scope -> query -> recognition ->
-score -> grade` without per-call file I/O.
+must be sufficient to identify `journal -> scope/drop -> query -> recognition
+-> score -> grade/publication` without per-call file I/O. No new sound hook or
+loader-owned playback call is introduced for diagnostics.
 
 ## 15. Proof and acceptance policy
 
@@ -1103,10 +1211,13 @@ Run one ordinary chart twice before broader testing:
 
 1. **No input:** heartbeat scopes, recognition, score, and native MISS deltas
    advance; exactly one native-stage-open and one absolute-stage-activation
-   record appear; the song reaches normal result/lifecycle.
+   record appear; exact natural drain selects a closed frontier rather than a
+   native-state fatal; the song reaches normal result/lifecycle.
 2. **Real input:** one physical rise appears as journal record -> resolved event
    scope -> true scoped query -> one recognition/score pair -> visible native
-   result/grade delta. At least one reasonably timed input produces non-MISS.
+   result/grade delta -> event-only native-tail interval. At least one reasonably
+   timed input produces non-MISS, and reported hidden/ad-lib plus free-input
+   cases produce their expected audible native result.
 
 Stop on either failure. The new counters must identify the first dead stage.
 
@@ -1150,10 +1261,11 @@ enabled. At every rate:
 
 - a fresh explicit native stage activates exact judgement;
 - journal/event/query/native-call/grade counters are meaningful;
-- call-count invariants hold;
+- call-count and event-isolation invariants hold;
 - the chart finishes with sensible visible judgement and score;
 - eviction, sequence error, rounded fallback, discontinuity, fatal invariant,
-  and end-of-stage backlog are zero; and
+  mixed event batch, overload drop, cleanup drop, and end-of-stage backlog are
+  zero; and
 - any late record/unavailable read is reported, not hidden (repeat an
   acceptance run containing an accepted late miss).
 
@@ -1202,6 +1314,17 @@ The implementation and review must reject these known failure patterns:
 - **Recovery machinery for impossible internal failures:** do not turn an
   expected-success Boolean into fallback/retry state. Perform one always-on
   check and terminate through the phase-appropriate fatal path.
+- **Transient-output clobber:** never execute a loader-added event recognition
+  in the same native-tail publication interval as another recognition call.
+  Do not preserve only the currently reported sound bytes or invent merge
+  semantics for native transient arrays.
+- **Cursor sign as mixing state:** a nonnegative native group cursor identifies
+  the selected cursor/history; it does not override an exact `Inactive`
+  observation or turn natural drain into a native-state mismatch.
+- **Silent diagnostic zeros:** do not print declared counters or snapshot fields
+  that have no truthful producer assignment.
+- **Early overload baseline:** never apply a dropped event's `held_after` state
+  before chronological scheduling reaches that event's exact coordinate.
 
 These are review gates, not optional historical commentary.
 
@@ -1256,5 +1379,62 @@ the approved product behavior:
 - Native-stage-open and absolute-stage-activation diagnostics are separate
   because native construction can precede the first exact BGM epoch.
 
-These corrections are binding review gates and are reflected task-by-task in
-the implementation plan.
+These corrections are binding review gates and must be reflected task-by-task
+in the runtime-correction implementation plan before production code changes.
+
+## 19. 2026-08-21 runtime-correction closure
+
+The first implemented 240-FPS run is preserved as
+`.superpowers/sdd/2026-08-20-absolute-time-judgement/runtime-evidence/20260821T025248+0800-240fps-loader-log.txt`
+with SHA-256
+`4371D789B0D4EC98E9923FC9A7618408CC03D2B69E51DBBE32DA056C70F922E7`.
+The corresponding diagnosis closes these source-to-native chains:
+
+- event recognition can set free-tap sound bytes `+237/+238`, and accepted
+  muted hidden/ad-lib lifecycle can set `+170`; a later recognition clears them
+  before the single original tail consumes them;
+- the natural BGM tail was exact at `J=103.4763591 s`, but a nonnegative retained
+  cursor plus exact `Inactive` observation entered `NativeStateMismatch`; and
+- transport/query/endpoint/epoch counters and `last_endpoint_position` printed
+  zeros even though their producer/assignment wiring was absent.
+
+The design is therefore corrected, not replaced:
+
+1. every event scope owns one complete recognition -> score -> original-tail
+   publication interval;
+2. heartbeat-only native-equivalent catch-up remains bounded to three authored
+   boundaries per outer call;
+3. the newest 32 ready event records remain eligible, while older excess events
+   are marked and consumed baseline-only at their chronological turn;
+4. natural exact `Inactive` resolves/catches up through a proven closed frontier
+   and freezes there until native cleanup; and
+5. diagnostics obtain values from real owning boundaries and expose event batch,
+   drop, query, score, and transient-publication evidence.
+
+The accepted cost is delivery latency, not timestamp error. An event separated
+from a preceding heartbeat may be delivered one render update later: about
+`4.17 ms` at 240 FPS, `6.06 ms` at 165 FPS, `6.94 ms` at 144 FPS, or
+`16.67 ms` at 60 FPS. Additional already-ready event records take successive
+outer calls. With three-heartbeat catch-up, the approximate steady-backlog
+service condition is
+
+`event_records_per_second <= render_fps - 20`.
+
+This is about 40, 124, 145, and 220 event records per second at 60, 144, 165,
+and 240 FPS. A full press/release tap normally creates two records. The observed
+240-FPS run produced about 7.5 event records per second. The 32-record shedding
+rule therefore targets synthetic bounce, a malfunctioning device, or an
+extraordinary stall rather than normal human rapid trigger.
+
+Rejected corrections remain prohibited: OR-merging selected transient fields,
+calling sound/effect consumers from loader policy, replaying the inline native
+tail multiple times without a complete side-effect proof, patching only the
+three reported bytes, fabricating a negative DirectSound cursor, or adding an
+in-song blocking fatal dialog. The existing fatal path remains one synchronous
+log flush followed by termination; removing the false natural-end fatal is the
+bug fix.
+
+No automated gameplay test or emulated expected-value model is authorized for
+this correction. Static review and x86 Debug/Release builds are implementation
+evidence; the supported game at 60/144/165/240 FPS remains the only gameplay
+acceptance oracle.
