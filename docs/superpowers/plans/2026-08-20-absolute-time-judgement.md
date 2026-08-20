@@ -3,8 +3,9 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Status:** Tasks 1-10 implemented; first Task 11 240-FPS run diagnosed;
-2026-08-21 runtime-correction Tasks 12-15 approved for implementation and
-deployment.
+runtime-correction Tasks 12-14 implemented and controller-reviewed in
+`7f01266`; Task 15 source/build/ABI/deployment gates completed on 2026-08-21.
+Native-game acceptance remains pending the operator's next 240-FPS run.
 
 **Goal:** Build an opt-in WASAPI-exclusive judgement path that feeds every successfully observed physical transition to native recognition/score at its exact audio-derived song time, with render-independent results at 60, 144, 165, and 240 FPS.
 
@@ -2128,7 +2129,7 @@ last_overload_drop_sequence
 
 - Keep `kProtectedReadyEventCount = 32` private to the scheduler.
 
-- [ ] **Step 1: Preserve chronological baseline semantics for a dropped event**
+- [x] **Step 1: Preserve chronological baseline semantics for a dropped event**
 
 Keep a resolved event fully resolved while it is merely marked by scheduler
 count. Do not rewrite its history entry when overload is first detected.
@@ -2143,7 +2144,7 @@ visible to later scopes as stale held state, with no edge, paired companion,
 freshness, native call, sound, or effect. Conversion itself emits no
 `ScheduledJudgementScope` and creates no publication barrier.
 
-- [ ] **Step 2: Mark only the oldest excess ready records**
+- [x] **Step 2: Mark only the oldest excess ready records**
 
 Before capping the heartbeat horizon, count resolved undelivered events whose
 exact coordinate is `<= ready`. Let:
@@ -2158,7 +2159,7 @@ fatal. Increase the marked count only by the difference. Never mark an event
 whose coordinate is beyond exact current-ready/closed-frontier time. Never
 infer pairs, merge controls, retimestamp, or mutate transport order.
 
-- [ ] **Step 3: Make event scopes barriers on both sides**
+- [x] **Step 3: Make event scopes barriers on both sides**
 
 Track the current outer batch's event and heartbeat scope counts. `NextScope()`
 must obey this exact order:
@@ -2175,7 +2176,7 @@ An event at an authored boundary still commits the boundary only when it is the
 final same-time sequence. Separate same-time records may occupy successive
 outer calls. One multi-bit journal record remains one event scope.
 
-- [ ] **Step 4: Classify and check every nonempty native batch**
+- [x] **Step 4: Classify and check every nonempty native batch**
 
 At `FinishOuterCall()`:
 
@@ -2193,7 +2194,7 @@ the completed-batch invariant `event_scopes == event_only_batches` plus
 `mixed_event_batches == 0`. Check the batch invariant only after the batch has
 finished, not between an event's native pair and its tail.
 
-- [ ] **Step 5: Atomically account cleanup drops**
+- [x] **Step 5: Atomically account cleanup drops**
 
 At explicit native cleanup, after validating the native manager and confirming
 there is no outstanding scope, call the existing journal-locked
@@ -2221,7 +2222,7 @@ Cleanup dropping is not fatal. Log the final counters before clearing stage
 state; input published after this atomic cleanup cutoff is inter-stage input and
 is discarded by the next stage-begin cutoff.
 
-- [ ] **Step 6: Update scheduler reset and runtime accounting**
+- [x] **Step 6: Update scheduler reset and runtime accounting**
 
 Reset marked-drop count, outer batch kind/counts, barrier-recorded state, and
 drop-sequence diagnostics at every native stage begin/end. `PendingWorkCount()`
@@ -2229,7 +2230,7 @@ continues to include marked events until their chronological conversion.
 Observe `maximum_event_backlog` from resolved pending event records, separately
 from unresolved/total pending work.
 
-- [ ] **Step 7: Perform source review and focused build**
+- [x] **Step 7: Perform source review and focused build**
 
 Review the amended 200-ms worked example against the merge code. Confirm no
 path can return an event after a heartbeat or any scope after an event in one
@@ -2244,7 +2245,7 @@ cmake --build --preset msvc32-debug --target iDmacDrv32
 
 Expected evidence: the history/scheduler/diagnostic contracts compile and link.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add -- src/Patches/AbsoluteJudgement/JudgementHistory.h src/Patches/AbsoluteJudgement/JudgementHistory.cpp src/Patches/AbsoluteJudgement/JudgementScheduler.h src/Patches/AbsoluteJudgement/JudgementScheduler.cpp src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
@@ -2269,7 +2270,7 @@ git commit -m "Isolate absolute judgement event publications"
   observation.
 - Preserve `GameplayAudioCursorState::{Exact,Pending,Inactive}` unchanged.
 
-- [ ] **Step 1: Correct the cursor-sign contract**
+- [x] **Step 1: Correct the cursor-sign contract**
 
 The runtime still calls the native group-2 cursor getter exactly once. A
 negative return clears/discards the incidental observation and sets
@@ -2277,7 +2278,7 @@ negative return clears/discards the incidental observation and sets
 scoped observation and sets the field true. Never use the rounded magnitude and
 never synthesize a negative DirectSound result.
 
-- [ ] **Step 2: Route selected `Inactive` through the existing resolver**
+- [x] **Step 2: Route selected `Inactive` through the existing resolver**
 
 In `SelectOuterHorizonOrFatal`, handle selected `Inactive` through the same
 `ResolveCurrentQpc` call used for `Pending`, with
@@ -2296,14 +2297,14 @@ at-most-three-heartbeat batches. Once no work is due, the coordinate remains
 frozen until native cleanup or a later exact selected Play/Seek epoch. There is
 no timeout, elapsed-frame decision, or stage transition.
 
-- [ ] **Step 3: Preserve negative-sign closed-tail behavior**
+- [x] **Step 3: Preserve negative-sign closed-tail behavior**
 
 When the native getter returns negative after a previously selected history,
 continue the existing last-selected-history resolution. It may likewise use a
 newly proven closed frontier. Before any history was selected, negative sign is
 ordinary `NoPlayback` and emits no scope.
 
-- [ ] **Step 4: Review and focused build**
+- [x] **Step 4: Review and focused build**
 
 Trace the preserved fatal run coordinate `J=103.4763591 s`: selected cursor,
 exact `Inactive`, resolver `OutsidePlayback`, fixed closed frontier, bounded
@@ -2314,7 +2315,7 @@ catch-up, then zero scopes until native cleanup. Confirm the path contains no
 cmake --build --preset msvc32-debug --target iDmacDrv32
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add -- src/Patches/AbsoluteJudgement/JudgementScheduler.h src/Patches/AbsoluteJudgement/JudgementScheduler.cpp src/Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.cpp
@@ -2355,7 +2356,7 @@ struct AbsoluteJudgementTransientPublications {
 };
 ```
 
-- [ ] **Step 1: Eliminate the dead shared-counter layer**
+- [x] **Step 1: Eliminate the dead shared-counter layer**
 
 Remove `AbsoluteJudgementSharedCounters`, `shared_counters()`,
 `LoadSharedAbsolute`, and shared stage baselines. No producer writes those
@@ -2369,14 +2370,14 @@ The final transport fields are `transport_records_drained`,
 add `std::popcount(record.rising)` / `std::popcount(record.falling)` with checked
 arithmetic. A two-bit chord is one record and two rising controls.
 
-- [ ] **Step 2: Accumulate the already-collected five-query evidence**
+- [x] **Step 2: Accumulate the already-collected five-query evidence**
 
 Add one diagnostics method that checked-adds a scope's
 `AbsoluteJudgementQueryCounters` into stage totals. Call it exactly once after
 the native recognition/score pair for every event and heartbeat scope. Overflow
 enters the active-stage fatal path; no field remains a local Verbose-only value.
 
-- [ ] **Step 3: Publish endpoint and playback-history facts from real owners**
+- [x] **Step 3: Publish endpoint and playback-history facts from real owners**
 
 Expose the endpoint provider's atomic publication count without a lock. When
 `ResolveQpc` selects an anchor, return both its real sequence and endpoint
@@ -2394,7 +2395,7 @@ Play/Seek epochs. Checked-sum those real per-history values into stage
 `playback_epochs`, `playback_play_epochs`, and `playback_seek_epochs`; do not
 use audio-thread mirror atomics.
 
-- [ ] **Step 4: Expose exact closed-frontier/frozen state**
+- [x] **Step 4: Expose exact closed-frontier/frozen state**
 
 Track the exact last selected closed frontier separately from ordinary current
 ready time. Increment `closed_frontier_selections` only when a new/different
@@ -2403,7 +2404,7 @@ coordinate, and clear it only when exact active playback supplies a later
 ordinary ready coordinate or native cleanup resets the stage. Print the
 optional frozen coordinate in periodic/end/fatal runtime snapshots.
 
-- [ ] **Step 5: Observe audited transient native publications read-only**
+- [x] **Step 5: Observe audited transient native publications read-only**
 
 Add the three byte offsets above to `NativeJudgementAbi.h` and one SEH-safe byte
 reader beside the existing guarded native reads. Immediately after original
@@ -2416,7 +2417,7 @@ Boolean values, batch kind, and event-isolation disposition to the existing
 Verbose scope record. This is observation only: do not clear, restore, OR,
 merge, replay, or call a native sound/effect consumer.
 
-- [ ] **Step 6: Make summaries and invariants causally complete**
+- [x] **Step 6: Make summaries and invariants causally complete**
 
 Periodic/end/fatal records must include:
 
@@ -2436,7 +2437,7 @@ Ordinary runtime acceptance requires mixed batches, overload drops, cleanup
 drops, transport loss, and final pending work all zero. Keep per-scope evidence
 at `Verbose`; add no per-scope `Info` log.
 
-- [ ] **Step 7: Record fatal error counters only from the fatal owner**
+- [x] **Step 7: Record fatal error counters only from the fatal owner**
 
 If history/discontinuity count fields remain, increment them from the latched
 fatal reason in `FatalActiveStage` before snapshot formatting. Do not scatter
@@ -2444,7 +2445,7 @@ speculative increments across resolver branches. Otherwise remove those fields
 and rely on the exact fatal reason. Either choice must leave no declared field
 without a writer.
 
-- [ ] **Step 8: Source scan and focused build**
+- [x] **Step 8: Source scan and focused build**
 
 Require source searches to show:
 
@@ -2462,7 +2463,7 @@ Build:
 cmake --build --preset msvc32-debug --target iDmacDrv32
 ```
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add -- src/Audio/ExactAudioTime.h src/Audio/Wasapi/ExactWasapiClock.h src/Audio/Wasapi/ExactWasapiClock.cpp src/Patches/AbsoluteJudgement/JudgementClockResolver.h src/Patches/AbsoluteJudgement/JudgementClockResolver.cpp src/Patches/AbsoluteJudgement/JudgementScheduler.h src/Patches/AbsoluteJudgement/JudgementScheduler.cpp src/Patches/AbsoluteJudgement/NativeJudgementAbi.h src/Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.cpp src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
@@ -2488,7 +2489,7 @@ agent performs this task.
   `H:\gc\iDmacDrv32.dll`; preserve `H:\gc\config.toml` unless an exact schema
   requirement changed.
 
-- [ ] **Step 1: Review every changed line against the corrected spec**
+- [x] **Step 1: Review every changed line against the corrected spec**
 
 Trace these source chains manually:
 
@@ -2506,7 +2507,7 @@ rounded cursor fallback, no target-FPS term in time policy, no broad catch, no
 string stream, no automated test, and no loader-owned sound/effect call. Fix
 all findings inline and repeat the relevant source trace.
 
-- [ ] **Step 2: Run focused and complete x86 builds through a persisted script**
+- [x] **Step 2: Run focused and complete x86 builds through a persisted script**
 
 The script must invoke the existing PowerShell 7 VS18 HostX86/x86 environment
 and `H:\gc\artifacts\ASIOSDK`; do not rely on transient interactive shell
@@ -2522,19 +2523,19 @@ cmake --build --preset msvc32-release
 Do not run CTest or add tests. A compile failure is fixed inline, reviewed, and
 both complete graphs are rerun after the final source change.
 
-- [ ] **Step 3: Re-run static artifact/ABI inspection**
+- [x] **Step 3: Re-run static artifact/ABI inspection**
 
 Use the persisted Release ABI script to confirm PE32 x86, declared exports and
 ordinals, and unchanged seven InlineHook shim cleanup sizes. Compute the exact
 Release DLL SHA-256. This is build/static evidence only.
 
-- [ ] **Step 4: Commit controller corrections**
+- [x] **Step 4: Commit controller corrections**
 
 Commit each coherent reviewed correction. Do not create an empty review commit.
 Require a clean tracked worktree before deployment; ignored Superpowers ledger,
 brief, report, and evidence files remain in place.
 
-- [ ] **Step 5: Back up and deploy automatically**
+- [x] **Step 5: Back up and deploy automatically**
 
 Resolve and hash the exact current runtime DLL and config, create one timestamped
 backup directory, and copy both files there before overwrite. Copy the reviewed
@@ -2554,35 +2555,35 @@ and zero ordinary overload/cleanup drops.
 
 ## Completion checklist
 
-- [ ] Tasks 1-9 each have a focused source commit.
-- [ ] Task 10 Debug and Release full builds pass without CTest.
-- [ ] `src/Patches/Framerate/` is unchanged from `0484300`.
-- [ ] Exactly eight enabled-mode sites are guarded, fully preflighted before mutation, and installed before operational mode is exposed.
-- [ ] Feature-off installs zero sites and leaves audio backends unrestricted.
-- [ ] No test suite, replay source, loader note routing, rounded fallback, CBooster-ring materialization, or mid-stage native fallback exists.
-- [ ] A changed FastIO exchange pushes its journal record before Debug logging or unrelated work.
-- [ ] The provider registry is synchronized outside the render path, and stale generation cleanup cannot clear a newer provider.
-- [ ] Exact playback slots use atomic scalar payloads; readers reconstruct ordinary epoch snapshots only after a stable version read.
-- [ ] Allocation-capable outer preparation is not `noexcept`, and its immediate `noexcept` hook boundary converts failure to the active-stage fatal path.
-- [ ] Runtime deployment was explicitly authorized before Task 11.
+- [x] Tasks 1-9 each have a focused source commit.
+- [x] Task 10 Debug and Release full builds pass without CTest.
+- [x] `src/Patches/Framerate/` is unchanged from `0484300`.
+- [x] Exactly eight enabled-mode sites are guarded, fully preflighted before mutation, and installed before operational mode is exposed.
+- [x] Feature-off installs zero sites and leaves audio backends unrestricted.
+- [x] No test suite, replay source, loader note routing, rounded fallback, CBooster-ring materialization, or mid-stage native fallback exists.
+- [x] A changed FastIO exchange pushes its journal record before Debug logging or unrelated work.
+- [x] The provider registry is synchronized outside the render path, and stale generation cleanup cannot clear a newer provider.
+- [x] Exact playback slots use atomic scalar payloads; readers reconstruct ordinary epoch snapshots only after a stable version read.
+- [x] Allocation-capable outer preparation is not `noexcept`, and its immediate `noexcept` hook boundary converts failure to the active-stage fatal path.
+- [x] Runtime deployment was explicitly authorized before Task 11.
 - [ ] 240-FPS no-input and real-input gates pass before broad testing.
 - [ ] Two consecutive charts in one process show one explicit begin/end pair
   plus one activation per native stage and no cross-stage state.
 - [ ] Actual mechanics/types and full-song 60/144/165/240 runs pass.
 - [ ] Full-song 144/165 summaries prove zero accumulated boundary drift.
 - [ ] Final report keeps build/static, structural runtime, and actual game evidence separate.
-- [ ] Every event scope is the sole native recognition call before its original
+- [x] Every event scope is the sole native recognition call before its original
   tail; heartbeat batches contain no event and at most three scopes.
-- [ ] The newest 32 ready event records are protected; any older excess record
+- [x] The newest 32 ready event records are protected; any older excess record
   is consumed baseline-only only at chronological turn.
-- [ ] Exact natural `Inactive` catches up through a proven closed frontier and
+- [x] Exact natural `Inactive` catches up through a proven closed frontier and
   freezes without a native-state fatal until explicit cleanup.
-- [ ] Final transport accounting explains every post-cutoff record as event,
+- [x] Final transport accounting explains every post-cutoff record as event,
   outside-playback baseline, accepted late, overload drop, or cleanup drop.
-- [ ] Info counters have real owners, scope query totals are accumulated, and
+- [x] Info counters have real owners, scope query totals are accumulated, and
   Verbose scope evidence observes arrange/left/right transient publications
   without changing native fields or calling sound/effect consumers.
-- [ ] Tasks 12-14 receive one high-reasoning implementation pass; all review,
+- [x] Tasks 12-14 receive one high-reasoning implementation pass; all review,
   corrections, builds, ABI checks, backup, and deployment are controller-only.
-- [ ] Full Debug and Release graphs pass after the final correction, and the
+- [x] Full Debug and Release graphs pass after the final correction, and the
   deployed runtime DLL hash exactly matches the reviewed Release artifact.
