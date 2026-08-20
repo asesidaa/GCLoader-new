@@ -9,6 +9,12 @@
 
 namespace gc::session_log {
 
+namespace {
+
+std::atomic<SessionLogAppender*> g_active_process_appender{nullptr};
+
+} // namespace
+
 const wchar_t* ProcessLogFileName(
     nesys_service::ProcessRole role) noexcept {
     return role == nesys_service::ProcessRole::Service
@@ -105,6 +111,13 @@ bool BoundedSessionFile::Write(std::string_view bytes) noexcept {
     return false;
 }
 
+void BoundedSessionFile::Flush() noexcept {
+    plog::util::MutexLock lock(mutex_);
+    if (file_ != INVALID_HANDLE_VALUE) {
+        FlushFileBuffers(file_);
+    }
+}
+
 SessionLogAppender::SessionLogAppender(
     const wchar_t* file_name,
     std::uint64_t max_bytes) noexcept
@@ -127,6 +140,23 @@ void SessionLogAppender::write(const plog::Record& record) {
             OutputDebugStringW(
                 L"GCLoader: failed to format the process session log.\n");
         }
+    }
+}
+
+void SessionLogAppender::Flush() noexcept {
+    file_.Flush();
+}
+
+void RegisterActiveProcessLogAppender(
+    SessionLogAppender* appender) noexcept {
+    g_active_process_appender.store(appender, std::memory_order_release);
+}
+
+void FlushActiveProcessLog() noexcept {
+    auto* appender =
+        g_active_process_appender.load(std::memory_order_acquire);
+    if (appender != nullptr) {
+        appender->Flush();
     }
 }
 

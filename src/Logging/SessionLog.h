@@ -32,6 +32,7 @@ public:
     BoundedSessionFile& operator=(const BoundedSessionFile&) = delete;
 
     bool Write(std::string_view bytes) noexcept;
+    void Flush() noexcept;
 
 private:
     bool WriteLocked(std::string_view bytes) noexcept;
@@ -52,10 +53,15 @@ public:
         std::uint64_t max_bytes = kMaxSessionLogBytes) noexcept;
 
     void write(const plog::Record& record) override;
+    void Flush() noexcept;
 
 private:
     BoundedSessionFile file_;
     std::atomic_bool formatting_failed_{false};
 };
+
+void RegisterActiveProcessLogAppender(
+    SessionLogAppender* appender) noexcept;
+void FlushActiveProcessLog() noexcept;
 
 } // namespace gc::session_log

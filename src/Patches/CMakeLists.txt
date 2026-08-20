@@ -1,4 +1,5 @@
 add_library(gc_runtime_patches STATIC
+        AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
         GameCompatibility/GameBinaryPatch.cpp
         GameCompatibility/GameBinaryPatchDiagnostics.cpp
         Framerate/FramerateAuthoredClock.cpp
@@ -22,6 +23,7 @@ target_include_directories(gc_runtime_patches PUBLIC
 target_link_libraries(gc_runtime_patches PUBLIC
         gc_audio
         gc_config
+        gc_logging
         safetyhook::safetyhook
 )
 

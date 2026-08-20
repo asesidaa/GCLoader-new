@@ -37,6 +37,8 @@ void InitProcessLog(gc::nesys_service::ProcessRole role) {
     static gc::session_log::SessionLogAppender loader_log_appender(
         gc::session_log::ProcessLogFileName(role));
     plog::init(plog::info, &loader_log_appender);
+    gc::session_log::RegisterActiveProcessLogAppender(
+        &loader_log_appender);
 }
 
 const char* LoaderLogLevelName(gc::config::LoaderLogLevel level) {
