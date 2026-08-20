@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Audio/ExactAudioTime.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -69,6 +71,7 @@ public:
         std::uint32_t output_sample_rate) noexcept;
     std::optional<std::uint64_t> ToOutputFrame(
         std::uint64_t position) const noexcept;
+    [[nodiscard]] EndpointClockMapping mapping() const noexcept;
 
 private:
     std::uint64_t origin_position_{};

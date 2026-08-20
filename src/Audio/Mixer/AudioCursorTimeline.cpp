@@ -314,6 +314,15 @@ std::optional<std::uint64_t> EndpointClockMapper::ToOutputFrame(
     return origin_output_frame_ + *elapsed_frames;
 }
 
+EndpointClockMapping EndpointClockMapper::mapping() const noexcept {
+    return {
+        origin_position_,
+        frequency_,
+        origin_output_frame_,
+        output_sample_rate_,
+    };
+}
+
 void PresentedClockPublication::Publish(
     std::uint64_t presented_output_frame,
     std::uint64_t sample_qpc_100ns,

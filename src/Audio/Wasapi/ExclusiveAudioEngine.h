@@ -2,6 +2,7 @@
 
 #include "Audio/DirectSound/DirectSoundFacade.h"
 #include "Audio/Mixer/AudioRenderCore.h"
+#include "Audio/Wasapi/ExactWasapiClock.h"
 #include "Audio/Wasapi/OutputPacingTracker.h"
 #include "Audio/Wasapi/WasapiEndpoint.h"
 #include "Audio/Wasapi/WasapiPresentedOutputClock.h"
@@ -29,6 +30,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartExclusiveAudioEngineAndWait(
     std::shared_ptr<IAudioEngineObserver>,
     DWORD timeout_ms,
     REFERENCE_TIME configured_duration,
+    bool enable_absolute_time_judgement,
     std::shared_ptr<const ma_allocation_callbacks>,
     const ExclusiveAudioEngineTiming&,
     AudioStartupFailure*) noexcept;
@@ -77,6 +79,7 @@ public:
         std::shared_ptr<IAudioEngineObserver>,
         DWORD timeout_ms,
         REFERENCE_TIME configured_duration,
+        bool enable_absolute_time_judgement,
         std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
         AudioStartupFailure*) noexcept;
 
@@ -99,6 +102,7 @@ private:
             std::shared_ptr<IAudioEngineObserver>,
             DWORD,
             REFERENCE_TIME,
+            bool,
             std::shared_ptr<const ma_allocation_callbacks>,
             const detail::ExclusiveAudioEngineTiming&,
             AudioStartupFailure*) noexcept;
@@ -107,6 +111,7 @@ private:
         std::unique_ptr<IWasapiApi>,
         std::shared_ptr<IAudioEngineObserver>,
         REFERENCE_TIME configured_duration,
+        bool enable_absolute_time_judgement,
         std::shared_ptr<const ma_allocation_callbacks>,
         DWORD summary_interval_ms) noexcept;
 
@@ -115,6 +120,7 @@ private:
     void AudioThreadMain() noexcept;
     void MonitorThreadMain() noexcept;
     void RenderLoop() noexcept;
+    void CleanupExactClock() noexcept;
     void CleanupEndpointOnAudioThread() noexcept;
     void SignalInitializationFailure(
         AudioFailure,
@@ -129,6 +135,7 @@ private:
 
     std::unique_ptr<IWasapiApi> pending_api_;
     REFERENCE_TIME configured_duration_{};
+    bool enable_absolute_time_judgement_{};
     std::unique_ptr<WasapiEndpoint> endpoint_;
     std::shared_ptr<IAudioEngineObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
@@ -136,6 +143,8 @@ private:
     WasapiPresentedOutputClock* presented_clock_{};
     std::vector<std::int16_t> pcm16_mix_;
     EndpointClockMapper clock_mapper_;
+    std::shared_ptr<ExactWasapiClock> exact_clock_;
+    std::uint64_t exact_anchor_sequence_{};
     std::optional<OutputPacingTracker> pacing_tracker_;
     std::thread audio_thread_;
     std::thread monitor_thread_;

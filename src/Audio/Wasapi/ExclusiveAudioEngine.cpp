@@ -2,6 +2,7 @@
 #include "Audio/Wasapi/ExclusiveAudioEngineInternal.h"
 
 #include <algorithm>
+#include <limits>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -28,10 +29,12 @@ ExclusiveAudioEngine::ExclusiveAudioEngine(
     std::unique_ptr<IWasapiApi> api,
     std::shared_ptr<IAudioEngineObserver> observer,
     REFERENCE_TIME configured_duration,
+    bool enable_absolute_time_judgement,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     DWORD summary_interval_ms) noexcept
     : pending_api_(std::move(api)),
       configured_duration_(configured_duration),
+      enable_absolute_time_judgement_(enable_absolute_time_judgement),
       observer_(std::move(observer)),
       mixer_allocations_(std::move(mixer_allocations)),
       summary_interval_ms_(summary_interval_ms) {}
@@ -50,6 +53,8 @@ ExclusiveAudioEngine::~ExclusiveAudioEngine() {
         monitor_thread_.join();
     }
 
+    CleanupExactClock();
+
     // Every finite post-create path resets the endpoint on the audio thread.
     // If a future regression violates that invariant, abandon rather than run
     // thread-affine endpoint destruction on this controlling thread.
@@ -64,6 +69,7 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
     std::shared_ptr<IAudioEngineObserver> observer,
     DWORD timeout_ms,
     REFERENCE_TIME configured_duration,
+    bool enable_absolute_time_judgement,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     AudioStartupFailure* startup_failure) noexcept {
     return detail::StartExclusiveAudioEngineAndWait(
@@ -71,6 +77,7 @@ std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
         std::move(observer),
         timeout_ms,
         configured_duration,
+        enable_absolute_time_judgement,
         std::move(mixer_allocations),
         detail::ExclusiveAudioEngineTiming{},
         startup_failure);
@@ -82,6 +89,7 @@ detail::StartExclusiveAudioEngineAndWait(
     std::shared_ptr<IAudioEngineObserver> observer,
     DWORD timeout_ms,
     REFERENCE_TIME configured_duration,
+    bool enable_absolute_time_judgement,
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
     const ExclusiveAudioEngineTiming& timing,
     AudioStartupFailure* startup_failure) noexcept {
@@ -101,6 +109,7 @@ detail::StartExclusiveAudioEngineAndWait(
             std::move(api),
             std::move(observer),
             configured_duration,
+            enable_absolute_time_judgement,
             std::move(mixer_allocations),
             timing.summary_interval_ms));
     if (engine == nullptr) {
@@ -228,9 +237,11 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
         output_sample_rate_.store(
             output_sample_rate, std::memory_order_release);
 
+        const auto presented_clock_actions =
+            ProductionWasapiPresentedOutputClockActions();
         auto presented_clock = std::make_unique<WasapiPresentedOutputClock>(
             output_sample_rate,
-            ProductionWasapiPresentedOutputClockActions());
+            presented_clock_actions);
         presented_clock_ = presented_clock.get();
         ma_result mixer_result = MA_ERROR;
         render_core_ = AudioRenderCore::Create(
@@ -266,6 +277,45 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
             0,
             output_sample_rate);
         pacing_tracker_.emplace(frames, output_sample_rate);
+
+        if (enable_absolute_time_judgement_) {
+            const auto endpoint_generation =
+                detail::NextExactWasapiClockGeneration();
+            if (endpoint_generation == 0 ||
+                presented_clock_actions.qpc_frequency == 0 ||
+                presented_clock_actions.qpc_frequency >
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                failure = {
+                    AudioFailureStage::InitializeMixer,
+                    E_UNEXPECTED,
+                };
+                CleanupEndpointOnAudioThread();
+                SignalInitializationFailure(
+                    failure, std::move(initialization_));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+            exact_clock_ = ExactWasapiClock::Create(
+                endpoint_generation,
+                output_sample_rate,
+                initialization_.clock_frequency,
+                static_cast<std::int64_t>(
+                    presented_clock_actions.qpc_frequency),
+                frames);
+            if (exact_clock_ == nullptr ||
+                !detail::RegisterExactWasapiClock(exact_clock_)) {
+                failure = {
+                    AudioFailureStage::InitializeMixer,
+                    E_OUTOFMEMORY,
+                };
+                CleanupEndpointOnAudioThread();
+                SignalInitializationFailure(
+                    failure, std::move(initialization_));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+        }
         current_submitted_lead_frames_.store(
             frames, std::memory_order_relaxed);
         minimum_submitted_lead_frames_.store(
@@ -327,6 +377,9 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
 
         EndpointClockPosition clock{};
         if (FAILED(endpoint_->ReadClock(&clock, &failure))) {
+            if (exact_clock_ != nullptr) {
+                exact_clock_->Invalidate();
+            }
             static_cast<void>(endpoint_->TrySubmitSilence());
             RecordRuntimeFailure(failure);
             break;
@@ -391,6 +444,16 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
                 clock.qpc_100ns,
                 submitted_tail);
         }
+        if (exact_clock_ != nullptr) {
+            exact_clock_->Publish({
+                ++exact_anchor_sequence_,
+                exact_clock_->endpoint_generation(),
+                clock.position,
+                clock.qpc_100ns,
+                clock_mapper_.mapping(),
+                submitted_tail,
+            });
+        }
         RecordPacingDecision(decision);
         render_callbacks_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -438,7 +501,19 @@ void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
     }
 }
 
+void ExclusiveAudioEngine::CleanupExactClock() noexcept {
+    if (exact_clock_ == nullptr) {
+        return;
+    }
+    const auto endpoint_generation =
+        exact_clock_->endpoint_generation();
+    exact_clock_->Invalidate();
+    detail::UnregisterExactWasapiClock(endpoint_generation);
+    exact_clock_.reset();
+}
+
 void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept {
+    CleanupExactClock();
     if (render_core_ != nullptr) {
         render_core_->InvalidatePresentationClock();
     }

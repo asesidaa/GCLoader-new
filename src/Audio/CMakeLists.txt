@@ -9,6 +9,7 @@ add_library(gc_audio STATIC
         Mixer/AudioRenderCore.cpp
         Mixer/AudioSnapshot.cpp
         Mixer/MiniaudioMixer.cpp
+        Wasapi/ExactWasapiClock.cpp
         Wasapi/ExclusiveAudioEngine.cpp
         Wasapi/OutputPacingTracker.cpp
         AudioPatch.cpp
@@ -24,6 +25,7 @@ target_include_directories(gc_audio PUBLIC
 target_link_libraries(gc_audio PUBLIC
         gc_asio
         gc_config
+        gc_timing
         minhook
         miniaudio
         dsound

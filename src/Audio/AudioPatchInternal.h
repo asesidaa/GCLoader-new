@@ -74,6 +74,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn,
     StartExclusiveAudioEngineFn,
     REFERENCE_TIME configured_duration,
+    bool enable_absolute_time_judgement,
     AudioPatchPlatformActions,
     std::shared_ptr<IAudioEngineObserver>,
     AudioStartupFailure*) noexcept;

@@ -798,8 +798,12 @@ class ProductionWasapiOutputBackendFactory final
 public:
     ProductionWasapiOutputBackendFactory(
         detail::AudioPatchPlatformActions actions,
-        ProductionDiagnosticContext& diagnostics) noexcept
-        : actions_(actions), diagnostics_(diagnostics) {}
+        ProductionDiagnosticContext& diagnostics,
+        bool enable_absolute_time_judgement) noexcept
+        : actions_(actions),
+          diagnostics_(diagnostics),
+          enable_absolute_time_judgement_(
+              enable_absolute_time_judgement) {}
 
     std::unique_ptr<IAudioEngineServices> Start(
         REFERENCE_TIME configured_duration,
@@ -823,6 +827,7 @@ public:
             CreateProductionWasapiApi,
             &ExclusiveAudioEngine::StartAndWait,
             configured_duration,
+            enable_absolute_time_judgement_,
             actions_,
             std::move(observer),
             startup_failure);
@@ -832,6 +837,7 @@ public:
 private:
     detail::AudioPatchPlatformActions actions_{};
     ProductionDiagnosticContext& diagnostics_;
+    bool enable_absolute_time_judgement_{};
 };
 
 class ProductionAsioOutputBackendFactory final
@@ -1002,9 +1008,15 @@ struct ProductionDetourState {
     // This process-lifetime state samples the parsed value exactly once.
     ProductionDetourState()
         : config(production_controller_config()),
+          enable_absolute_time_judgement(
+              ConfigManager::instance()
+                  .GetEnableAbsoluteTimeJudgement()),
           diagnostics{config.requested_backend},
           reporter(production_platform_actions(), &diagnostics),
-          wasapi(production_platform_actions(), diagnostics),
+          wasapi(
+              production_platform_actions(),
+              diagnostics,
+              enable_absolute_time_judgement),
           asio(production_platform_actions()),
           factory(config, wasapi, asio, reporter) {
         report_audio_buffer_handoff(
@@ -1014,6 +1026,7 @@ struct ProductionDetourState {
     }
 
     AudioBackendControllerConfig config;
+    bool enable_absolute_time_judgement{};
     ProductionDiagnosticContext diagnostics;
     ProductionAudioBackendControllerReporter reporter;
     ProductionWasapiOutputBackendFactory wasapi;
@@ -1255,6 +1268,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn create_api,
     StartExclusiveAudioEngineFn start_engine,
     REFERENCE_TIME configured_duration,
+    bool enable_absolute_time_judgement,
     AudioPatchPlatformActions actions,
     std::shared_ptr<IAudioEngineObserver> observer,
     AudioStartupFailure* startup_failure) noexcept {
@@ -1291,6 +1305,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
         std::move(observer),
         10'000,
         configured_duration,
+        enable_absolute_time_judgement,
         std::shared_ptr<const ma_allocation_callbacks>{},
         startup_failure);
 }
