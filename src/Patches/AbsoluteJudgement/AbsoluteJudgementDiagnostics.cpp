@@ -590,6 +590,16 @@ void AbsoluteJudgementDiagnostics::ResetStageState() noexcept {
     next_summary_tick_ms_ = GetTickCount64() + kSummaryCadenceMilliseconds;
 }
 
+void AbsoluteJudgementDiagnostics::SetStartupTargetFps(
+    const std::uint32_t target_fps) noexcept {
+    startup_target_fps_ = target_fps;
+}
+
+std::uint32_t AbsoluteJudgementDiagnostics::startup_target_fps()
+    const noexcept {
+    return startup_target_fps_;
+}
+
 void AbsoluteJudgementDiagnostics::LogStartup(
     const AbsoluteJudgementStartupRecord& record) noexcept {
     PLOG_INFO << std::format(

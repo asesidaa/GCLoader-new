@@ -270,6 +270,7 @@ JudgementClockResult EndpointFailure(
     return {
         .status = endpoint.status,
         .output_frame = endpoint.output_frame,
+        .endpoint_anchor_sequence = endpoint.anchor_sequence,
     };
 }
 
@@ -530,12 +531,14 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
         return {
             .status = ExactClockStatus::Pending,
             .output_frame = endpoint.output_frame,
+            .endpoint_anchor_sequence = endpoint.anchor_sequence,
         };
     }
 
     JudgementClockResult resolved{
         .status = ExactClockStatus::OutsidePlayback,
         .output_frame = endpoint.output_frame,
+        .endpoint_anchor_sequence = endpoint.anchor_sequence,
     };
     bool has_resolved{};
     bool has_pending{};
@@ -547,6 +550,7 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
             *endpoint.output_frame,
             game_time_offset_ms,
             scratch);
+        candidate.endpoint_anchor_sequence = endpoint.anchor_sequence;
         if (candidate.checked_arithmetic_failure) {
             return candidate;
         }
@@ -573,7 +577,10 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
         if (has_resolved &&
             resolved.judgement_seconds->Compare(
                 *candidate.judgement_seconds) != 0) {
-            return {.status = ExactClockStatus::Discontinuous};
+            return {
+                .status = ExactClockStatus::Discontinuous,
+                .endpoint_anchor_sequence = endpoint.anchor_sequence,
+            };
         }
         if (!has_resolved) {
             resolved = candidate;
@@ -584,18 +591,21 @@ JudgementClockResult JudgementClockResolver::ResolveHistoricalQpc(
         return {
             .status = ExactClockStatus::Pending,
             .output_frame = endpoint.output_frame,
+            .endpoint_anchor_sequence = endpoint.anchor_sequence,
         };
     }
     if (has_unavailable) {
         return {
             .status = ExactClockStatus::TemporarilyUnavailable,
             .output_frame = endpoint.output_frame,
+            .endpoint_anchor_sequence = endpoint.anchor_sequence,
         };
     }
     if (other_status) {
         return {
             .status = *other_status,
             .output_frame = endpoint.output_frame,
+            .endpoint_anchor_sequence = endpoint.anchor_sequence,
         };
     }
     return resolved;
@@ -624,11 +634,13 @@ JudgementClockResult JudgementClockResolver::ResolveCurrentQpc(
         !endpoint.output_frame) {
         return EndpointFailure(endpoint);
     }
-    return ResolveStableSource(
+    auto result = ResolveStableSource(
         selected_history,
         *endpoint.output_frame,
         game_time_offset_ms,
         scratch);
+    result.endpoint_anchor_sequence = endpoint.anchor_sequence;
+    return result;
 }
 
 JudgementPlaybackOriginResult

@@ -31,6 +31,7 @@ struct JudgementClockResult {
     std::optional<gc::timing::CheckedRational> source_frame;
     std::optional<gc::timing::CheckedRational> judgement_seconds;
     std::optional<gc::timing::CheckedRational> closed_frontier_seconds;
+    std::uint64_t endpoint_anchor_sequence{};
     std::uint64_t buffer_instance_id{};
     std::uint64_t playback_generation{};
     bool checked_arithmetic_failure{};

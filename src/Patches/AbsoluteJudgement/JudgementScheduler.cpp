@@ -182,6 +182,7 @@ void JudgementScheduler::ClearStageOwnedState() noexcept {
     last_output_frame_.reset();
     last_source_frame_.reset();
     last_j_.reset();
+    last_anchor_sequence_ = 0;
     outer_now_qpc_ = 0;
     last_qpc_ = 0;
 }
@@ -476,6 +477,9 @@ ExactClockStatus JudgementScheduler::ResolveUnresolvedPrefixOrFatal(
         last_j_ = resolved.judgement_seconds
             ? resolved.judgement_seconds
             : resolved.closed_frontier_seconds;
+        if (resolved.endpoint_anchor_sequence != 0) {
+            last_anchor_sequence_ = resolved.endpoint_anchor_sequence;
+        }
         if (resolved.checked_arithmetic_failure) {
             Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
         }
@@ -659,6 +663,9 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
     last_j_ = current.judgement_seconds
         ? current.judgement_seconds
         : current.closed_frontier_seconds;
+    if (current.endpoint_anchor_sequence != 0) {
+        last_anchor_sequence_ = current.endpoint_anchor_sequence;
+    }
     if (current.checked_arithmetic_failure) {
         Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
     }
@@ -1084,11 +1091,13 @@ AbsoluteJudgementFatalSnapshot JudgementScheduler::FatalSnapshot()
     }
     return {
         .enabled = true,
+        .target_fps = JudgementDiagnostics().startup_target_fps(),
         .native = native,
         .input_generation = stage_.open()
             ? stage_.cutoff().transport_epoch
             : 0,
         .endpoint_generation = stage_.endpoint_generation(),
+        .last_anchor_sequence = last_anchor_sequence_,
         .histories = history_diagnostics_,
         .runtime = RuntimeSnapshot(),
     };

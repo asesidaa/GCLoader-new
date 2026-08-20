@@ -297,6 +297,8 @@ public:
     void ObserveBacklog(std::uint64_t depth) noexcept;
     void ObserveDeliveryDelayQpc(std::uint64_t delay) noexcept;
     void SetPendingWork(std::uint64_t count) noexcept;
+    void SetStartupTargetFps(std::uint32_t target_fps) noexcept;
+    [[nodiscard]] std::uint32_t startup_target_fps() const noexcept;
 
     void LogStartup(const AbsoluteJudgementStartupRecord& record) noexcept;
     void LogNativeStageOpen(
@@ -365,6 +367,7 @@ private:
     bool has_heartbeat_index_{};
     AbsoluteJudgementNativeScoreCounters last_native_score_{};
     bool has_native_score_{};
+    std::uint32_t startup_target_fps_{};
     ULONGLONG next_summary_tick_ms_{};
 };
 

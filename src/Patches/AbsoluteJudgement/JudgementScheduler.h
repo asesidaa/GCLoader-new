@@ -152,6 +152,7 @@ private:
     std::optional<gc::timing::CheckedRational> last_output_frame_;
     std::optional<gc::timing::CheckedRational> last_source_frame_;
     std::optional<gc::timing::CheckedRational> last_j_;
+    std::uint64_t last_anchor_sequence_{};
     std::int64_t outer_now_qpc_{};
     std::int64_t last_qpc_{};
 };

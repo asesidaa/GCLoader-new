@@ -126,12 +126,14 @@ std::optional<gc::timing::CheckedRational> QpcDeltaSeconds(
 ExactOutputClockResult Result(
     ExactClockStatus status,
     std::uint64_t endpoint_generation,
-    std::uint64_t submitted_output_tail = 0) noexcept {
+    std::uint64_t submitted_output_tail = 0,
+    std::uint64_t anchor_sequence = 0) noexcept {
     return {
         status,
         endpoint_generation,
         std::nullopt,
         submitted_output_tail,
+        anchor_sequence,
     };
 }
 
@@ -224,12 +226,7 @@ std::shared_ptr<ExactWasapiClock> ExactWasapiClock::Create(
     if (provider == nullptr) {
         return nullptr;
     }
-    try {
-        return std::shared_ptr<ExactWasapiClock>(provider);
-    } catch (...) {
-        delete provider;
-        return nullptr;
-    }
+    return std::shared_ptr<ExactWasapiClock>(provider);
 }
 
 void ExactWasapiClock::Publish(
@@ -375,7 +372,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             return Result(
                 ExactClockStatus::Discontinuous,
                 endpoint_generation_,
-                latest_tail);
+                latest_tail,
+                anchor.sequence);
         }
         if (!oldest.has_value()) {
             latest_tail = anchor.submitted_output_tail;
@@ -388,7 +386,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
             return Result(
                 ExactClockStatus::Discontinuous,
                 endpoint_generation_,
-                latest_tail);
+                latest_tail,
+                anchor.sequence);
         }
         if (*comparison >= 0 && !selected.has_value()) {
             selected = anchor;
@@ -400,7 +399,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            latest_tail);
+            latest_tail,
+            selected ? selected->sequence : 0);
     }
     if (!selected.has_value()) {
         if (unstable) {
@@ -416,7 +416,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
                 return Result(
                     ExactClockStatus::HistoryLost,
                     endpoint_generation_,
-                    latest_tail);
+                    latest_tail,
+                    oldest->sequence);
             }
         }
         return Result(
@@ -432,7 +433,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
 
     const auto clock_delta = delta_seconds->Multiply(
@@ -445,7 +447,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
 
     const auto endpoint_offset =
@@ -456,7 +459,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
     const auto output_offset = endpoint_offset->Multiply(
         static_cast<std::int64_t>(anchor.mapping.output_sample_rate),
@@ -468,7 +472,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
     const auto output_frame =
         gc::timing::CheckedRational::Whole(
@@ -481,13 +486,15 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
     if (invalidated_.load(kExactClockAtomicOrder)) {
         return Result(
             ExactClockStatus::Discontinuous,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
 
     if (anchor.submitted_output_tail == 0 ||
@@ -497,7 +504,8 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         return Result(
             ExactClockStatus::Pending,
             endpoint_generation_,
-            anchor.submitted_output_tail);
+            anchor.submitted_output_tail,
+            anchor.sequence);
     }
 
     return {
@@ -505,6 +513,7 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
         endpoint_generation_,
         *output_frame,
         anchor.submitted_output_tail,
+        anchor.sequence,
     };
 }
 
@@ -518,18 +527,14 @@ std::int64_t ExactWasapiClock::qpc_frequency() const noexcept {
 
 std::shared_ptr<const ExactWasapiClock>
 AcquireExactWasapiClock() noexcept {
-    try {
-        std::lock_guard lock(g_active_provider.mutex);
-        auto provider = g_active_provider.provider.lock();
-        if (provider == nullptr ||
-            provider->endpoint_generation() !=
-                g_active_provider.endpoint_generation) {
-            return nullptr;
-        }
-        return provider;
-    } catch (...) {
+    std::lock_guard lock(g_active_provider.mutex);
+    auto provider = g_active_provider.provider.lock();
+    if (provider == nullptr ||
+        provider->endpoint_generation() !=
+            g_active_provider.endpoint_generation) {
         return nullptr;
     }
+    return provider;
 }
 
 namespace detail {
@@ -557,37 +562,30 @@ bool RegisterExactWasapiClock(
     if (provider == nullptr || provider->endpoint_generation() == 0) {
         return false;
     }
-    try {
-        std::lock_guard lock(g_active_provider.mutex);
-        auto previous = g_active_provider.provider.lock();
-        if (g_active_provider.endpoint_generation ==
-            provider->endpoint_generation()) {
-            return previous == provider;
-        }
-        if (previous != nullptr) {
-            previous->Invalidate();
-        }
-        g_active_provider.provider = provider;
-        g_active_provider.endpoint_generation =
-            provider->endpoint_generation();
-        return true;
-    } catch (...) {
-        return false;
+    std::lock_guard lock(g_active_provider.mutex);
+    auto previous = g_active_provider.provider.lock();
+    if (g_active_provider.endpoint_generation ==
+        provider->endpoint_generation()) {
+        return previous == provider;
     }
+    if (previous != nullptr) {
+        previous->Invalidate();
+    }
+    g_active_provider.provider = provider;
+    g_active_provider.endpoint_generation =
+        provider->endpoint_generation();
+    return true;
 }
 
 void UnregisterExactWasapiClock(
     std::uint64_t expected_generation) noexcept {
-    try {
-        std::lock_guard lock(g_active_provider.mutex);
-        if (g_active_provider.endpoint_generation !=
-            expected_generation) {
-            return;
-        }
-        g_active_provider.provider.reset();
-        g_active_provider.endpoint_generation = 0;
-    } catch (...) {
+    std::lock_guard lock(g_active_provider.mutex);
+    if (g_active_provider.endpoint_generation !=
+        expected_generation) {
+        return;
     }
+    g_active_provider.provider.reset();
+    g_active_provider.endpoint_generation = 0;
 }
 
 } // namespace detail

@@ -427,6 +427,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
     const auto target_fps = config.GetTargetFps();
     const auto input_rate_hz = config.GetInputPollHertz();
     const auto backend = config.GetAudioBackend();
+    JudgementDiagnostics().SetStartupTargetFps(target_fps);
     if (!enabled) {
         JudgementDiagnostics().LogStartup({
             .enabled = false,
