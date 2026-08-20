@@ -31,6 +31,9 @@
 - Verify all eight signatures before creating the first hook. Any expected-success setup/invariant result that fails takes an always-on startup or active-stage fatal path; do not build fallback/retry machinery. Partial operational activation and active-stage native fallback are forbidden.
 - Do not rely on C/C++ `assert()` alone: every fatal invariant check remains active in Release. Explicit operational statuses (`NoPlayback`, `Pending`, `TemporarilyUnavailable`) are not assertion failures.
 - Do not restore the test suite, add test targets, add gameplay emulation, run CTest, or invoke TDD. Each review/build/runtime step below states the evidence it can actually establish.
+- New Task 6-10 formatting code must use C++23 `std::format` / `std::format_to`; do not introduce `std::ostringstream`, `std::wostringstream`, or other string-stream formatting.
+- Exceptions are not a normal control path. Do not add broad defensive `try`/`catch`, swallowed exceptions, or exception-driven retry/fallback/recovery. The only authorized new exception boundary is Task 9's immediate native-loop hook boundary: map `std::bad_alloc` to `StorageAllocationFailure`, map every other unexpected exception to `UnexpectedInternalException`, then enter the one-way active-stage fatal path.
+- Check expected-success Boolean, HRESULT, and invariant results once. Failure enters the established always-on fatal/abort path; it is never downgraded to a warning or hidden behind recovery machinery.
 - Build success is compilation/static evidence only. Actual game behavior is required for gameplay acceptance.
 - Do not mutate or deploy into `H:\gc` during implementation tasks. Runtime deployment requires a separate explicit user authorization at Task 11.
 - Commit each task only after its listed review/build gate succeeds. Preserve unrelated worktree changes.
