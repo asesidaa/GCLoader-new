@@ -209,11 +209,15 @@ snapshot affecting the ten gameplay controls. Each record contains:
 - a transport epoch/generation that changes whenever publication is reset.
 
 When publication is armed, sample QPC immediately before the existing aggregate
-exchange, then publish the complete record after the exchange. This preserves
-the aggregate as FastIO authority while ensuring the explicitly accepted
-handoff window can make a record late, not silently retimestamp it to the end of
-a producer delay. `QueryPerformanceCounter` failure is checked once and
-hard-aborts; it has no fallback clock.
+exchange, then publish the complete record after the exchange. For a changed
+gameplay mask, that journal publication is the first operation after the
+exchange: no logging, formatting, or unrelated work may run between them. The
+existing Debug snapshot log runs only after the journal push. This preserves the
+aggregate as FastIO authority while keeping the explicitly accepted handoff
+window as short as the journal mutex permits; the window can make a record late,
+but cannot silently retimestamp it to the end of a producer delay.
+`QueryPerformanceCounter` failure is checked once and hard-aborts; it has no
+fallback clock.
 
 Multiple bits changing in one observed snapshot are one atomic record. System
 inputs outside the ten gameplay controls do not create judgement records. The
@@ -266,8 +270,8 @@ only for existing DirectSound-compatible behavior.
 The WASAPI render/audio thread publishes a preallocated single-producer,
 single-consumer anchor ring. Capacity is computed from the actual endpoint
 period as the exact integer ratio `period_frames/output_sample_rate` and
-guarantees at least 60 seconds of retained anchors. No audio-thread lock,
-allocation, file logging, or wait is permitted.
+guarantees at least 60 seconds of retained anchors. No lock, allocation, file
+logging, or wait is permitted in the successful render/publication path.
 
 Every committed anchor contains enough immutable information to resolve an
 older input QPC in one continuous endpoint generation:
@@ -279,6 +283,14 @@ older input QPC in one continuous endpoint generation:
 - submitted output tail at publication; and
 - stable identity/data for mapping endpoint position to the mixer's global
   output-frame coordinate.
+
+Anchor slots use an atomic version and scalar atomic payload fields. In the
+first implementation, every slot-version and payload load/store uses
+`std::memory_order_seq_cst`: the writer stores an odd version, stores the complete
+payload, then stores the next even version; the reader accepts fields only when
+two surrounding version loads return the same even value. This gives one
+unambiguous total order on supported x86 builds. Do not weaken the memory order
+without a separate C++ memory-model proof.
 
 For an input record, select the newest anchor at or before the record's QPC in
 the same endpoint generation. Project from that anchor using checked rational
@@ -306,6 +318,15 @@ step after endpoint output is known exactly and retained playback history
 proves a gap. A missing registered endpoint provider after enabled audio
 startup is a capability/invariant failure, not a BGM wait state.
 
+The process active-provider registry stores its `std::weak_ptr` and endpoint
+generation as one state protected by a small mutex. Register, acquire, and
+generation-matched unregister take that mutex; acquire promotes the weak handle
+while still under the mutex, and stale cleanup may not clear a newer generation.
+Registration happens before the render loop and unregistration after it. The
+successful render path and `ExactWasapiClock::Publish` never touch the registry
+mutex. This startup/cleanup synchronization is distinct from the lock-free
+anchor publication path.
+
 The same endpoint source supplies current exact ready time for the scheduler.
 A bounded coherent-publication read that cannot obtain a stable same-generation
 snapshot reports `TemporarilyUnavailable` and freezes delivery; it does not
@@ -330,6 +351,25 @@ voice. Each epoch contains:
 - exact global-output coverage, mapped tail, and—when naturally ended—the
   exact terminal source-frame coordinate; and
 - a coherent publication sequence and lifetime-safe history handle.
+
+The shared ring slots do not contain concurrently accessed, ordinary
+`ExactPlaybackEpoch` objects. Each slot has an atomic publication version and
+scalar atomic storage for every field, including optional engagement flags,
+enum values, and the numerator/denominator of an exact closed source tail. As
+with anchor slots, every version and payload operation uses
+`std::memory_order_seq_cst` in the first implementation: the writer stores an odd version,
+updates the scalar atomics, then stores the next even version; the reader loads
+an even version, loads the scalar atomics, rechecks the same even version, and
+only then reconstructs an ordinary `ExactPlaybackEpoch` in caller-owned
+storage. Tail extension, later-epoch closure, and natural-end closure all use
+that protocol. Do not weaken this ordering without a separate C++ memory-model
+proof. A seqlock version around a concurrently mutated non-atomic payload is
+forbidden because it would still be a C++ data race.
+
+After mixer-node destruction has proved writer quiescence, buffer Release may
+perform the one sequential writer handoff needed for
+`WriterQuiescedRelease`; it uses the same atomic publication protocol. The
+audio writer and Release writer are never active concurrently.
 
 Publish an epoch origin when that generation first renders, then extend its
 tail monotonically. Within one epoch:
@@ -441,6 +481,15 @@ buffer instance ID and grows on the game thread for every newly observed
 authoritative handle. Do not impose a two-history lifetime cap. Allocation
 failure takes the active-stage fatal path; steady-state scope delivery performs
 no allocation.
+
+The outer-call operation that can register a new history is intentionally
+allocation-capable and therefore is not `noexcept`. It is invoked only inside
+the `noexcept` loop-hook handler, whose immediate exception boundary catches
+allocation failure and enters the active-stage fatal path. Marking that helper
+`noexcept` while relying on the outer handler is forbidden: an allocation
+exception would call `std::terminate` before the handler could record the fatal
+snapshot. No exception crosses the native hook ABI, and no exception creates a
+fallback or recovery state.
 
 The judgement scheduler performs exactly one group-2/current-ready observation
 per outer judgement call. Historical events are still resolved from their own
@@ -904,6 +953,13 @@ termination must be active in both Debug and Release. This rule applies to
 unlikely setup/invariant results, not to expected operational states such as
 stage-open `NoPlayback`/`Pending`/current `OutsidePlayback` or coherent
 `TemporarilyUnavailable`, which retain their explicit status semantics.
+
+Every installed native hook handler remains `noexcept` and catches all internal
+exceptions before returning across the ABI. An internal helper that may allocate
+must either be allowed to throw only as far as that immediate handler boundary,
+or catch locally and enter the same fatal path; it must not be marked `noexcept`
+while depending on an outer catch. This is a terminal invariant rule, not an
+error-recovery mechanism.
 
 The eight sites are preflighted together and are never exposed as a
 partial operational mode. If installation fails, startup terminates; there is

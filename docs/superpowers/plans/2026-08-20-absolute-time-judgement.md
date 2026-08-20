@@ -321,7 +321,27 @@ After the worker initializes its mapper and clears state, call `BeginGameplayTra
 
 - [ ] **Step 5: Extend `Publish()` without changing FastIO**
 
-Retain the existing `g_published_input.exchange(next, acq_rel)` as the FastIO authority. Cache the startup-only feature bit in the worker; when armed, capture QPC immediately before that exchange. On `previous != next`, call the journal publisher with both snapshots and that pre-exchange timestamp. Keep the existing Debug snapshot log; add no per-transition Info log.
+Retain the existing `g_published_input.exchange(next, acq_rel)` as the FastIO
+authority. Cache the startup-only feature bit in the worker as
+`bool absolute_publication_enabled_{}`; when armed, capture QPC into
+`observed_qpc_ticks` immediately before that exchange. On `previous != next`, make the journal
+publisher the first operation after the exchange, then run the existing Debug
+snapshot log:
+
+```cpp
+if (previous != next) {
+    if (absolute_publication_enabled_) {
+        PublishGameplayTransition(previous, next, observed_qpc_ticks);
+    }
+    PLOG_DEBUG << "Input snapshot fastio=0x" << std::hex << next
+               << std::dec;
+}
+```
+
+Do not place logging, formatting, status inspection, or unrelated work between
+the exchange and journal push. The journal mutex may still create the explicitly
+accepted rare late handoff, but Debug logging must not enlarge that window. Add
+no per-transition Info log.
 
 - [ ] **Step 6: Add bounded drain/status access**
 
@@ -562,8 +582,12 @@ using checked integer arithmetic directly from the endpoint's validated frame
 period and sample rate; do not round through `REFERENCE_TIME`. Allocate all
 slots once before `RenderLoop`. Each slot uses a seqlock generation plus scalar
 atomics so the audio thread is the sole writer and the game thread never waits.
-Creation failure prevents enabled-mode capability from becoming usable; it
-never allocates inside the render loop.
+Use `std::memory_order_seq_cst` for both the version and every payload field in
+the first implementation: odd version, complete scalar payload, next
+even version; a reader accepts only matching surrounding even versions. Do not
+weaken these orders without a separate C++ memory-model proof. Creation failure
+prevents enabled-mode capability from becoming usable; it never allocates
+inside the render loop.
 
 - [ ] **Step 3: Implement exact QPC-domain comparison and delta**
 
@@ -597,7 +621,21 @@ Do not return the last output frame for any non-Resolved status.
 
 - [ ] **Step 5: Add a lifetime-safe active-provider registry**
 
-The engine owns a `shared_ptr<ExactWasapiClock>`; the process registry holds only a `weak_ptr` plus endpoint generation. `AcquireExactWasapiClock` returns a strong read handle. Assign endpoint generations from a process-wide monotonic atomic and treat wrap as creation failure.
+The engine owns a `shared_ptr<ExactWasapiClock>`. Implement one process-owned
+registry containing a mutex, `std::weak_ptr<ExactWasapiClock>`, and endpoint
+generation. Treat the weak handle and generation as one mutex-protected state:
+
+- registration stores both under the mutex before the render loop starts;
+- `AcquireExactWasapiClock` takes the mutex, promotes the weak handle while
+  still locked, verifies that the strong handle reports the stored generation,
+  and returns it;
+- unregistration takes the expected generation and clears the registry only
+  when it still matches, so delayed cleanup cannot remove a newer provider.
+
+The registry mutex is used only by register/acquire/unregister. Neither
+`RenderLoop` nor `ExactWasapiClock::Publish` may take it. Assign endpoint
+generations from a process-wide monotonic atomic and treat zero or wrap as
+creation failure.
 
 - [ ] **Step 6: Publish only after successful output commit**
 
@@ -738,6 +776,28 @@ keep no exact ring. Check that expected-success operation once and enter the
 existing audio fatal path if it fails. Do not retry and do not fall back to a
 rounded/general history.
 
+Do not store the public `ExactPlaybackEpoch` structure as the shared slot
+payload. Define an internal slot with an atomic publication version and scalar
+atomics for every field: identities, origin/closure enums, output/source
+origins and rates, mapped tail, closure-engaged and closed-tail-engaged flags,
+and the closed rational numerator/denominator. Ring metadata read across
+threads is atomic as well. The sole writer uses this protocol for every origin,
+tail, and closure update:
+
+1. publish an odd slot version;
+2. store the scalar fields;
+3. publish the next even version.
+
+Use `std::memory_order_seq_cst` for every version and scalar payload load/store
+in the first implementation. A reader loads an even version, loads
+every scalar field, then accepts the snapshot only if a second version load sees
+the same even value. It reconstructs `ExactPlaybackEpoch` only in caller-owned
+scratch storage. Retry a fixed bounded number of times and report
+`TemporarilyUnavailable` on failure. Do not weaken the memory orders without a
+separate C++ memory-model proof. Do not use a seqlock version around a plain
+non-atomic struct; the audio thread's in-place tail update would make that a C++
+data race even when a reader later rejects the version.
+
 E-040 proves the game's periodic seek-request cadence is once per three seconds
 (and E-041 suppresses the harmless in-margin requests), so 256 epochs retain
 far beyond the required 60 seconds without allocating a large ring for every
@@ -748,6 +808,10 @@ readers use bounded coherent reads. Expose oldest/newest exact output coverage
 so any exceptional faster-generation eviction is explicit `HistoryLost`. Do
 not increase or reinterpret `kRenderSpanCapacity = 32`; existing DirectSound
 cursor resolution continues to use the old spans.
+
+After `MixerVoice` destruction has quiesced the node, buffer Release becomes the
+next sequential writer only for `WriterQuiescedRelease` and uses the same atomic
+slot protocol. It must never overlap the audio writer.
 
 - [ ] **Step 2: Publish the cumulative mixer origin and tail**
 
@@ -930,7 +994,9 @@ execution, five queries, score deltas, late/eviction/error counts, and maximum
 backlog/delivery delay. Include `outside_playback_baseline_records` and
 `closed_frontier_catchups` counters separate from accepted late records. Use atomics only for fields written across
 input/audio/game threads; keep game-thread stage counters plain inside the
-diagnostics owner.
+diagnostics owner. Include `StorageAllocationFailure` and
+`UnexpectedInternalException` in `AbsoluteJudgementFatalReason`; Task 9 uses
+those exact reasons at the hook exception boundary.
 
 - [ ] **Step 2: Define lifecycle records and summary cadence**
 
@@ -1229,12 +1295,17 @@ public:
     void BeginNativeStage(std::uintptr_t tune_manager) noexcept;
     void EndNativeStage(std::uintptr_t tune_manager) noexcept;
     [[nodiscard]] bool NativeStageOpen() const noexcept;
-    void PrepareOuterCall(const AbsoluteJudgementOuterProbe&) noexcept;
+    void PrepareOuterCall(const AbsoluteJudgementOuterProbe&);
     std::optional<ScheduledJudgementScope> NextScope() noexcept;
     void CommitScope(const ScheduledJudgementScope&) noexcept;
     void FinishOuterCall() noexcept;
 };
 ```
+
+`PrepareOuterCall` is intentionally not `noexcept`: observing a new authoritative
+buffer can grow `observed_stage_bgm_histories`. It is called only from inside the
+loop-hook handler's immediate exception boundary. The other shown scheduler
+methods perform no allocation and remain `noexcept`.
 
 - [ ] **Step 1: Implement the exact clock chain**
 
@@ -1356,7 +1427,10 @@ A Play or Seek generation, stop/drain, or the native getter choosing the other
 audited BGM channel does not alter stage generation. On each nonnegative
 observation, register a newly seen lifetime-safe history by buffer instance ID
 on the game thread and retain it until native cleanup. The vector may grow
-there; allocation failure is fatal. There is no two-history lifetime cap.
+there; allow allocation failure to leave `PrepareOuterCall` and let the
+immediate `noexcept` hook boundary enter `FatalActiveStage`. Do not catch it and
+continue, return a reduced binding, impose a two-history cap, or mark
+`PrepareOuterCall` `noexcept`. There is no two-history lifetime cap.
 Resolve only through exact output coverage; overlapping histories must produce
 the same exact source-seconds coordinate or the result is `Discontinuous`.
 
@@ -1603,7 +1677,9 @@ nonnegative rounded magnitude for absolute judgement. Acquire the registered
 exact WASAPI endpoint and current QPC once; check QPC failure once and take the
 fatal path with no alternate clock. Package native identity, group sign,
 observation, endpoint handle, and QPC into one
-`AbsoluteJudgementOuterProbe` for `PrepareOuterCall`.
+`AbsoluteJudgementOuterProbe` for `PrepareOuterCall`. Probe construction,
+`PrepareOuterCall`, and the complete scope loop all remain inside the loop-hook
+handler's `try` region described in Step 9.
 
 - [ ] **Step 6: Invoke the native pair under one immutable scope**
 
@@ -1661,7 +1737,17 @@ audio, config, input, timing, logging, and SafetyHook.
 
 - [ ] **Step 9: Make active exceptions fail closed**
 
-All eight handlers are `noexcept`. Catch internal exceptions at their boundary.
+All eight handlers are `noexcept`. Catch internal exceptions at their immediate
+boundary. Internal helpers that may allocate are deliberately not `noexcept`;
+in particular, keep `PrepareOuterCall` non-`noexcept` so a vector allocation
+failure reaches the loop-hook catch instead of invoking `std::terminate` first.
+The loop-hook handler catches `std::bad_alloc` and enters the active-stage fatal
+path with `AbsoluteJudgementFatalReason::StorageAllocationFailure`; its final
+catch-all enters the same path with
+`AbsoluteJudgementFatalReason::UnexpectedInternalException`. Neither catch returns.
+Do not catch an allocation failure inside the scheduler and continue with a
+partial binding.
+
 During process installation, before any successful native stage begin, a
 creation/preflight problem is startup fatal. From successful native begin
 through matching cleanup—including the no-scope interval before absolute
@@ -1756,12 +1842,21 @@ Trace before/after/rise/fall masks from publication through retained history and
 Confirm:
 
 - WASAPI successful render publication performs no allocation, lock, wait, or logging;
-- input publication uses only its bounded mutex/ring and no allocation;
+- the active-provider registry mutex is used only for register/acquire/
+  generation-matched unregister and never by `RenderLoop` or
+  `ExactWasapiClock::Publish`;
+- exact playback ring slots contain only scalar atomic shared fields plus their
+  atomic publication versions; public `ExactPlaybackEpoch` values are
+  reconstructed in reader-owned storage;
+- input publication uses only its bounded mutex/ring and no allocation, and its
+  journal push is the first operation after a changed FastIO exchange, before
+  the existing Debug log;
 - game-thread unresolved/resolved history and scope-scheduler storage is
   preallocated before activation;
 - the authoritative-history vector may grow only on the game thread when a new
   buffer instance is first observed, never inside scope delivery; allocation
-  failure is fatal rather than a two-history cap or fallback;
+  failure reaches the immediate `noexcept` hook catch through a non-`noexcept`
+  internal helper and is fatal rather than a two-history cap or fallback;
 - no per-scope Info logging occurs; and
 - provider handles make engine/timeline lifetime explicit.
 
@@ -1931,6 +2026,10 @@ If runtime evidence finds a source defect, return to the relevant implementation
 - [ ] Exactly eight enabled-mode sites are guarded, fully preflighted before mutation, and installed before operational mode is exposed.
 - [ ] Feature-off installs zero sites and leaves audio backends unrestricted.
 - [ ] No test suite, replay source, loader note routing, rounded fallback, CBooster-ring materialization, or mid-stage native fallback exists.
+- [ ] A changed FastIO exchange pushes its journal record before Debug logging or unrelated work.
+- [ ] The provider registry is synchronized outside the render path, and stale generation cleanup cannot clear a newer provider.
+- [ ] Exact playback slots use atomic scalar payloads; readers reconstruct ordinary epoch snapshots only after a stable version read.
+- [ ] Allocation-capable outer preparation is not `noexcept`, and its immediate `noexcept` hook boundary converts failure to the active-stage fatal path.
 - [ ] Runtime deployment was explicitly authorized before Task 11.
 - [ ] 240-FPS no-input and real-input gates pass before broad testing.
 - [ ] Two consecutive charts in one process show one explicit begin/end pair
