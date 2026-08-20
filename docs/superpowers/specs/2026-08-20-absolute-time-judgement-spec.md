@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20
 
-**Status:** Approved design contract; ready for implementation planning
+**Status:** Lifecycle correction applied; implementation not authorized
 
 **Initial backend:** WASAPI exclusive only
 **Configuration:** `[experimental] enable_absolute_time_judgement = false`
@@ -22,10 +22,13 @@ avoid repeating their errors; they do not override this specification.
 
 Native facts come from the completed audit at
 `H:\gc\artifacts\GCLoader\.planning\debug\high-fps-timing-domains\evidence`,
-especially E-042 through E-046. That audit is complete and must not be repeated
-without a concrete, recorded question not answered there. Current source is
-authoritative for integration shape. The supported game binary/IDB and actual
-game behavior are the final ground truth.
+especially E-040, E-041, and E-042 through E-046. E-040 proves that playback
+generation changes can occur during one ordinary stage, while E-044 identifies
+the native construction and cleanup paths that actually delimit stage state.
+That audit is complete and must not be repeated without a concrete, recorded
+question not answered there. Current source is authoritative for integration
+shape. The supported game binary/IDB and actual game behavior are the final
+ground truth.
 
 The approved discussion record remains useful rationale and examples, but this
 document supersedes it wherever the two differ:
@@ -106,9 +109,12 @@ audited primitive beneath it in a focused module.
 
 ## 4. Architecture
 
-The feature consists of six responsibilities with one-way data flow:
+The feature consists of seven responsibilities with one-way data flow:
 
 ```text
+native stage init success (0x6629A0) ------------+
+native stage cleanup entry (0x662080) -----------| stage lifetime
+                                                  v
 keyboard Raw Input / 1000-Hz XInput worker
               |
               v
@@ -132,17 +138,19 @@ transport. The clean baseline has no timestamped transition journal, so the
 journal is new implementation work. It is a judgement-side history feed, not a
 replacement FastIO implementation or a second device-polling system.
 
-The judgement-facing native transaction has exactly six interception sites:
+The judgement-facing native transaction has exactly eight interception sites:
 
-1. scheduler seam VA `0x640239` / RVA `0x240239`; and
-2. five lower CBooster query methods:
+1. native stage-state construction VA `0x6629A0` / RVA `0x2629A0`;
+2. native stage-state cleanup VA `0x662080` / RVA `0x262080`;
+3. scheduler seam VA `0x640239` / RVA `0x240239`; and
+4. five lower CBooster query methods:
    - pressed VA `0x62DFB0` / RVA `0x22DFB0`;
    - held VA `0x62DF50` / RVA `0x22DF50`;
    - released VA `0x62DD30` / RVA `0x22DD30`;
    - direction VA `0x62E480` / RVA `0x22E480`; and
    - held age VA `0x62DAA0` / RVA `0x22DAA0`.
 
-All six sites form one guarded, fully preflighted set. Verify every signature
+All eight sites form one guarded, fully preflighted set. Verify every signature
 before creating the first hook. Any creation failure takes the startup-fatal
 path immediately; the process never continues with a partial set and never
 falls back to stock judgement. The existing Switch hooks remain separate
@@ -155,12 +163,12 @@ Define the authored policy quantum exactly as:
 `Q = 1/60 second`.
 
 Let `R(q)` be the exact unwrapped source position of the bound gameplay BGM at
-input QPC tick `q`. Let `G` be the session's immutable native
+input QPC tick `q`. Let `G` be the stage's immutable native
 `GameTimeOffset`. The judgement coordinate is:
 
 `J(q) = R(q) + G`.
 
-Native authored frame zero is `J = 0`; there is no loader-created session-time
+Native authored frame zero is `J = 0`; there is no loader-created stage-time
 origin. The values passed to both native calls for a scope are derived directly
 from the same exact coordinate:
 
@@ -235,7 +243,7 @@ This intentionally misses that edge. A late press may be held in later scopes;
 a late release makes later scopes unheld. The exception is expected to be rare
 and avoids a transport watermark protocol. Journal eviction, a missing sequence
 range, transport epoch loss, or unknown retained-history loss is not this
-exception and is fatal during an active session.
+exception and is fatal during an active stage.
 
 ## 7. Exact WASAPI event-time provider
 
@@ -274,10 +282,15 @@ The provider exposes explicit statuses rather than ambiguous optionals:
 
 - `NoPlayback`;
 - `Pending`;
+- `OutsidePlayback`;
 - `Resolved`;
 - `TemporarilyUnavailable`;
 - `HistoryLost`; and
 - `Discontinuous`.
+
+`ExactWasapiClock` itself does not emit `OutsidePlayback`; it resolves QPC to
+endpoint output. The bound voice-history step emits that status only after the
+endpoint output is known exactly and retained playback history proves a gap.
 
 The same endpoint source supplies current exact ready time for the scheduler.
 A bounded coherent-publication read that cannot obtain a stable same-generation
@@ -286,56 +299,109 @@ manufacture a time. An underlying `IAudioClock` HRESULT failure keeps the
 existing WASAPI engine's fatal behavior. Absolute judgement may publish that
 failure context, but it does not add an audio retry/recovery state machine.
 
-### 7.2 Exact playback mapping
+### 7.2 Exact playback-epoch history
 
 The mixer already has cumulative playback mapping state (`epoch_source_start`,
 `epoch_output_frames`, output/source rates, and playback epoch). Add a dedicated
-lifetime-safe exact mapping publication per candidate voice/playback
-generation. It contains:
+lifetime-safe, preallocated history of exact mapping epochs per candidate
+voice. Each epoch contains:
 
-- unique buffer/voice instance identity that is never inferred from reusable
-  pointer value;
-- playback generation;
+- a process-unique buffer/voice instance ID that is not a pointer value;
+- playback generation and origin kind (`Play` or `Seek`);
 - origin global output frame `O0`;
 - origin source frame `S0`;
 - output rate `Fo` and source rate `Fs`;
-- mapped submitted tail;
-- active/end state; and
-- a lifetime-safe handle/version that readers can validate.
+- exact global-output coverage and mapped submitted tail; and
+- a coherent publication sequence and lifetime-safe history handle.
 
-Publish the origin once when a new playback epoch first renders, then extend
-its tail monotonically. Within that epoch:
+Publish an epoch origin when that generation first renders, then extend its
+tail monotonically. Within one epoch:
 
 `S(O) = S0 + (O - O0) * Fs / Fo`.
 
-This mapping is exact and unwrapped. Seek, play/reset, buffer replacement, or
-generation change creates a new identity; it never silently rebases an active
-judgement session. Resolution must prove that projected output lies within both
-the WASAPI submitted tail and the bound voice's mapped tail.
+`Play` and `SetCurrentPosition` both create playback mapping epochs. The
+previous epoch remains retained for historical input resolution and the next
+epoch begins at the exact global output frame where the mixer applies it.
+`Stop`, Release, or natural drain closes the current mapping coverage but does
+not end the native stage.
+
+This distinction is mandatory. E-040 proves that the game can call
+`SetCurrentPosition` on both stage-BGM channels during one stage, and the
+DirectSound facade creates a new playback generation for each successful seek.
+Therefore playback generation, seek, buffer lifetime, and audible drain are
+audio-clock facts inside a stage, never stage-lifecycle signals.
+
+The exact epoch history has 256 preallocated entries per gameplay-native
+candidate voice when the feature is enabled. E-040 proves the game's periodic
+seek-request cadence is one per three seconds, and E-041 suppresses harmless
+in-margin requests, so this retains far beyond 60 seconds; any exceptional
+faster-generation eviction is detected as `HistoryLost`, never hidden.
+Historical resolution selects the retained epoch whose global-output interval
+contains projected `O`; current ready-time resolution uses the authoritative
+group-2 observation's current epoch. Both require `O` inside the endpoint
+submitted tail and the voice mapped tail.
+
+`Pending` means future coherent publication may still extend coverage over
+`O`: for example, the first span of a new Play/Seek generation has not been
+published or `O` is at/after the still-open mapped tail. `OutsidePlayback`
+means retained history has already proved that `O` lies before the first
+playback origin or in a closed gap between epochs. It must never be returned
+merely because the renderer has not published enough history yet. An output
+older than an evicted prefix is `HistoryLost`, not `OutsidePlayback`.
+
+A forward seek is ordinary exact catch-up. A backward seek is accepted only
+while its resolved coordinate remains at or after the last committed judgement
+frontier; if it would move behind already-issued native work, the clock is
+genuinely discontinuous and cannot be repaired by replay or rebasing.
 
 ### 7.3 Authoritative BGM binding
 
-Bind only through the game's existing sound-group-2 query inside
-`ScopedGameplayAudioCursorQuery`. Extend its read-only observation to report:
+Obtain BGM authority only through the game's existing sound-group-2 cursor
+getter inside `ScopedGameplayAudioCursorQuery`. Extend the exact observation
+associated with that native getter to report:
 
 - unique buffer/voice instance;
-- lifetime-safe exact mapping handle;
-- playback and endpoint generations;
-- source/output rates and active state; and
-- the number of qualifying active publications observed during the query.
+- lifetime-safe exact epoch-history handle;
+- current playback generation/origin and endpoint generation;
+- source/output rates, global output frame, and current mapping state.
 
-Zero qualifying voices means `NoPlayback` while armed. Exactly one binds the
-session. More than one is ambiguous and fatal before recognition. Pointer
-identity alone and heuristic “most recent voice” selection are forbidden.
+Reuse the native getter's channel choice; do not enumerate all active group-2
+voices and invent a second selection policy. The presence of the game's two
+stage-BGM channels is not ambiguity. No exact observation means `NoPlayback`;
+an observed generation whose first mixer span is not yet published is
+`Pending`. Neither condition starts, ends, or times out a native stage.
+
+The supported binary makes that choice concrete at VA `0x6122B0`: it builds
+the requested group's ordered channel list, calls the channel cursor method
+with the same output slot, and breaks on the first successful call. Therefore
+the observation published inside that successful DirectSound cursor call is
+the channel that supplies the native return value. The existing scoped
+single-observation overwrite behavior is sufficient because the loop does not
+continue after success.
+
+Preserve the native return's sign as the playing/no-playback decision: a
+negative result is `NoPlayback` and discards any incidental unsuccessful
+observation. For a nonnegative result, ignore the rounded millisecond magnitude
+and use only the successful call's exact history observation. The rounded value
+is never a judgement timestamp or fallback.
+
+The stage retains every authoritative history handle it has observed until
+native cleanup. This lets input predating a seek resolve through the old epoch
+while current ready time resolves through the new one. A buffer or channel
+change chosen by the native group getter is likewise an audio-authority change,
+not a stage change; overlapping mappings must agree on the exact coordinate or
+report `Discontinuous` rather than choosing by pointer or recency.
 
 The judgement scheduler performs exactly one group-2/current-ready observation
 per outer judgement call. Historical events are still resolved from their own
 QPC anchors. The independent existing high-FPS clock query is not reused as a
 mutable coordinator and is not changed by this feature.
 
-## 8. Session lifecycle and identity
+## 8. Native stage lifecycle and stage identity
 
-The feature has three states.
+The feature has three operational states: installed, native stage open while
+awaiting an exact clock, and active. State changes come only from explicit
+native calls and provider statuses. Elapsed time is never an input.
 
 ### 8.1 Installed
 
@@ -343,7 +409,7 @@ At process-start preflight, when enabled, validate:
 
 - game-process role, target configuration, WASAPI-exclusive route/capability,
   exact input poll rate, QPC frequency, and bounded storage allocation;
-- all six supported executable signatures, x86 calling conventions,
+- all eight supported executable signatures, x86 calling conventions,
   trampoline availability, and fail-fast all-or-none installation;
 - availability of the audited live configuration accessor; and
 - that no prohibited rounded fallback or partial hook set can activate.
@@ -351,50 +417,90 @@ At process-start preflight, when enabled, validate:
 An actual endpoint and BGM voice do not exist in `DllMain`; installed state
 therefore validates configured capability, not fictional active playback.
 
-### 8.2 Armed
+### 8.2 Native stage begin
 
-At a fresh native gameplay lifecycle, bind all session identities before the
-first recognition step:
+Hook `CTuneGameManager` gameplay-state construction at VA `0x6629A0` / RVA
+`0x2629A0`. Call the original first. A false return means native loading is not
+complete and creates no loader state. Each successful return is the explicit
+beginning of a new stage because that call has just constructed and initialized
+the per-player judgement and score objects.
 
-- native `Tune`/judgement/score state identity and lifecycle generation;
-- expected CBooster receiver/session identity;
-- unique BGM buffer/voice instance and playback generation;
-- WASAPI endpoint generation and exact mapping;
-- input transport epoch and session-start sequence cutoff;
-- immutable `GameTimeOffset`;
-- live `HoldSafeFrame` and `SlideHoldSafeFrame`, both exactly zero; and
-- private committed delivery coordinate and heartbeat index consistent with
-  exact `J` and the fresh native lifecycle.
+This is not a heuristic. `CTuneGameManager_RunGameplayFrameStateMachine` calls
+this function only in native state `5`; a false result leaves that state in
+place, while a true result immediately changes it to state `6`. Therefore one
+native stage has exactly one successful construction transition. The hook
+observes that transition and does not independently decide whether a stage has
+begun.
 
-Activation is tied to the native lifecycle, never to a timeout or “first clock
-that happened to arrive.” Mid-song attachment after stock CBooster judgement
-has begun is forbidden. While awaiting a same-lifecycle provider, withhold
-recognition and retain input only while all required histories remain intact.
+On success, increment a loader-owned stage generation and reset every
+stage-owned journal cursor, retained history, audio handle, frontier, heartbeat
+index, counter, and immutable binding before any recognition can run. Record
+the `CTuneGameManager` receiver only as an invariant inside that stage; its
+address is not the stage identity and may be reused in the next stage.
 
-At session start, discard queued pre-session records through a recorded cutoff
+At native stage begin, discard queued pre-stage records through a recorded cutoff
 and take the journal's current 10-bit held mask from the same synchronized
 cutoff snapshot as the baseline. Do not combine that cutoff with a separately
 sampled later FastIO aggregate. Pre-held controls have no current edge, no
 paired companion, and held age at least 2. They cannot synthesize a tap,
 free-input effect, flick head, or slide head.
 
-### 8.3 Active
+### 8.3 Clock wait and activation
 
-One active session is immutable with respect to every identity above. A normal
-song end clears pending scopes, history, bindings, cutoff, and private boundary
-state together. A normal next song creates a new session. No input age, paired
-lookback, mapping origin, or committed index crosses sessions.
+The first intercepted scheduler call in the open native stage binds, before
+the first recognition step:
 
-The game has no separate gameplay “pause” state in this design. Render/game
-thread lag with a continuous advancing audio epoch is catch-up. Temporary
-same-generation clock unavailability freezes delivery and retains work. A seek,
-backward clock, changed identity, changed offset, changed safe value, or lost
-history is a discontinuity/fatal condition, not a pause or an opportunity to
-rebase.
+- loader stage generation and native `CTuneGameManager` receiver;
+- native `Tune`/judgement/score state and expected CBooster receiver/player;
+- input transport epoch and the already-recorded stage-start cutoff/baseline;
+- immutable `GameTimeOffset`;
+- live `HoldSafeFrame` and `SlideHoldSafeFrame`, both exactly zero; and
+- WASAPI endpoint generation plus the authoritative group-2 exact history.
+
+If group 2 is not playing or its first exact mapping is still pending, withhold
+recognition and retain input in sequence. There is no timeout, inactivity
+counter, render count, or pointer-reuse heuristic. Do not classify a retained
+record as pre-audio merely because it arrived before the first epoch was
+published.
+
+Once exact history exists, first project each retained QPC to endpoint output
+`O`. A record that resolves inside an epoch follows the normal event path. A
+record whose result is the proven `OutsidePlayback` status updates only the
+held baseline in sequence and exposes no edge, paired companion, freshness, or
+scope. A `Pending` predecessor remains retained and blocks later delivery; it
+is not skipped or converted by elapsed time. `HistoryLost` and
+`Discontinuous` retain their explicit failure meanings.
+
+A stable playback generation change or seek only selects another retained
+audio epoch inside the same native stage. Activation occurs on the first
+`Resolved` exact clock and is forbidden if stock CBooster judgement somehow
+ran after this stage's successful begin.
+
+While active, native receiver/state identities, `GameTimeOffset`, the zero safe
+values, endpoint generation, and input epoch remain immutable. Render/game
+thread lag with advancing audio is bounded catch-up. A coherent publication
+read that is temporarily unavailable freezes delivery and retains work; no
+elapsed duration converts it into another state. Retained-history coverage,
+not a deadline, decides whether exact resolution remains possible.
+
+### 8.4 Native stage end
+
+Hook `CTuneGameManager_Cleanup` at VA `0x662080` / RVA `0x262080`. At function
+entry, end the matching loader stage, emit its final summary, and clear pending
+scopes, retained input/audio history handles, bindings, cutoff, and private
+indices before calling the original cleanup. Cleanup before any successful
+stage begin is an idempotent no-op for this feature. A later successful native
+construction always starts a fresh loader stage even when every native or audio
+address is reused.
+
+Stage lifecycle itself is never inferred and never becomes fatal. `Play`,
+`Stop`, natural drain, buffer Release, `SetCurrentPosition`, and playback
+generation changes do not begin or end it. No input age, paired lookback,
+mapping origin, or committed index crosses the explicit native boundary.
 
 ## 9. Retained causal input view
 
-The journal is drained into session-owned retained history. Each successfully
+The journal is drained into stage-owned retained history. Each successfully
 resolved event has an exact coordinate and original sequence. History remains
 long enough for every pending scope and every required lookback. It is pruned
 only after no current or future scope can query the removed prefix.
@@ -481,7 +587,7 @@ countdowns expire faster. The supported design accepts only live values zero:
 
 Read both through the same audited live accessor used by their handlers. A text
 configuration file is diagnostic evidence, not the activation proof. A nonzero
-value rejects activation/fails the session; it is never silently approximated.
+value rejects activation/fails the stage; it is never silently approximated.
 Supporting nonzero grace is a separate future design.
 
 ## 10. Immutable recognition scope
@@ -489,7 +595,7 @@ Supporting nonzero grace is a separate future design.
 Before every delivered unit, install one game-thread/TLS immutable scope that
 contains:
 
-- session and scope identity;
+- stage and scope identity;
 - exact time and sequence cutoff;
 - native millisecond and authored-frame arguments;
 - event held-before/after and rising/falling masks, or no-edge heartbeat state;
@@ -501,8 +607,8 @@ Keep the same scope installed across original native recognition
 `0x5D68E0` and immediately following original native score `0x5CF930`, then
 clear it with an explicit lifetime guard even on failure. All five lower query
 hooks answer from that scope only when it is active on the game thread and the
-receiver/session identity matches. Outside a scope they trampoline unchanged.
-An unexpected receiver or scope invariant during an active session is fatal;
+receiver/stage identity matches. Outside a scope they trampoline unchanged.
+An unexpected receiver or scope invariant during an active stage is fatal;
 mixing native-ring and retained-history facts is forbidden.
 
 The native recognition and score pair receive identical `native_ms`. The score
@@ -606,7 +712,7 @@ enable_absolute_time_judgement = false
 - require `audio_backend = "wasapi_exclusive"` for the first implementation;
 - reject DirectSound and ASIO explicitly at startup;
 - require exactly 1000-Hz input polling and both live safe-frame values zero;
-- install all six sites or none; and
+- install all eight sites or none; and
 - never silently fall back to stock judgement after any absolute scope has run.
 
 The feature does not hot-toggle. Changing the setting requires process restart.
@@ -617,9 +723,13 @@ and acceptance, not a configuration bypass.
 
 Expected nonfatal states are limited to:
 
-- `NoPlayback`/`Pending` while armed before a unique BGM mapping exists;
-- temporary same-generation clock unavailability while retained history is
+- a native stage that is open while group 2 is `NoPlayback`/`Pending`;
+- a proven `OutsidePlayback` transition applied only to the held baseline;
+- native cleanup, which closes the stage immediately without a timer;
+- temporary coherent-publication unavailability while retained history is
   intact;
+- an ordinary `Play`, `SetCurrentPosition`, stop, drain, or playback-generation
+  transition whose exact mapping remains provable inside the same native stage;
 - ordinary render hitch/catch-up; and
 - the accepted, individually counted late handoff record.
 
@@ -628,8 +738,8 @@ Expected nonfatal states are limited to:
 An internal Boolean/result whose contract is “this operation is expected to
 succeed” must not create a fallback mode, retry state machine, or ladder of
 error propagation. Check it once. Before activation, failure enters the
-existing startup-fatal path; during an active session, failure enters the one
-active-session fatal path below. Both paths terminate the process.
+existing startup-fatal path; during an active stage, failure enters the one
+active-stage fatal path below. Both paths terminate the process.
 
 An existing or layer-appropriate Boolean API may remain, but its owning caller
 checks it exactly once and immediately enters the phase-appropriate fatal path;
@@ -638,21 +748,22 @@ also appropriate when it preserves cleaner ownership. A plain C/C++ `assert()`
 is insufficient because Release builds may compile it out; the check and
 termination must be active in both Debug and Release. This rule applies to
 unlikely setup/invariant results, not to expected operational states such as
-armed `NoPlayback`/`Pending` or same-generation `TemporarilyUnavailable`, which
+stage-open `NoPlayback`/`Pending` or coherent `TemporarilyUnavailable`, which
 retain their explicit status semantics.
 
-The six sites are still preflighted together and are never exposed as a
+The eight sites are preflighted together and are never exposed as a
 partial operational mode. If installation fails, startup terminates; there is
 no fallback to stock judgement. Ordinary RAII cleanup is welcome, but no
 custom recovery protocol is required merely to keep the doomed process alive.
 
 Fatal conditions include:
 
-- partial/failed six-site transaction or ABI/signature mismatch;
-- ambiguous active group-2 voice;
-- endpoint/playback/input/native-session generation replacement inside an
-  active session;
-- backward exact time, seek, unexplained stop/reset, or changed immutable
+- partial/failed eight-site transaction or ABI/signature mismatch;
+- endpoint/input/native-state replacement inside an explicitly active native
+  stage;
+- conflicting/overlapping playback mappings, an uncovered epoch, or a backward
+  seek whose resolved coordinate is behind already-issued native work;
+- backward endpoint time, unexplained reset, or changed immutable
   `GameTimeOffset`;
 - nonzero/changed live safe-frame values;
 - journal eviction, sequence corruption, transport epoch loss, anchor/mapping
@@ -661,11 +772,11 @@ Fatal conditions include:
   recognition/score/scope count mismatch; and
 - active-scope thread, receiver, or lifetime invariant failure.
 
-On the first active-session fatal condition:
+On the first active-stage fatal condition:
 
 1. atomically latch the first reason;
 2. stop issuing native recognition immediately;
-3. emit and flush one structured snapshot containing mode/FPS, every session
+3. emit and flush one structured snapshot containing mode/FPS, every stage
    identity/generation, last anchor and exact `J`, committed boundary, pending
    work, last sequence, held mask, late/eviction counts, offsets, safe values,
    and native call/query/score counters; and
@@ -674,7 +785,7 @@ On the first active-session fatal condition:
 A minidump may supplement the snapshot through existing crash infrastructure,
 but the snapshot cannot depend on it. Do not display an in-song blocking dialog,
 keep the game running with judgement disabled, rebase after a discontinuity, or
-fall back to native CBooster mid-session.
+fall back to native CBooster mid-stage.
 
 ## 14. Required observability
 
@@ -684,22 +795,25 @@ whole chain.
 
 ### 14.1 Info records
 
-At `Info`, emit one startup record, one session-start record, a compact summary
-at the existing roughly five-second cadence, and one session-end record. Do not
+At `Info`, emit one startup record, one native-stage-begin record, a compact
+summary at the existing roughly five-second cadence, and one native-stage-end
+record. Do not
 log every scope or query at `Info`.
 
 Startup reports setting, target FPS, input rate, backend, exact-provider
-capability, `rounded_fallback=0`, and installed site count (`0` or `6`). Session
-start reports all identities/generations, cutoff, exact origin/rates, initial
-`J`, private boundary index, offset, baseline mask, safe values, and armed
-waits.
+capability, `rounded_fallback=0`, and installed site count (`0` or `8`). Stage
+begin reports loader stage generation, native manager/state identities,
+endpoint/input generations, observed BGM history IDs and Play/Seek epoch counts,
+cutoff, exact origin/rates, initial `J`, private boundary index, offset,
+baseline mask, safe values, and clock waits.
 
 Periodic/end summaries include interval and cumulative counters for:
 
 - transport records, rise/fall masks, pending/max depth, late records,
-  evictions, and sequence errors;
-- exact/resolved/unavailable clock reads, generation, last endpoint/output/
-  source/QPC and `J`, history/discontinuity errors, and zero rounded fallback;
+  outside-playback baseline-only records, evictions, and sequence errors;
+- exact/resolved/unavailable clock reads, endpoint and playback-epoch counts,
+  last endpoint/output/source/QPC and `J`, history/discontinuity errors, and
+  zero rounded fallback;
 - outer calls, event/heartbeat scopes, equal-boundary substitutions, committed
   boundaries, batches, maximum batch/backlog/delivery delay, and pending work;
 - recognition and score calls;
@@ -717,7 +831,7 @@ The repository's existing most detailed runtime level is `Verbose`; do not
 invent a new `Trace` enum. When `Verbose` is enabled, emit one compact record
 after each delivered scope containing:
 
-- session/scope identity and event/heartbeat/equal-boundary kind;
+- native-stage/scope identity and event/heartbeat/equal-boundary kind;
 - journal sequence, exact mapped time, native ms/frame, and delivery delay;
 - held-before/after and rise/fall masks;
 - actual query calls/results and held-age classes seen in the scope;
@@ -752,7 +866,7 @@ Only the third permits the claim that judgement is sane in play.
 
 ### 15.1 Static review gates
 
-- Six guarded interception sites are preflighted before mutation and all six
+- Eight guarded interception sites are preflighted before mutation and all eight
   install with verified bytes and correct x86 ABI before operational mode is
   exposed.
 - The existing framerate/shared-Tune/visual hook implementation has no
@@ -776,7 +890,16 @@ Run one ordinary chart twice before broader testing:
 
 Stop on either failure. The new counters must identify the first dead stage.
 
-### 15.3 Real-input mechanic coverage
+### 15.3 Consecutive native-stage lifecycle gate
+
+Complete two ordinary charts without restarting the game process. Each chart
+must produce exactly one successful native stage-begin record and one matching
+native cleanup/end record. Loader stage generation must increase, and no input
+age, history, audio epoch handle, committed frontier, or counter from the first
+stage may enter the second. Native/audio addresses may repeat without changing
+the lifecycle decision. This is not an input replay or equality oracle.
+
+### 15.4 Real-input mechanic coverage
 
 Actual keyboard/controller input and real charts must cover:
 
@@ -791,7 +914,7 @@ Actual keyboard/controller input and real charts must cover:
 - hold and dual-hold start, sustain, immediate zero-grace release, aggregation,
   duration, and result;
 - scratch, beat, turn, hidden notes, free input, and mode-routed behavior;
-- a pre-held session start followed by a genuine release/repress; and
+- a pre-held stage start followed by a genuine release/repress; and
 - a render hitch with retained, original-time ordered catch-up.
 
 Record which real charts exercise actual raw/effective note types `0..15`.
@@ -799,17 +922,17 @@ Shared wrapper coverage is insufficient; every type claimed must be observed in
 real chart behavior. Visuals, sounds, displayed grades, score, and song
 completion are part of the operator record.
 
-### 15.4 Mandatory FPS matrix
+### 15.5 Mandatory FPS matrix
 
 Run a complete real-input chart at 60, 144, 165, and 240 FPS with absolute mode
 enabled. At every rate:
 
-- a fresh exact session activates;
+- a fresh explicit native stage activates exact judgement;
 - journal/event/query/native-call/grade counters are meaningful;
 - call-count invariants hold;
 - the chart finishes with sensible visible judgement and score;
 - eviction, sequence error, rounded fallback, discontinuity, fatal invariant,
-  and end-of-session backlog are zero; and
+  and end-of-stage backlog are zero; and
 - any late record/unavailable read is reported, not hidden (repeat an
   acceptance run containing an accepted late miss).
 
@@ -843,6 +966,9 @@ The implementation and review must reject these known failure patterns:
   and then infer that absence means no transition.
 - **Arbitrary phase correction:** never align exact time by current render
   frame/current cursor or tolerate it with a clamp.
+- **Playback generation as stage identity:** ordinary `SetCurrentPosition`
+  creates a new generation inside one stage. Only native state construction
+  success and cleanup delimit the stage.
 - **Shared-clock coupling:** do not change target-FPS `Tune` progression and add
   another hook to compensate.
 - **Hook installation as success:** installed-site logs without scopes,
@@ -851,7 +977,7 @@ The implementation and review must reject these known failure patterns:
 - **Implementation-derived tests:** a loader model agreeing with itself is not
   native behavior proof.
 - **Partial fallback:** never mix absolute history with the native CBooster ring
-  inside one active session.
+  inside one active stage.
 - **Recovery machinery for impossible internal failures:** do not turn an
   expected-success Boolean into fallback/retry state. Perform one always-on
   check and terminate through the phase-appropriate fatal path.
@@ -866,12 +992,14 @@ The implementation plan must preserve separate, reviewable tasks for:
 2. clean gameplay transition journal;
 3. exact WASAPI endpoint anchor history;
 4. lifetime-safe voice playback mapping and group-2 binding;
-5. exact session/time resolver and private scheduler;
+5. exact stage/time resolver and private scheduler;
 6. retained-history query algebra and immutable scope;
-7. six-site native transaction and original recognition/score dispatch;
+7. eight-site native transaction, explicit stage lifecycle, and original
+   recognition/score dispatch;
 8. structured failure and observability;
 9. x86 Debug/Release build and static ownership review; and
 10. staged real-game acceptance.
 
 No production code is authorized by this document-writing task. Implementation
-begins only under the separately reviewed plan.
+begins only under the separately reviewed
+[implementation plan](../plans/2026-08-20-absolute-time-judgement.md).

@@ -94,8 +94,10 @@ remain design input.
 
 Those results are now consolidated in the authoritative
 [2026-08-20 absolute-time judgement specification](../../specs/2026-08-20-absolute-time-judgement-spec.md).
-New implementation planning must use that document while retaining this index
-and the older files as negative evidence.
+The corresponding clean sequence is the
+[2026-08-20 implementation plan](../../plans/2026-08-20-absolute-time-judgement.md).
+Implementation must use those two documents while retaining this index and the
+older files as negative evidence.
 
 ## Confirmed non-repeat findings
 

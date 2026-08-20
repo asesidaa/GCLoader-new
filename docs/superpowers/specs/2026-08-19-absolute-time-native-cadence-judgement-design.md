@@ -8,7 +8,10 @@
 **Status:** Historical approved discussion record. Its decisions and the
 erratum below are consolidated into the authoritative
 [2026-08-20 specification](2026-08-20-absolute-time-judgement-spec.md).
-Use that specification for implementation and this record for rationale.
+Use that specification for implementation and this record for rationale. Do
+not implement any clause in this chronological record directly: later sections
+still preserve superseded proposals such as playback-generation stage identity
+and a six-site transaction so the failed reasoning is not lost.
 
 ## 2026-08-20 scope erratum
 
@@ -43,6 +46,36 @@ fatal path on failure. The check must remain active in Release; a C/C++
 such as armed `NoPlayback`/`Pending` and same-generation temporary clock
 unavailability remain explicit statuses because they are not invariant
 failures.
+
+### 2026-08-20 stage-lifecycle correction
+
+The first correction that identified a stage with one group-2 BGM `Play`
+generation was itself wrong. E-040 proves that the native game may call
+`SetCurrentPosition` during an ordinary stage, and the current DirectSound
+facade creates a new playback generation for every successful seek. That model
+would therefore mistake a normal audio re-anchor for a new stage or a fatal
+discontinuity.
+
+The authoritative lifecycle is already explicit in the audited native state:
+
+- successful `CTuneGameManager` gameplay-state construction at VA `0x6629A0`
+  / RVA `0x2629A0` begins a stage after it has created and initialized the
+  judgement and score objects; and
+- entry to `CTuneGameManager_Cleanup` at VA `0x662080` / RVA `0x262080` ends
+  that stage and releases the gameplay/chart state.
+
+The construction call is itself inside native state `5`. A zero result leaves
+the state at `5` for another load poll; the single nonzero result immediately
+advances the manager to state `6`. The hook therefore observes one proven
+native transition rather than trying to determine lifecycle independently.
+
+The clean design therefore adds those two lifecycle hooks. Together with the
+scheduler seam and five CBooster query hooks, the enabled transaction contains
+eight sites. Playback `Play`, seek, stop, natural drain, generation change, and
+buffer lifetime are clock-mapping epochs inside the native stage. Native and
+audio pointer addresses are validation details only within one explicit stage
+and may be reused after cleanup. No elapsed time, inactivity timeout, render
+count, or pointer-reuse heuristic participates in lifecycle.
 
 ## Architecture reopening — Resolved
 
