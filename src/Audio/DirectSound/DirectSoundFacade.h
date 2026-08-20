@@ -150,7 +150,8 @@ private:
         DWORD,
         const NormalizedSourceFormat&,
         std::shared_ptr<AudioSnapshot>,
-        std::shared_ptr<AudioCursorTimeline>) noexcept;
+        std::shared_ptr<AudioCursorTimeline>,
+        std::uint64_t buffer_instance_id) noexcept;
     ~SecondarySoundBuffer();
 
     std::uint64_t ResolveCurrentSourceFrameLocked() noexcept;
@@ -165,7 +166,9 @@ private:
     std::mutex control_mutex_;
     std::atomic_ulong references_{1};
     std::atomic_long volume_{DSBVOLUME_MAX};
+    const std::uint64_t buffer_instance_id_{};
     std::uint64_t playback_generation_{};
+    ExactPlaybackOrigin playback_origin_{ExactPlaybackOrigin::Play};
     std::uint64_t last_reported_source_frame_{};
 };
 

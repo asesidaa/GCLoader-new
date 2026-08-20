@@ -6,7 +6,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 
 namespace gc::audio {
 
@@ -43,6 +45,52 @@ struct AudioCursorResolution {
     std::uint64_t source_frame_unwrapped{};
 };
 
+enum class ExactPlaybackOrigin : std::uint8_t {
+    Play,
+    Seek,
+};
+
+enum class ExactPlaybackClosure : std::uint8_t {
+    LaterEpoch,
+    NaturalEnd,
+    WriterQuiescedRelease,
+};
+
+struct ExactPlaybackEpoch {
+    std::uint64_t buffer_instance_id{};
+    std::uint64_t endpoint_generation{};
+    std::uint64_t playback_generation{};
+    ExactPlaybackOrigin origin{};
+    std::uint64_t output_origin{};
+    std::uint64_t source_origin{};
+    std::uint32_t output_rate{};
+    std::uint32_t source_rate{};
+    std::uint64_t mapped_output_tail{};
+    std::optional<ExactPlaybackClosure> closure;
+    std::optional<gc::timing::CheckedRational> closed_source_tail;
+};
+
+struct ExactSourceCoordinate {
+    gc::timing::CheckedRational source_frame;
+    std::uint32_t source_rate{};
+};
+
+struct ExactSourceFrameResult {
+    ExactClockStatus status{};
+    std::uint64_t buffer_instance_id{};
+    std::uint64_t playback_generation{};
+    std::optional<ExactSourceCoordinate> resolved;
+    std::optional<ExactSourceCoordinate> closed_frontier;
+};
+
+struct ExactPlaybackHistoryStatus {
+    ExactClockStatus status{};
+    std::uint64_t publication_sequence{};
+    bool prefix_evicted{};
+};
+
+inline constexpr std::size_t kExactPlaybackEpochCapacity = 256;
+
 class AudioCursorTimeline {
 public:
     void Publish(const AudioRenderSpan&) noexcept;
@@ -51,7 +99,41 @@ public:
         std::uint64_t generation,
         std::uint64_t source_length_frames) const noexcept;
 
+    bool ConfigureExactPlaybackHistory(
+        std::uint64_t buffer_instance_id,
+        std::uint64_t endpoint_generation) noexcept;
+    bool AssignBufferInstanceId(std::uint64_t buffer_instance_id) noexcept;
+    [[nodiscard]] bool HasExactPlaybackHistory() const noexcept;
+    [[nodiscard]] std::uint64_t exact_buffer_instance_id() const noexcept;
+    [[nodiscard]] std::uint64_t exact_endpoint_generation() const noexcept;
+    bool ExpectExactPlaybackGeneration(
+        std::uint64_t playback_generation) noexcept;
+    bool PublishExactMappedSpan(
+        std::uint64_t playback_generation,
+        ExactPlaybackOrigin origin,
+        std::uint64_t output_origin,
+        std::uint64_t source_origin,
+        std::uint32_t output_rate,
+        std::uint32_t source_rate,
+        std::uint64_t mapped_output_tail,
+        bool natural_end,
+        std::uint64_t natural_source_tail) noexcept;
+    bool CloseExactWriterAfterQuiescence() noexcept;
+    ExactSourceFrameResult ResolveExactSourceFrame(
+        const gc::timing::CheckedRational& output) const noexcept;
+    std::size_t CopyExactPlaybackEpochs(
+        std::span<ExactPlaybackEpoch> output,
+        ExactPlaybackHistoryStatus* status) const noexcept;
+
 private:
+    bool BeginExactPublication(std::uint64_t* writing) noexcept;
+    void EndExactPublication(std::uint64_t writing) noexcept;
+    bool StoreExactSlot(
+        std::size_t index,
+        const ExactPlaybackEpoch& epoch) noexcept;
+    std::optional<ExactPlaybackEpoch> LoadExactSlot(
+        std::size_t index) const noexcept;
+
     struct Slot {
         std::atomic<std::uint64_t> sequence{};
         mutable AudioRenderSpan span{};
@@ -60,6 +142,39 @@ private:
     std::array<Slot, kRenderSpanCapacity> slots_{};
     std::atomic<std::uint64_t> published_generation_{};
     std::uint64_t writer_generation_{};
+
+    struct ExactSlot {
+        std::atomic_uint64_t version{};
+        std::atomic_uint64_t buffer_instance_id{};
+        std::atomic_uint64_t endpoint_generation{};
+        std::atomic_uint64_t playback_generation{};
+        std::atomic_uint8_t origin{};
+        std::atomic_uint64_t output_origin{};
+        std::atomic_uint64_t source_origin{};
+        std::atomic_uint32_t output_rate{};
+        std::atomic_uint32_t source_rate{};
+        std::atomic_uint64_t mapped_output_tail{};
+        std::atomic_bool closure_engaged{};
+        std::atomic_uint8_t closure{};
+        std::atomic_bool closed_tail_engaged{};
+        std::atomic_int64_t closed_tail_numerator{};
+        std::atomic_uint64_t closed_tail_denominator{1};
+    };
+
+    std::unique_ptr<std::array<ExactSlot, kExactPlaybackEpochCapacity>>
+        exact_slots_;
+    std::atomic_bool exact_configured_{};
+    std::atomic_uint64_t exact_buffer_instance_id_{};
+    std::atomic_uint64_t exact_endpoint_generation_{};
+    std::atomic_uint64_t exact_publication_sequence_{};
+    std::atomic_uint64_t exact_published_count_{};
+    std::atomic_uint64_t exact_requested_generation_{};
+    std::atomic_bool exact_prefix_evicted_{};
+    std::atomic_bool exact_discontinuous_{};
+    std::uint64_t exact_writer_epoch_count_{};
+    std::uint64_t exact_writer_current_generation_{};
+    std::size_t exact_writer_current_slot_{};
+    bool exact_writer_has_current_{};
 };
 
 class EndpointClockMapper {

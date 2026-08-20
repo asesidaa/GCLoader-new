@@ -54,6 +54,11 @@ ScopedGameplayAudioCursorQuery::~ScopedGameplayAudioCursorQuery() {
 
 std::optional<GameplayAudioCursorObservation>
 ScopedGameplayAudioCursorQuery::Consume() noexcept {
+    // Binary authority: native VA 0x6122B0 walks the ordered group channel
+    // list, calls the cursor method with one output slot, and breaks after the
+    // first successful call at 0x61233F..0x612368. The last scoped publication
+    // therefore belongs to the native-selected successful channel; no second
+    // loader-side voice selection policy is permitted here.
     if (!owns_scope_ || !g_query_state.active ||
         g_query_state.active_serial != serial_ ||
         !g_query_state.publication.has_value() ||

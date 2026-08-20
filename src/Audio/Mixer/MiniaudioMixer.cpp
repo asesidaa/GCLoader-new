@@ -108,6 +108,7 @@ struct MiniaudioMixerState {
     std::atomic_uint64_t native_gameplay_buffers{};
     std::atomic_uint32_t active_voices{};
     std::atomic_uint32_t maximum_simultaneous_voices{};
+    std::atomic_bool exact_publication_failed{};
     bool initialized{};
 
     ~MiniaudioMixerState() {
@@ -367,12 +368,15 @@ struct MixerVoiceState {
         std::atomic_uint64_t sequence{};
         std::atomic_uint64_t source_frame{};
         std::atomic_uint64_t epoch{1};
+        std::atomic_uint8_t origin{
+            static_cast<std::uint8_t>(ExactPlaybackOrigin::Play)};
 
         void Publish(
             std::uint64_t frame,
-            std::uint64_t new_epoch) noexcept {
+            std::uint64_t new_epoch,
+            ExactPlaybackOrigin new_origin) noexcept {
             std::lock_guard lock(writer_mutex);
-            PublishLocked(frame, new_epoch);
+            PublishLocked(frame, new_epoch, new_origin);
         }
 
         void PublishForPlay(
@@ -385,18 +389,22 @@ struct MixerVoiceState {
             const auto frame = current_sequence != applied_sequence
                 ? source_frame.load(std::memory_order_seq_cst)
                 : fallback_frame;
-            PublishLocked(frame, new_epoch);
+            PublishLocked(frame, new_epoch, ExactPlaybackOrigin::Play);
         }
 
     private:
         void PublishLocked(
             std::uint64_t frame,
-            std::uint64_t new_epoch) noexcept {
+            std::uint64_t new_epoch,
+            ExactPlaybackOrigin new_origin) noexcept {
             const auto stable = sequence.load(std::memory_order_seq_cst);
             const auto writing = (stable & 1U) == 0 ? stable + 1 : stable + 2;
             sequence.store(writing, std::memory_order_seq_cst);
             source_frame.store(frame, std::memory_order_seq_cst);
             epoch.store(new_epoch, std::memory_order_seq_cst);
+            origin.store(
+                static_cast<std::uint8_t>(new_origin),
+                std::memory_order_seq_cst);
             sequence.store(writing + 1, std::memory_order_seq_cst);
         }
     } seek_mailbox;
@@ -421,11 +429,13 @@ struct MixerVoiceState {
     std::uint64_t epoch{1};
     std::uint64_t epoch_source_start{};
     std::uint64_t epoch_output_frames{};
+    ExactPlaybackOrigin epoch_origin{ExactPlaybackOrigin::Play};
     std::uint64_t last_render_id{};
     std::uint64_t render_output_offset{};
     bool converter_initialized{};
     bool node_initialized{};
     bool node_attached{};
+    bool exact_history_enabled{};
 
     ~MixerVoiceState() {
         if (node_attached) {
@@ -446,7 +456,8 @@ struct MixerVoiceState {
     bool ReadStableSeek(
         std::uint64_t* sequence_out,
         std::uint64_t* frame_out,
-        std::uint64_t* epoch_out) noexcept {
+        std::uint64_t* epoch_out,
+        ExactPlaybackOrigin* origin_out) noexcept {
         const auto before = seek_mailbox.sequence.load(
             std::memory_order_seq_cst);
         if ((before & 1U) != 0) {
@@ -456,14 +467,19 @@ struct MixerVoiceState {
             std::memory_order_seq_cst);
         const auto new_epoch = seek_mailbox.epoch.load(
             std::memory_order_seq_cst);
+        const auto origin_value = seek_mailbox.origin.load(
+            std::memory_order_seq_cst);
         const auto after = seek_mailbox.sequence.load(
             std::memory_order_seq_cst);
-        if (before != after || (after & 1U) != 0) {
+        if (before != after || (after & 1U) != 0 ||
+            origin_value > static_cast<std::uint8_t>(
+                ExactPlaybackOrigin::Seek)) {
             return false;
         }
         *sequence_out = after;
         *frame_out = frame;
         *epoch_out = new_epoch;
+        *origin_out = static_cast<ExactPlaybackOrigin>(origin_value);
         return true;
     }
 
@@ -550,6 +566,21 @@ bool PublishMappedSpans(
     std::uint64_t output_frames,
     bool loop_wrapped,
     bool source_ended) noexcept {
+    const auto fail_publication = [&voice]() noexcept {
+        if (voice.exact_history_enabled) {
+            voice.mixer->exact_publication_failed.store(
+                true, std::memory_order_seq_cst);
+        }
+        return false;
+    };
+    if (output_frames == 0 ||
+        output_begin > std::numeric_limits<std::uint64_t>::max() -
+            output_frames ||
+        voice.epoch_output_frames > output_begin) {
+        return fail_publication();
+    }
+    const auto exact_output_origin =
+        output_begin - voice.epoch_output_frames;
     const auto divisor = std::gcd<std::uint64_t>(
         voice.format.sample_rate,
         voice.mixer->output_sample_rate);
@@ -560,7 +591,7 @@ bool PublishMappedSpans(
     while (output_offset < output_frames) {
         if (voice.epoch_output_frames >
             std::numeric_limits<std::uint64_t>::max() - output_offset) {
-            return false;
+            return fail_publication();
         }
         const auto cumulative_begin =
             voice.epoch_output_frames + output_offset;
@@ -597,7 +628,7 @@ bool PublishMappedSpans(
                 voice,
                 cumulative_begin + segment_length,
                 &source_end)) {
-            return false;
+            return fail_publication();
         }
 
         auto* const timeline = voice.timeline.get();
@@ -613,9 +644,23 @@ bool PublishMappedSpans(
         output_offset += segment_length;
     }
 
+    if (voice.exact_history_enabled &&
+        !voice.timeline->PublishExactMappedSpan(
+            voice.epoch,
+            voice.epoch_origin,
+            exact_output_origin,
+            voice.epoch_source_start,
+            voice.mixer->output_sample_rate,
+            voice.format.sample_rate,
+            output_begin + output_frames,
+            source_ended,
+            voice.source_length_frames)) {
+        return fail_publication();
+    }
+
     if (voice.epoch_output_frames >
         std::numeric_limits<std::uint64_t>::max() - output_frames) {
-        return false;
+        return fail_publication();
     }
     voice.epoch_output_frames += output_frames;
     return true;
@@ -752,10 +797,12 @@ void VoiceNodeProcess(
     std::uint64_t seek_sequence{};
     std::uint64_t seek_frame{};
     std::uint64_t seek_epoch{};
+    ExactPlaybackOrigin seek_origin{};
     if (!voice.ReadStableSeek(
             &seek_sequence,
             &seek_frame,
-            &seek_epoch)) {
+            &seek_epoch,
+            &seek_origin)) {
         voice.render_output_offset += requested;
         return;
     }
@@ -773,6 +820,7 @@ void VoiceNodeProcess(
         voice.epoch_source_start = seek_frame;
         voice.epoch_output_frames = 0;
         voice.epoch = seek_epoch;
+        voice.epoch_origin = seek_origin;
         voice.ended.store(false, std::memory_order_seq_cst);
         voice.last_render_id = render->id;
         voice.render_output_offset = 0;
@@ -992,7 +1040,8 @@ HRESULT MixerVoice::Seek(
         return DSERR_INVALIDPARAM;
     }
     std::lock_guard control_lock(state_->control_mutex);
-    state_->seek_mailbox.Publish(source_frame, epoch);
+    state_->seek_mailbox.Publish(
+        source_frame, epoch, ExactPlaybackOrigin::Seek);
     state_->accepted_epoch.store(epoch, std::memory_order_seq_cst);
     return DS_OK;
 }
@@ -1132,6 +1181,8 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
         voice_state->format = format;
         voice_state->snapshot = std::move(snapshot);
         voice_state->timeline = std::move(timeline);
+        voice_state->exact_history_enabled =
+            voice_state->timeline->HasExactPlaybackHistory();
         voice_state->source_length_frames =
             voice_state->snapshot->byte_length() / format.block_align;
         voice_state->node.state = voice_state.get();
@@ -1275,6 +1326,8 @@ MixerRenderResult MiniaudioMixer::Render(
     current_render_context = nullptr;
     const auto active_voices = state_->active_voices.load(
         std::memory_order_seq_cst);
+    const auto exact_publication_failed =
+        state_->exact_publication_failed.load(std::memory_order_seq_cst);
 
     if (frames_read < state_->period_frames) {
         std::fill(
@@ -1283,7 +1336,11 @@ MixerRenderResult MiniaudioMixer::Render(
             stereo.end(),
             0.0F);
     }
-    return {result, frames_read, active_voices};
+    return {
+        exact_publication_failed ? MA_INVALID_OPERATION : result,
+        frames_read,
+        active_voices,
+    };
 }
 
 MixerDiagnosticsSnapshot MiniaudioMixer::diagnostics() const noexcept {

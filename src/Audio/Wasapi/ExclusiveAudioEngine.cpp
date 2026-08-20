@@ -422,6 +422,15 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
                 decision.block_begin,
                 decision.discontinuity_frames,
             });
+        if (enable_absolute_time_judgement_ &&
+            block.mixer_result != MA_SUCCESS) {
+            static_cast<void>(endpoint_->TrySubmitSilence());
+            RecordRuntimeFailure({
+                AudioFailureStage::InitializeMixer,
+                E_FAIL,
+            });
+            break;
+        }
         if (block.silence_substituted) {
             silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
         }
@@ -656,6 +665,26 @@ std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
             *result = MA_INVALID_OPERATION;
         }
         return nullptr;
+    }
+    if (enable_absolute_time_judgement_ &&
+        usage == VoiceUsage::GameplayNativeCandidate) {
+        const auto buffer_instance_id = timeline != nullptr
+            ? timeline->exact_buffer_instance_id()
+            : 0;
+        if (exact_clock_ == nullptr || timeline == nullptr ||
+            buffer_instance_id == 0 ||
+            !timeline->ConfigureExactPlaybackHistory(
+                buffer_instance_id,
+                exact_clock_->endpoint_generation())) {
+            if (result != nullptr) {
+                *result = MA_INVALID_OPERATION;
+            }
+            RecordRuntimeFailure({
+                AudioFailureStage::InitializeMixer,
+                E_FAIL,
+            });
+            return nullptr;
+        }
     }
     return render_core_->CreateVoice(
         format,

@@ -3,6 +3,7 @@
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <new>
 #include <utility>
@@ -19,6 +20,30 @@ constexpr DWORD kObservedStaticFlags =
     DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME |
     DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER;
 
+std::atomic_uint64_t g_next_buffer_instance_id{1};
+
+[[noreturn]] void ExactInvariantFatal() noexcept {
+    std::abort();
+}
+
+std::uint64_t NextBufferInstanceId() noexcept {
+    auto current = g_next_buffer_instance_id.load(
+        std::memory_order_seq_cst);
+    for (;;) {
+        if (current == 0 ||
+            current == std::numeric_limits<std::uint64_t>::max()) {
+            ExactInvariantFatal();
+        }
+        if (g_next_buffer_instance_id.compare_exchange_weak(
+                current,
+                current + 1,
+                std::memory_order_seq_cst,
+                std::memory_order_seq_cst)) {
+            return current;
+        }
+    }
+}
+
 WAVEFORMATEX GamePrimaryWaveFormat() noexcept {
     return {
         .wFormatTag = WAVE_FORMAT_PCM,
@@ -32,7 +57,12 @@ WAVEFORMATEX GamePrimaryWaveFormat() noexcept {
 }
 
 std::uint64_t NextPlaybackGeneration(
-    std::uint64_t generation) noexcept {
+    std::uint64_t generation,
+    bool exact_history_enabled) noexcept {
+    if (exact_history_enabled &&
+        generation == std::numeric_limits<std::uint64_t>::max()) {
+        ExactInvariantFatal();
+    }
     return generation == std::numeric_limits<std::uint64_t>::max()
         ? 1
         : generation + 1;
@@ -373,15 +403,31 @@ SecondarySoundBuffer::SecondarySoundBuffer(
     DWORD buffer_bytes,
     const NormalizedSourceFormat& format,
     std::shared_ptr<AudioSnapshot> snapshot,
-    std::shared_ptr<AudioCursorTimeline> timeline) noexcept
+    std::shared_ptr<AudioCursorTimeline> timeline,
+    std::uint64_t buffer_instance_id) noexcept
     : engine_(engine),
       flags_(flags),
       buffer_bytes_(buffer_bytes),
       format_(format),
       snapshot_(std::move(snapshot)),
-      timeline_(std::move(timeline)) {}
+      timeline_(std::move(timeline)),
+      buffer_instance_id_(buffer_instance_id) {}
 
-SecondarySoundBuffer::~SecondarySoundBuffer() = default;
+SecondarySoundBuffer::~SecondarySoundBuffer() {
+    if (voice_ == nullptr) {
+        return;
+    }
+
+    voice_.reset();
+    // Pinned miniaudio authority: ma_node_uninit() first performs a full
+    // detach, and miniaudio.h states that detach waits for local node
+    // processing to finish. MixerVoice destruction therefore proves that the
+    // sole audio writer is quiesced before Release becomes the next writer.
+    if (timeline_->HasExactPlaybackHistory() &&
+        !timeline_->CloseExactWriterAfterQuiescence()) {
+        ExactInvariantFatal();
+    }
+}
 
 HRESULT SecondarySoundBuffer::Create(
     IAudioEngineServices& engine,
@@ -417,6 +463,7 @@ HRESULT SecondarySoundBuffer::Create(
     }
 
     try {
+        const auto buffer_instance_id = NextBufferInstanceId();
         auto snapshot = std::make_shared<AudioSnapshot>(
             descriptor.dwBufferBytes,
             format.block_align);
@@ -427,9 +474,15 @@ HRESULT SecondarySoundBuffer::Create(
             descriptor.dwBufferBytes,
             format,
             std::move(snapshot),
-            std::move(timeline));
+            std::move(timeline),
+            buffer_instance_id);
         if (buffer == nullptr) {
             return DSERR_OUTOFMEMORY;
+        }
+        if (!buffer->timeline_->AssignBufferInstanceId(
+                buffer_instance_id)) {
+            delete buffer;
+            ExactInvariantFatal();
         }
 
         const bool observed_usage =
@@ -506,31 +559,57 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
 std::uint64_t
 SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
     const auto last = last_reported_source_frame_;
+    const auto has_exact_history = timeline_->HasExactPlaybackHistory();
+    const auto publish_exact = [this, has_exact_history](
+            GameplayAudioCursorState state,
+            std::uint64_t output_frame,
+            std::uint64_t source_frame_unwrapped) noexcept {
+        PublishGameplayAudioCursorObservation({
+            .state = state,
+            .source_frame_unwrapped = source_frame_unwrapped,
+            .source_sample_rate = format_.sample_rate,
+            .buffer_instance_id = buffer_instance_id_,
+            .endpoint_generation = has_exact_history
+                ? timeline_->exact_endpoint_generation()
+                : 0,
+            .playback_generation = playback_generation_,
+            .origin = playback_origin_,
+            .output_frame = output_frame,
+            .exact_history = has_exact_history ? timeline_ : nullptr,
+        });
+    };
     const auto mixing = voice_->playing();
     const auto audible_until = voice_->audible_until_output_frame();
     if (!mixing && !audible_until.has_value()) {
-        PublishGameplayAudioCursorObservation({
-            .state = GameplayAudioCursorState::Inactive,
-            .source_sample_rate = format_.sample_rate,
-            .playback_generation = playback_generation_,
-        });
+        publish_exact(GameplayAudioCursorState::Inactive, 0, last);
         return last;
     }
 
     const auto output_frame = engine_.CurrentOutputFrame();
     if (!output_frame.has_value()) {
+        if (has_exact_history) {
+            publish_exact(GameplayAudioCursorState::Pending, 0, last);
+        }
         return last;
     }
     const auto draining = audible_until.has_value() &&
         *output_frame < *audible_until;
     if (!mixing && !draining) {
-        PublishGameplayAudioCursorObservation({
-            .state = GameplayAudioCursorState::Inactive,
-            .source_sample_rate = format_.sample_rate,
-            .playback_generation = playback_generation_,
-            .output_frame = *output_frame,
-        });
+        publish_exact(
+            GameplayAudioCursorState::Inactive, *output_frame, last);
         return last;
+    }
+    GameplayAudioCursorState exact_state = GameplayAudioCursorState::Pending;
+    if (has_exact_history &&
+        *output_frame <= static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max())) {
+        const auto exact = timeline_->ResolveExactSourceFrame(
+            gc::timing::CheckedRational::Whole(
+                static_cast<std::int64_t>(*output_frame)));
+        if (exact.status == ExactClockStatus::Resolved &&
+            exact.playback_generation == playback_generation_) {
+            exact_state = GameplayAudioCursorState::Exact;
+        }
     }
     const auto resolution = timeline_->ResolveSourceFrame(
         *output_frame,
@@ -538,20 +617,23 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
         buffer_bytes_ / format_.block_align);
     if (resolution.kind == AudioCursorResolutionKind::PendingGeneration) {
         engine_.CountPendingCursorQuery();
+        if (has_exact_history) {
+            publish_exact(exact_state, *output_frame, last);
+        }
         return last;
     }
     if (resolution.kind == AudioCursorResolutionKind::Unmapped) {
         engine_.CountUnmappedCursorFailure();
+        if (has_exact_history) {
+            publish_exact(exact_state, *output_frame, last);
+        }
         return last;
     }
     last_reported_source_frame_ = resolution.source_frame;
-    PublishGameplayAudioCursorObservation({
-        .state = GameplayAudioCursorState::Exact,
-        .source_frame_unwrapped = resolution.source_frame_unwrapped,
-        .source_sample_rate = format_.sample_rate,
-        .playback_generation = playback_generation_,
-        .output_frame = *output_frame,
-    });
+    publish_exact(
+        has_exact_history ? exact_state : GameplayAudioCursorState::Exact,
+        *output_frame,
+        resolution.source_frame_unwrapped);
     return resolution.source_frame;
 }
 
@@ -712,7 +794,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
     }
     std::lock_guard control_lock(control_mutex_);
     const auto generation = NextPlaybackGeneration(
-        playback_generation_);
+        playback_generation_, timeline_->HasExactPlaybackHistory());
     const auto anchor = voice_->at_end()
         ? std::uint64_t{0}
         : last_reported_source_frame_;
@@ -721,7 +803,12 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
         generation);
     if (SUCCEEDED(result)) {
         playback_generation_ = generation;
+        playback_origin_ = ExactPlaybackOrigin::Play;
         last_reported_source_frame_ = anchor;
+        if (timeline_->HasExactPlaybackHistory() &&
+            !timeline_->ExpectExactPlaybackGeneration(generation)) {
+            ExactInvariantFatal();
+        }
     }
     return result;
 }
@@ -735,11 +822,16 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
     std::lock_guard control_lock(control_mutex_);
     const auto source_frame = position / format_.block_align;
     const auto generation = NextPlaybackGeneration(
-        playback_generation_);
+        playback_generation_, timeline_->HasExactPlaybackHistory());
     const auto result = voice_->Seek(source_frame, generation);
     if (SUCCEEDED(result)) {
         playback_generation_ = generation;
+        playback_origin_ = ExactPlaybackOrigin::Seek;
         last_reported_source_frame_ = source_frame;
+        if (timeline_->HasExactPlaybackHistory() &&
+            !timeline_->ExpectExactPlaybackGeneration(generation)) {
+            ExactInvariantFatal();
+        }
     }
     return result;
 }
