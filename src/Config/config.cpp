@@ -48,6 +48,18 @@ std::expected<void, std::string> ValidateInputConfig(
         return std::unexpected(input_validation.error());
     }
 
+    if (value.experimental().enable_absolute_time_judgement() &&
+        value.experimental().audio_backend() != AudioBackend::wasapi_exclusive) {
+        return std::unexpected(
+            "Absolute-time judgement requires "
+            "[experimental].audio_backend = 'wasapi_exclusive'");
+    }
+    if (value.experimental().enable_absolute_time_judgement() &&
+        value.input_poll_hz() != 1000) {
+        return std::unexpected(
+            "Absolute-time judgement requires input_poll_hz = 1000");
+    }
+
     if (!gc::nesys_service::IsDottedDecimalIpv4(
             value.nesys().server_ip())) {
         return std::unexpected(

@@ -74,6 +74,8 @@ struct ExperimentalConfig
 {
     rfl::Rename<"target_fps", gc::config::TargetFpsConfigValue>
         target_fps = gc::config::kMinimumTargetFps;
+    rfl::Rename<"enable_absolute_time_judgement", bool>
+        enable_absolute_time_judgement = false;
     rfl::Rename<"enable_testmode_storage_redirect", bool>
         enable_testmode_storage_redirect = false;
     rfl::Rename<"enable_timer_freeze_patches", bool>
@@ -186,6 +188,10 @@ public:
     {
         return static_cast<std::uint32_t>(
             config.experimental().target_fps());
+    }
+    [[nodiscard]] bool GetEnableAbsoluteTimeJudgement() const
+    {
+        return config.experimental().enable_absolute_time_judgement();
     }
     [[nodiscard]] bool GetEnableTestModeStorageRedirect() const
     {

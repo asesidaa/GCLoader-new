@@ -1420,6 +1420,33 @@ void DrawExperimental(
             "This value is formula-driven but not individually gameplay-validated.");
     }
 
+    bool absolute_time_judgement =
+        experimental.enable_absolute_time_judgement();
+    if (ImGui::Checkbox(
+            "Absolute-time judgement (WASAPI)",
+            &absolute_time_judgement))
+    {
+        experimental.enable_absolute_time_judgement = absolute_time_judgement;
+        dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Uses exact audio time for gameplay judgement at every FPS.\n"
+            "Requires WASAPI exclusive, input_poll_hz = 1000, and restart.\n"
+            "Only HoldSafeFrame = 0 and SlideHoldSafeFrame = 0 are supported.");
+    }
+    if (absolute_time_judgement &&
+        experimental.audio_backend() !=
+            gc::config::AudioBackend::wasapi_exclusive)
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
+            "Select WASAPI exclusive before saving.");
+    }
+
     bool timer_freeze = experimental.enable_timer_freeze_patches();
     if (ImGui::Checkbox("Timer freeze patches", &timer_freeze))
     {
