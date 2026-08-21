@@ -254,12 +254,17 @@ The entry hook calls `QueryPerformanceCounter` once, then calls:
 ```cpp
 void JudgementScheduler::BeginSemanticStage(
     std::uintptr_t tune_manager,
-    std::int64_t stage_entry_qpc) noexcept;
+    std::int64_t stage_entry_qpc,
+    std::int32_t game_time_offset_ms,
+    std::int32_t hold_safe_frame,
+    std::int32_t slide_hold_safe_frame) noexcept;
 ```
 
 `BeginSemanticStage` performs the synchronized transport cutoff, starts a fresh
-generation, resets stage-owned state, and stores `stage_entry_qpc`. It does not
-require an existing BGM origin.
+generation, resets stage-owned state, and stores `stage_entry_qpc` plus the
+three configuration values read by the entry callback. This preserves the
+specification's stage-entry `GameTimeOffset` anchor and rejects nonzero safe
+frames before gameplay. It does not require an existing BGM origin.
 
 Change the cutoff API to accept that timestamp:
 

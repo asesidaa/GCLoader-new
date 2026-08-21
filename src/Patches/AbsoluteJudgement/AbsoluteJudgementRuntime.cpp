@@ -17,6 +17,12 @@ namespace {
 
 using namespace native_abi;
 
+struct NativeJudgementConfiguration final {
+    std::int32_t game_time_offset_ms{};
+    std::int32_t hold_safe_frame{};
+    std::int32_t slide_hold_safe_frame{};
+};
+
 [[nodiscard]] bool AddAddress(
     const std::uintptr_t base,
     const std::size_t offset,
@@ -200,7 +206,13 @@ public:
     void BeginSemanticStage(
         const std::uintptr_t tune_manager,
         const std::int64_t stage_entry_qpc) noexcept {
-        scheduler_.BeginSemanticStage(tune_manager, stage_entry_qpc);
+        const auto configuration = ReadConfigurationOrFatal();
+        scheduler_.BeginSemanticStage(
+            tune_manager,
+            stage_entry_qpc,
+            configuration.game_time_offset_ms,
+            configuration.hold_safe_frame,
+            configuration.slide_hold_safe_frame);
         native_manager_ = tune_manager;
     }
 
@@ -284,6 +296,39 @@ public:
     }
 
 private:
+    [[nodiscard]] NativeJudgementConfiguration
+    ReadConfigurationOrFatal() const noexcept {
+        const auto get_config = reinterpret_cast<AccessorFn>(
+            executable_base_ + kGetConfigRva);
+        void* const config = get_config();
+        std::uint32_t game_time_offset{};
+        std::uint32_t hold_safe_frame{};
+        std::uint32_t slide_hold_safe_frame{};
+        if (config == nullptr ||
+            !ReadFieldU32Safe(
+                reinterpret_cast<std::uintptr_t>(config),
+                kGameTimeOffsetOffset,
+                &game_time_offset) ||
+            !ReadFieldU32Safe(
+                reinterpret_cast<std::uintptr_t>(config),
+                kHoldSafeFrameOffset,
+                &hold_safe_frame) ||
+            !ReadFieldU32Safe(
+                reinterpret_cast<std::uintptr_t>(config),
+                kSlideHoldSafeFrameOffset,
+                &slide_hold_safe_frame)) {
+            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+        }
+        return {
+            .game_time_offset_ms =
+                static_cast<std::int32_t>(game_time_offset),
+            .hold_safe_frame =
+                static_cast<std::int32_t>(hold_safe_frame),
+            .slide_hold_safe_frame =
+                static_cast<std::int32_t>(slide_hold_safe_frame),
+        };
+    }
+
     [[nodiscard]] NativeJudgementIdentity ResolveNativeIdentityOrFatal(
         const safetyhook::Context& context) const noexcept {
         std::uintptr_t tune_slot{};
@@ -339,27 +384,7 @@ private:
         }
         const auto booster = static_cast<std::uintptr_t>(booster_raw);
 
-        const auto get_config = reinterpret_cast<AccessorFn>(
-            executable_base_ + kGetConfigRva);
-        void* const config = get_config();
-        std::uint32_t game_time_offset{};
-        std::uint32_t hold_safe_frame{};
-        std::uint32_t slide_hold_safe_frame{};
-        if (config == nullptr ||
-            !ReadFieldU32Safe(
-                reinterpret_cast<std::uintptr_t>(config),
-                kGameTimeOffsetOffset,
-                &game_time_offset) ||
-            !ReadFieldU32Safe(
-                reinterpret_cast<std::uintptr_t>(config),
-                kHoldSafeFrameOffset,
-                &hold_safe_frame) ||
-            !ReadFieldU32Safe(
-                reinterpret_cast<std::uintptr_t>(config),
-                kSlideHoldSafeFrameOffset,
-                &slide_hold_safe_frame)) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
-        }
+        const auto configuration = ReadConfigurationOrFatal();
 
         return {
             .stage_generation = scheduler_.stage_generation(),
@@ -369,11 +394,10 @@ private:
             .score_state = score_state,
             .booster = booster,
             .player = player,
-            .game_time_offset_ms =
-                static_cast<std::int32_t>(game_time_offset),
-            .hold_safe_frame = static_cast<std::int32_t>(hold_safe_frame),
+            .game_time_offset_ms = configuration.game_time_offset_ms,
+            .hold_safe_frame = configuration.hold_safe_frame,
             .slide_hold_safe_frame =
-                static_cast<std::int32_t>(slide_hold_safe_frame),
+                configuration.slide_hold_safe_frame,
         };
     }
 

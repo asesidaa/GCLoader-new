@@ -29,7 +29,6 @@ enum class JudgementStageError : std::uint8_t {
     EndpointGenerationChanged,
     InputGenerationChanged,
     QpcFrequencyChanged,
-    GameTimeOffsetChanged,
     SafeFrameChanged,
     CleanupIdentityChanged,
 };
@@ -38,9 +37,14 @@ class JudgementStage final {
 public:
     [[nodiscard]] std::expected<void, JudgementStageError> Begin(
         std::uintptr_t tune_manager,
-        std::int64_t stage_entry_qpc) noexcept;
-    [[nodiscard]] std::expected<void, JudgementStageError> BindOrValidate(
-        const NativeJudgementIdentity& native,
+        std::int64_t stage_entry_qpc,
+        std::int32_t game_time_offset_ms,
+        std::int32_t hold_safe_frame,
+        std::int32_t slide_hold_safe_frame) noexcept;
+    [[nodiscard]] std::expected<void, JudgementStageError>
+    BindOrValidateNative(const NativeJudgementIdentity& native) noexcept;
+    [[nodiscard]] std::expected<void, JudgementStageError>
+    BindEndpointOrValidate(
         std::uint64_t endpoint_generation,
         std::int64_t endpoint_qpc_frequency) noexcept;
     void Activate() noexcept;
@@ -62,6 +66,9 @@ private:
     std::uint64_t generation_{};
     std::uintptr_t tune_manager_{};
     std::uint64_t endpoint_generation_{};
+    std::int32_t entry_game_time_offset_ms_{};
+    std::int32_t entry_hold_safe_frame_{};
+    std::int32_t entry_slide_hold_safe_frame_{};
     bool open_{};
     bool bound_{};
     bool active_{};

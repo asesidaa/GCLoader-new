@@ -104,11 +104,6 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     GC_SUBTRACT_COUNTER(resolved_clock_reads);
     GC_SUBTRACT_COUNTER(unavailable_clock_reads);
     result.endpoint_publication_count = value.endpoint_publication_count;
-    GC_SUBTRACT_COUNTER(endpoint_stage_publications);
-    GC_SUBTRACT_COUNTER(playback_epochs);
-    GC_SUBTRACT_COUNTER(playback_play_epochs);
-    GC_SUBTRACT_COUNTER(playback_seek_epochs);
-    GC_SUBTRACT_COUNTER(closed_frontier_selections);
     GC_SUBTRACT_COUNTER(outer_calls);
     GC_SUBTRACT_COUNTER(event_scopes);
     GC_SUBTRACT_COUNTER(heartbeat_scopes);
@@ -118,7 +113,6 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     GC_SUBTRACT_COUNTER(event_barrier_deferrals);
     GC_SUBTRACT_COUNTER(equal_boundary_substitutions);
     GC_SUBTRACT_COUNTER(committed_boundaries);
-    GC_SUBTRACT_COUNTER(closed_frontier_catchups);
     GC_SUBTRACT_COUNTER(batches);
     result.pending_work = value.pending_work;
     GC_SUBTRACT_COUNTER(recognition_calls);
@@ -181,11 +175,7 @@ const char* FatalReasonName(
         return "clock_history_lost";
     case AbsoluteJudgementFatalReason::ClockDiscontinuous:
         return "clock_discontinuous";
-    case AbsoluteJudgementFatalReason::PlaybackMappingConflict:
-        return "playback_mapping_conflict";
     case AbsoluteJudgementFatalReason::BackwardTime: return "backward_time";
-    case AbsoluteJudgementFatalReason::GameTimeOffsetChanged:
-        return "game_time_offset_changed";
     case AbsoluteJudgementFatalReason::SafeFrameChanged:
         return "safe_frame_changed";
     case AbsoluteJudgementFatalReason::TransportEviction:
@@ -319,34 +309,6 @@ void AppendTransientPublicationCounts(
         counts.right_free_tap);
 }
 
-void AppendHistories(
-    std::string& message,
-    std::span<const AbsoluteJudgementPlaybackHistoryDiagnostic> histories) {
-    std::format_to(
-        std::back_inserter(message),
-        " history_count={}",
-        histories.size());
-    for (std::size_t index = 0; index < histories.size(); ++index) {
-        const auto& history = histories[index];
-        std::format_to(
-            std::back_inserter(message),
-            " history[{}]={{buffer_id:{},endpoint_generation:{},"
-            "last_playback_generation:{},play_epochs:{},seek_epochs:{},"
-            "output_origin:{},source_origin:{},output_rate:{},"
-            "source_rate:{}}}",
-            index,
-            history.buffer_instance_id,
-            history.endpoint_generation,
-            history.last_playback_generation,
-            history.play_epoch_count,
-            history.seek_epoch_count,
-            history.output_origin,
-            history.source_origin,
-            history.output_rate,
-            history.source_rate);
-    }
-}
-
 void AppendCounters(
     std::string& message,
     std::string_view prefix,
@@ -397,11 +359,7 @@ void AppendCounters(
     std::format_to(
         std::back_inserter(message),
         " {}clock_reads={} {}clock_resolved={} {}clock_unavailable={}"
-        " {}endpoint_publication_count={}"
-        " {}endpoint_stage_publications={} {}playback_epochs={}"
-        " {}playback_play_epochs={} {}playback_seek_epochs={}"
-        " {}closed_frontier_selections={}"
-        " {}rounded_fallback=0",
+        " {}endpoint_publication_count={} {}rounded_fallback=0",
         prefix,
         counters.exact_clock_reads,
         prefix,
@@ -410,16 +368,6 @@ void AppendCounters(
         counters.unavailable_clock_reads,
         prefix,
         counters.endpoint_publication_count,
-        prefix,
-        counters.endpoint_stage_publications,
-        prefix,
-        counters.playback_epochs,
-        prefix,
-        counters.playback_play_epochs,
-        prefix,
-        counters.playback_seek_epochs,
-        prefix,
-        counters.closed_frontier_selections,
         prefix);
     std::format_to(
         std::back_inserter(message),
@@ -427,7 +375,7 @@ void AppendCounters(
         " {}event_only_batches={} {}heartbeat_only_batches={}"
         " {}mixed_event_batches={} {}event_barrier_deferrals={}"
         " {}equal_boundary_substitutions={} {}committed_boundaries={}"
-        " {}closed_frontier_catchups={} {}batches={}"
+        " {}batches={}"
         " {}maximum_batch={} {}maximum_backlog={}"
         " {}maximum_event_backlog={}"
         " {}maximum_delivery_delay_qpc={} {}pending_work={}"
@@ -450,8 +398,6 @@ void AppendCounters(
         counters.equal_boundary_substitutions,
         prefix,
         counters.committed_boundaries,
-        prefix,
-        counters.closed_frontier_catchups,
         prefix,
         counters.batches,
         prefix,
@@ -492,13 +438,9 @@ void AppendRuntime(
             " last_endpoint_position=none");
     }
     AppendRational(message, "last_output_frame", runtime.last_output_frame);
-    AppendRational(message, "last_source_frame", runtime.last_source_frame);
     std::format_to(
         std::back_inserter(message), " last_qpc={}", runtime.last_qpc);
     AppendRational(message, "last_j", runtime.last_j);
-    AppendRational(
-        message, "last_closed_frontier", runtime.last_closed_frontier);
-    AppendRational(message, "frozen_j", runtime.frozen_j);
     std::format_to(
         std::back_inserter(message),
         " committed_boundary={} pending_work={} last_sequence={}"
@@ -601,11 +543,6 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .resolved_clock_reads = stage_.resolved_clock_reads,
         .unavailable_clock_reads = stage_.unavailable_clock_reads,
         .endpoint_publication_count = stage_.endpoint_publication_count,
-        .endpoint_stage_publications = stage_.endpoint_stage_publications,
-        .playback_epochs = stage_.playback_epochs,
-        .playback_play_epochs = stage_.playback_play_epochs,
-        .playback_seek_epochs = stage_.playback_seek_epochs,
-        .closed_frontier_selections = stage_.closed_frontier_selections,
         .outer_calls = stage_.outer_calls,
         .event_scopes = stage_.event_scopes,
         .heartbeat_scopes = stage_.heartbeat_scopes,
@@ -616,7 +553,6 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .equal_boundary_substitutions =
             stage_.equal_boundary_substitutions,
         .committed_boundaries = stage_.committed_boundaries,
-        .closed_frontier_catchups = stage_.closed_frontier_catchups,
         .batches = stage_.batches,
         .maximum_batch = stage_.maximum_batch,
         .maximum_backlog = stage_.maximum_backlog,
@@ -717,7 +653,9 @@ void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
     auto message = std::format(
         "AbsoluteJudgement: absolute-stage-activation stage_generation={}"
         " native_manager={} tune={} judgement_state={} score_state={}"
-        " booster={} player={} input_generation={} endpoint_generation={}",
+        " booster={} player={} input_generation={} endpoint_generation={}"
+        " buffer_instance_id={} playback_generation={} output_origin={}"
+        " source_origin={} output_rate={} source_rate={}",
         record.native.stage_generation,
         record.native.native_manager,
         record.native.tune,
@@ -726,8 +664,13 @@ void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
         record.native.booster,
         record.native.player,
         record.input_generation,
-        record.endpoint_generation);
-    AppendHistories(message, record.histories);
+        record.endpoint_generation,
+        record.buffer_instance_id,
+        record.playback_generation,
+        record.output_origin,
+        record.source_origin,
+        record.output_rate,
+        record.source_rate);
     AppendRational(message, "initial_j", record.initial_j);
     std::format_to(
         std::back_inserter(message),
@@ -1066,7 +1009,7 @@ bool AbsoluteJudgementDiagnostics::recognition_stopped() const noexcept {
         " last_anchor_sequence={} recognition_stopped=1",
         FatalReasonName(reason),
         snapshot.enabled ? "absolute" : "stock",
-        snapshot.target_fps,
+        diagnostics.startup_target_fps(),
         snapshot.native.stage_generation,
         snapshot.native.native_manager,
         snapshot.native.tune,
@@ -1077,7 +1020,6 @@ bool AbsoluteJudgementDiagnostics::recognition_stopped() const noexcept {
         snapshot.input_generation,
         snapshot.endpoint_generation,
         snapshot.last_anchor_sequence);
-    AppendHistories(message, snapshot.histories);
     AppendRuntime(message, snapshot.runtime);
     AppendCounters(message, "", counters);
     PLOG_FATAL << message;

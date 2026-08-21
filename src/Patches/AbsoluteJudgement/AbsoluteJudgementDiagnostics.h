@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string_view>
 
 namespace gc::absolute_judgement {
@@ -23,9 +22,7 @@ enum class AbsoluteJudgementFatalReason : std::uint32_t {
     NativeStateMismatch,
     ClockHistoryLost,
     ClockDiscontinuous,
-    PlaybackMappingConflict,
     BackwardTime,
-    GameTimeOffsetChanged,
     SafeFrameChanged,
     TransportEviction,
     TransportSequenceError,
@@ -56,18 +53,6 @@ struct AbsoluteJudgementNativeIdentityDiagnostic {
     std::uintptr_t score_state{};
     std::uintptr_t booster{};
     std::uint32_t player{};
-};
-
-struct AbsoluteJudgementPlaybackHistoryDiagnostic {
-    std::uint64_t buffer_instance_id{};
-    std::uint64_t endpoint_generation{};
-    std::uint64_t last_playback_generation{};
-    std::uint64_t play_epoch_count{};
-    std::uint64_t seek_epoch_count{};
-    std::uint64_t output_origin{};
-    std::uint64_t source_origin{};
-    std::uint32_t output_rate{};
-    std::uint32_t source_rate{};
 };
 
 struct AbsoluteJudgementNativeScoreCounters {
@@ -143,11 +128,6 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t resolved_clock_reads{};
     std::uint64_t unavailable_clock_reads{};
     std::uint64_t endpoint_publication_count{};
-    std::uint64_t endpoint_stage_publications{};
-    std::uint64_t playback_epochs{};
-    std::uint64_t playback_play_epochs{};
-    std::uint64_t playback_seek_epochs{};
-    std::uint64_t closed_frontier_selections{};
 
     std::uint64_t outer_calls{};
     std::uint64_t event_scopes{};
@@ -158,7 +138,6 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t event_barrier_deferrals{};
     std::uint64_t equal_boundary_substitutions{};
     std::uint64_t committed_boundaries{};
-    std::uint64_t closed_frontier_catchups{};
     std::uint64_t batches{};
     std::uint64_t maximum_batch{};
     std::uint64_t maximum_backlog{};
@@ -196,11 +175,6 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t resolved_clock_reads{};
     std::uint64_t unavailable_clock_reads{};
     std::uint64_t endpoint_publication_count{};
-    std::uint64_t endpoint_stage_publications{};
-    std::uint64_t playback_epochs{};
-    std::uint64_t playback_play_epochs{};
-    std::uint64_t playback_seek_epochs{};
-    std::uint64_t closed_frontier_selections{};
 
     std::uint64_t outer_calls{};
     std::uint64_t event_scopes{};
@@ -211,7 +185,6 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t event_barrier_deferrals{};
     std::uint64_t equal_boundary_substitutions{};
     std::uint64_t committed_boundaries{};
-    std::uint64_t closed_frontier_catchups{};
     std::uint64_t batches{};
     std::uint64_t maximum_batch{};
     std::uint64_t maximum_backlog{};
@@ -230,11 +203,8 @@ struct AbsoluteJudgementRuntimeSnapshot {
     std::uint64_t last_endpoint_anchor_sequence{};
     std::optional<std::uint64_t> last_endpoint_position;
     std::optional<gc::timing::CheckedRational> last_output_frame;
-    std::optional<gc::timing::CheckedRational> last_source_frame;
     std::int64_t last_qpc{};
     std::optional<gc::timing::CheckedRational> last_j;
-    std::optional<gc::timing::CheckedRational> last_closed_frontier;
-    std::optional<gc::timing::CheckedRational> frozen_j;
     std::int64_t committed_boundary{};
     std::uint64_t pending_work{};
     std::uint64_t last_sequence{};
@@ -269,7 +239,12 @@ struct AbsoluteJudgementActivationRecord {
     AbsoluteJudgementNativeIdentityDiagnostic native{};
     std::uint64_t input_generation{};
     std::uint64_t endpoint_generation{};
-    std::span<const AbsoluteJudgementPlaybackHistoryDiagnostic> histories;
+    std::uint64_t buffer_instance_id{};
+    std::uint64_t playback_generation{};
+    std::uint64_t output_origin{};
+    std::uint64_t source_origin{};
+    std::uint32_t output_rate{};
+    std::uint32_t source_rate{};
     gc::timing::CheckedRational initial_j =
         gc::timing::CheckedRational::Whole(0);
     std::int64_t committed_boundary_seed{};
@@ -316,12 +291,10 @@ struct AbsoluteJudgementScopeRecord {
 
 struct AbsoluteJudgementFatalSnapshot {
     bool enabled{};
-    std::uint32_t target_fps{};
     AbsoluteJudgementNativeIdentityDiagnostic native{};
     std::uint64_t input_generation{};
     std::uint64_t endpoint_generation{};
     std::uint64_t last_anchor_sequence{};
-    std::span<const AbsoluteJudgementPlaybackHistoryDiagnostic> histories;
     AbsoluteJudgementRuntimeSnapshot runtime{};
 };
 

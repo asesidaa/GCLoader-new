@@ -22,7 +22,10 @@ bool SameNativeObjectIdentity(
 
 std::expected<void, JudgementStageError> JudgementStage::Begin(
     const std::uintptr_t tune_manager,
-    const std::int64_t stage_entry_qpc) noexcept {
+    const std::int64_t stage_entry_qpc,
+    const std::int32_t game_time_offset_ms,
+    const std::int32_t hold_safe_frame,
+    const std::int32_t slide_hold_safe_frame) noexcept {
     if (open_) {
         return std::unexpected(JudgementStageError::AlreadyOpen);
     }
@@ -37,6 +40,9 @@ std::expected<void, JudgementStageError> JudgementStage::Begin(
 
     generation_ = generation;
     tune_manager_ = tune_manager;
+    entry_game_time_offset_ms_ = game_time_offset_ms;
+    entry_hold_safe_frame_ = hold_safe_frame;
+    entry_slide_hold_safe_frame_ = slide_hold_safe_frame;
     open_ = true;
     if (tune_manager == 0 ||
         !gc::input::CaptureGameplayTransitionCutoff(
@@ -45,53 +51,67 @@ std::expected<void, JudgementStageError> JudgementStage::Begin(
         return std::unexpected(
             JudgementStageError::InputCapabilityUnavailable);
     }
+    if (hold_safe_frame != 0 || slide_hold_safe_frame != 0) {
+        return std::unexpected(JudgementStageError::SafeFrameChanged);
+    }
     return {};
 }
 
-std::expected<void, JudgementStageError> JudgementStage::BindOrValidate(
-    const NativeJudgementIdentity& native,
-    const std::uint64_t endpoint_generation,
-    const std::int64_t endpoint_qpc_frequency) noexcept {
+std::expected<void, JudgementStageError>
+JudgementStage::BindOrValidateNative(
+    const NativeJudgementIdentity& native) noexcept {
     if (!open_ || native.stage_generation != generation_ ||
         native.tune_manager != tune_manager_ || native.tune == 0 ||
         native.judgement_state == 0 || native.score_state == 0 ||
-        native.booster == 0 || endpoint_generation == 0 ||
-        endpoint_qpc_frequency <= 0) {
+        native.booster == 0) {
         return std::unexpected(JudgementStageError::NativeIdentityInvalid);
     }
     if (native.hold_safe_frame != 0 ||
         native.slide_hold_safe_frame != 0) {
         return std::unexpected(JudgementStageError::SafeFrameChanged);
     }
-    if (endpoint_qpc_frequency != cutoff_.qpc_frequency) {
-        return std::unexpected(JudgementStageError::QpcFrequencyChanged);
-    }
-
     if (!bound_) {
         native_ = native;
-        endpoint_generation_ = endpoint_generation;
+        native_.game_time_offset_ms = entry_game_time_offset_ms_;
+        native_.hold_safe_frame = entry_hold_safe_frame_;
+        native_.slide_hold_safe_frame = entry_slide_hold_safe_frame_;
         bound_ = true;
         return {};
     }
     if (!SameNativeObjectIdentity(native_, native)) {
         return std::unexpected(JudgementStageError::NativeIdentityChanged);
     }
-    if (endpoint_generation != endpoint_generation_) {
-        return std::unexpected(
-            JudgementStageError::EndpointGenerationChanged);
-    }
-    if (native.game_time_offset_ms != native_.game_time_offset_ms) {
-        return std::unexpected(JudgementStageError::GameTimeOffsetChanged);
-    }
-    if (native.hold_safe_frame != native_.hold_safe_frame ||
-        native.slide_hold_safe_frame != native_.slide_hold_safe_frame) {
+    if (native.hold_safe_frame != 0 ||
+        native.slide_hold_safe_frame != 0) {
         return std::unexpected(JudgementStageError::SafeFrameChanged);
     }
     return {};
 }
 
+std::expected<void, JudgementStageError>
+JudgementStage::BindEndpointOrValidate(
+    const std::uint64_t endpoint_generation,
+    const std::int64_t endpoint_qpc_frequency) noexcept {
+    if (!open_ || !bound_ || endpoint_generation == 0 ||
+        endpoint_qpc_frequency <= 0) {
+        return std::unexpected(JudgementStageError::NativeIdentityInvalid);
+    }
+    if (endpoint_qpc_frequency != cutoff_.qpc_frequency) {
+        return std::unexpected(JudgementStageError::QpcFrequencyChanged);
+    }
+    if (endpoint_generation_ == 0) {
+        endpoint_generation_ = endpoint_generation;
+        return {};
+    }
+    if (endpoint_generation != endpoint_generation_) {
+        return std::unexpected(
+            JudgementStageError::EndpointGenerationChanged);
+    }
+    return {};
+}
+
 void JudgementStage::Activate() noexcept {
-    if (open_ && bound_) {
+    if (open_ && bound_ && endpoint_generation_ != 0) {
         active_ = true;
     }
 }
@@ -102,6 +122,9 @@ void JudgementStage::Reset() noexcept {
     generation_ = 0;
     tune_manager_ = 0;
     endpoint_generation_ = 0;
+    entry_game_time_offset_ms_ = 0;
+    entry_hold_safe_frame_ = 0;
+    entry_slide_hold_safe_frame_ = 0;
     open_ = false;
     bound_ = false;
     active_ = false;

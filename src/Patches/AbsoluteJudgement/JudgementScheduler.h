@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
-#include <vector>
 
 namespace gc::absolute_judgement {
 
@@ -37,7 +36,10 @@ class JudgementScheduler final {
 public:
     void BeginSemanticStage(
         std::uintptr_t tune_manager,
-        std::int64_t stage_entry_qpc) noexcept;
+        std::int64_t stage_entry_qpc,
+        std::int32_t game_time_offset_ms,
+        std::int32_t hold_safe_frame,
+        std::int32_t slide_hold_safe_frame) noexcept;
     void EndSemanticStage(std::uintptr_t tune_manager) noexcept;
     [[nodiscard]] bool SemanticStageOpen() const noexcept;
     [[nodiscard]] std::uint64_t stage_generation() const noexcept;
@@ -70,28 +72,20 @@ private:
     void ClearStageOwnedState() noexcept;
     void ValidateStageBindingOrFatal(
         const AbsoluteJudgementOuterProbe& probe) noexcept;
-    ObservedPlaybackHistory* RegisterOrValidateObservation(
-        const gc::audio::GameplayAudioCursorObservation& observation);
-    [[nodiscard]] gc::audio::ExactClockStatus
-    UpdatePlaybackDiagnostics() noexcept;
     void DrainTransportOrFatal() noexcept;
     void AccountCleanupDropsOrFatal() noexcept;
-    [[nodiscard]] gc::audio::ExactClockStatus
-    ResolveUnresolvedPrefixOrFatal(
-        gc::audio::ExactClockStatus validation_status) noexcept;
+    [[nodiscard]] JudgementClockStatus
+    ResolveUnresolvedPrefixOrFatal() noexcept;
     void TryActivateOrWait(
-        gc::audio::ExactClockStatus validation_status) noexcept;
+        const JudgementClockResult& entry_clock) noexcept;
     void SelectOuterHorizonOrFatal(
-        const AbsoluteJudgementOuterProbe& probe,
-        const ObservedPlaybackHistory* selected) noexcept;
+        const AbsoluteJudgementOuterProbe& probe) noexcept;
     void SetReadyHorizonOrFatal(
-        const gc::timing::CheckedRational& ready,
-        bool closed_frontier) noexcept;
+        const gc::timing::CheckedRational& ready) noexcept;
     void MarkReadyOverloadOrFatal(
         const gc::timing::CheckedRational& ready) noexcept;
     void ConsumeMarkedOverloadOrFatal(
         const ResolvedGameplayTransition& event) noexcept;
-    void UpdateFrozenCoordinateOrFatal() noexcept;
 
     [[nodiscard]] std::uint64_t CurrentHistoryPrefixEnd() const noexcept;
     [[nodiscard]] std::optional<ScheduledJudgementScope>
@@ -126,7 +120,6 @@ private:
 
     JudgementStage stage_;
     JudgementClockResolver clock_resolver_;
-    JudgementClockBinding clock_binding_;
     JudgementHistory history_;
 
     std::array<gc::input::GameplayTransitionRecord,
@@ -137,11 +130,6 @@ private:
     std::array<gc::audio::ExactPlaybackEpoch,
                gc::audio::kExactPlaybackEpochCapacity>
         left_epoch_scratch_{};
-    std::array<gc::audio::ExactPlaybackEpoch,
-               gc::audio::kExactPlaybackEpochCapacity>
-        right_epoch_scratch_{};
-    std::vector<AbsoluteJudgementPlaybackHistoryDiagnostic>
-        history_diagnostics_;
 
     std::size_t unresolved_read_slot_{};
     std::size_t unresolved_size_{};
@@ -149,11 +137,7 @@ private:
     std::uint64_t next_delivery_sequence_{};
     std::uint64_t pending_event_count_{};
     std::uint64_t marked_overload_count_{};
-    std::uint64_t last_selected_buffer_instance_id_{};
     std::uint64_t accumulated_clock_waits_{};
-    std::uint64_t endpoint_publication_baseline_{};
-    std::uint64_t last_endpoint_publication_count_{};
-    bool has_endpoint_publication_baseline_{};
 
     std::optional<JudgementScopeCoordinate> last_resolved_coordinate_;
     std::optional<JudgementScopeCoordinate> committed_frontier_;
@@ -167,15 +151,10 @@ private:
     std::uint64_t outer_event_scope_count_{};
     std::uint64_t outer_heartbeat_scope_count_{};
     bool outer_prepared_{};
-    bool outer_uses_closed_frontier_{};
     bool outer_event_barrier_recorded_{};
-    std::optional<gc::timing::CheckedRational> outer_closed_frontier_;
 
     std::optional<gc::timing::CheckedRational> last_output_frame_;
-    std::optional<gc::timing::CheckedRational> last_source_frame_;
     std::optional<gc::timing::CheckedRational> last_j_;
-    std::optional<gc::timing::CheckedRational> last_closed_frontier_;
-    std::optional<gc::timing::CheckedRational> frozen_j_;
     std::uint64_t last_anchor_sequence_{};
     std::optional<std::uint64_t> last_endpoint_position_;
     std::int64_t outer_now_qpc_{};

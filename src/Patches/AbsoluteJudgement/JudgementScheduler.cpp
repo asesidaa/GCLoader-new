@@ -16,7 +16,6 @@
 namespace gc::absolute_judgement {
 namespace {
 
-using gc::audio::ExactClockStatus;
 using gc::timing::CheckedRational;
 
 AbsoluteJudgementFatalReason StageErrorReason(
@@ -28,8 +27,6 @@ AbsoluteJudgementFatalReason StageErrorReason(
         return AbsoluteJudgementFatalReason::EndpointGenerationChanged;
     case JudgementStageError::InputGenerationChanged:
         return AbsoluteJudgementFatalReason::InputGenerationChanged;
-    case JudgementStageError::GameTimeOffsetChanged:
-        return AbsoluteJudgementFatalReason::GameTimeOffsetChanged;
     case JudgementStageError::SafeFrameChanged:
         return AbsoluteJudgementFatalReason::SafeFrameChanged;
     case JudgementStageError::GenerationExhausted:
@@ -83,11 +80,19 @@ bool SameScope(const ScheduledJudgementScope& left,
 
 void JudgementScheduler::BeginSemanticStage(
     const std::uintptr_t tune_manager,
-    const std::int64_t stage_entry_qpc) noexcept {
+    const std::int64_t stage_entry_qpc,
+    const std::int32_t game_time_offset_ms,
+    const std::int32_t hold_safe_frame,
+    const std::int32_t slide_hold_safe_frame) noexcept {
     if (!stage_.open()) {
         ClearStageOwnedState();
     }
-    const auto result = stage_.Begin(tune_manager, stage_entry_qpc);
+    const auto result = stage_.Begin(
+        tune_manager,
+        stage_entry_qpc,
+        game_time_offset_ms,
+        hold_safe_frame,
+        slide_hold_safe_frame);
     if (!result) {
         Fatal(StageErrorReason(result.error()));
     }
@@ -99,6 +104,8 @@ void JudgementScheduler::BeginSemanticStage(
         cutoff.held_baseline);
     next_drain_sequence_ = cutoff.first_stage_sequence;
     next_delivery_sequence_ = cutoff.first_stage_sequence;
+    clock_resolver_.Reset(
+        stage_.generation(), stage_entry_qpc, game_time_offset_ms);
     JudgementDiagnostics().LogSemanticStageOpen({
         .loader_stage_generation = stage_.generation(),
         .native_manager = tune_manager,
@@ -162,10 +169,7 @@ JudgementScheduler::committed_boundary_index() const noexcept {
 }
 
 void JudgementScheduler::ClearStageOwnedState() noexcept {
-    clock_binding_.endpoint_generation = 0;
-    clock_binding_.endpoint.reset();
-    clock_binding_.observed_stage_bgm_histories.clear();
-    history_diagnostics_.clear();
+    clock_resolver_.Reset(0, 0, 0);
     history_.Reset(0, 0, 0);
     unresolved_read_slot_ = 0;
     unresolved_size_ = 0;
@@ -173,11 +177,7 @@ void JudgementScheduler::ClearStageOwnedState() noexcept {
     next_delivery_sequence_ = 0;
     pending_event_count_ = 0;
     marked_overload_count_ = 0;
-    last_selected_buffer_instance_id_ = 0;
     accumulated_clock_waits_ = 0;
-    endpoint_publication_baseline_ = 0;
-    last_endpoint_publication_count_ = 0;
-    has_endpoint_publication_baseline_ = false;
     last_resolved_coordinate_.reset();
     committed_frontier_.reset();
     committed_frontier_is_boundary_ = false;
@@ -189,14 +189,9 @@ void JudgementScheduler::ClearStageOwnedState() noexcept {
     outer_event_scope_count_ = 0;
     outer_heartbeat_scope_count_ = 0;
     outer_prepared_ = false;
-    outer_uses_closed_frontier_ = false;
     outer_event_barrier_recorded_ = false;
-    outer_closed_frontier_.reset();
     last_output_frame_.reset();
-    last_source_frame_.reset();
     last_j_.reset();
-    last_closed_frontier_.reset();
-    frozen_j_.reset();
     last_anchor_sequence_ = 0;
     last_endpoint_position_.reset();
     outer_now_qpc_ = 0;
@@ -205,163 +200,21 @@ void JudgementScheduler::ClearStageOwnedState() noexcept {
 
 void JudgementScheduler::ValidateStageBindingOrFatal(
     const AbsoluteJudgementOuterProbe& probe) noexcept {
+    const auto native = stage_.BindOrValidateNative(probe.native);
+    if (!native) {
+        Fatal(StageErrorReason(native.error()));
+    }
     if (!probe.endpoint) {
-        Fatal(AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable);
+        return;
     }
-    const auto endpoint_generation = probe.endpoint->endpoint_generation();
-    const auto binding = stage_.BindOrValidate(
-        probe.native,
-        endpoint_generation,
+    const auto endpoint = stage_.BindEndpointOrValidate(
+        probe.endpoint->endpoint_generation(),
         probe.endpoint->qpc_frequency());
-    if (!binding) {
-        Fatal(StageErrorReason(binding.error()));
+    if (!endpoint) {
+        Fatal(StageErrorReason(endpoint.error()));
     }
-    if (!clock_binding_.endpoint) {
-        clock_binding_.endpoint_generation = endpoint_generation;
-        clock_binding_.endpoint = probe.endpoint;
-        endpoint_publication_baseline_ =
-            probe.endpoint->publication_count();
-        last_endpoint_publication_count_ =
-            endpoint_publication_baseline_;
-        has_endpoint_publication_baseline_ = true;
-    } else if (clock_binding_.endpoint_generation != endpoint_generation ||
-               clock_binding_.endpoint.get() != probe.endpoint.get()) {
-        Fatal(AbsoluteJudgementFatalReason::EndpointGenerationChanged);
-    }
-    if (!has_endpoint_publication_baseline_) {
-        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
-    }
-    const auto publication_count = probe.endpoint->publication_count();
-    if (publication_count < last_endpoint_publication_count_ ||
-        publication_count < endpoint_publication_baseline_) {
-        Fatal(AbsoluteJudgementFatalReason::ClockDiscontinuous);
-    }
-    last_endpoint_publication_count_ = publication_count;
-    auto& counters = JudgementDiagnostics().stage_counters();
-    counters.endpoint_publication_count = publication_count;
-    counters.endpoint_stage_publications =
-        publication_count - endpoint_publication_baseline_;
-}
-
-ObservedPlaybackHistory*
-JudgementScheduler::RegisterOrValidateObservation(
-    const gc::audio::GameplayAudioCursorObservation& observation) {
-    if (!observation.exact_history || observation.buffer_instance_id == 0 ||
-        observation.endpoint_generation !=
-            clock_binding_.endpoint_generation ||
-        !observation.exact_history->HasExactPlaybackHistory() ||
-        observation.exact_history->exact_buffer_instance_id() !=
-            observation.buffer_instance_id ||
-        observation.exact_history->exact_endpoint_generation() !=
-            observation.endpoint_generation) {
-        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
-    }
-
-    for (auto& observed :
-         clock_binding_.observed_stage_bgm_histories) {
-        if (observed.buffer_instance_id != observation.buffer_instance_id) {
-            continue;
-        }
-        if (observed.endpoint_generation !=
-                observation.endpoint_generation ||
-            observed.history.get() != observation.exact_history.get()) {
-            Fatal(AbsoluteJudgementFatalReason::PlaybackMappingConflict);
-        }
-        return &observed;
-    }
-
-    clock_binding_.observed_stage_bgm_histories.push_back({
-        .buffer_instance_id = observation.buffer_instance_id,
-        .endpoint_generation = observation.endpoint_generation,
-        .history = observation.exact_history,
-    });
-    history_diagnostics_.push_back({
-        .buffer_instance_id = observation.buffer_instance_id,
-        .endpoint_generation = observation.endpoint_generation,
-    });
-    return &clock_binding_.observed_stage_bgm_histories.back();
-}
-
-ExactClockStatus JudgementScheduler::UpdatePlaybackDiagnostics() noexcept {
-    if (history_diagnostics_.size() !=
-        clock_binding_.observed_stage_bgm_histories.size()) {
-        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
-    }
-    std::uint64_t play_epochs{};
-    std::uint64_t seek_epochs{};
-    for (std::size_t index = 0;
-         index < clock_binding_.observed_stage_bgm_histories.size();
-         ++index) {
-        const auto& observed =
-            clock_binding_.observed_stage_bgm_histories[index];
-        if (!observed.history) {
-            return ExactClockStatus::Discontinuous;
-        }
-        auto& diagnostic = history_diagnostics_[index];
-        gc::audio::ExactPlaybackHistoryStatus status{};
-        const auto count = observed.history->CopyExactPlaybackEpochs(
-            left_epoch_scratch_, &status);
-        if (status.prefix_evicted) {
-            return ExactClockStatus::HistoryLost;
-        }
-        if (observed.last_validated_publication != 0 &&
-            (status.status == ExactClockStatus::Pending ||
-             status.status == ExactClockStatus::NoPlayback)) {
-            return ExactClockStatus::Discontinuous;
-        }
-        if (status.status != ExactClockStatus::Resolved) {
-            return status.status;
-        }
-        if (count == 0) {
-            return ExactClockStatus::Pending;
-        }
-        if (status.publication_sequence <
-            observed.last_validated_publication) {
-            return ExactClockStatus::Discontinuous;
-        }
-        if (status.publication_sequence !=
-            observed.last_validated_publication) {
-            return ExactClockStatus::TemporarilyUnavailable;
-        }
-        diagnostic.play_epoch_count = 0;
-        diagnostic.seek_epoch_count = 0;
-        for (std::size_t epoch = 0; epoch < count; ++epoch) {
-            if (left_epoch_scratch_[epoch].origin ==
-                gc::audio::ExactPlaybackOrigin::Play) {
-                if (play_epochs ==
-                    (std::numeric_limits<std::uint64_t>::max)()) {
-                    Fatal(
-                        AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-                }
-                ++diagnostic.play_epoch_count;
-                ++play_epochs;
-            } else {
-                if (seek_epochs ==
-                    (std::numeric_limits<std::uint64_t>::max)()) {
-                    Fatal(
-                        AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-                }
-                ++diagnostic.seek_epoch_count;
-                ++seek_epochs;
-            }
-        }
-        const auto& first = left_epoch_scratch_[0];
-        const auto& last = left_epoch_scratch_[count - 1];
-        diagnostic.last_playback_generation = last.playback_generation;
-        diagnostic.output_origin = first.output_origin;
-        diagnostic.source_origin = first.source_origin;
-        diagnostic.output_rate = first.output_rate;
-        diagnostic.source_rate = first.source_rate;
-    }
-    if (seek_epochs > (std::numeric_limits<std::uint64_t>::max)() -
-            play_epochs) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    auto& counters = JudgementDiagnostics().stage_counters();
-    counters.playback_play_epochs = play_epochs;
-    counters.playback_seek_epochs = seek_epochs;
-    counters.playback_epochs = play_epochs + seek_epochs;
-    return ExactClockStatus::Resolved;
+    JudgementDiagnostics().stage_counters().endpoint_publication_count =
+        probe.endpoint->publication_count();
 }
 
 void JudgementScheduler::PrepareOuterCall(
@@ -377,70 +230,65 @@ void JudgementScheduler::PrepareOuterCall(
     outer_scope_count_ = 0;
     outer_event_scope_count_ = 0;
     outer_heartbeat_scope_count_ = 0;
-    outer_uses_closed_frontier_ = false;
     outer_event_barrier_recorded_ = false;
-    outer_closed_frontier_.reset();
     outer_now_qpc_ = probe.now_qpc;
     last_qpc_ = probe.now_qpc;
     IncrementOrFatal(JudgementDiagnostics().stage_counters().outer_calls);
 
     ValidateStageBindingOrFatal(probe);
+    DrainTransportOrFatal();
 
-    ObservedPlaybackHistory* selected{};
-    if (probe.group2_cursor_selected) {
-        if (!probe.group2_observation) {
+    JudgementClockResult entry_clock{
+        .status = JudgementClockStatus::Pending,
+    };
+    if (!clock_resolver_.bound()) {
+        if (probe.group2_cursor_selected && !probe.group2_observation) {
             Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
         }
-        selected = RegisterOrValidateObservation(*probe.group2_observation);
-        last_selected_buffer_instance_id_ = selected->buffer_instance_id;
+        if (probe.group2_cursor_selected && probe.group2_observation &&
+            probe.endpoint) {
+            entry_clock = clock_resolver_.TryBind(
+                *probe.group2_observation,
+                probe.endpoint,
+                left_epoch_scratch_);
+            if (entry_clock.status ==
+                    JudgementClockStatus::CheckedArithmeticFailure ||
+                entry_clock.status ==
+                    JudgementClockStatus::HistoryLostBeforeBinding ||
+                entry_clock.status ==
+                    JudgementClockStatus::UnsupportedContinuity) {
+                FailForClockResult(entry_clock);
+            }
+        }
+    } else {
+        if (probe.endpoint &&
+            (probe.endpoint->endpoint_generation() !=
+                 clock_resolver_.anchor().endpoint_generation ||
+             probe.endpoint.get() !=
+                 clock_resolver_.anchor().endpoint.get())) {
+            Fatal(AbsoluteJudgementFatalReason::EndpointGenerationChanged);
+        }
+        entry_clock = clock_resolver_.ResolveQpc(
+            stage_.cutoff().stage_entry_qpc);
     }
 
-    const auto validation = clock_resolver_.ValidateRetainedHistories(
-        clock_binding_, left_epoch_scratch_, right_epoch_scratch_);
-    if (validation.checked_arithmetic_failure) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    if (validation.status == ExactClockStatus::HistoryLost) {
-        Fatal(AbsoluteJudgementFatalReason::ClockHistoryLost);
-    }
-    if (validation.status == ExactClockStatus::Discontinuous) {
-        Fatal(AbsoluteJudgementFatalReason::PlaybackMappingConflict);
-    }
-    auto validation_status = validation.status;
-    if (validation_status != ExactClockStatus::Resolved &&
-        validation_status != ExactClockStatus::Pending &&
-        validation_status != ExactClockStatus::TemporarilyUnavailable) {
-        Fatal(AbsoluteJudgementFatalReason::PlaybackMappingConflict);
-    }
-    if (validation_status == ExactClockStatus::Resolved) {
-        validation_status = UpdatePlaybackDiagnostics();
-        if (validation_status == ExactClockStatus::HistoryLost) {
-            Fatal(AbsoluteJudgementFatalReason::ClockHistoryLost);
-        }
-        if (validation_status == ExactClockStatus::Discontinuous) {
-            Fatal(AbsoluteJudgementFatalReason::PlaybackMappingConflict);
-        }
-        if (validation_status != ExactClockStatus::Resolved &&
-            validation_status != ExactClockStatus::Pending &&
-            validation_status !=
-                ExactClockStatus::TemporarilyUnavailable) {
-            Fatal(AbsoluteJudgementFatalReason::PlaybackMappingConflict);
-        }
-    }
-
-    DrainTransportOrFatal();
-    const auto unresolved_status =
-        ResolveUnresolvedPrefixOrFatal(validation_status);
-    TryActivateOrWait(validation_status);
-    if (validation_status != ExactClockStatus::Resolved ||
-        unresolved_status != ExactClockStatus::Resolved) {
+    TryActivateOrWait(entry_clock);
+    if (!clock_resolver_.bound() || !stage_.active()) {
         auto& diagnostics = JudgementDiagnostics();
         diagnostics.ObserveBacklog(PendingWorkCount());
         diagnostics.SetPendingWork(PendingWorkCount());
         return;
     }
-    SelectOuterHorizonOrFatal(probe, selected);
 
+    const auto unresolved_status = ResolveUnresolvedPrefixOrFatal();
+    if (unresolved_status != JudgementClockStatus::Resolved) {
+        auto& diagnostics = JudgementDiagnostics();
+        diagnostics.ObserveBacklog(PendingWorkCount());
+        diagnostics.SetPendingWork(PendingWorkCount());
+        return;
+    }
+
+    SelectOuterHorizonOrFatal(probe);
     auto& diagnostics = JudgementDiagnostics();
     diagnostics.ObserveBacklog(PendingWorkCount());
     diagnostics.SetPendingWork(PendingWorkCount());
@@ -586,55 +434,35 @@ void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
     diagnostics.CheckFinalTransportIdentityOrFatal(FatalSnapshot());
 }
 
-ExactClockStatus JudgementScheduler::ResolveUnresolvedPrefixOrFatal(
-    const ExactClockStatus validation_status) noexcept {
-    if (validation_status == ExactClockStatus::TemporarilyUnavailable ||
-        validation_status == ExactClockStatus::Pending) {
-        return validation_status;
-    }
-    if (validation_status != ExactClockStatus::Resolved) {
-        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
+JudgementClockStatus
+JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
+    if (!clock_resolver_.bound()) {
+        return JudgementClockStatus::Pending;
     }
 
     auto& counters = JudgementDiagnostics().stage_counters();
     while (unresolved_size_ != 0) {
         const auto& record = UnresolvedFront();
         IncrementOrFatal(counters.exact_clock_reads);
-        const auto resolved = clock_resolver_.ResolveHistoricalQpc(
-            clock_binding_,
-            record.qpc_ticks,
-            stage_.native().game_time_offset_ms,
-            left_epoch_scratch_);
+        const auto resolved = clock_resolver_.ResolveQpc(record.qpc_ticks);
         last_qpc_ = record.qpc_ticks;
         last_output_frame_ = resolved.output_frame;
-        last_source_frame_ = resolved.source_frame;
-        last_j_ = resolved.judgement_seconds
-            ? resolved.judgement_seconds
-            : resolved.closed_frontier_seconds;
+        last_j_ = resolved.judgement_seconds;
         if (resolved.endpoint_anchor_sequence != 0) {
             last_anchor_sequence_ = resolved.endpoint_anchor_sequence;
         }
-        if (resolved.endpoint_anchor_position) {
-            last_endpoint_position_ = resolved.endpoint_anchor_position;
+        if (resolved.endpoint_position) {
+            last_endpoint_position_ = resolved.endpoint_position;
         }
-        if (resolved.checked_arithmetic_failure) {
-            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+        if (resolved.status == JudgementClockStatus::Pending) {
+            return JudgementClockStatus::Pending;
         }
-        if (resolved.status == ExactClockStatus::Pending) {
-            return ExactClockStatus::Pending;
-        }
-        if (resolved.status == ExactClockStatus::TemporarilyUnavailable) {
+        if (resolved.status ==
+            JudgementClockStatus::TemporarilyUnavailable) {
             IncrementOrFatal(counters.unavailable_clock_reads);
-            return ExactClockStatus::TemporarilyUnavailable;
+            return JudgementClockStatus::TemporarilyUnavailable;
         }
-        if (resolved.status == ExactClockStatus::OutsidePlayback) {
-            ApplyHistoryResultOrFatal(history_.ApplyBaselineOnly(
-                record, BaselineOnlyReason::OutsidePlayback));
-            IncrementOrFatal(counters.outside_playback_baseline_records);
-            PopUnresolved();
-            continue;
-        }
-        if (resolved.status != ExactClockStatus::Resolved ||
+        if (resolved.status != JudgementClockStatus::Resolved ||
             !resolved.judgement_seconds) {
             FailForClockResult(resolved);
         }
@@ -670,38 +498,26 @@ ExactClockStatus JudgementScheduler::ResolveUnresolvedPrefixOrFatal(
         }
         PopUnresolved();
     }
-    return ExactClockStatus::Resolved;
+    return JudgementClockStatus::Resolved;
 }
 
 void JudgementScheduler::TryActivateOrWait(
-    const ExactClockStatus validation_status) noexcept {
+    const JudgementClockResult& entry_clock) noexcept {
     if (stage_.active()) {
         return;
     }
-    if (validation_status != ExactClockStatus::Resolved) {
+    if (entry_clock.status == JudgementClockStatus::Pending ||
+        entry_clock.status ==
+            JudgementClockStatus::TemporarilyUnavailable) {
         IncrementOrFatal(accumulated_clock_waits_);
         return;
     }
-    const auto origin = clock_resolver_.FindFirstPlaybackOrigin(
-        clock_binding_,
-        stage_.native().game_time_offset_ms,
-        left_epoch_scratch_);
-    if (origin.checked_arithmetic_failure) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    if (origin.status == ExactClockStatus::Pending ||
-        origin.status == ExactClockStatus::TemporarilyUnavailable) {
-        IncrementOrFatal(accumulated_clock_waits_);
-        return;
-    }
-    if (origin.status != ExactClockStatus::Resolved ||
-        !origin.judgement_seconds) {
-        Fatal(origin.status == ExactClockStatus::HistoryLost
-                  ? AbsoluteJudgementFatalReason::ClockHistoryLost
-                  : AbsoluteJudgementFatalReason::ClockDiscontinuous);
+    if (entry_clock.status != JudgementClockStatus::Resolved ||
+        !entry_clock.judgement_seconds || !clock_resolver_.bound()) {
+        FailForClockResult(entry_clock);
     }
 
-    const auto scaled = origin.judgement_seconds->Multiply(60, 1);
+    const auto scaled = entry_clock.judgement_seconds->Multiply(60, 1);
     const auto ceiling = scaled ? scaled->Ceil() :
         std::expected<std::int64_t, gc::timing::RationalError>(
             std::unexpected(gc::timing::RationalError::Overflow));
@@ -715,8 +531,9 @@ void JudgementScheduler::TryActivateOrWait(
     if (!stage_.active()) {
         Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
     }
-    last_j_ = origin.judgement_seconds;
+    last_j_ = entry_clock.judgement_seconds;
     JudgementDiagnostics().SeedHeartbeatIndex(committed_boundary_index_);
+    const auto& anchor = clock_resolver_.anchor();
     JudgementDiagnostics().LogAbsoluteStageActivation({
         .native = {
             .stage_generation = stage_.native().stage_generation,
@@ -729,10 +546,15 @@ void JudgementScheduler::TryActivateOrWait(
         },
         .input_generation = stage_.cutoff().transport_epoch,
         .endpoint_generation = stage_.endpoint_generation(),
-        .histories = history_diagnostics_,
-        .initial_j = *origin.judgement_seconds,
+        .buffer_instance_id = anchor.buffer_instance_id,
+        .playback_generation = anchor.playback_generation,
+        .output_origin = anchor.output_origin,
+        .source_origin = anchor.source_origin,
+        .output_rate = anchor.output_rate,
+        .source_rate = anchor.source_rate,
+        .initial_j = *entry_clock.judgement_seconds,
         .committed_boundary_seed = committed_boundary_index_,
-        .game_time_offset_ms = stage_.native().game_time_offset_ms,
+        .game_time_offset_ms = anchor.game_time_offset_ms,
         .hold_safe_frame = stage_.native().hold_safe_frame,
         .slide_hold_safe_frame = stage_.native().slide_hold_safe_frame,
         .accumulated_clock_waits = accumulated_clock_waits_,
@@ -740,125 +562,48 @@ void JudgementScheduler::TryActivateOrWait(
 }
 
 void JudgementScheduler::SelectOuterHorizonOrFatal(
-    const AbsoluteJudgementOuterProbe& probe,
-    const ObservedPlaybackHistory* selected) noexcept {
+    const AbsoluteJudgementOuterProbe& probe) noexcept {
     if (!stage_.active()) {
         return;
     }
 
     auto& counters = JudgementDiagnostics().stage_counters();
-    JudgementClockResult current{};
-    bool can_use_result{};
-    bool resolved_ready_allowed{};
-    if (probe.group2_cursor_selected) {
-        if (selected == nullptr || !probe.group2_observation) {
-            Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
-        }
-        switch (probe.group2_observation->state) {
-        case gc::audio::GameplayAudioCursorState::Exact:
-            resolved_ready_allowed = true;
-            [[fallthrough]];
-        case gc::audio::GameplayAudioCursorState::Pending:
-        case gc::audio::GameplayAudioCursorState::Inactive:
-            IncrementOrFatal(counters.exact_clock_reads);
-            last_qpc_ = probe.now_qpc;
-            current = clock_resolver_.ResolveCurrentQpc(
-                clock_binding_,
-                *selected,
-                probe.now_qpc,
-                stage_.native().game_time_offset_ms,
-                left_epoch_scratch_);
-            can_use_result = true;
-            break;
-        }
-    } else if (last_selected_buffer_instance_id_ != 0) {
-        for (const auto& observed :
-             clock_binding_.observed_stage_bgm_histories) {
-            if (observed.buffer_instance_id ==
-                last_selected_buffer_instance_id_) {
-                IncrementOrFatal(counters.exact_clock_reads);
-                last_qpc_ = probe.now_qpc;
-                current = clock_resolver_.ResolveCurrentQpc(
-                    clock_binding_,
-                    observed,
-                    probe.now_qpc,
-                    stage_.native().game_time_offset_ms,
-                    left_epoch_scratch_);
-                can_use_result = true;
-                break;
-            }
-        }
-        if (!can_use_result) {
-            Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
-        }
-    }
-    if (!can_use_result) {
-        return;
-    }
-
+    IncrementOrFatal(counters.exact_clock_reads);
+    last_qpc_ = probe.now_qpc;
+    const auto current = clock_resolver_.ResolveQpc(probe.now_qpc);
     last_output_frame_ = current.output_frame;
-    last_source_frame_ = current.source_frame;
-    last_j_ = current.judgement_seconds
-        ? current.judgement_seconds
-        : current.closed_frontier_seconds;
+    last_j_ = current.judgement_seconds;
     if (current.endpoint_anchor_sequence != 0) {
         last_anchor_sequence_ = current.endpoint_anchor_sequence;
     }
-    if (current.endpoint_anchor_position) {
-        last_endpoint_position_ = current.endpoint_anchor_position;
+    if (current.endpoint_position) {
+        last_endpoint_position_ = current.endpoint_position;
     }
-    if (current.checked_arithmetic_failure) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    if (current.status == ExactClockStatus::TemporarilyUnavailable) {
+    if (current.status ==
+        JudgementClockStatus::TemporarilyUnavailable) {
         IncrementOrFatal(counters.unavailable_clock_reads);
         return;
     }
-    if (current.status == ExactClockStatus::Pending) {
+    if (current.status == JudgementClockStatus::Pending) {
         return;
     }
-    if (current.status == ExactClockStatus::Resolved &&
-        resolved_ready_allowed && current.judgement_seconds) {
-        IncrementOrFatal(counters.resolved_clock_reads);
-        last_j_ = current.judgement_seconds;
-        SetReadyHorizonOrFatal(*current.judgement_seconds, false);
-        return;
+    if (current.status != JudgementClockStatus::Resolved ||
+        !current.judgement_seconds) {
+        FailForClockResult(current);
     }
-    if (current.status == ExactClockStatus::OutsidePlayback) {
-        if (current.closed_frontier_seconds) {
-            last_j_ = current.closed_frontier_seconds;
-            SetReadyHorizonOrFatal(
-                *current.closed_frontier_seconds, true);
-        }
-        return;
-    }
-    if (current.status == ExactClockStatus::Resolved &&
-        !resolved_ready_allowed) {
-        return;
-    }
-    FailForClockResult(current);
+
+    IncrementOrFatal(counters.resolved_clock_reads);
+    SetReadyHorizonOrFatal(*current.judgement_seconds);
 }
 
 void JudgementScheduler::SetReadyHorizonOrFatal(
-    const CheckedRational& ready,
-    const bool closed_frontier) noexcept {
+    const CheckedRational& ready) noexcept {
     if (committed_frontier_ &&
         ready.Compare(committed_frontier_->judgement_seconds) < 0) {
         Fatal(AbsoluteJudgementFatalReason::ClockDiscontinuous);
     }
     if (!has_committed_boundary_index_) {
         Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
-    }
-    if (closed_frontier) {
-        if (!last_closed_frontier_ ||
-            last_closed_frontier_->Compare(ready) != 0) {
-            IncrementOrFatal(JudgementDiagnostics().stage_counters()
-                                 .closed_frontier_selections);
-            last_closed_frontier_ = ready;
-        }
-        outer_closed_frontier_ = ready;
-    } else if (frozen_j_ && ready.Compare(*frozen_j_) > 0) {
-        frozen_j_.reset();
     }
     MarkReadyOverloadOrFatal(ready);
     const auto scaled = ready.Multiply(60, 1);
@@ -885,7 +630,6 @@ void JudgementScheduler::SetReadyHorizonOrFatal(
     } else {
         outer_horizon_ = ready;
     }
-    outer_uses_closed_frontier_ = closed_frontier;
 }
 
 void JudgementScheduler::MarkReadyOverloadOrFatal(
@@ -932,29 +676,6 @@ void JudgementScheduler::ConsumeMarkedOverloadOrFatal(
     JudgementDiagnostics().SetPendingWork(PendingWorkCount());
 }
 
-void JudgementScheduler::UpdateFrozenCoordinateOrFatal() noexcept {
-    if (!outer_closed_frontier_) {
-        return;
-    }
-    if (!has_committed_boundary_index_ ||
-        committed_boundary_index_ ==
-            (std::numeric_limits<std::int64_t>::max)()) {
-        Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
-    }
-    const auto* event = history_.FirstResolvedAtOrAfter(
-        next_delivery_sequence_);
-    const bool event_due = event != nullptr &&
-        event->judgement_seconds.Compare(*outer_closed_frontier_) <= 0;
-    const auto boundary = BoundaryAt(committed_boundary_index_ + 1);
-    if (!boundary) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    const bool boundary_due =
-        boundary->Compare(*outer_closed_frontier_) <= 0;
-    if (!event_due && !boundary_due) {
-        frozen_j_ = *outer_closed_frontier_;
-    }
-}
 
 std::optional<ScheduledJudgementScope>
 JudgementScheduler::NextScope() noexcept {
@@ -1150,13 +871,8 @@ void JudgementScheduler::FinishOuterCall() noexcept {
             Fatal(AbsoluteJudgementFatalReason::NativeCallCountMismatch);
         }
         diagnostics.RecordBatch(outer_scope_count_, FatalSnapshot());
-        if (outer_uses_closed_frontier_) {
-            IncrementOrFatal(
-                diagnostics.stage_counters().closed_frontier_catchups);
-        }
         diagnostics.CheckCompletedBatchInvariantOrFatal(FatalSnapshot());
     }
-    UpdateFrozenCoordinateOrFatal();
     diagnostics.ObserveBacklog(PendingWorkCount());
     diagnostics.SetPendingWork(PendingWorkCount());
     diagnostics.MaybeLogFiveSecondSummary(RuntimeSnapshot());
@@ -1165,9 +881,7 @@ void JudgementScheduler::FinishOuterCall() noexcept {
     outer_event_scope_count_ = 0;
     outer_heartbeat_scope_count_ = 0;
     outer_prepared_ = false;
-    outer_uses_closed_frontier_ = false;
     outer_event_barrier_recorded_ = false;
-    outer_closed_frontier_.reset();
 }
 
 void JudgementScheduler::CheckNativeCallInvariantOrFatal() const noexcept {
@@ -1297,13 +1011,16 @@ void JudgementScheduler::IncrementOrFatal(std::uint64_t& value) noexcept {
 
 void JudgementScheduler::FailForClockResult(
     const JudgementClockResult& result) noexcept {
-    if (result.checked_arithmetic_failure) {
+    if (result.status ==
+        JudgementClockStatus::CheckedArithmeticFailure) {
         Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
     }
-    if (result.status == ExactClockStatus::HistoryLost) {
+    if (result.status ==
+        JudgementClockStatus::HistoryLostBeforeBinding) {
         Fatal(AbsoluteJudgementFatalReason::ClockHistoryLost);
     }
-    if (result.status == ExactClockStatus::Discontinuous) {
+    if (result.status ==
+        JudgementClockStatus::UnsupportedContinuity) {
         Fatal(AbsoluteJudgementFatalReason::ClockDiscontinuous);
     }
     Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
@@ -1315,11 +1032,8 @@ JudgementScheduler::RuntimeSnapshot() const noexcept {
         .last_endpoint_anchor_sequence = last_anchor_sequence_,
         .last_endpoint_position = last_endpoint_position_,
         .last_output_frame = last_output_frame_,
-        .last_source_frame = last_source_frame_,
         .last_qpc = last_qpc_,
         .last_j = last_j_,
-        .last_closed_frontier = last_closed_frontier_,
-        .frozen_j = frozen_j_,
         .committed_boundary = has_committed_boundary_index_
             ? committed_boundary_index_
             : 0,
@@ -1366,14 +1080,12 @@ AbsoluteJudgementFatalSnapshot JudgementScheduler::FatalSnapshot()
     }
     return {
         .enabled = true,
-        .target_fps = JudgementDiagnostics().startup_target_fps(),
         .native = native,
         .input_generation = stage_.open()
             ? stage_.cutoff().transport_epoch
             : 0,
         .endpoint_generation = stage_.endpoint_generation(),
         .last_anchor_sequence = last_anchor_sequence_,
-        .histories = history_diagnostics_,
         .runtime = RuntimeSnapshot(),
     };
 }
