@@ -304,9 +304,10 @@ from falling back.
 - [ ] **Step 7: Remove old lifecycle terminology**
 
 Rename `NativeStageOpen`, `native_stage_open`, and construction/cleanup log
-labels to `semantic_stage_*` throughout the owned module. Keep an explicit
-diagnostic assertion that later native cleanup cannot find an open semantic
-stage, but do not perform semantic end accounting there.
+labels to `semantic_stage_*` throughout the owned module. Do not retain a
+construction or cleanup interception merely to observe lifecycle state: the
+audited state-18 exit transition is the sole semantic close, and the installed
+set remains exactly eight sites.
 
 - [ ] **Step 8: Run focused static checks and compile**
 

@@ -12,11 +12,11 @@ namespace gc::absolute_judgement {
 void InitializeAbsoluteJudgementRuntime(
     std::uintptr_t executable_base) noexcept;
 
-void BeginAbsoluteJudgementNativeStage(
+void BeginAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
-void EndAbsoluteJudgementNativeStage(
+void EndAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
-[[nodiscard]] bool AbsoluteJudgementNativeStageOpen() noexcept;
+[[nodiscard]] bool AbsoluteJudgementSemanticStageOpen() noexcept;
 [[nodiscard]] std::uint64_t AbsoluteJudgementStageGeneration() noexcept;
 
 [[noreturn]] void FailAbsoluteJudgementQueryInvariant(

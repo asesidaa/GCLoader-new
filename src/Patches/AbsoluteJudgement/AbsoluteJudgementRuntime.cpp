@@ -197,18 +197,20 @@ public:
         executable_base_ = executable_base;
     }
 
-    void BeginNativeStage(const std::uintptr_t tune_manager) noexcept {
-        scheduler_.BeginNativeStage(tune_manager);
+    void BeginSemanticStage(
+        const std::uintptr_t tune_manager,
+        const std::int64_t stage_entry_qpc) noexcept {
+        scheduler_.BeginSemanticStage(tune_manager, stage_entry_qpc);
         native_manager_ = tune_manager;
     }
 
-    void EndNativeStage(const std::uintptr_t tune_manager) noexcept {
-        scheduler_.EndNativeStage(tune_manager);
+    void EndSemanticStage(const std::uintptr_t tune_manager) noexcept {
+        scheduler_.EndSemanticStage(tune_manager);
         native_manager_ = 0;
     }
 
-    [[nodiscard]] bool NativeStageOpen() const noexcept {
-        return scheduler_.NativeStageOpen();
+    [[nodiscard]] bool SemanticStageOpen() const noexcept {
+        return scheduler_.SemanticStageOpen();
     }
 
     [[nodiscard]] std::uint64_t stage_generation() const noexcept {
@@ -592,18 +594,23 @@ void InitializeAbsoluteJudgementRuntime(
     Runtime().Initialize(executable_base);
 }
 
-void BeginAbsoluteJudgementNativeStage(
+void BeginAbsoluteJudgementSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
-    Runtime().BeginNativeStage(tune_manager);
+    LARGE_INTEGER stage_entry_qpc{};
+    if (!QueryPerformanceCounter(&stage_entry_qpc) ||
+        stage_entry_qpc.QuadPart <= 0) {
+        Runtime().Fail(AbsoluteJudgementFatalReason::ClockDiscontinuous);
+    }
+    Runtime().BeginSemanticStage(tune_manager, stage_entry_qpc.QuadPart);
 }
 
-void EndAbsoluteJudgementNativeStage(
+void EndAbsoluteJudgementSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
-    Runtime().EndNativeStage(tune_manager);
+    Runtime().EndSemanticStage(tune_manager);
 }
 
-bool AbsoluteJudgementNativeStageOpen() noexcept {
-    return Runtime().NativeStageOpen();
+bool AbsoluteJudgementSemanticStageOpen() noexcept {
+    return Runtime().SemanticStageOpen();
 }
 
 std::uint64_t AbsoluteJudgementStageGeneration() noexcept {

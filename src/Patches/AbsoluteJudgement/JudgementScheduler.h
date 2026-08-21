@@ -35,9 +35,11 @@ struct ScheduledJudgementScope {
 
 class JudgementScheduler final {
 public:
-    void BeginNativeStage(std::uintptr_t tune_manager) noexcept;
-    void EndNativeStage(std::uintptr_t tune_manager) noexcept;
-    [[nodiscard]] bool NativeStageOpen() const noexcept;
+    void BeginSemanticStage(
+        std::uintptr_t tune_manager,
+        std::int64_t stage_entry_qpc) noexcept;
+    void EndSemanticStage(std::uintptr_t tune_manager) noexcept;
+    [[nodiscard]] bool SemanticStageOpen() const noexcept;
     [[nodiscard]] std::uint64_t stage_generation() const noexcept;
     [[nodiscard]] const NativeJudgementIdentity& native_identity()
         const noexcept;

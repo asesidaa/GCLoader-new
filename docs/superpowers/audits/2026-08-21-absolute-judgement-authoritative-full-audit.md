@@ -144,6 +144,23 @@ of whether the enclosing Tune object is reused or reconstructed.
 Object construction and destruction may arm and destroy loader storage. They
 must not open or close semantic gameplay input history.
 
+### Implemented semantic hook-site contract
+
+The 2026-08-22 implementation uses the already-persisted raw disassembly in
+`H:\gc\runs\20260815T182438Z-297470b1\artifacts\audit-core-callsite-disasm-2026-08-17.txt`
+and a byte-for-byte `dumpbin /disasm:bytes` check of the supported
+`H:\gc\game471.exe`. No IDA database was reopened.
+
+| Meaning | VA / RVA | Guarded whole instructions | Tune receiver | Hook / continuation | Ordering proof |
+|---|---|---|---|---|---|
+| Semantic stage entry | `0x6641CC` / `0x2641CC` | `8B 8D 4C FD FF FF C7 41 10 00 00 00 00` (`mov ecx,[ebp-0x2B4]`; `mov dword ptr [ecx+0x10],0`) | pointer stored at `[EBP-0x2B4]` | SafetyHook MidHook before the guarded instructions; relocated instructions resume at `0x6641D9` | This is the jump-table case-17 block. A committed case 16 sets state 17 at `0x6641BF..0x6641CB` and falls into it; an existing state 17 enters it directly. The hook therefore runs once at the common transition before Tune frame zero is stored, before `GameplayInput_SetCurrentFrameAndFillHistory` at `0x6641F7`, and before the BGM-pair `Play` at `0x664235`. |
+| Semantic stage exit | `0x664D9A` / `0x264D9A` | `8B 95 4C FD FF FF C7 42 04 13 00 00 00` (`mov edx,[ebp-0x2B4]`; `mov dword ptr [edx+4],19`) | pointer stored at `[EBP-0x2B4]` | SafetyHook MidHook before the guarded instructions; relocated instructions resume at `0x664DA7` | The state-18 end predicate is tested at `0x664D8F..0x664D98`; only its taken exit path reaches this site. The original write selects state 19, then `0x664DA7` jumps past audio sync, input-frame update, and the judgement call at `0x664E06`. |
+
+The entry's two predecessors are controlled forms of the same native
+transition, not unrelated call paths. Neither site splits an instruction, both
+callbacks run before the state mutation they delimit, and both recover the
+same unambiguous receiver from the active Tune-run stack frame.
+
 ## Native lifecycle proof and current contradiction
 
 The Tune state machine establishes the following deterministic facts:

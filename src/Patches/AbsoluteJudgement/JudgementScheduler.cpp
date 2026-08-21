@@ -7,11 +7,11 @@
 #include <span>
 #include <utility>
 
-// Native lifecycle authority (completed audit, read-only):
-// CTuneGameManager_RunGameplayFrameStateMachine invokes RVA 0x2629A0 only in
-// state 5. A false result stays in state 5; a true result advances to state 6.
-// The matching cleanup entry is RVA 0x262080. These explicit calls, never an
-// elapsed-time or audio heuristic, own the loader stage boundary.
+// Semantic lifecycle authority (completed audit, read-only): state 16 commits
+// state 17 and reaches RVA 0x2641CC before frame-zero input/audio work. The
+// taken state-18 exit predicate reaches RVA 0x264D9A immediately before state
+// 19. These transitions, never object construction/cleanup or elapsed time,
+// own the loader stage boundary.
 
 namespace gc::absolute_judgement {
 namespace {
@@ -81,12 +81,13 @@ bool SameScope(const ScheduledJudgementScope& left,
 
 } // namespace
 
-void JudgementScheduler::BeginNativeStage(
-    const std::uintptr_t tune_manager) noexcept {
+void JudgementScheduler::BeginSemanticStage(
+    const std::uintptr_t tune_manager,
+    const std::int64_t stage_entry_qpc) noexcept {
     if (!stage_.open()) {
         ClearStageOwnedState();
     }
-    const auto result = stage_.Begin(tune_manager);
+    const auto result = stage_.Begin(tune_manager, stage_entry_qpc);
     if (!result) {
         Fatal(StageErrorReason(result.error()));
     }
@@ -98,7 +99,7 @@ void JudgementScheduler::BeginNativeStage(
         cutoff.held_baseline);
     next_drain_sequence_ = cutoff.first_stage_sequence;
     next_delivery_sequence_ = cutoff.first_stage_sequence;
-    JudgementDiagnostics().LogNativeStageOpen({
+    JudgementDiagnostics().LogSemanticStageOpen({
         .loader_stage_generation = stage_.generation(),
         .native_manager = tune_manager,
         .input_generation = cutoff.transport_epoch,
@@ -106,17 +107,18 @@ void JudgementScheduler::BeginNativeStage(
         .first_eligible_sequence = cutoff.first_stage_sequence,
         .held_baseline = cutoff.held_baseline,
         .transport_fault_baseline = cutoff.eviction_count,
+        .stage_entry_qpc = cutoff.stage_entry_qpc,
+        .stage_entry_handoff_drops = cutoff.stage_entry_handoff_drops,
     });
 }
 
-void JudgementScheduler::EndNativeStage(
+void JudgementScheduler::EndSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
     if (!stage_.open()) {
-        return;
+        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
     }
-    const auto validation = stage_.ValidateCleanup(tune_manager);
-    if (!validation) {
-        Fatal(StageErrorReason(validation.error()));
+    if (tune_manager == 0 || tune_manager != stage_.tune_manager()) {
+        Fatal(AbsoluteJudgementFatalReason::NativeIdentityChanged);
     }
     if (outstanding_scope_) {
         Fatal(AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
@@ -124,7 +126,7 @@ void JudgementScheduler::EndNativeStage(
 
     AccountCleanupDropsOrFatal();
 
-    JudgementDiagnostics().LogNativeStageEnd({
+    JudgementDiagnostics().LogSemanticStageEnd({
         .loader_stage_generation = stage_.generation(),
         .native_manager = tune_manager,
         .activated = stage_.active(),
@@ -134,7 +136,7 @@ void JudgementScheduler::EndNativeStage(
     stage_.Reset();
 }
 
-bool JudgementScheduler::NativeStageOpen() const noexcept {
+bool JudgementScheduler::SemanticStageOpen() const noexcept {
     return stage_.open();
 }
 
@@ -528,7 +530,8 @@ void JudgementScheduler::DrainTransportOrFatal() noexcept {
 
 void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
     gc::input::GameplayTransitionCutoff cutoff{};
-    if (!gc::input::CaptureGameplayTransitionCutoff(&cutoff)) {
+    if (!gc::input::CaptureGameplayTransitionCutoff(
+            stage_.cutoff().stage_entry_qpc, &cutoff)) {
         Fatal(AbsoluteJudgementFatalReason::TransportEpochLost);
     }
     const auto& stage_cutoff = stage_.cutoff();

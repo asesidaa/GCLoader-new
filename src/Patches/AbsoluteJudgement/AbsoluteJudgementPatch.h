@@ -8,8 +8,8 @@ namespace gc::absolute_judgement {
 
 void InitializeAbsoluteJudgementOrFatal() noexcept;
 
-std::uint8_t __fastcall HookStageBegin(void* self, void*) noexcept;
-int __fastcall HookStageEnd(void* self, void*) noexcept;
+void HookSemanticStageEntry(safetyhook::Context& context) noexcept;
+void HookSemanticStageExit(safetyhook::Context& context) noexcept;
 void HookLoopGuard(safetyhook::Context& context) noexcept;
 std::uint8_t __fastcall HookPressed(
     void* self, void*, int id, int frame) noexcept;

@@ -36,12 +36,15 @@ struct GameplayTransitionCutoff {
     std::uint64_t eviction_count{};
     GameplayHeldMask held_baseline{};
     std::int64_t qpc_frequency{};
+    std::int64_t stage_entry_qpc{};
+    std::uint64_t stage_entry_handoff_drops{};
 };
 
 bool PrepareGameplayTransitionTransport(bool enabled) noexcept;
 void BeginGameplayTransitionEpoch(GameplayHeldMask baseline) noexcept;
 void EndGameplayTransitionEpoch() noexcept;
 bool CaptureGameplayTransitionCutoff(
+    std::int64_t stage_entry_qpc,
     GameplayTransitionCutoff* output) noexcept;
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,

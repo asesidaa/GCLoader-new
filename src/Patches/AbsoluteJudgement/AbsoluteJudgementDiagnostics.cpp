@@ -84,9 +84,9 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     AbsoluteJudgementCounterSnapshot result{};
 #define GC_SUBTRACT_COUNTER(field) \
     result.field = SubtractMonotonic(value.field, baseline.field)
-    GC_SUBTRACT_COUNTER(native_stage_opens);
+    GC_SUBTRACT_COUNTER(semantic_stage_opens);
     GC_SUBTRACT_COUNTER(absolute_stage_activations);
-    GC_SUBTRACT_COUNTER(native_stage_ends);
+    GC_SUBTRACT_COUNTER(semantic_stage_ends);
     GC_SUBTRACT_COUNTER(transport_records_drained);
     GC_SUBTRACT_COUNTER(transport_rising_controls);
     GC_SUBTRACT_COUNTER(transport_falling_controls);
@@ -353,8 +353,8 @@ void AppendCounters(
     const AbsoluteJudgementCounterSnapshot& counters) {
     std::format_to(
         std::back_inserter(message),
-        " {}native_stage_opens={} {}absolute_stage_activations={}"
-        " {}native_stage_ends={} {}transport_records_drained={}"
+        " {}semantic_stage_opens={} {}absolute_stage_activations={}"
+        " {}semantic_stage_ends={} {}transport_records_drained={}"
         " {}transport_rising_controls={} {}transport_falling_controls={}"
         " {}transport_pending={} {}transport_max_depth={}"
         " {}late_records={} {}outside_playback_baseline_records={}"
@@ -363,11 +363,11 @@ void AppendCounters(
         " {}first_overload_drop_sequence={}"
         " {}last_overload_drop_sequence={}",
         prefix,
-        counters.native_stage_opens,
+        counters.semantic_stage_opens,
         prefix,
         counters.absolute_stage_activations,
         prefix,
-        counters.native_stage_ends,
+        counters.semantic_stage_ends,
         prefix,
         counters.transport_records_drained,
         prefix,
@@ -578,9 +578,9 @@ void AbsoluteJudgementDiagnostics::SetPendingWork(
 AbsoluteJudgementCounterSnapshot
 AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
     return {
-        .native_stage_opens = stage_.native_stage_opens,
+        .semantic_stage_opens = stage_.semantic_stage_opens,
         .absolute_stage_activations = stage_.absolute_stage_activations,
-        .native_stage_ends = stage_.native_stage_ends,
+        .semantic_stage_ends = stage_.semantic_stage_ends,
         .transport_records_drained = stage_.transport_records_drained,
         .transport_rising_controls = stage_.transport_rising_controls,
         .transport_falling_controls = stage_.transport_falling_controls,
@@ -690,22 +690,25 @@ void AbsoluteJudgementDiagnostics::LogStartup(
         record.installed_site_count);
 }
 
-void AbsoluteJudgementDiagnostics::LogNativeStageOpen(
-    const AbsoluteJudgementNativeStageOpenRecord& record) noexcept {
+void AbsoluteJudgementDiagnostics::LogSemanticStageOpen(
+    const AbsoluteJudgementSemanticStageOpenRecord& record) noexcept {
     ResetStageState();
-    stage_.native_stage_opens = 1;
+    stage_.semantic_stage_opens = 1;
     PLOG_INFO << std::format(
-        "AbsoluteJudgement: native-stage-open stage_generation={}"
+        "AbsoluteJudgement: semantic-stage-open stage_generation={}"
         " native_manager={} input_generation={} cutoff_sequence={}"
         " first_eligible_sequence={} held_baseline={}"
-        " transport_fault_baseline={}",
+        " transport_fault_baseline={} stage_entry_qpc={}"
+        " stage_entry_handoff_drops={}",
         record.loader_stage_generation,
         record.native_manager,
         record.input_generation,
         record.cutoff_sequence,
         record.first_eligible_sequence,
         record.held_baseline,
-        record.transport_fault_baseline);
+        record.transport_fault_baseline,
+        record.stage_entry_qpc,
+        record.stage_entry_handoff_drops);
 }
 
 void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
@@ -764,13 +767,13 @@ void AbsoluteJudgementDiagnostics::MaybeLogFiveSecondSummary(
     LogSummary("five-second-summary", runtime, cumulative);
 }
 
-void AbsoluteJudgementDiagnostics::LogNativeStageEnd(
-    const AbsoluteJudgementNativeStageEndRecord& record) noexcept {
-    ++stage_.native_stage_ends;
+void AbsoluteJudgementDiagnostics::LogSemanticStageEnd(
+    const AbsoluteJudgementSemanticStageEndRecord& record) noexcept {
+    ++stage_.semantic_stage_ends;
     const auto cumulative = SnapshotCounters();
     const auto interval = SnapshotIntervalCounters(cumulative);
     auto message = std::format(
-        "AbsoluteJudgement: native-stage-end stage_generation={}"
+        "AbsoluteJudgement: semantic-stage-end stage_generation={}"
         " native_manager={} activated={}",
         record.loader_stage_generation,
         record.native_manager,

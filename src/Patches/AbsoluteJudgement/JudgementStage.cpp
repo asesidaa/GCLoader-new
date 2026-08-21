@@ -21,7 +21,8 @@ bool SameNativeObjectIdentity(
 } // namespace
 
 std::expected<void, JudgementStageError> JudgementStage::Begin(
-    const std::uintptr_t tune_manager) noexcept {
+    const std::uintptr_t tune_manager,
+    const std::int64_t stage_entry_qpc) noexcept {
     if (open_) {
         return std::unexpected(JudgementStageError::AlreadyOpen);
     }
@@ -38,7 +39,8 @@ std::expected<void, JudgementStageError> JudgementStage::Begin(
     tune_manager_ = tune_manager;
     open_ = true;
     if (tune_manager == 0 ||
-        !gc::input::CaptureGameplayTransitionCutoff(&cutoff_) ||
+        !gc::input::CaptureGameplayTransitionCutoff(
+            stage_entry_qpc, &cutoff_) ||
         cutoff_.transport_epoch == 0 || cutoff_.qpc_frequency <= 0) {
         return std::unexpected(
             JudgementStageError::InputCapabilityUnavailable);
@@ -84,17 +86,6 @@ std::expected<void, JudgementStageError> JudgementStage::BindOrValidate(
     if (native.hold_safe_frame != native_.hold_safe_frame ||
         native.slide_hold_safe_frame != native_.slide_hold_safe_frame) {
         return std::unexpected(JudgementStageError::SafeFrameChanged);
-    }
-    return {};
-}
-
-std::expected<void, JudgementStageError> JudgementStage::ValidateCleanup(
-    const std::uintptr_t tune_manager) const noexcept {
-    if (!open_) {
-        return {};
-    }
-    if (tune_manager == 0 || tune_manager != tune_manager_) {
-        return std::unexpected(JudgementStageError::CleanupIdentityChanged);
     }
     return {};
 }

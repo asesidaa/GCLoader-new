@@ -37,14 +37,12 @@ enum class JudgementStageError : std::uint8_t {
 class JudgementStage final {
 public:
     [[nodiscard]] std::expected<void, JudgementStageError> Begin(
-        std::uintptr_t tune_manager) noexcept;
+        std::uintptr_t tune_manager,
+        std::int64_t stage_entry_qpc) noexcept;
     [[nodiscard]] std::expected<void, JudgementStageError> BindOrValidate(
         const NativeJudgementIdentity& native,
         std::uint64_t endpoint_generation,
         std::int64_t endpoint_qpc_frequency) noexcept;
-    [[nodiscard]] std::expected<void, JudgementStageError> ValidateCleanup(
-        std::uintptr_t tune_manager) const noexcept;
-
     void Activate() noexcept;
     void Reset() noexcept;
 

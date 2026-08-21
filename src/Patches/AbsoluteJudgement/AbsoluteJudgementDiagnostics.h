@@ -121,9 +121,9 @@ enum class AbsoluteJudgementEventIsolationDisposition : std::uint8_t {
 };
 
 struct AbsoluteJudgementStageCounters {
-    std::uint64_t native_stage_opens{};
+    std::uint64_t semantic_stage_opens{};
     std::uint64_t absolute_stage_activations{};
-    std::uint64_t native_stage_ends{};
+    std::uint64_t semantic_stage_ends{};
 
     std::uint64_t transport_records_drained{};
     std::uint64_t transport_rising_controls{};
@@ -174,9 +174,9 @@ struct AbsoluteJudgementStageCounters {
 };
 
 struct AbsoluteJudgementCounterSnapshot {
-    std::uint64_t native_stage_opens{};
+    std::uint64_t semantic_stage_opens{};
     std::uint64_t absolute_stage_activations{};
-    std::uint64_t native_stage_ends{};
+    std::uint64_t semantic_stage_ends{};
 
     std::uint64_t transport_records_drained{};
     std::uint64_t transport_rising_controls{};
@@ -253,7 +253,7 @@ struct AbsoluteJudgementStartupRecord {
     std::uint32_t installed_site_count{};
 };
 
-struct AbsoluteJudgementNativeStageOpenRecord {
+struct AbsoluteJudgementSemanticStageOpenRecord {
     std::uint64_t loader_stage_generation{};
     std::uintptr_t native_manager{};
     std::uint64_t input_generation{};
@@ -261,6 +261,8 @@ struct AbsoluteJudgementNativeStageOpenRecord {
     std::uint64_t first_eligible_sequence{};
     gc::input::GameplayHeldMask held_baseline{};
     std::uint64_t transport_fault_baseline{};
+    std::int64_t stage_entry_qpc{};
+    std::uint64_t stage_entry_handoff_drops{};
 };
 
 struct AbsoluteJudgementActivationRecord {
@@ -277,7 +279,7 @@ struct AbsoluteJudgementActivationRecord {
     std::uint64_t accumulated_clock_waits{};
 };
 
-struct AbsoluteJudgementNativeStageEndRecord {
+struct AbsoluteJudgementSemanticStageEndRecord {
     std::uint64_t loader_stage_generation{};
     std::uintptr_t native_manager{};
     bool activated{};
@@ -345,14 +347,14 @@ public:
     [[nodiscard]] std::uint32_t startup_target_fps() const noexcept;
 
     void LogStartup(const AbsoluteJudgementStartupRecord& record) noexcept;
-    void LogNativeStageOpen(
-        const AbsoluteJudgementNativeStageOpenRecord& record) noexcept;
+    void LogSemanticStageOpen(
+        const AbsoluteJudgementSemanticStageOpenRecord& record) noexcept;
     void LogAbsoluteStageActivation(
         const AbsoluteJudgementActivationRecord& record) noexcept;
     void MaybeLogFiveSecondSummary(
         const AbsoluteJudgementRuntimeSnapshot& runtime) noexcept;
-    void LogNativeStageEnd(
-        const AbsoluteJudgementNativeStageEndRecord& record) noexcept;
+    void LogSemanticStageEnd(
+        const AbsoluteJudgementSemanticStageEndRecord& record) noexcept;
     void LogScopeVerbose(
         const AbsoluteJudgementScopeRecord& record) noexcept;
 

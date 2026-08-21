@@ -128,9 +128,10 @@ void EndGameplayTransitionEpoch() noexcept
 }
 
 bool CaptureGameplayTransitionCutoff(
+    const std::int64_t stage_entry_qpc,
     GameplayTransitionCutoff* output) noexcept
 {
-    if (output == nullptr)
+    if (output == nullptr || stage_entry_qpc <= 0)
     {
         return false;
     }
@@ -142,12 +143,25 @@ bool CaptureGameplayTransitionCutoff(
         return false;
     }
 
+    std::uint64_t handoff_drops{};
+    for (std::size_t index = 0; index < transport.size; ++index)
+    {
+        const auto& record = transport.records[
+            (transport.read_slot + index) % kGameplayTransitionCapacity];
+        if (record.qpc_ticks >= stage_entry_qpc)
+        {
+            ++handoff_drops;
+        }
+    }
+
     *output = GameplayTransitionCutoff{
         .transport_epoch = transport.transport_epoch,
         .first_stage_sequence = transport.next_sequence,
         .eviction_count = transport.eviction_count,
         .held_baseline = transport.published_held,
         .qpc_frequency = transport.qpc_frequency,
+        .stage_entry_qpc = stage_entry_qpc,
+        .stage_entry_handoff_drops = handoff_drops,
     };
     ClearQueue(transport);
     return true;

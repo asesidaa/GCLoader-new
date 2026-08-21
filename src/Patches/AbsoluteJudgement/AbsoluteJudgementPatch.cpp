@@ -29,8 +29,8 @@ namespace {
 using namespace native_abi;
 
 enum class NativeSite : std::size_t {
-    StageBegin,
-    StageEnd,
+    SemanticStageEntry,
+    SemanticStageExit,
     LoopGuard,
     Pressed,
     Held,
@@ -57,8 +57,8 @@ struct InstallFailure final {
 };
 
 struct AbsoluteJudgementHooks final {
-    safetyhook::InlineHook stage_begin;
-    safetyhook::InlineHook stage_end;
+    safetyhook::MidHook semantic_stage_entry;
+    safetyhook::MidHook semantic_stage_exit;
     safetyhook::MidHook loop_guard;
     safetyhook::InlineHook pressed;
     safetyhook::InlineHook held;
@@ -68,8 +68,12 @@ struct AbsoluteJudgementHooks final {
 };
 
 inline constexpr std::array<NativeSiteContract, 8> kSiteContracts{{
-    {NativeSite::StageBegin, kStageBeginRva, kStageBeginPrefix},
-    {NativeSite::StageEnd, kStageEndRva, kStageEndPrefix},
+    {NativeSite::SemanticStageEntry,
+     kSemanticStageEntryRva,
+     kSemanticStageEntryPrefix},
+    {NativeSite::SemanticStageExit,
+     kSemanticStageExitRva,
+     kSemanticStageExitPrefix},
     {NativeSite::LoopGuard, kLoopGuardRva, kLoopGuardPrefix},
     {NativeSite::Pressed, kPressedRva, kPressedPrefix},
     {NativeSite::Held, kHeldRva, kHeldPrefix},
@@ -79,8 +83,8 @@ inline constexpr std::array<NativeSiteContract, 8> kSiteContracts{{
 }};
 
 inline constexpr std::array<std::string_view, 8> kPreflightFailureLogs{{
-    "AbsoluteJudgement: startup fatal stage=preflight site=native_stage_begin",
-    "AbsoluteJudgement: startup fatal stage=preflight site=native_stage_end",
+    "AbsoluteJudgement: startup fatal stage=preflight site=semantic_stage_entry",
+    "AbsoluteJudgement: startup fatal stage=preflight site=semantic_stage_exit",
     "AbsoluteJudgement: startup fatal stage=preflight site=loop_guard",
     "AbsoluteJudgement: startup fatal stage=preflight site=pressed",
     "AbsoluteJudgement: startup fatal stage=preflight site=held",
@@ -89,8 +93,8 @@ inline constexpr std::array<std::string_view, 8> kPreflightFailureLogs{{
     "AbsoluteJudgement: startup fatal stage=preflight site=held_age",
 }};
 inline constexpr std::array<std::string_view, 8> kCreateFailureLogs{{
-    "AbsoluteJudgement: startup fatal stage=create site=native_stage_begin",
-    "AbsoluteJudgement: startup fatal stage=create site=native_stage_end",
+    "AbsoluteJudgement: startup fatal stage=create site=semantic_stage_entry",
+    "AbsoluteJudgement: startup fatal stage=create site=semantic_stage_exit",
     "AbsoluteJudgement: startup fatal stage=create site=loop_guard",
     "AbsoluteJudgement: startup fatal stage=create site=pressed",
     "AbsoluteJudgement: startup fatal stage=create site=held",
@@ -99,8 +103,8 @@ inline constexpr std::array<std::string_view, 8> kCreateFailureLogs{{
     "AbsoluteJudgement: startup fatal stage=create site=held_age",
 }};
 inline constexpr std::array<std::string_view, 8> kEnableFailureLogs{{
-    "AbsoluteJudgement: startup fatal stage=enable site=native_stage_begin",
-    "AbsoluteJudgement: startup fatal stage=enable site=native_stage_end",
+    "AbsoluteJudgement: startup fatal stage=enable site=semantic_stage_entry",
+    "AbsoluteJudgement: startup fatal stage=enable site=semantic_stage_exit",
     "AbsoluteJudgement: startup fatal stage=enable site=loop_guard",
     "AbsoluteJudgement: startup fatal stage=enable site=pressed",
     "AbsoluteJudgement: startup fatal stage=enable site=held",
@@ -152,6 +156,53 @@ std::atomic_bool g_startup_fatal_published{false};
     return true;
 }
 
+[[nodiscard]] bool AddSignedAddress(
+    const std::uintptr_t base,
+    const std::ptrdiff_t offset,
+    std::uintptr_t* const result) noexcept {
+    if (result == nullptr) {
+        return false;
+    }
+    if (offset < 0) {
+        const auto magnitude = static_cast<std::uintptr_t>(-offset);
+        if (magnitude > base) {
+            return false;
+        }
+        *result = base - magnitude;
+        return true;
+    }
+    return AddAddress(base, static_cast<std::uintptr_t>(offset), result);
+}
+
+[[nodiscard]] bool ReadU32Safe(
+    const std::uintptr_t address,
+    std::uint32_t* const value) noexcept {
+    if (address == 0 || value == nullptr) {
+        return false;
+    }
+    __try {
+        *value = *reinterpret_cast<volatile const std::uint32_t*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+[[nodiscard]] std::uintptr_t ReadSemanticTuneManagerOrFatal(
+    const safetyhook::Context& context) noexcept {
+    std::uintptr_t slot{};
+    std::uint32_t tune_manager{};
+    if (!AddSignedAddress(
+            static_cast<std::uintptr_t>(context.ebp),
+            kSemanticStageTuneStackOffset,
+            &slot) ||
+        !ReadU32Safe(slot, &tune_manager) || tune_manager == 0) {
+        FailAbsoluteJudgementActiveStage(
+            AbsoluteJudgementFatalReason::NativeStateMismatch);
+    }
+    return static_cast<std::uintptr_t>(tune_manager);
+}
+
 [[nodiscard]] bool PrefixMatchesSafe(
     const std::uintptr_t address,
     const std::span<const std::uint8_t> expected) noexcept {
@@ -194,23 +245,28 @@ template <typename Hook>
     // Install directly into stable process-lifetime storage. Once any hook is
     // enabled its handler must never observe a moved-from trampoline owner.
     auto& pending = g_hooks;
-    auto created_stage_begin = safetyhook::InlineHook::create(
-        reinterpret_cast<void*>(executable_base + kStageBeginRva),
-        reinterpret_cast<void*>(&HookStageBegin),
-        safetyhook::InlineHook::StartDisabled);
-    if (!created_stage_begin) {
-        return InstallFailure{InstallStage::Create, NativeSite::StageBegin};
+    auto created_semantic_stage_entry = safetyhook::MidHook::create(
+        reinterpret_cast<void*>(
+            executable_base + kSemanticStageEntryRva),
+        &HookSemanticStageEntry,
+        safetyhook::MidHook::StartDisabled);
+    if (!created_semantic_stage_entry) {
+        return InstallFailure{
+            InstallStage::Create, NativeSite::SemanticStageEntry};
     }
-    pending.stage_begin = std::move(*created_stage_begin);
+    pending.semantic_stage_entry =
+        std::move(*created_semantic_stage_entry);
 
-    auto created_stage_end = safetyhook::InlineHook::create(
-        reinterpret_cast<void*>(executable_base + kStageEndRva),
-        reinterpret_cast<void*>(&HookStageEnd),
-        safetyhook::InlineHook::StartDisabled);
-    if (!created_stage_end) {
-        return InstallFailure{InstallStage::Create, NativeSite::StageEnd};
+    auto created_semantic_stage_exit = safetyhook::MidHook::create(
+        reinterpret_cast<void*>(
+            executable_base + kSemanticStageExitRva),
+        &HookSemanticStageExit,
+        safetyhook::MidHook::StartDisabled);
+    if (!created_semantic_stage_exit) {
+        return InstallFailure{
+            InstallStage::Create, NativeSite::SemanticStageExit};
     }
-    pending.stage_end = std::move(*created_stage_end);
+    pending.semantic_stage_exit = std::move(*created_semantic_stage_exit);
 
     auto created_loop_guard = safetyhook::MidHook::create(
         reinterpret_cast<void*>(executable_base + kLoopGuardRva),
@@ -285,12 +341,14 @@ template <typename Hook>
     if (!EnableHook(pending.loop_guard)) {
         return InstallFailure{InstallStage::Enable, NativeSite::LoopGuard};
     }
-    if (!EnableHook(pending.stage_end)) {
-        return InstallFailure{InstallStage::Enable, NativeSite::StageEnd};
+    if (!EnableHook(pending.semantic_stage_exit)) {
+        return InstallFailure{
+            InstallStage::Enable, NativeSite::SemanticStageExit};
     }
-    // The authoritative begin hook is the final operational commit point.
-    if (!EnableHook(pending.stage_begin)) {
-        return InstallFailure{InstallStage::Enable, NativeSite::StageBegin};
+    // The semantic entry hook is the final operational commit point.
+    if (!EnableHook(pending.semantic_stage_entry)) {
+        return InstallFailure{
+            InstallStage::Enable, NativeSite::SemanticStageEntry};
     }
 
     return std::nullopt;
@@ -308,27 +366,20 @@ template <typename Value>
 
 } // namespace
 
-std::uint8_t __fastcall HookStageBegin(
-    void* const self,
-    void*) noexcept {
-    const auto result =
-        g_active_hooks->stage_begin.unsafe_thiscall<std::uint8_t>(self);
-    if (result != 0) {
-        BeginAbsoluteJudgementNativeStage(
-            reinterpret_cast<std::uintptr_t>(self));
-    }
-    return result;
+void HookSemanticStageEntry(safetyhook::Context& context) noexcept {
+    BeginAbsoluteJudgementSemanticStage(
+        ReadSemanticTuneManagerOrFatal(context));
 }
 
-int __fastcall HookStageEnd(void* const self, void*) noexcept {
-    EndAbsoluteJudgementNativeStage(
-        reinterpret_cast<std::uintptr_t>(self));
-    return g_active_hooks->stage_end.unsafe_thiscall<int>(self);
+void HookSemanticStageExit(safetyhook::Context& context) noexcept {
+    EndAbsoluteJudgementSemanticStage(
+        ReadSemanticTuneManagerOrFatal(context));
 }
 
 void HookLoopGuard(safetyhook::Context& context) noexcept {
-    if (!AbsoluteJudgementNativeStageOpen()) {
-        return;
+    if (!AbsoluteJudgementSemanticStageOpen()) {
+        FailAbsoluteJudgementActiveStage(
+            AbsoluteJudgementFatalReason::NativeStateMismatch);
     }
     try {
         DispatchAbsoluteJudgementOuterCall(context);
