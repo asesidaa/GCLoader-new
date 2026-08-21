@@ -92,7 +92,6 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     GC_SUBTRACT_COUNTER(transport_falling_controls);
     result.transport_pending_depth = value.transport_pending_depth;
     GC_SUBTRACT_COUNTER(late_records);
-    GC_SUBTRACT_COUNTER(outside_playback_baseline_records);
     GC_SUBTRACT_COUNTER(sequence_errors);
     GC_SUBTRACT_COUNTER(post_cutoff_records);
     GC_SUBTRACT_COUNTER(overload_drops);
@@ -319,8 +318,7 @@ void AppendCounters(
         " {}semantic_stage_ends={} {}transport_records_drained={}"
         " {}transport_rising_controls={} {}transport_falling_controls={}"
         " {}transport_pending={} {}transport_max_depth={}"
-        " {}late_records={} {}outside_playback_baseline_records={}"
-        " {}sequence_errors={} {}post_cutoff_records={}"
+        " {}late_records={} {}sequence_errors={} {}post_cutoff_records={}"
         " {}overload_drops={} {}cleanup_drops={}"
         " {}first_overload_drop_sequence={}"
         " {}last_overload_drop_sequence={}",
@@ -342,8 +340,6 @@ void AppendCounters(
         counters.transport_max_depth,
         prefix,
         counters.late_records,
-        prefix,
-        counters.outside_playback_baseline_records,
         prefix,
         counters.sequence_errors,
         prefix,
@@ -529,8 +525,6 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .transport_pending_depth = stage_.transport_pending_depth,
         .transport_max_depth = stage_.transport_max_depth,
         .late_records = stage_.late_records,
-        .outside_playback_baseline_records =
-            stage_.outside_playback_baseline_records,
         .sequence_errors = stage_.sequence_errors,
         .post_cutoff_records = stage_.post_cutoff_records,
         .overload_drops = stage_.overload_drops,
@@ -823,7 +817,6 @@ void AbsoluteJudgementDiagnostics::CheckFinalTransportIdentityOrFatal(
         return true;
     };
     if (!add(stage_.event_scopes) ||
-        !add(stage_.outside_playback_baseline_records) ||
         !add(stage_.late_records) ||
         !add(stage_.overload_drops) ||
         !add(stage_.cleanup_drops)) {

@@ -410,7 +410,6 @@ void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
         already_classified += value;
     };
     add_classified(counters.event_scopes);
-    add_classified(counters.outside_playback_baseline_records);
     add_classified(counters.late_records);
     add_classified(counters.overload_drops);
     if (counters.post_cutoff_records < already_classified) {
@@ -484,8 +483,16 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
         last_resolved_coordinate_ = coordinate;
 
         if (IsBehindCommittedFrontier(coordinate)) {
-            ApplyHistoryResultOrFatal(history_.ApplyBaselineOnly(
-                record, BaselineOnlyReason::AcceptedLate));
+            if (next_delivery_sequence_ != record.sequence) {
+                Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+            }
+            ApplyHistoryResultOrFatal(history_.AppendStateOnly(
+                {
+                    .transport = record,
+                    .judgement_seconds = *resolved.judgement_seconds,
+                },
+                StateOnlyReason::AcceptedLate));
+            next_delivery_sequence_ = record.sequence + 1;
             IncrementOrFatal(counters.late_records);
         } else {
             ApplyHistoryResultOrFatal(history_.Append({
@@ -660,8 +667,8 @@ void JudgementScheduler::ConsumeMarkedOverloadOrFatal(
             (std::numeric_limits<std::uint64_t>::max)()) {
         Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
     }
-    ApplyHistoryResultOrFatal(history_.ConvertResolvedToBaselineOnly(
-        event.transport.sequence, BaselineOnlyReason::Overload));
+    ApplyHistoryResultOrFatal(history_.ConvertResolvedToStateOnly(
+        event.transport.sequence, StateOnlyReason::Overload));
     next_delivery_sequence_ = event.transport.sequence + 1;
     --pending_event_count_;
     --marked_overload_count_;

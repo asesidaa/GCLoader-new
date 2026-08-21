@@ -116,7 +116,6 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t transport_pending_depth{};
     std::uint64_t transport_max_depth{};
     std::uint64_t late_records{};
-    std::uint64_t outside_playback_baseline_records{};
     std::uint64_t sequence_errors{};
     std::uint64_t post_cutoff_records{};
     std::uint64_t overload_drops{};
@@ -163,7 +162,6 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t transport_pending_depth{};
     std::uint64_t transport_max_depth{};
     std::uint64_t late_records{};
-    std::uint64_t outside_playback_baseline_records{};
     std::uint64_t sequence_errors{};
     std::uint64_t post_cutoff_records{};
     std::uint64_t overload_drops{};

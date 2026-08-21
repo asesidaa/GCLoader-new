@@ -1,5 +1,6 @@
 #include "Patches/AbsoluteJudgement/JudgementHistory.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <limits>
 
@@ -57,12 +58,29 @@ void JudgementHistory::Reset(const std::uint64_t transport_epoch,
         }
     }
     causal_time_floor_.reset();
-    last_resolved_coordinate_.reset();
+    last_coordinate_.reset();
     initialized_ = true;
 }
 
 std::expected<void, JudgementHistoryError> JudgementHistory::Append(
     const ResolvedGameplayTransition& transition) noexcept
+{
+    return AppendEntry(
+        transition, true, StateOnlyReason::AcceptedLate);
+}
+
+std::expected<void, JudgementHistoryError>
+JudgementHistory::AppendStateOnly(
+    const ResolvedGameplayTransition& transition,
+    const StateOnlyReason reason) noexcept
+{
+    return AppendEntry(transition, false, reason);
+}
+
+std::expected<void, JudgementHistoryError> JudgementHistory::AppendEntry(
+    const ResolvedGameplayTransition& transition,
+    const bool event_eligible,
+    const StateOnlyReason state_only_reason) noexcept
 {
     const auto transport_validation = ValidateTransport(transition.transport);
     if (!transport_validation)
@@ -80,14 +98,13 @@ std::expected<void, JudgementHistoryError> JudgementHistory::Append(
         .judgement_seconds = transition.judgement_seconds,
         .sequence = transition.transport.sequence,
     };
-    if (last_resolved_coordinate_)
+    if (last_coordinate_)
     {
         const int time_order = transition.judgement_seconds.Compare(
-            last_resolved_coordinate_->judgement_seconds);
+            last_coordinate_->judgement_seconds);
         if (time_order < 0 ||
             (time_order == 0 &&
-             transition.transport.sequence <=
-                 last_resolved_coordinate_->sequence))
+             transition.transport.sequence <= last_coordinate_->sequence))
         {
             return std::unexpected(JudgementHistoryError::BackwardTime);
         }
@@ -97,52 +114,15 @@ std::expected<void, JudgementHistoryError> JudgementHistory::Append(
         return std::unexpected(JudgementHistoryError::HistoryLost);
     }
 
-    RetainedEntry& entry = EntryAt(size_);
-    entry = RetainedEntry{
+    EntryAt(size_) = RetainedEntry{
         .transition = transition,
-        .baseline_reason = BaselineOnlyReason::OutsidePlayback,
-        .resolved = true,
+        .state_only_reason = state_only_reason,
+        .event_eligible = event_eligible,
     };
     ++size_;
     ++next_sequence_;
     current_held_ = transition.transport.held_after;
-    last_resolved_coordinate_ = coordinate;
-    return {};
-}
-
-std::expected<void, JudgementHistoryError>
-JudgementHistory::ApplyBaselineOnly(
-    const gc::input::GameplayTransitionRecord& transition,
-    const BaselineOnlyReason reason) noexcept
-{
-    const auto transport_validation = ValidateTransport(transition);
-    if (!transport_validation)
-    {
-        return std::unexpected(transport_validation.error());
-    }
-    if (transition.sequence ==
-        (std::numeric_limits<std::uint64_t>::max)())
-    {
-        return std::unexpected(
-            JudgementHistoryError::SequenceDiscontinuity);
-    }
-    if (size_ == kJudgementHistoryCapacity)
-    {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
-    }
-
-    RetainedEntry& entry = EntryAt(size_);
-    entry = RetainedEntry{
-        .transition = ResolvedGameplayTransition{
-            .transport = transition,
-            .judgement_seconds = gc::timing::CheckedRational::Whole(0),
-        },
-        .baseline_reason = reason,
-        .resolved = false,
-    };
-    ++size_;
-    ++next_sequence_;
-    current_held_ = transition.held_after;
+    last_coordinate_ = coordinate;
     return {};
 }
 
@@ -155,24 +135,31 @@ JudgementHistory::CountResolvedAtOrBefore(
     {
         return std::unexpected(JudgementHistoryError::NotInitialized);
     }
-    if (first_sequence < base_next_sequence_ ||
-        first_sequence > next_sequence_)
+    if (first_sequence > next_sequence_)
     {
         return std::unexpected(JudgementHistoryError::HistoryLost);
     }
 
+    // A consumed state-only prefix may already have advanced the retained
+    // base. For example, base=66 with delivery request=64 starts at 66; it is
+    // not missing promised event history.
+    const auto retained_start = (std::max)(
+        first_sequence, base_next_sequence_);
     std::uint64_t count{};
     for (std::size_t offset = 0; offset < size_; ++offset)
     {
         const RetainedEntry& entry = EntryAt(offset);
-        if (!entry.resolved ||
-            entry.transition.transport.sequence < first_sequence)
+        if (entry.transition.transport.sequence < retained_start)
         {
             continue;
         }
         if (entry.transition.judgement_seconds.Compare(ready) > 0)
         {
             break;
+        }
+        if (!entry.event_eligible)
+        {
+            continue;
         }
         if (count == (std::numeric_limits<std::uint64_t>::max)())
         {
@@ -185,15 +172,15 @@ JudgementHistory::CountResolvedAtOrBefore(
 }
 
 std::expected<void, JudgementHistoryError>
-JudgementHistory::ConvertResolvedToBaselineOnly(
+JudgementHistory::ConvertResolvedToStateOnly(
     const std::uint64_t sequence,
-    const BaselineOnlyReason reason) noexcept
+    const StateOnlyReason reason) noexcept
 {
     if (!initialized_)
     {
         return std::unexpected(JudgementHistoryError::NotInitialized);
     }
-    if (reason != BaselineOnlyReason::Overload ||
+    if (reason != StateOnlyReason::Overload ||
         sequence < base_next_sequence_ || sequence >= next_sequence_)
     {
         return std::unexpected(JudgementHistoryError::HistoryLost);
@@ -211,13 +198,13 @@ JudgementHistory::ConvertResolvedToBaselineOnly(
         {
             continue;
         }
-        if (!entry.resolved)
+        if (!entry.event_eligible)
         {
             return std::unexpected(
                 JudgementHistoryError::TransportStateMismatch);
         }
-        entry.resolved = false;
-        entry.baseline_reason = reason;
+        entry.event_eligible = false;
+        entry.state_only_reason = reason;
         return {};
     }
     return std::unexpected(JudgementHistoryError::HistoryLost);
@@ -258,14 +245,15 @@ std::expected<void, JudgementHistoryError> JudgementHistory::PruneBefore(
         {
             break;
         }
-        if (entry.resolved &&
-            entry.transition.judgement_seconds.Compare(*lookback_start) >= 0)
+        if (entry.transition.judgement_seconds.Compare(*lookback_start) >= 0)
         {
             break;
         }
 
         ApplyToState(causal_base_, entry);
-        if (entry.resolved)
+        if (!causal_time_floor_ ||
+            entry.transition.judgement_seconds.Compare(
+                causal_time_floor_->judgement_seconds) > 0)
         {
             causal_time_floor_ = JudgementScopeCoordinate{
                 .judgement_seconds = entry.transition.judgement_seconds,
@@ -325,6 +313,119 @@ std::expected<bool, JudgementHistoryError> JudgementHistory::Released(
     const gc::input::GameplayHeldMask current_falling) const noexcept
 {
     return Edge(control, kind, coordinate, current_falling, false);
+}
+
+std::expected<bool, JudgementHistoryError>
+JudgementHistory::ReleasedInWindow(
+    const std::uint32_t control,
+    const gc::timing::CheckedRational& window_end,
+    const std::uint64_t history_prefix_end_sequence) const noexcept
+{
+    if (!initialized_)
+    {
+        return std::unexpected(JudgementHistoryError::NotInitialized);
+    }
+    if (control >= kJudgementLogicalControlCount)
+    {
+        return std::unexpected(JudgementHistoryError::InvalidControl);
+    }
+    if (history_prefix_end_sequence < base_next_sequence_ ||
+        history_prefix_end_sequence > next_sequence_)
+    {
+        return false;
+    }
+
+    const auto quantum =
+        gc::timing::CheckedRational::Whole(1).Multiply(1, 60);
+    const auto window_start = quantum
+        ? window_end.Subtract(*quantum)
+        : std::expected<gc::timing::CheckedRational,
+                        gc::timing::RationalError>(
+              std::unexpected(gc::timing::RationalError::Overflow));
+    if (!quantum || !window_start)
+    {
+        return std::unexpected(
+            JudgementHistoryError::CheckedArithmeticFailure);
+    }
+    if (causal_time_floor_ &&
+        window_start->Compare(
+            causal_time_floor_->judgement_seconds) < 0)
+    {
+        return false;
+    }
+
+    for (std::size_t offset = 0; offset < size_; ++offset)
+    {
+        const RetainedEntry& entry = EntryAt(offset);
+        const auto sequence = entry.transition.transport.sequence;
+        if (sequence >= history_prefix_end_sequence)
+        {
+            break;
+        }
+        if (entry.transition.judgement_seconds.Compare(window_end) > 0)
+        {
+            break;
+        }
+        if (!entry.event_eligible ||
+            entry.transition.judgement_seconds.Compare(*window_start) <= 0)
+        {
+            continue;
+        }
+
+        const auto falling = entry.transition.transport.falling;
+        const auto ordinary_edge = [falling](
+                                       const std::uint32_t ordinary) {
+            return (falling & static_cast<gc::input::GameplayHeldMask>(
+                                  1u << ordinary)) != 0;
+        };
+        if (control < 10)
+        {
+            if (ordinary_edge(control))
+            {
+                return true;
+            }
+            continue;
+        }
+
+        const std::uint32_t pair =
+            control >= 15 ? control - 15 : control - 10;
+        const std::uint32_t first = pair;
+        const std::uint32_t second = pair + 5;
+        const bool first_current = ordinary_edge(first);
+        const bool second_current = ordinary_edge(second);
+        if (control < 15)
+        {
+            if (first_current || second_current)
+            {
+                return true;
+            }
+            continue;
+        }
+        if (first_current && second_current)
+        {
+            return true;
+        }
+        if (!first_current && !second_current)
+        {
+            continue;
+        }
+
+        const JudgementScopeCoordinate coordinate{
+            .judgement_seconds = entry.transition.judgement_seconds,
+            .sequence = sequence,
+        };
+        const auto paired = HasPriorEdge(
+            first_current ? second : first, coordinate, false);
+        if (!paired)
+        {
+            return std::unexpected(paired.error());
+        }
+        if (*paired)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::expected<std::int32_t, JudgementHistoryError>
@@ -410,7 +511,8 @@ const ResolvedGameplayTransition* JudgementHistory::FindResolvedTransition(
         {
             return nullptr;
         }
-        if (entry.transition.transport.sequence == sequence && entry.resolved)
+        if (entry.transition.transport.sequence == sequence &&
+            entry.event_eligible)
         {
             return &entry.transition;
         }
@@ -424,7 +526,7 @@ const ResolvedGameplayTransition* JudgementHistory::FirstResolvedAtOrAfter(
     for (std::size_t offset = 0; offset < size_; ++offset)
     {
         const RetainedEntry& entry = EntryAt(offset);
-        if (entry.resolved &&
+        if (entry.event_eligible &&
             entry.transition.transport.sequence >= sequence)
         {
             return &entry.transition;
@@ -523,10 +625,12 @@ JudgementHistory::StateAt(
         {
             break;
         }
-        if (entry.resolved &&
-            entry.transition.judgement_seconds.Compare(query_time) > 0)
+        // Sequence eligibility alone is not causal. A release at J=2.000
+        // cannot affect a held-state query at J=1.993 even when both entries
+        // are already present under the immutable prefix.
+        if (entry.transition.judgement_seconds.Compare(query_time) > 0)
         {
-            continue;
+            break;
         }
         ApplyToState(state, entry);
     }
@@ -603,7 +707,7 @@ std::expected<bool, JudgementHistoryError> JudgementHistory::HasPriorEdge(
     for (std::size_t offset = size_; offset != 0; --offset)
     {
         const RetainedEntry& entry = EntryAt(offset - 1);
-        if (!entry.resolved ||
+        if (!entry.event_eligible ||
             entry.transition.transport.sequence >= coordinate.sequence)
         {
             continue;
@@ -664,7 +768,7 @@ void JudgementHistory::ApplyToState(CausalState& state,
         LogicalRiseState& rise = state.rises[control];
         if (!was_held && is_held)
         {
-            if (entry.resolved)
+            if (entry.event_eligible)
             {
                 rise.stale = false;
                 rise.accepted_rise = JudgementScopeCoordinate{

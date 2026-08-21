@@ -26,8 +26,7 @@ struct JudgementScopeCoordinate {
     std::uint64_t sequence{};
 };
 
-enum class BaselineOnlyReason : std::uint8_t {
-    OutsidePlayback,
+enum class StateOnlyReason : std::uint8_t {
     AcceptedLate,
     Overload,
 };
@@ -63,15 +62,15 @@ public:
     [[nodiscard]] std::expected<void, JudgementHistoryError> Append(
         const ResolvedGameplayTransition& transition) noexcept;
     [[nodiscard]] std::expected<void, JudgementHistoryError>
-    ApplyBaselineOnly(const gc::input::GameplayTransitionRecord& transition,
-                      BaselineOnlyReason reason) noexcept;
+    AppendStateOnly(const ResolvedGameplayTransition& transition,
+                    StateOnlyReason reason) noexcept;
     [[nodiscard]] std::expected<std::uint64_t, JudgementHistoryError>
     CountResolvedAtOrBefore(
         std::uint64_t first_sequence,
         const gc::timing::CheckedRational& ready) const noexcept;
     [[nodiscard]] std::expected<void, JudgementHistoryError>
-    ConvertResolvedToBaselineOnly(std::uint64_t sequence,
-                                  BaselineOnlyReason reason) noexcept;
+    ConvertResolvedToStateOnly(std::uint64_t sequence,
+                               StateOnlyReason reason) noexcept;
 
     // earliest_query_time is the oldest exact time any pending or future
     // scope can request, including relative-frame translation. The exclusive
@@ -101,6 +100,11 @@ public:
         JudgementScopeKind kind,
         const JudgementScopeCoordinate& coordinate,
         gc::input::GameplayHeldMask current_falling) const noexcept;
+    [[nodiscard]] std::expected<bool, JudgementHistoryError>
+    ReleasedInWindow(
+        std::uint32_t control,
+        const gc::timing::CheckedRational& window_end,
+        std::uint64_t history_prefix_end_sequence) const noexcept;
     [[nodiscard]] std::expected<std::int32_t, JudgementHistoryError> HeldAge(
         std::uint32_t control,
         JudgementScopeKind kind,
@@ -131,13 +135,17 @@ private:
 
     struct RetainedEntry final {
         ResolvedGameplayTransition transition{};
-        BaselineOnlyReason baseline_reason{BaselineOnlyReason::OutsidePlayback};
-        bool resolved{};
+        StateOnlyReason state_only_reason{StateOnlyReason::AcceptedLate};
+        bool event_eligible{};
     };
 
     [[nodiscard]] std::expected<void, JudgementHistoryError>
     ValidateTransport(const gc::input::GameplayTransitionRecord& transition)
         const noexcept;
+    [[nodiscard]] std::expected<void, JudgementHistoryError> AppendEntry(
+        const ResolvedGameplayTransition& transition,
+        bool event_eligible,
+        StateOnlyReason state_only_reason) noexcept;
     [[nodiscard]] std::expected<CausalState, JudgementHistoryError> StateAt(
         const gc::timing::CheckedRational& query_time,
         std::uint64_t history_prefix_end_sequence) const noexcept;
@@ -165,7 +173,7 @@ private:
     std::array<RetainedEntry, kJudgementHistoryCapacity> entries_{};
     CausalState causal_base_{};
     std::optional<JudgementScopeCoordinate> causal_time_floor_;
-    std::optional<JudgementScopeCoordinate> last_resolved_coordinate_;
+    std::optional<JudgementScopeCoordinate> last_coordinate_;
     std::size_t read_slot_{};
     std::size_t size_{};
     std::uint64_t transport_epoch_{};
