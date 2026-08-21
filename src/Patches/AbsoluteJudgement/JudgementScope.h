@@ -21,7 +21,6 @@ enum class JudgementQueryInvariant : std::uint8_t {
     StageMismatch,
     ScopeLifetimeViolation,
     InvalidScope,
-    InvalidControl,
     InvalidFrame,
     InvalidDirectionArguments,
     HistoryLost,

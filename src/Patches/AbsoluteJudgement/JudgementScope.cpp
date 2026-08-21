@@ -36,15 +36,6 @@ ActiveScopeResolution ResolveActiveScope(
     const JudgementScopeData* data = ActiveJudgementScopeData();
     if (data == nullptr)
     {
-        if (g_active_scope_thread.load(std::memory_order_seq_cst) != 0)
-        {
-            return {
-                .data = nullptr,
-                .disposition =
-                    JudgementQueryDisposition::InvariantFailure,
-                .invariant = JudgementQueryInvariant::ThreadMismatch,
-            };
-        }
         return {};
     }
 
@@ -192,8 +183,6 @@ JudgementQueryInvariant MapHistoryError(
         return JudgementQueryInvariant::HistoryLost;
     case JudgementHistoryError::CheckedArithmeticFailure:
         return JudgementQueryInvariant::CheckedArithmeticFailure;
-    case JudgementHistoryError::InvalidControl:
-        return JudgementQueryInvariant::InvalidControl;
     default:
         return JudgementQueryInvariant::HistoryInvariantFailure;
     }
@@ -394,8 +383,7 @@ JudgementQueryResult<std::uint8_t> QueryJudgementPressed(
     if (control < 0 ||
         control >= static_cast<int>(kJudgementLogicalControlCount))
     {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::InvalidControl);
+        return AnsweredResult<std::uint8_t>(0);
     }
     if (requested_frame != active.data->native_frame)
     {
@@ -438,8 +426,7 @@ JudgementQueryResult<std::uint8_t> QueryJudgementHeld(
     if (control < 0 ||
         control >= static_cast<int>(kJudgementLogicalControlCount))
     {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::InvalidControl);
+        return AnsweredResult<std::uint8_t>(0);
     }
 
     const auto query_time =
@@ -481,20 +468,31 @@ JudgementQueryResult<std::uint8_t> QueryJudgementReleased(
     if (control < 0 ||
         control >= static_cast<int>(kJudgementLogicalControlCount))
     {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::InvalidControl);
-    }
-    if (requested_frame != active.data->native_frame)
-    {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::InvalidFrame);
+        return AnsweredResult<std::uint8_t>(0);
     }
 
-    const auto released = active.data->history->Released(
-        static_cast<std::uint32_t>(control),
-        active.data->kind,
-        active.data->coordinate,
-        active.data->falling);
+    std::expected<bool, JudgementHistoryError> released = false;
+    if (requested_frame == active.data->native_frame)
+    {
+        released = active.data->history->Released(
+            static_cast<std::uint32_t>(control),
+            active.data->kind,
+            active.data->coordinate,
+            active.data->falling);
+    }
+    else
+    {
+        const auto window_end = TranslateRequestedFrame(
+            *active.data, requested_frame);
+        if (!window_end)
+        {
+            return HistoryFailure<std::uint8_t>(window_end.error());
+        }
+        released = active.data->history->ReleasedInWindow(
+            static_cast<std::uint32_t>(control),
+            *window_end,
+            active.data->history_prefix_end_sequence);
+    }
     if (!released)
     {
         return HistoryFailure<std::uint8_t>(released.error());
@@ -524,13 +522,24 @@ JudgementQueryResult<int> QueryJudgementDirection(
     {
         return FromResolution<int>(active);
     }
-    if (x == nullptr || y == nullptr || booster < 0 || booster > 2)
+    if (x == nullptr || y == nullptr)
     {
         return InvariantResult<int>(
             JudgementQueryInvariant::InvalidDirectionArguments);
     }
     *x = 0.0F;
     *y = 0.0F;
+
+    if (booster < 0 || booster > 2)
+    {
+        if (!RecordDirectionQuery(*active.data->diagnostics, false))
+        {
+            return InvariantResult<int>(
+                JudgementQueryInvariant::DiagnosticOverflow);
+        }
+        return AnsweredResult<int>(static_cast<int>(
+            reinterpret_cast<std::uintptr_t>(x)));
+    }
 
     const auto query_time =
         TranslateRequestedFrame(*active.data, requested_frame);
@@ -648,7 +657,7 @@ JudgementQueryResult<int> QueryJudgementHeldAge(
     }
     if (control >= kJudgementLogicalControlCount)
     {
-        return InvariantResult<int>(JudgementQueryInvariant::InvalidControl);
+        return AnsweredResult<int>(0);
     }
 
     const auto age = active.data->history->HeldAge(

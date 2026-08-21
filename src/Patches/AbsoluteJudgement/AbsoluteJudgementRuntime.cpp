@@ -189,7 +189,6 @@ struct NativeJudgementConfiguration final {
         return AbsoluteJudgementFatalReason::CheckedArithmeticFailure;
     case JudgementQueryInvariant::None:
     case JudgementQueryInvariant::InvalidScope:
-    case JudgementQueryInvariant::InvalidControl:
     case JudgementQueryInvariant::InvalidFrame:
     case JudgementQueryInvariant::InvalidDirectionArguments:
         return AbsoluteJudgementFatalReason::NativeStateMismatch;

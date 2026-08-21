@@ -397,6 +397,10 @@ std::uint8_t __fastcall HookPressed(
     void*,
     const int id,
     const int frame) noexcept {
+    if (ActiveJudgementScopeData() == nullptr) {
+        return g_active_hooks->pressed.unsafe_thiscall<std::uint8_t>(
+            self, id, frame);
+    }
     const auto query = QueryJudgementPressed(
         self, AbsoluteJudgementStageGeneration(), id, frame);
     if (query.disposition == JudgementQueryDisposition::Inactive) {
@@ -411,6 +415,10 @@ std::uint8_t __fastcall HookHeld(
     void*,
     const int id,
     const int frame) noexcept {
+    if (ActiveJudgementScopeData() == nullptr) {
+        return g_active_hooks->held.unsafe_thiscall<std::uint8_t>(
+            self, id, frame);
+    }
     const auto query = QueryJudgementHeld(
         self, AbsoluteJudgementStageGeneration(), id, frame);
     if (query.disposition == JudgementQueryDisposition::Inactive) {
@@ -425,6 +433,10 @@ std::uint8_t __fastcall HookReleased(
     void*,
     const int id,
     const int frame) noexcept {
+    if (ActiveJudgementScopeData() == nullptr) {
+        return g_active_hooks->released.unsafe_thiscall<std::uint8_t>(
+            self, id, frame);
+    }
     const auto query = QueryJudgementReleased(
         self, AbsoluteJudgementStageGeneration(), id, frame);
     if (query.disposition == JudgementQueryDisposition::Inactive) {
@@ -441,6 +453,10 @@ int __fastcall HookDirection(
     float* const x,
     float* const y,
     const int frame) noexcept {
+    if (ActiveJudgementScopeData() == nullptr) {
+        return g_active_hooks->direction.unsafe_thiscall<int>(
+            self, booster, x, y, frame);
+    }
     const auto query = QueryJudgementDirection(
         self,
         AbsoluteJudgementStageGeneration(),
@@ -459,6 +475,9 @@ int __fastcall HookHeldAge(
     void* const self,
     void*,
     const unsigned int id) noexcept {
+    if (ActiveJudgementScopeData() == nullptr) {
+        return g_active_hooks->held_age.unsafe_thiscall<int>(self, id);
+    }
     const auto query = QueryJudgementHeldAge(
         self, AbsoluteJudgementStageGeneration(), id);
     if (query.disposition == JudgementQueryDisposition::Inactive) {
