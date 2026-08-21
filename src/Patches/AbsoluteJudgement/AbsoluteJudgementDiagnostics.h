@@ -7,6 +7,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -257,6 +258,8 @@ struct AbsoluteJudgementStageCounters {
     AbsoluteJudgementQueryCounters queries{};
     AbsoluteJudgementScoreDeltas score_deltas{};
     AbsoluteJudgementTransientPublicationCounts transient_publications{};
+    std::uint64_t scope_trace_records{};
+    std::uint64_t scope_trace_drops{};
     std::uint64_t score_observation_read_failures{};
     std::uint64_t score_counter_regressions{};
     std::uint64_t transient_publication_read_failures{};
@@ -309,6 +312,8 @@ struct AbsoluteJudgementCounterSnapshot {
     AbsoluteJudgementQueryCounters queries{};
     AbsoluteJudgementScoreDeltas score_deltas{};
     AbsoluteJudgementTransientPublicationCounts transient_publications{};
+    std::uint64_t scope_trace_records{};
+    std::uint64_t scope_trace_drops{};
     std::uint64_t score_observation_read_failures{};
     std::uint64_t score_counter_regressions{};
     std::uint64_t transient_publication_read_failures{};
@@ -366,6 +371,11 @@ struct AbsoluteJudgementActivationRecord {
     gc::timing::CheckedRational initial_j =
         gc::timing::CheckedRational::Whole(0);
     std::int64_t committed_boundary_seed{};
+    std::int64_t first_pending_boundary_index{};
+    std::optional<gc::timing::CheckedRational> first_pending_boundary_j;
+    std::optional<std::int32_t> first_pending_boundary_native_ms;
+    std::optional<std::int32_t> first_pending_boundary_native_frame;
+    std::uint64_t pending_negative_boundary_count{};
     std::int32_t game_time_offset_ms{};
     std::int32_t hold_safe_frame{};
     std::int32_t slide_hold_safe_frame{};
@@ -440,11 +450,11 @@ public:
         const AbsoluteJudgementSemanticStageOpenRecord& record) noexcept;
     void LogAbsoluteStageActivation(
         const AbsoluteJudgementActivationRecord& record) noexcept;
-    void MaybeLogFiveSecondSummary(
+    void MaybeLogPeriodicDiagnostics(
         const AbsoluteJudgementRuntimeSnapshot& runtime) noexcept;
     void LogSemanticStageEnd(
         const AbsoluteJudgementSemanticStageEndRecord& record) noexcept;
-    void LogScopeVerbose(
+    void ObserveScope(
         const AbsoluteJudgementScopeRecord& record) noexcept;
 
     void CheckNativeCallInvariantOrFatal(
@@ -481,6 +491,7 @@ private:
         const AbsoluteJudgementFatalSnapshot&) noexcept;
 
     void ResetStageState() noexcept;
+    void FlushScopeTrace(std::string_view reason) noexcept;
     void LogSummary(
         std::string_view record_name,
         const AbsoluteJudgementRuntimeSnapshot& runtime,
@@ -497,6 +508,10 @@ private:
         std::uint64_t delivery_delay_qpc{};
     };
 
+    // Diagnostic-only storage. This exceeds the scheduler's maximum number
+    // of completed scopes in one second at the supported 240-FPS target.
+    static constexpr std::size_t kScopeTraceCapacity = 1024;
+
     AbsoluteJudgementStageCounters stage_{};
     IntervalMaxima interval_maxima_{};
     AbsoluteJudgementCounterSnapshot last_summary_{};
@@ -510,7 +525,13 @@ private:
     bool has_heartbeat_index_{};
     AbsoluteJudgementNativeScoreCounters last_native_score_{};
     bool has_native_score_{};
+    std::array<AbsoluteJudgementScopeRecord, kScopeTraceCapacity>
+        scope_trace_{};
+    std::size_t scope_trace_size_{};
+    std::uint64_t scope_trace_drops_since_flush_{};
+    std::uint64_t scope_trace_window_{};
     std::uint32_t startup_target_fps_{};
+    ULONGLONG next_scope_trace_tick_ms_{};
     ULONGLONG next_summary_tick_ms_{};
 };
 

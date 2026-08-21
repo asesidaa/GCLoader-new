@@ -683,6 +683,10 @@ void JudgementScheduler::TryActivateOrWait(
             AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
             {1, 60, 1});
     }
+    const auto first_pending_boundary = BoundaryAt(*ceiling);
+    const auto first_pending_native = first_pending_boundary
+        ? NativeArguments(*first_pending_boundary)
+        : std::nullopt;
     committed_boundary_index_ = *ceiling - 1;
     has_committed_boundary_index_ = true;
     stage_.Activate();
@@ -718,6 +722,17 @@ void JudgementScheduler::TryActivateOrWait(
         .source_rate = anchor.source_rate,
         .initial_j = *entry_clock.judgement_seconds,
         .committed_boundary_seed = committed_boundary_index_,
+        .first_pending_boundary_index = *ceiling,
+        .first_pending_boundary_j = first_pending_boundary,
+        .first_pending_boundary_native_ms = first_pending_native
+            ? std::optional<std::int32_t>(first_pending_native->first)
+            : std::nullopt,
+        .first_pending_boundary_native_frame = first_pending_native
+            ? std::optional<std::int32_t>(first_pending_native->second)
+            : std::nullopt,
+        .pending_negative_boundary_count = *ceiling < 0
+            ? static_cast<std::uint64_t>(-*ceiling)
+            : 0,
         .game_time_offset_ms = anchor.game_time_offset_ms,
         .hold_safe_frame = stage_.native().hold_safe_frame,
         .slide_hold_safe_frame = stage_.native().slide_hold_safe_frame,
@@ -1088,7 +1103,7 @@ void JudgementScheduler::FinishOuterCall() noexcept {
     }
     diagnostics.ObserveBacklog(PendingWorkCount());
     diagnostics.SetPendingWork(PendingWorkCount());
-    diagnostics.MaybeLogFiveSecondSummary(RuntimeSnapshot());
+    diagnostics.MaybeLogPeriodicDiagnostics(RuntimeSnapshot());
     outer_horizon_.reset();
     outer_scope_count_ = 0;
     outer_event_scope_count_ = 0;

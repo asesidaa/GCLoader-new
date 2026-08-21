@@ -666,7 +666,7 @@ private:
 
         const auto& stage_counters =
             JudgementDiagnostics().stage_counters();
-        JudgementDiagnostics().LogScopeVerbose({
+        JudgementDiagnostics().ObserveScope({
             .native = {
                 .stage_generation = native.stage_generation,
                 .native_manager = native.tune_manager,

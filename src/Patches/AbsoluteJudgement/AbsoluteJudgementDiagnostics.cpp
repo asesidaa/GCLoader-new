@@ -18,6 +18,8 @@ namespace gc::absolute_judgement {
 namespace {
 
 constexpr ULONGLONG kSummaryCadenceMilliseconds = 5'000;
+constexpr ULONGLONG kScopeTraceCadenceMilliseconds = 1'000;
+constexpr std::size_t kScopeTraceEntriesPerLine = 16;
 
 std::uint64_t SubtractMonotonic(
     std::uint64_t value,
@@ -132,6 +134,8 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     result.transient_publications = SubtractTransientPublications(
         value.transient_publications,
         baseline.transient_publications);
+    GC_SUBTRACT_COUNTER(scope_trace_records);
+    GC_SUBTRACT_COUNTER(scope_trace_drops);
     GC_SUBTRACT_COUNTER(score_observation_read_failures);
     GC_SUBTRACT_COUNTER(score_counter_regressions);
     GC_SUBTRACT_COUNTER(transient_publication_read_failures);
@@ -604,6 +608,73 @@ void AppendTransientPublicationCounts(
         counts.right_free_tap);
 }
 
+bool HasScoreDelta(
+    const AbsoluteJudgementScoreDeltas& deltas) noexcept {
+    return deltas.miss != 0 || deltas.good != 0 || deltas.cool != 0 ||
+        deltas.great != 0;
+}
+
+bool HasTransientPublication(
+    const AbsoluteJudgementTransientPublications& publications) noexcept {
+    return publications.arrange || publications.left_free_tap ||
+        publications.right_free_tap;
+}
+
+bool IsScopeTraceRelevant(
+    const AbsoluteJudgementScopeRecord& record) noexcept {
+    return record.kind == AbsoluteJudgementScopeKind::Event ||
+        HasScoreDelta(record.score_deltas) ||
+        HasTransientPublication(record.transient_publications);
+}
+
+void AppendScopeTraceEntry(
+    std::string& message,
+    const AbsoluteJudgementScopeRecord& record) {
+    std::format_to(
+        std::back_inserter(message),
+        " entry_begin scope_id={} kind={} equal_boundary_substitution={}",
+        record.scope_id,
+        ScopeKindName(record.kind),
+        record.equal_boundary_substitution ? 1 : 0);
+    if (record.kind == AbsoluteJudgementScopeKind::Event) {
+        std::format_to(
+            std::back_inserter(message),
+            " journal_sequence={}",
+            record.journal_sequence);
+    } else {
+        std::format_to(
+            std::back_inserter(message), " journal_sequence=none");
+    }
+    AppendRational(message, "mapped_j", record.mapped_j);
+    std::format_to(
+        std::back_inserter(message),
+        " native_ms={} native_frame={}",
+        record.native_ms,
+        record.native_frame);
+    AppendRational(message, "delivery_delay", record.delivery_delay);
+    std::format_to(
+        std::back_inserter(message),
+        " held_before={:#x} held_after={:#x} rise_mask={:#x}"
+        " fall_mask={:#x}",
+        record.held_before,
+        record.held_after,
+        record.rising,
+        record.falling);
+    AppendQueries(message, "scope_", record.queries);
+    AppendScoreDeltas(message, "scope_", record.score_deltas);
+    std::format_to(
+        std::back_inserter(message),
+        " scope_transient_arrange={} scope_transient_left_free_tap={}"
+        " scope_transient_right_free_tap={} boundary_committed={}"
+        " committed_boundary={} remaining_backlog={} entry_end",
+        record.transient_publications.arrange ? 1 : 0,
+        record.transient_publications.left_free_tap ? 1 : 0,
+        record.transient_publications.right_free_tap ? 1 : 0,
+        record.boundary_committed ? 1 : 0,
+        record.committed_boundary,
+        record.remaining_backlog);
+}
+
 void AppendCounters(
     std::string& message,
     std::string_view prefix,
@@ -712,12 +783,17 @@ void AppendCounters(
         message, prefix, counters.transient_publications);
     std::format_to(
         std::back_inserter(message),
+        " {}scope_trace_records={} {}scope_trace_drops={}"
         " {}score_observation_read_failures={}"
         " {}score_counter_regressions={}"
         " {}transient_publication_read_failures={}"
         " {}delivery_delay_conversion_failures={}"
         " {}final_accounting_mismatches={}"
         " {}diagnostic_saturations={}",
+        prefix,
+        counters.scope_trace_records,
+        prefix,
+        counters.scope_trace_drops,
         prefix,
         counters.score_observation_read_failures,
         prefix,
@@ -894,6 +970,8 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .queries = stage_.queries,
         .score_deltas = stage_.score_deltas,
         .transient_publications = stage_.transient_publications,
+        .scope_trace_records = stage_.scope_trace_records,
+        .scope_trace_drops = stage_.scope_trace_drops,
         .score_observation_read_failures =
             stage_.score_observation_read_failures,
         .score_counter_regressions = stage_.score_counter_regressions,
@@ -935,11 +1013,16 @@ void AbsoluteJudgementDiagnostics::ResetStageState() noexcept {
     has_heartbeat_index_ = false;
     last_native_score_ = {};
     has_native_score_ = false;
+    scope_trace_size_ = 0;
+    scope_trace_drops_since_flush_ = 0;
+    scope_trace_window_ = 0;
     recognition_stopped_.store(false, std::memory_order_release);
     first_fatal_predicate_.store(
         AbsoluteJudgementFatalPredicate::None,
         std::memory_order_release);
-    next_summary_tick_ms_ = GetTickCount64() + kSummaryCadenceMilliseconds;
+    const auto now = GetTickCount64();
+    next_scope_trace_tick_ms_ = now + kScopeTraceCadenceMilliseconds;
+    next_summary_tick_ms_ = now + kSummaryCadenceMilliseconds;
 }
 
 void AbsoluteJudgementDiagnostics::SetStartupTargetFps(
@@ -1013,15 +1096,73 @@ void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
     AppendRational(message, "initial_j", record.initial_j);
     std::format_to(
         std::back_inserter(message),
-        " committed_boundary_seed={} game_time_offset_ms={}"
+        " committed_boundary_seed={} first_pending_boundary_index={}",
+        record.committed_boundary_seed,
+        record.first_pending_boundary_index);
+    AppendRational(
+        message,
+        "first_pending_boundary_j",
+        record.first_pending_boundary_j);
+    if (record.first_pending_boundary_native_ms &&
+        record.first_pending_boundary_native_frame) {
+        std::format_to(
+            std::back_inserter(message),
+            " first_pending_boundary_native_ms={}"
+            " first_pending_boundary_native_frame={}",
+            *record.first_pending_boundary_native_ms,
+            *record.first_pending_boundary_native_frame);
+    } else {
+        std::format_to(
+            std::back_inserter(message),
+            " first_pending_boundary_native_ms=none"
+            " first_pending_boundary_native_frame=none");
+    }
+    std::format_to(
+        std::back_inserter(message),
+        " pending_negative_boundary_count={} game_time_offset_ms={}"
         " hold_safe_frame={} slide_hold_safe_frame={}"
         " accumulated_clock_waits={}",
-        record.committed_boundary_seed,
+        record.pending_negative_boundary_count,
         record.game_time_offset_ms,
         record.hold_safe_frame,
         record.slide_hold_safe_frame,
         record.accumulated_clock_waits);
     PLOG_INFO << message;
+}
+
+void AbsoluteJudgementDiagnostics::FlushScopeTrace(
+    const std::string_view reason) noexcept {
+    if (scope_trace_size_ == 0 &&
+        scope_trace_drops_since_flush_ == 0) {
+        return;
+    }
+
+    IncrementSaturating(scope_trace_window_);
+    const auto part_count = (scope_trace_size_ +
+        kScopeTraceEntriesPerLine - 1) / kScopeTraceEntriesPerLine;
+    for (std::size_t part = 0; part < part_count; ++part) {
+        const auto begin = part * kScopeTraceEntriesPerLine;
+        const auto end = (std::min)(
+            begin + kScopeTraceEntriesPerLine, scope_trace_size_);
+        auto message = std::format(
+            "AbsoluteJudgement: scope-trace reason={} stage_generation={}"
+            " window={} part={}/{} entries_total={} entries_in_part={}"
+            " dropped_since_last_flush={}",
+            reason,
+            scope_trace_[begin].native.stage_generation,
+            scope_trace_window_,
+            part + 1,
+            part_count,
+            scope_trace_size_,
+            end - begin,
+            scope_trace_drops_since_flush_);
+        for (auto index = begin; index < end; ++index) {
+            AppendScopeTraceEntry(message, scope_trace_[index]);
+        }
+        PLOG_INFO << message;
+    }
+    scope_trace_size_ = 0;
+    scope_trace_drops_since_flush_ = 0;
 }
 
 void AbsoluteJudgementDiagnostics::LogSummary(
@@ -1038,9 +1179,13 @@ void AbsoluteJudgementDiagnostics::LogSummary(
     ResetIntervalMaxima();
 }
 
-void AbsoluteJudgementDiagnostics::MaybeLogFiveSecondSummary(
+void AbsoluteJudgementDiagnostics::MaybeLogPeriodicDiagnostics(
     const AbsoluteJudgementRuntimeSnapshot& runtime) noexcept {
     const auto now = GetTickCount64();
+    if (now >= next_scope_trace_tick_ms_) {
+        next_scope_trace_tick_ms_ = now + kScopeTraceCadenceMilliseconds;
+        FlushScopeTrace("periodic");
+    }
     if (now < next_summary_tick_ms_) {
         return;
     }
@@ -1052,6 +1197,7 @@ void AbsoluteJudgementDiagnostics::MaybeLogFiveSecondSummary(
 void AbsoluteJudgementDiagnostics::LogSemanticStageEnd(
     const AbsoluteJudgementSemanticStageEndRecord& record) noexcept {
     IncrementSaturating(stage_.semantic_stage_ends);
+    FlushScopeTrace("stage-end");
     const auto cumulative = SnapshotCounters();
     const auto interval = SnapshotIntervalCounters(cumulative);
     auto message = std::format(
@@ -1068,8 +1214,19 @@ void AbsoluteJudgementDiagnostics::LogSemanticStageEnd(
     ResetIntervalMaxima();
 }
 
-void AbsoluteJudgementDiagnostics::LogScopeVerbose(
+void AbsoluteJudgementDiagnostics::ObserveScope(
     const AbsoluteJudgementScopeRecord& record) noexcept {
+    if (IsScopeTraceRelevant(record)) {
+        if (scope_trace_size_ < scope_trace_.size()) {
+            scope_trace_[scope_trace_size_] = record;
+            ++scope_trace_size_;
+            IncrementSaturating(stage_.scope_trace_records);
+        } else {
+            IncrementSaturating(scope_trace_drops_since_flush_);
+            IncrementSaturating(stage_.scope_trace_drops);
+        }
+    }
+
     auto* logger = plog::get();
     if (logger == nullptr || !logger->checkSeverity(plog::verbose)) {
         return;
