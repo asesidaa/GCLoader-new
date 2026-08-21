@@ -46,6 +46,7 @@ struct JudgementClockBinding final {
     std::int32_t game_time_offset_ms{};
     std::uint64_t pending_buffer_instance_id{};
     std::uint64_t pending_endpoint_generation{};
+    std::shared_ptr<const gc::audio::ExactWasapiClock> pending_endpoint;
     std::shared_ptr<gc::audio::AudioCursorTimeline> pending_history;
     std::optional<JudgementStageClockAnchor> anchor;
 };

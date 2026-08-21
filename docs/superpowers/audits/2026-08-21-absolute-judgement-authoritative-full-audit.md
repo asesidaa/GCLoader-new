@@ -161,6 +161,30 @@ transition, not unrelated call paths. Neither site splits an instruction, both
 callbacks run before the state mutation they delimit, and both recover the
 same unambiguous receiver from the active Tune-run stack frame.
 
+### Implemented corrected-scheduler static trace
+
+The 2026-08-22 controller implementation has one immutable stage anchor and
+one delivery cursor. The following construction cases were traced directly
+through the implemented branches; they are static evidence, not gameplay
+acceptance:
+
+- Input published after semantic entry but before BGM `Play` remains in the
+  unresolved FIFO. When the first qualifying `Play` binds, its QPC maps through
+  the same formula with `O(q) < O0`, producing a signed pre-origin `J` rather
+  than deleting the edge.
+- A later native `Seek`, `Play`, stop, or natural drain is never consulted by
+  `ResolveQpc`; later input and the ready horizon continue from the immutable
+  `(O0,S0,Fo,Fs,G)` anchor.
+- A ten-boundary hitch caps each outer horizon at exactly three newly
+  constructed `index/60` boundaries, yielding heartbeat-only batches of
+  `3/3/3/1` without incrementing a rounded duration.
+- With 33 simultaneously ready events, `CountResolvedAtOrBefore` marks the
+  oldest one state-only and leaves the newest 32 eligible. Conversion advances
+  the same delivery cursor used by event commits.
+- Accepted-late input is appended with its original exact `J`, consumed
+  state-only immediately in sequence, and cannot affect a held-state query
+  whose query time precedes that `J`.
+
 ## Native lifecycle proof and current contradiction
 
 The Tune state machine establishes the following deterministic facts:

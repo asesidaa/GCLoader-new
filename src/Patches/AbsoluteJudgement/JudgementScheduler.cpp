@@ -649,15 +649,7 @@ void JudgementScheduler::MarkReadyOverloadOrFatal(
     const auto required_marked = *ready_count > kProtectedReadyEventCount
         ? *ready_count - kProtectedReadyEventCount
         : 0;
-    if (marked_overload_count_ > required_marked) {
-        Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
-    }
-    const auto additional = required_marked - marked_overload_count_;
-    if (additional > (std::numeric_limits<std::uint64_t>::max)() -
-            marked_overload_count_) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-    }
-    marked_overload_count_ += additional;
+    marked_overload_count_ = required_marked;
 }
 
 void JudgementScheduler::ConsumeMarkedOverloadOrFatal(

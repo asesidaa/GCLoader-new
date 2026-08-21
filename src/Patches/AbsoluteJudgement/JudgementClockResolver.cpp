@@ -79,17 +79,33 @@ JudgementClockResult JudgementClockResolver::TryBind(
         return ResolveQpc(binding_.stage_entry_qpc);
     }
     if (binding_.stage_generation == 0 ||
-        binding_.stage_entry_qpc <= 0 || !endpoint ||
-        selected.state != gc::audio::GameplayAudioCursorState::Exact ||
+        binding_.stage_entry_qpc <= 0) {
+        return {.status = JudgementClockStatus::UnsupportedContinuity};
+    }
+    if (!endpoint) {
+        return {.status = JudgementClockStatus::Pending};
+    }
+
+    const auto endpoint_generation = endpoint->endpoint_generation();
+    if (endpoint_generation == 0) {
+        return {.status = JudgementClockStatus::UnsupportedContinuity};
+    }
+    if (binding_.pending_endpoint) {
+        if (binding_.pending_endpoint.get() != endpoint.get() ||
+            binding_.pending_endpoint->endpoint_generation() !=
+                endpoint_generation) {
+            return {.status = JudgementClockStatus::UnsupportedContinuity};
+        }
+    } else {
+        binding_.pending_endpoint = endpoint;
+    }
+    if (selected.state != gc::audio::GameplayAudioCursorState::Exact ||
         !selected.exact_history || selected.buffer_instance_id == 0 ||
         selected.endpoint_generation == 0 ||
         selected.playback_generation == 0) {
         return {.status = JudgementClockStatus::Pending};
     }
-
-    const auto endpoint_generation = endpoint->endpoint_generation();
-    if (endpoint_generation == 0 ||
-        endpoint_generation != selected.endpoint_generation) {
+    if (endpoint_generation != selected.endpoint_generation) {
         return {.status = JudgementClockStatus::UnsupportedContinuity};
     }
     if (binding_.pending_history) {
@@ -212,7 +228,7 @@ JudgementClockResult JudgementClockResolver::TryBind(
         .output_rate = earliest->output_rate,
         .source_rate = earliest->source_rate,
         .game_time_offset_ms = binding_.game_time_offset_ms,
-        .endpoint = std::move(endpoint),
+        .endpoint = std::move(binding_.pending_endpoint),
     };
     binding_.pending_history.reset();
     return ResolveQpc(binding_.stage_entry_qpc);
