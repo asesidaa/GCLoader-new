@@ -1517,6 +1517,50 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
 - `H:\gc\config.toml` was not modified. Task 8 Step 4 remains open until the
   operator's 240-FPS game behavior and `loader-log.txt` are reviewed.
 
+### 2026-08-22 second-session diagnosis and selective trace deployment
+
+- The reviewed `H:\gc\loader-log.txt` contains two separate card-scan
+  sessions and two separate semantic stage generations. The second session's
+  worse COOL rate did not correlate with transport backlog, delivery delay,
+  WASAPI starvation, endpoint failure, or render-cadence loss.
+- The only concrete session-specific scheduling discontinuity was activation
+  phase. Generation 1 entered at `J=-115181/10000000`, seeded boundary `-1`,
+  and first scheduled boundary `0`. Generation 2 entered at
+  `J=-192043/10000000`, seeded boundary `-2`, and therefore had one pending
+  negative boundary at `J=-1/60` with native arguments `-16 ms, frame -1`.
+  This remains a hypothesis boundary, not a claimed cause of the reported
+  SLOW results.
+- Commit `8b77e8a` adds a fixed-capacity selective scope trace. The hot path
+  copies only physical input-event scopes and scopes with native score or
+  arrange/free-tap publications. Silent 60-Hz heartbeat scopes are excluded.
+  Trace records flush once per second and at semantic stage exit in chunks of
+  at most 16 entries. Each entry includes exact `J`, native ms/frame, input
+  sequence and masks, delivery delay, per-scope native query observations,
+  grade deltas, transient publications, committed boundary, and backlog.
+- Trace storage is fixed and exceeds the maximum completed-scope count in one
+  second at 240 FPS. Exhaustion remains diagnostic-only: entries are dropped,
+  and both interval/cumulative drop counters are logged. It never changes a
+  scheduler decision or invokes a fatal path.
+- Activation logging now derives the first pending boundary, its exact `J`,
+  native ms/frame projection, and the pending negative-boundary count. No new
+  native hook, guessed field, or signed FAST/SLOW publication was introduced;
+  the completed audit proves grade counters but not a safe signed timing-result
+  field.
+- Fresh complete `msvc32-debug` and `msvc32-release` preset graphs succeeded.
+  No CTest or repository test target was run. The persistent ABI inspection
+  again passed PE32/x86/GUI, exports, hook symbols, and returns
+  `8/8/8/10h/4`.
+- Debug DLL SHA-256:
+  `E8D83AD78EB6943D4D8114CCCED550A421F37A1F9C4E211BFC4F61230C712E64`.
+- Release and installed DLL SHA-256:
+  `D92ADCA86E5CC1B46E44C286E2AF19C55FF1D9D236773DA6F364957F92721DE6`.
+- Recoverable pre-deployment backup:
+  `H:\gc\artifacts\runtime-backups\20260822-053517-absolute-judgement-diagnostics\iDmacDrv32.dll`,
+  SHA-256
+  `6AF6D9CE94B23E6397131EDFA21A62E4A0681DC4C869FD63528F7003A909660E`.
+- `H:\gc\config.toml` was not modified. Runtime judgement behavior and the
+  usefulness of the new trace remain operator acceptance, not build proof.
+
 ---
 
 ## Plan self-review coverage
