@@ -1561,6 +1561,60 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
 - `H:\gc\config.toml` was not modified. Runtime judgement behavior and the
   usefulness of the new trace remain operator acceptance, not build proof.
 
+### 2026-08-22 dense-note runtime finding
+
+- The follow-up `H:\gc\loader-log.txt` SHA-256 is
+  `494A893034AF1554A7072BEA9EC199803F3A274D808A2C00D491B7DEC6C759FB`.
+  It contains one semantic stage, not a second song or a later-stage
+  transition. This run therefore disproves session order as a necessary cause
+  of the reported SLOW tendency.
+- Activation was coherent: `initial_j=-17593/1250000`, committed seed `-1`,
+  first pending boundary `0`, and pending negative-boundary count `0`. The
+  earlier negative-boundary phase hypothesis is also disproved for this
+  reproduction.
+- The selective trace captured 695 scopes with zero trace drops. Native score
+  observations contain 285 in-song results across 277 event scopes:
+  238 GREAT, 44 COOL, and 3 GOOD. Five later heartbeat MISS results occur at
+  the chart tail and are not included in the event-quality comparison.
+- Outcome quality correlates with resolved-note density in one-second trace
+  windows: 1-3 results per window produced 1/36 non-GREAT results (2.8%),
+  4-6 produced 24/177 (13.6%), and 7-9 produced 22/72 (30.6%). This supports
+  the operator's correction that dense note sections, not a second song, are
+  the relevant condition.
+- Transport and dispatch do not explain that correlation. The full stage had
+  zero late records, sequence errors, overload drops, cleanup drops, clock
+  failures, or rounded fallback; maximum event backlog was two records and
+  the densest quality bucket ended with maximum remaining backlog zero. Event
+  delivery maxima rose modestly from 7.619 ms in the sparse bucket to
+  11.864 ms in the dense bucket, but the grade is computed from the retained
+  event timestamp, not dispatch time. COOL scopes averaged 2.984 ms delivery
+  versus 3.109 ms for GREAT scopes, and no event arrived behind the committed
+  frontier. The trace therefore does not support delivery delay as the timing
+  grade cause.
+- The eight scopes that resolved two results are valid held/direction
+  transactions: each had two true held queries, one direction result, ages
+  one and two-plus, and two GREAT results. They are not the reported failure.
+  The held/direction path overall produced 49/50 GREAT results.
+- Every physical transition was a single rise or single fall; there were no
+  combined rises, combined falls, or simultaneous rise/fall records. No
+  scored same-control retrigger followed a release by less than 80 ms. The
+  trace therefore does not support rapid-trigger collapse or coalesced-edge
+  loss in this run.
+- The degradation is concentrated in ordinary timing-graded taps: 39 of the
+  47 non-GREAT event results occurred between song time 13 and 30 seconds.
+  The same run then produced 33/33 GREAT ordinary tap scopes from 30 to 40
+  seconds. This is a section/density pattern, not cumulative clock drift.
+- The trace proves the grade and exact event coordinate, but it does not
+  contain the native note target or the signed expression
+  `recognition_ms - note_target_ms`. Consequently this run cannot yet
+  distinguish a real positive SLOW bias, physical/player timing, Raw Input
+  message-queue age, or native candidate selection. No scheduler or clock fix
+  is justified from the current evidence. The next diagnostic must capture
+  that signed native timing expression for timing-graded results and, if input
+  capture delay remains plausible, the keyboard message's queue age. Both
+  must remain bounded, observation-only, and associated with the existing
+  per-scope trace.
+
 ---
 
 ## Plan self-review coverage
