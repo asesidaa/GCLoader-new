@@ -1191,7 +1191,7 @@ Do not stage unrelated input changes.
 - Produces: PE32/export/hook ABI evidence
 - Consumed by: Task 8 deployment
 
-- [ ] **Step 1: Review the complete diff against the spec and audit**
+- [x] **Step 1: Review the complete diff against the spec and audit**
 
 Inspect:
 
@@ -1225,7 +1225,7 @@ Ignore newline-only churn as instructed. Verify behaviorally:
 Fix each behavioral defect inline and commit it with a message naming the
 invariant. Do not make formatting-only commits.
 
-- [ ] **Step 2: Create the persistent ABI script**
+- [x] **Step 2: Create the persistent ABI script**
 
 Create `H:\gc\temp\inspect-asio-audio-backend-abi.ps1`. It must:
 
@@ -1370,7 +1370,7 @@ $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dll).Hash
 "Release ABI inspection passed: $hash"
 ```
 
-- [ ] **Step 3: Run complete Debug and Release builds**
+- [x] **Step 3: Run complete Debug and Release builds**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -1381,7 +1381,7 @@ $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $dll).Hash
 
 Expected: both complete preset graphs succeed. Do not run CTest.
 
-- [ ] **Step 4: Run ABI inspection and record hashes**
+- [x] **Step 4: Run ABI inspection and record hashes**
 
 ```powershell
 & 'H:\gc\temp\inspect-asio-audio-backend-abi.ps1'
@@ -1393,7 +1393,7 @@ Get-FileHash -Algorithm SHA256 `
 Record the exact output in the execution report. This is build/ABI evidence,
 not gameplay acceptance.
 
-- [ ] **Step 5: Confirm the repository boundary**
+- [x] **Step 5: Confirm the repository boundary**
 
 ```powershell
 git status --short
@@ -1422,7 +1422,7 @@ modification remains unstaged unless the user separately authorizes it.
 - Produces: installed Release DLL plus recoverable backup and hashes
 - Runtime acceptance remains user-operated
 
-- [ ] **Step 1: Verify the game is not running**
+- [x] **Step 1: Verify the game is not running**
 
 ```powershell
 $game = Get-Process -Name 'game471' -ErrorAction SilentlyContinue
@@ -1433,7 +1433,7 @@ if ($game) {
 
 Do not terminate an unexpected live game process automatically.
 
-- [ ] **Step 2: Resolve exact source and backup paths**
+- [x] **Step 2: Resolve exact source and backup paths**
 
 ```powershell
 $releaseDll =
@@ -1453,7 +1453,7 @@ Copy-Item -LiteralPath $runtimeDll `
 
 The backup is recoverable by copying it back while the game is stopped.
 
-- [ ] **Step 3: Deploy and verify byte identity**
+- [x] **Step 3: Deploy and verify byte identity**
 
 ```powershell
 Copy-Item -LiteralPath $releaseDll -Destination $runtimeDll -Force
@@ -1488,6 +1488,34 @@ no diagnostic fatal
 
 Do not claim the correction accepted until the user reports game behavior and
 the corresponding `H:\gc\loader-log.txt` is reviewed.
+
+### 2026-08-22 build and deployment record
+
+- Focused controller review retained the recorded lifecycle, exact-clock,
+  time-causal history, native query compatibility, and predicate-exact fatal
+  boundaries. Per operator direction, runtime behavior remains the primary
+  acceptance gate rather than further speculative static review.
+- Fresh complete `msvc32-debug` and `msvc32-release` preset graphs succeeded.
+  No CTest or repository test target was run.
+- Debug DLL SHA-256:
+  `2D4F2CDDB5DBC1FC9C4902F3621C2A01CCD19F93EF898DC016D337A808C94CD5`.
+- Release DLL SHA-256:
+  `6AF6D9CE94B23E6397131EDFA21A62E4A0681DC4C869FD63528F7003A909660E`.
+- Persistent ABI inspection passed PE32/x86/GUI, the `.def` export contract,
+  semantic entry/exit and loop-guard symbol presence, and hook returns
+  `8/8/8/10h/4`.
+- The first deployment copy was refused because another process still held
+  the runtime DLL. It did not change the installed file. After the operator
+  terminated that process, deployment succeeded with source/runtime hash
+  identity.
+- Recoverable pre-deployment backup:
+  `H:\gc\artifacts\runtime-backups\20260822-033605-absolute-judgement-correction\iDmacDrv32.dll`,
+  SHA-256
+  `D2986EB62672F09AE00B0898B6D485FEE5704100D58621FCF77841941897DBF5`.
+- Installed `H:\gc\iDmacDrv32.dll` SHA-256:
+  `6AF6D9CE94B23E6397131EDFA21A62E4A0681DC4C869FD63528F7003A909660E`.
+- `H:\gc\config.toml` was not modified. Task 8 Step 4 remains open until the
+  operator's 240-FPS game behavior and `loader-log.txt` are reviewed.
 
 ---
 
