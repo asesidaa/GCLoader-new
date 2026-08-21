@@ -1684,6 +1684,26 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   `8/8/8/10h/4/8`. The final `8` is the newly proven
   `HookTimingGrade -> ret 8` contract. These results are static/build evidence,
   not game acceptance.
+- Implementation commit: `b40e68a` (`Add dense-note judgement diagnostics`).
+  Deployment occurred only after confirming that neither `game471.exe` nor
+  `NesysService.exe` was running.
+- Recoverable pre-deployment backup:
+  `H:\gc\artifacts\runtime-backups\20260822-061711-dense-note-judgement-diagnostics\iDmacDrv32.dll`,
+  SHA-256
+  `D92ADCA86E5CC1B46E44C286E2AF19C55FF1D9D236773DA6F364957F92721DE6`.
+  Release source and installed `H:\gc\iDmacDrv32.dll` both have SHA-256
+  `3620272A4EF2C58F00CCBB5D416110E7F5D889CCE211BBAB5CC167CFB6F3DAD2`.
+  `H:\gc\config.toml` remained unchanged at SHA-256
+  `F5768B091716EFE243DF7D00D5ACF5F5839000B2744DA33A0241B7F5DABAD0BD`.
+- The next operator log must show `timing_grade_diagnostic_hook=1`. For each
+  useful scope, `signed_error_ms < 0` means native recognition was before the
+  note target (FAST), `0` is exact, and `> 0` means after the target (SLOW).
+  Native grades remain `0=MISS`, `1=GOOD`, `2=COOL`, `3=GREAT`.
+  `raw_message_queue_age_available=1` makes the paired
+  `raw_message_queue_age_ms` valid; `available=0` means the edge did not come
+  from a Raw Input message and the zero value must not be interpreted as a
+  latency sample. `scope_timing_grade_drops`, interval/cumulative timing drops,
+  and scope-trace drops should all remain zero for a useful diagnosis.
 
 ---
 
