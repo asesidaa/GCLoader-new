@@ -149,51 +149,53 @@ struct NativeJudgementConfiguration final {
     return true;
 }
 
-[[nodiscard]] AbsoluteJudgementFatalReason HistoryErrorReason(
-    const JudgementHistoryError error) noexcept {
-    switch (error) {
-    case JudgementHistoryError::TransportEpochMismatch:
-        return AbsoluteJudgementFatalReason::TransportEpochLost;
-    case JudgementHistoryError::SequenceDiscontinuity:
-    case JudgementHistoryError::TransportStateMismatch:
-        return AbsoluteJudgementFatalReason::TransportSequenceError;
-    case JudgementHistoryError::BackwardTime:
-        return AbsoluteJudgementFatalReason::BackwardTime;
-    case JudgementHistoryError::HistoryLost:
-        return AbsoluteJudgementFatalReason::RetainedHistoryLost;
-    case JudgementHistoryError::CheckedArithmeticFailure:
-        return AbsoluteJudgementFatalReason::CheckedArithmeticFailure;
-    case JudgementHistoryError::NotInitialized:
-    case JudgementHistoryError::InvalidControl:
-        return AbsoluteJudgementFatalReason::NativeStateMismatch;
-    }
-    return AbsoluteJudgementFatalReason::NativeStateMismatch;
-}
+struct ExactFailure final {
+    AbsoluteJudgementFatalPredicate predicate{};
+    AbsoluteJudgementFatalReason category{};
+};
 
-[[nodiscard]] AbsoluteJudgementFatalReason QueryInvariantReason(
+[[nodiscard]] ExactFailure QueryInvariantFailure(
     const JudgementQueryInvariant invariant) noexcept {
     switch (invariant) {
     case JudgementQueryInvariant::ThreadMismatch:
-        return AbsoluteJudgementFatalReason::ScopeThreadMismatch;
+        return {AbsoluteJudgementFatalPredicate::ScopeTlsOwnerMismatch,
+                AbsoluteJudgementFatalReason::ScopeThreadMismatch};
     case JudgementQueryInvariant::ReceiverMismatch:
-        return AbsoluteJudgementFatalReason::ScopeReceiverMismatch;
+        return {AbsoluteJudgementFatalPredicate::ScopeReceiverMismatch,
+                AbsoluteJudgementFatalReason::ScopeReceiverMismatch};
     case JudgementQueryInvariant::ScopeLifetimeViolation:
-        return AbsoluteJudgementFatalReason::ScopeLifetimeViolation;
+        return {AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
+                AbsoluteJudgementFatalReason::ScopeLifetimeViolation};
     case JudgementQueryInvariant::StageMismatch:
-        return AbsoluteJudgementFatalReason::NativeIdentityChanged;
+        return {AbsoluteJudgementFatalPredicate::ScopeGenerationMismatch,
+                AbsoluteJudgementFatalReason::NativeIdentityChanged};
+    case JudgementQueryInvariant::ScopeAlreadyActive:
+        return {AbsoluteJudgementFatalPredicate::ScopeAlreadyActive,
+                AbsoluteJudgementFatalReason::ScopeLifetimeViolation};
     case JudgementQueryInvariant::HistoryLost:
+        return {AbsoluteJudgementFatalPredicate::HistoryPromisedEntryMissing,
+                AbsoluteJudgementFatalReason::RetainedHistoryLost};
     case JudgementQueryInvariant::HistoryInvariantFailure:
-        return AbsoluteJudgementFatalReason::RetainedHistoryLost;
+        return {AbsoluteJudgementFatalPredicate::TransportMaskMismatch,
+                AbsoluteJudgementFatalReason::RetainedHistoryLost};
     case JudgementQueryInvariant::CheckedArithmeticFailure:
-    case JudgementQueryInvariant::DiagnosticOverflow:
-        return AbsoluteJudgementFatalReason::CheckedArithmeticFailure;
-    case JudgementQueryInvariant::None:
-    case JudgementQueryInvariant::InvalidScope:
+        return {
+            AbsoluteJudgementFatalPredicate::RationalOperationUnrepresentable,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure};
     case JudgementQueryInvariant::InvalidFrame:
+        return {AbsoluteJudgementFatalPredicate::PressedFrameMismatch,
+                AbsoluteJudgementFatalReason::NativeStateMismatch};
     case JudgementQueryInvariant::InvalidDirectionArguments:
-        return AbsoluteJudgementFatalReason::NativeStateMismatch;
+        return {AbsoluteJudgementFatalPredicate::DirectionOutputNull,
+                AbsoluteJudgementFatalReason::NativeStateMismatch};
+    case JudgementQueryInvariant::InvalidScope:
+        return {AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
+                AbsoluteJudgementFatalReason::ScopeLifetimeViolation};
+    case JudgementQueryInvariant::None:
+        break;
     }
-    return AbsoluteJudgementFatalReason::NativeStateMismatch;
+    return {AbsoluteJudgementFatalPredicate::FatalRecordInvalid,
+            AbsoluteJudgementFatalReason::NativeStateMismatch};
 }
 
 class AbsoluteJudgementRuntime final {
@@ -229,18 +231,36 @@ public:
     }
 
     [[noreturn]] void Fail(
-        const AbsoluteJudgementFatalReason reason) const noexcept {
-        scheduler_.FailActiveStage(reason);
+        const AbsoluteJudgementFatalPredicate predicate,
+        const AbsoluteJudgementFatalReason category,
+        const std::initializer_list<std::uint64_t> operands = {}) const
+        noexcept {
+        scheduler_.FailActiveStage(predicate, category, operands);
     }
 
     [[noreturn]] void FailQueryInvariant(
         const JudgementQueryInvariant invariant,
-        const std::optional<JudgementHistoryError> history_error) const
-        noexcept {
+        const std::optional<JudgementHistoryError> history_error,
+        const std::uint64_t failure_operand0 = 0,
+        const std::uint64_t failure_operand1 = 0,
+        const std::uint8_t failure_operand_count = 0) const noexcept {
         if (history_error) {
-            Fail(HistoryErrorReason(*history_error));
+            scheduler_.FailHistoryInvariant(*history_error);
         }
-        Fail(QueryInvariantReason(invariant));
+        const auto failure = QueryInvariantFailure(invariant);
+        if (failure_operand_count >= 2) {
+            Fail(
+                failure.predicate,
+                failure.category,
+                {failure_operand0, failure_operand1});
+        }
+        if (failure_operand_count == 1) {
+            Fail(
+                failure.predicate,
+                failure.category,
+                {failure_operand0});
+        }
+        Fail(failure.predicate, failure.category);
     }
 
     void DispatchOuterCall(safetyhook::Context& context) {
@@ -256,7 +276,10 @@ public:
                 executable_base_ + kGetGroupCursorRva);
             void* const sound_manager = get_sound_manager();
             if (sound_manager == nullptr) {
-                Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+                Fail(
+                    AbsoluteJudgementFatalPredicate::
+                        GameplaySoundManagerMissing,
+                    AbsoluteJudgementFatalReason::NativeStateMismatch);
             }
             const int cursor_sign = get_group_cursor(
                 sound_manager, kGameplaySoundGroup);
@@ -269,8 +292,13 @@ public:
 
         auto endpoint = gc::audio::AcquireExactWasapiClock();
         LARGE_INTEGER now{};
-        if (!QueryPerformanceCounter(&now)) {
-            Fail(AbsoluteJudgementFatalReason::ClockDiscontinuous);
+        const auto qpc_result = QueryPerformanceCounter(&now);
+        if (!qpc_result || now.QuadPart <= 0) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::QueryPerformanceCounterFailed,
+                AbsoluteJudgementFatalReason::ClockDiscontinuous,
+                {qpc_result ? 1u : 0u,
+                 static_cast<std::uint64_t>(now.QuadPart)});
         }
 
         AbsoluteJudgementOuterProbe probe{
@@ -289,7 +317,10 @@ public:
         std::uintptr_t tail{};
         if (!AddAddress(executable_base_, kLoopTailRva, &tail) ||
             tail > (std::numeric_limits<std::uint32_t>::max)()) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            Fail(
+                AbsoluteJudgementFatalPredicate::GameImageAddressInvalid,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {executable_base_, kLoopTailRva});
         }
         context.eip = static_cast<std::uint32_t>(tail);
     }
@@ -303,20 +334,35 @@ private:
         std::uint32_t game_time_offset{};
         std::uint32_t hold_safe_frame{};
         std::uint32_t slide_hold_safe_frame{};
-        if (config == nullptr ||
-            !ReadFieldU32Safe(
-                reinterpret_cast<std::uintptr_t>(config),
-                kGameTimeOffsetOffset,
-                &game_time_offset) ||
-            !ReadFieldU32Safe(
-                reinterpret_cast<std::uintptr_t>(config),
-                kHoldSafeFrameOffset,
-                &hold_safe_frame) ||
-            !ReadFieldU32Safe(
-                reinterpret_cast<std::uintptr_t>(config),
+        if (config == nullptr) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::GameConfigurationMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch);
+        }
+        const auto config_address =
+            reinterpret_cast<std::uintptr_t>(config);
+        if (!ReadFieldU32Safe(
+                config_address, kGameTimeOffsetOffset, &game_time_offset)) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::GameConfigurationReadFailed,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {config_address, kGameTimeOffsetOffset});
+        }
+        if (!ReadFieldU32Safe(
+                config_address, kHoldSafeFrameOffset, &hold_safe_frame)) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::GameConfigurationReadFailed,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {config_address, kHoldSafeFrameOffset});
+        }
+        if (!ReadFieldU32Safe(
+                config_address,
                 kSlideHoldSafeFrameOffset,
                 &slide_hold_safe_frame)) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            Fail(
+                AbsoluteJudgementFatalPredicate::GameConfigurationReadFailed,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {config_address, kSlideHoldSafeFrameOffset});
         }
         return {
             .game_time_offset_ms =
@@ -332,13 +378,27 @@ private:
         const safetyhook::Context& context) const noexcept {
         std::uintptr_t tune_slot{};
         std::uint32_t tune_raw{};
-        if (native_manager_ == 0 ||
-            !AddSignedAddress(
+        if (native_manager_ == 0) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::
+                    SemanticStageMissingAtOwnedLoop,
+                AbsoluteJudgementFatalReason::NativeStateMismatch);
+        }
+        if (!AddSignedAddress(
                 static_cast<std::uintptr_t>(context.ebp),
                 kTuneStackOffset,
-                &tune_slot) ||
-            !ReadU32Safe(tune_slot, &tune_raw) || tune_raw == 0) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+                &tune_slot) || !ReadU32Safe(tune_slot, &tune_raw)) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::GameImageAddressInvalid,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {context.ebp,
+                 static_cast<std::uint64_t>(kTuneStackOffset)});
+        }
+        if (tune_raw == 0) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::TuneMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {tune_slot, tune_raw});
         }
         const auto tune = static_cast<std::uintptr_t>(tune_raw);
 
@@ -346,12 +406,26 @@ private:
             executable_base_ + kGetGlobalRva);
         void* const global = get_global();
         std::uint32_t player{};
-        if (global == nullptr ||
-            !ReadFieldU32Safe(
+        if (global == nullptr) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::GlobalStateMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {0});
+        }
+        if (!ReadFieldU32Safe(
                 reinterpret_cast<std::uintptr_t>(global),
                 kGlobalPlayerIndexOffset,
                 &player)) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            Fail(
+                AbsoluteJudgementFatalPredicate::GlobalStateMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {reinterpret_cast<std::uintptr_t>(global)});
+        }
+        if (player >= 2) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::PlayerIndexInvalid,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {player});
         }
 
         std::uintptr_t judgement_state{};
@@ -360,26 +434,47 @@ private:
                 tune,
                 kTuneJudgementStatesOffset,
                 player,
-                &judgement_state) ||
-            !ResolvePointerCollectionElementSafe(
+                &judgement_state)) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::JudgementStateMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {tune, player});
+        }
+        if (!ResolvePointerCollectionElementSafe(
                 tune,
                 kTuneScoreStatesOffset,
                 player,
                 &score_state)) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            Fail(
+                AbsoluteJudgementFatalPredicate::ScoreStateMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {tune, player});
         }
 
         const auto get_input_manager = reinterpret_cast<AccessorFn>(
             executable_base_ + kGetInputManagerRva);
         void* const input_manager = get_input_manager();
         std::uint32_t booster_raw{};
-        if (input_manager == nullptr ||
-            !ReadFieldU32Safe(
+        if (input_manager == nullptr) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::InputManagerMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {0});
+        }
+        if (!ReadFieldU32Safe(
                 reinterpret_cast<std::uintptr_t>(input_manager),
                 kInputManagerBoosterOffset,
-                &booster_raw) ||
-            booster_raw == 0) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+                &booster_raw)) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::InputManagerMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {reinterpret_cast<std::uintptr_t>(input_manager)});
+        }
+        if (booster_raw == 0) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::BoosterMissing,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {reinterpret_cast<std::uintptr_t>(input_manager), 0});
         }
         const auto booster = static_cast<std::uintptr_t>(booster_raw);
 
@@ -400,8 +495,8 @@ private:
         };
     }
 
-    [[nodiscard]] AbsoluteJudgementNativeScoreCounters
-    ReadScoreCountersOrFatal(const std::uintptr_t score_state) const noexcept {
+    [[nodiscard]] std::optional<AbsoluteJudgementNativeScoreCounters>
+    ReadScoreCounters(const std::uintptr_t score_state) const noexcept {
         AbsoluteJudgementNativeScoreCounters counters{};
         if (!ReadFieldU32Safe(
                 score_state, kScoreMissOffset, &counters.miss) ||
@@ -411,16 +506,16 @@ private:
                 score_state, kScoreCoolOffset, &counters.cool) ||
             !ReadFieldU32Safe(
                 score_state, kScoreGreatOffset, &counters.great)) {
-            Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            JudgementDiagnostics().RecordScoreObservationReadFailure();
+            return std::nullopt;
         }
         return counters;
     }
 
-    void IncrementOrFatal(std::uint64_t& value) const noexcept {
-        if (value == (std::numeric_limits<std::uint64_t>::max)()) {
-            Fail(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+    void IncrementDiagnostic(std::uint64_t& value) const noexcept {
+        if (value != (std::numeric_limits<std::uint64_t>::max)()) {
+            ++value;
         }
-        ++value;
     }
 
     void ExecuteScope(
@@ -434,7 +529,11 @@ private:
         std::optional<std::int64_t> event_qpc;
         if (scope.kind == JudgementScopeKind::Event) {
             if (scope.event == nullptr) {
-                Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+                Fail(
+                    AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+                    AbsoluteJudgementFatalReason::NativeStateMismatch,
+                    {static_cast<std::uint64_t>(scope.kind),
+                     scope.coordinate.sequence});
             }
             held_before = scope.event->transport.held_before;
             held_after = scope.event->transport.held_after;
@@ -446,7 +545,7 @@ private:
                 scope.coordinate.judgement_seconds,
                 scope.history_prefix_end_sequence);
             if (!held) {
-                Fail(HistoryErrorReason(held.error()));
+                scheduler_.FailHistoryInvariant(held.error());
             }
             held_before = *held;
             held_after = *held;
@@ -476,14 +575,20 @@ private:
             });
             const auto install = query_view.install_result();
             if (!install.installed) {
-                FailQueryInvariant(install.invariant, install.history_error);
+                FailQueryInvariant(
+                    install.invariant,
+                    install.history_error,
+                    install.failure_operand0,
+                    install.failure_operand1,
+                    install.failure_operand_count);
             }
 
-            const auto score_before = ReadScoreCountersOrFatal(
+            const auto score_before = ReadScoreCounters(
                 native.score_state);
-            static_cast<void>(
-                scheduler_.CheckAndRecordNativeScoreCountersOrFatal(
-                    score_before));
+            if (score_before) {
+                static_cast<void>(
+                    scheduler_.ObserveNativeScoreCounters(*score_before));
+            }
 
             const auto recognition = reinterpret_cast<RecognitionFn>(
                 executable_base_ + kRecognitionRva);
@@ -491,7 +596,7 @@ private:
                 reinterpret_cast<void*>(native.judgement_state),
                 scope.native_ms,
                 scope.native_frame);
-            IncrementOrFatal(
+            IncrementDiagnostic(
                 JudgementDiagnostics().stage_counters().recognition_calls);
 
             const auto score = reinterpret_cast<ScoreFn>(
@@ -499,40 +604,46 @@ private:
             score(
                 reinterpret_cast<void*>(native.score_state),
                 scope.native_ms);
-            IncrementOrFatal(
+            IncrementDiagnostic(
                 JudgementDiagnostics().stage_counters().score_calls);
 
             std::uint8_t arrange{};
             std::uint8_t left_free_tap{};
             std::uint8_t right_free_tap{};
-            if (!ReadFieldU8Safe(
+            const bool transient_read = ReadFieldU8Safe(
                     native.judgement_state,
                     kJudgementArrangePublicationOffset,
-                    &arrange) ||
-                !ReadFieldU8Safe(
+                    &arrange) &&
+                ReadFieldU8Safe(
                     native.judgement_state,
                     kJudgementLeftFreeTapPublicationOffset,
-                    &left_free_tap) ||
-                !ReadFieldU8Safe(
+                    &left_free_tap) &&
+                ReadFieldU8Safe(
                     native.judgement_state,
                     kJudgementRightFreeTapPublicationOffset,
-                    &right_free_tap)) {
-                Fail(AbsoluteJudgementFatalReason::NativeStateMismatch);
+                    &right_free_tap);
+            if (!transient_read) {
+                JudgementDiagnostics().
+                    RecordTransientPublicationReadFailure();
+            } else {
+                transient_publications = {
+                    .arrange = arrange != 0,
+                    .left_free_tap = left_free_tap != 0,
+                    .right_free_tap = right_free_tap != 0,
+                };
             }
-            transient_publications = {
-                .arrange = arrange != 0,
-                .left_free_tap = left_free_tap != 0,
-                .right_free_tap = right_free_tap != 0,
-            };
 
-            const auto score_after = ReadScoreCountersOrFatal(
+            const auto score_after = ReadScoreCounters(
                 native.score_state);
-            score_deltas =
-                scheduler_.CheckAndRecordNativeScoreCountersOrFatal(
-                    score_after);
-            scheduler_.AccumulateQueryCountersOrFatal(scope_queries);
-            scheduler_.RecordTransientPublicationsOrFatal(
-                transient_publications);
+            if (score_after) {
+                score_deltas =
+                    scheduler_.ObserveNativeScoreCounters(*score_after);
+            }
+            scheduler_.AccumulateQueryCounters(scope_queries);
+            if (transient_read) {
+                scheduler_.RecordTransientPublications(
+                    transient_publications);
+            }
         }
 
         scheduler_.CommitScope(scope);
@@ -546,9 +657,11 @@ private:
                 probe.now_qpc - *event_qpc,
                 probe.endpoint->qpc_frequency());
             if (!resolved_delay) {
-                Fail(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+                JudgementDiagnostics().
+                    RecordDeliveryDelayConversionFailure();
+            } else {
+                delivery_delay = *resolved_delay;
             }
-            delivery_delay = *resolved_delay;
         }
 
         const auto& stage_counters =
@@ -620,9 +733,14 @@ void InitializeAbsoluteJudgementRuntime(
 void BeginAbsoluteJudgementSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
     LARGE_INTEGER stage_entry_qpc{};
-    if (!QueryPerformanceCounter(&stage_entry_qpc) ||
+    const auto qpc_result = QueryPerformanceCounter(&stage_entry_qpc);
+    if (!qpc_result ||
         stage_entry_qpc.QuadPart <= 0) {
-        Runtime().Fail(AbsoluteJudgementFatalReason::ClockDiscontinuous);
+        Runtime().Fail(
+            AbsoluteJudgementFatalPredicate::QueryPerformanceCounterFailed,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous,
+            {qpc_result ? 1u : 0u,
+             static_cast<std::uint64_t>(stage_entry_qpc.QuadPart)});
     }
     Runtime().BeginSemanticStage(tune_manager, stage_entry_qpc.QuadPart);
 }
@@ -642,13 +760,23 @@ std::uint64_t AbsoluteJudgementStageGeneration() noexcept {
 
 [[noreturn]] void FailAbsoluteJudgementQueryInvariant(
     const JudgementQueryInvariant invariant,
-    const std::optional<JudgementHistoryError> history_error) noexcept {
-    Runtime().FailQueryInvariant(invariant, history_error);
+    const std::optional<JudgementHistoryError> history_error,
+    const std::uint64_t failure_operand0,
+    const std::uint64_t failure_operand1,
+    const std::uint8_t failure_operand_count) noexcept {
+    Runtime().FailQueryInvariant(
+        invariant,
+        history_error,
+        failure_operand0,
+        failure_operand1,
+        failure_operand_count);
 }
 
 [[noreturn]] void FailAbsoluteJudgementActiveStage(
-    const AbsoluteJudgementFatalReason reason) noexcept {
-    Runtime().Fail(reason);
+    const AbsoluteJudgementFatalPredicate predicate,
+    const AbsoluteJudgementFatalReason category,
+    const std::initializer_list<std::uint64_t> operands) noexcept {
+    Runtime().Fail(predicate, category, operands);
 }
 
 void DispatchAbsoluteJudgementOuterCall(safetyhook::Context& context) {

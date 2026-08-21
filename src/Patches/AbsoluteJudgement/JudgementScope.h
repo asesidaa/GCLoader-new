@@ -19,6 +19,7 @@ enum class JudgementQueryInvariant : std::uint8_t {
     ThreadMismatch,
     ReceiverMismatch,
     StageMismatch,
+    ScopeAlreadyActive,
     ScopeLifetimeViolation,
     InvalidScope,
     InvalidFrame,
@@ -26,7 +27,6 @@ enum class JudgementQueryInvariant : std::uint8_t {
     HistoryLost,
     CheckedArithmeticFailure,
     HistoryInvariantFailure,
-    DiagnosticOverflow,
 };
 
 template <typename Value>
@@ -35,12 +35,18 @@ struct JudgementQueryResult final {
     Value value{};
     JudgementQueryInvariant invariant{JudgementQueryInvariant::None};
     std::optional<JudgementHistoryError> history_error;
+    std::uint64_t failure_operand0{};
+    std::uint64_t failure_operand1{};
+    std::uint8_t failure_operand_count{};
 };
 
 struct JudgementScopeInstallResult final {
     bool installed{};
     JudgementQueryInvariant invariant{JudgementQueryInvariant::None};
     std::optional<JudgementHistoryError> history_error;
+    std::uint64_t failure_operand0{};
+    std::uint64_t failure_operand1{};
+    std::uint8_t failure_operand_count{};
 };
 
 struct JudgementScopeData final {
@@ -84,6 +90,9 @@ private:
     JudgementQueryInvariant install_invariant_{
         JudgementQueryInvariant::None};
     std::optional<JudgementHistoryError> install_history_error_;
+    std::uint64_t install_failure_operand0_{};
+    std::uint64_t install_failure_operand1_{};
+    std::uint8_t install_failure_operand_count_{};
     bool installed_{};
 };
 

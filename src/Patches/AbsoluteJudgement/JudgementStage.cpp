@@ -8,16 +8,6 @@ namespace {
 
 std::atomic_uint64_t g_next_stage_generation{1};
 
-bool SameNativeObjectIdentity(
-    const NativeJudgementIdentity& left,
-    const NativeJudgementIdentity& right) noexcept {
-    return left.stage_generation == right.stage_generation &&
-        left.tune_manager == right.tune_manager && left.tune == right.tune &&
-        left.judgement_state == right.judgement_state &&
-        left.score_state == right.score_state &&
-        left.booster == right.booster && left.player == right.player;
-}
-
 } // namespace
 
 std::expected<void, JudgementStageError> JudgementStage::Begin(
@@ -44,15 +34,31 @@ std::expected<void, JudgementStageError> JudgementStage::Begin(
     entry_hold_safe_frame_ = hold_safe_frame;
     entry_slide_hold_safe_frame_ = slide_hold_safe_frame;
     open_ = true;
-    if (tune_manager == 0 ||
-        !gc::input::CaptureGameplayTransitionCutoff(
-            stage_entry_qpc, &cutoff_) ||
-        cutoff_.transport_epoch == 0 || cutoff_.qpc_frequency <= 0) {
-        return std::unexpected(
-            JudgementStageError::InputCapabilityUnavailable);
+    if (tune_manager == 0) {
+        return std::unexpected(JudgementStageError::TuneManagerMissing);
     }
-    if (hold_safe_frame != 0 || slide_hold_safe_frame != 0) {
-        return std::unexpected(JudgementStageError::SafeFrameChanged);
+    if (!gc::input::CaptureGameplayTransitionCutoff(
+            stage_entry_qpc, &cutoff_) || cutoff_.transport_epoch == 0) {
+        failure_transport_status_ =
+            gc::input::ReadGameplayTransitionStatus();
+        if (failure_transport_status_.next_sequence ==
+            (std::numeric_limits<std::uint64_t>::max)()) {
+            return std::unexpected(
+                JudgementStageError::InputSequenceExhausted);
+        }
+        return std::unexpected(
+            JudgementStageError::InputTransportInactiveAtStageEntry);
+    }
+    if (cutoff_.qpc_frequency <= 0) {
+        return std::unexpected(
+            JudgementStageError::InputQpcFrequencyInvalidAtStageEntry);
+    }
+    if (hold_safe_frame != 0) {
+        return std::unexpected(JudgementStageError::HoldSafeFrameNonZero);
+    }
+    if (slide_hold_safe_frame != 0) {
+        return std::unexpected(
+            JudgementStageError::SlideHoldSafeFrameNonZero);
     }
     return {};
 }
@@ -60,15 +66,33 @@ std::expected<void, JudgementStageError> JudgementStage::Begin(
 std::expected<void, JudgementStageError>
 JudgementStage::BindOrValidateNative(
     const NativeJudgementIdentity& native) noexcept {
-    if (!open_ || native.stage_generation != generation_ ||
-        native.tune_manager != tune_manager_ || native.tune == 0 ||
-        native.judgement_state == 0 || native.score_state == 0 ||
-        native.booster == 0) {
-        return std::unexpected(JudgementStageError::NativeIdentityInvalid);
+    if (!open_) {
+        return std::unexpected(JudgementStageError::StageNotOpen);
     }
-    if (native.hold_safe_frame != 0 ||
-        native.slide_hold_safe_frame != 0) {
-        return std::unexpected(JudgementStageError::SafeFrameChanged);
+    if (native.stage_generation != generation_) {
+        return std::unexpected(JudgementStageError::StageGenerationChanged);
+    }
+    if (native.tune_manager != tune_manager_) {
+        return std::unexpected(JudgementStageError::TuneManagerChanged);
+    }
+    if (native.tune == 0) {
+        return std::unexpected(JudgementStageError::TuneMissing);
+    }
+    if (native.judgement_state == 0) {
+        return std::unexpected(JudgementStageError::JudgementStateMissing);
+    }
+    if (native.score_state == 0) {
+        return std::unexpected(JudgementStageError::ScoreStateMissing);
+    }
+    if (native.booster == 0) {
+        return std::unexpected(JudgementStageError::BoosterMissing);
+    }
+    if (native.hold_safe_frame != 0) {
+        return std::unexpected(JudgementStageError::HoldSafeFrameNonZero);
+    }
+    if (native.slide_hold_safe_frame != 0) {
+        return std::unexpected(
+            JudgementStageError::SlideHoldSafeFrameNonZero);
     }
     if (!bound_) {
         native_ = native;
@@ -78,12 +102,20 @@ JudgementStage::BindOrValidateNative(
         bound_ = true;
         return {};
     }
-    if (!SameNativeObjectIdentity(native_, native)) {
-        return std::unexpected(JudgementStageError::NativeIdentityChanged);
+    if (native_.tune != native.tune) {
+        return std::unexpected(JudgementStageError::TuneChanged);
     }
-    if (native.hold_safe_frame != 0 ||
-        native.slide_hold_safe_frame != 0) {
-        return std::unexpected(JudgementStageError::SafeFrameChanged);
+    if (native_.judgement_state != native.judgement_state) {
+        return std::unexpected(JudgementStageError::JudgementStateChanged);
+    }
+    if (native_.score_state != native.score_state) {
+        return std::unexpected(JudgementStageError::ScoreStateChanged);
+    }
+    if (native_.booster != native.booster) {
+        return std::unexpected(JudgementStageError::BoosterChanged);
+    }
+    if (native_.player != native.player) {
+        return std::unexpected(JudgementStageError::PlayerChanged);
     }
     return {};
 }
@@ -94,7 +126,7 @@ JudgementStage::BindEndpointOrValidate(
     const std::int64_t endpoint_qpc_frequency) noexcept {
     if (!open_ || !bound_ || endpoint_generation == 0 ||
         endpoint_qpc_frequency <= 0) {
-        return std::unexpected(JudgementStageError::NativeIdentityInvalid);
+        return std::unexpected(JudgementStageError::StageNotOpen);
     }
     if (endpoint_qpc_frequency != cutoff_.qpc_frequency) {
         return std::unexpected(JudgementStageError::QpcFrequencyChanged);
@@ -119,6 +151,7 @@ void JudgementStage::Activate() noexcept {
 void JudgementStage::Reset() noexcept {
     native_ = {};
     cutoff_ = {};
+    failure_transport_status_ = {};
     generation_ = 0;
     tune_manager_ = 0;
     endpoint_generation_ = 0;
@@ -161,6 +194,11 @@ const gc::input::GameplayTransitionCutoff& JudgementStage::cutoff()
 
 std::uint64_t JudgementStage::endpoint_generation() const noexcept {
     return endpoint_generation_;
+}
+
+const gc::input::GameplayTransitionStatus&
+JudgementStage::failure_transport_status() const noexcept {
+    return failure_transport_status_;
 }
 
 } // namespace gc::absolute_judgement

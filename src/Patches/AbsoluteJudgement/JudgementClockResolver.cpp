@@ -43,6 +43,11 @@ using gc::timing::CheckedRational;
     const bool before_binding) noexcept {
     return {
         .status = EndpointStatus(endpoint.status, before_binding),
+        .failure = endpoint.status == ExactClockStatus::HistoryLost
+            ? (before_binding
+                ? JudgementClockFailure::StageOriginHistoryLost
+                : JudgementClockFailure::EndpointProjectionDiscontinuous)
+            : JudgementClockFailure::None,
         .output_frame = endpoint.output_frame,
         .endpoint_anchor_sequence = endpoint.anchor_sequence,
         .endpoint_position = endpoint.anchor_endpoint_position,
@@ -80,7 +85,10 @@ JudgementClockResult JudgementClockResolver::TryBind(
     }
     if (binding_.stage_generation == 0 ||
         binding_.stage_entry_qpc <= 0) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = JudgementClockFailure::InvalidStageBinding,
+        };
     }
     if (!endpoint) {
         return {.status = JudgementClockStatus::Pending};
@@ -88,13 +96,21 @@ JudgementClockResult JudgementClockResolver::TryBind(
 
     const auto endpoint_generation = endpoint->endpoint_generation();
     if (endpoint_generation == 0) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = JudgementClockFailure::EndpointGenerationChanged,
+        };
     }
     if (binding_.pending_endpoint) {
         if (binding_.pending_endpoint.get() != endpoint.get() ||
             binding_.pending_endpoint->endpoint_generation() !=
                 endpoint_generation) {
-            return {.status = JudgementClockStatus::UnsupportedContinuity};
+            return {
+                .status = JudgementClockStatus::UnsupportedContinuity,
+                .failure = binding_.pending_endpoint.get() != endpoint.get()
+                    ? JudgementClockFailure::EndpointProviderChanged
+                    : JudgementClockFailure::EndpointGenerationChanged,
+            };
         }
     } else {
         binding_.pending_endpoint = endpoint;
@@ -106,7 +122,11 @@ JudgementClockResult JudgementClockResolver::TryBind(
         return {.status = JudgementClockStatus::Pending};
     }
     if (endpoint_generation != selected.endpoint_generation) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = JudgementClockFailure::
+                PlaybackHistoryEndpointChangedBeforeAnchor,
+        };
     }
     if (binding_.pending_history) {
         if (binding_.pending_buffer_instance_id !=
@@ -114,7 +134,15 @@ JudgementClockResult JudgementClockResolver::TryBind(
             binding_.pending_endpoint_generation !=
                 selected.endpoint_generation ||
             binding_.pending_history.get() != selected.exact_history.get()) {
-            return {.status = JudgementClockStatus::UnsupportedContinuity};
+            return {
+                .status = JudgementClockStatus::UnsupportedContinuity,
+                .failure = binding_.pending_endpoint_generation !=
+                        selected.endpoint_generation
+                    ? JudgementClockFailure::
+                          PlaybackHistoryEndpointChangedBeforeAnchor
+                    : JudgementClockFailure::
+                          PlaybackHistoryObjectChangedBeforeAnchor,
+            };
         }
     } else {
         binding_.pending_buffer_instance_id = selected.buffer_instance_id;
@@ -127,13 +155,25 @@ JudgementClockResult JudgementClockResolver::TryBind(
             binding_.pending_buffer_instance_id ||
         binding_.pending_history->exact_endpoint_generation() !=
             binding_.pending_endpoint_generation) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = binding_.pending_history->
+                    exact_endpoint_generation() !=
+                    binding_.pending_endpoint_generation
+                ? JudgementClockFailure::
+                      PlaybackHistoryEndpointChangedBeforeAnchor
+                : JudgementClockFailure::
+                      PlaybackHistoryObjectChangedBeforeAnchor,
+        };
     }
 
     const auto entry_output = endpoint->ResolveQpc(
         binding_.stage_entry_qpc);
     if (entry_output.endpoint_generation != endpoint_generation) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = JudgementClockFailure::EndpointGenerationChanged,
+        };
     }
     if (entry_output.status != ExactClockStatus::Resolved ||
         !entry_output.output_frame) {
@@ -147,6 +187,7 @@ JudgementClockResult JudgementClockResolver::TryBind(
         history_status.status == ExactClockStatus::HistoryLost) {
         return {
             .status = JudgementClockStatus::HistoryLostBeforeBinding,
+            .failure = JudgementClockFailure::StageOriginHistoryLost,
             .output_frame = entry_output.output_frame,
             .endpoint_anchor_sequence = entry_output.anchor_sequence,
             .endpoint_position = entry_output.anchor_endpoint_position,
@@ -172,6 +213,8 @@ JudgementClockResult JudgementClockResolver::TryBind(
     if (history_status.status != ExactClockStatus::Resolved) {
         return {
             .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = JudgementClockFailure::
+                PlaybackHistoryObjectChangedBeforeAnchor,
             .output_frame = entry_output.output_frame,
             .endpoint_anchor_sequence = entry_output.anchor_sequence,
             .endpoint_position = entry_output.anchor_endpoint_position,
@@ -192,6 +235,8 @@ JudgementClockResult JudgementClockResolver::TryBind(
         if (!output_origin) {
             return {
                 .status = JudgementClockStatus::CheckedArithmeticFailure,
+                .failure = JudgementClockFailure::
+                    RationalOperationUnrepresentable,
             };
         }
         if (output_origin->Compare(*entry_output.output_frame) < 0) {
@@ -200,6 +245,7 @@ JudgementClockResult JudgementClockResolver::TryBind(
         if (epoch.output_rate == 0 || epoch.source_rate == 0) {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
+                .failure = JudgementClockFailure::InvalidClockRates,
             };
         }
         if (earliest == nullptr ||
@@ -243,12 +289,20 @@ JudgementClockResult JudgementClockResolver::ResolveQpc(
     if (!stage_anchor.endpoint || stage_anchor.endpoint_generation == 0 ||
         stage_anchor.endpoint->endpoint_generation() !=
             stage_anchor.endpoint_generation) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = !stage_anchor.endpoint
+                ? JudgementClockFailure::EndpointProviderChanged
+                : JudgementClockFailure::EndpointGenerationChanged,
+        };
     }
 
     const auto endpoint = stage_anchor.endpoint->ResolveQpc(qpc_ticks);
     if (endpoint.endpoint_generation != stage_anchor.endpoint_generation) {
-        return {.status = JudgementClockStatus::UnsupportedContinuity};
+        return {
+            .status = JudgementClockStatus::UnsupportedContinuity,
+            .failure = JudgementClockFailure::EndpointGenerationChanged,
+        };
     }
     if (endpoint.status != ExactClockStatus::Resolved ||
         !endpoint.output_frame) {
@@ -259,7 +313,13 @@ JudgementClockResult JudgementClockResolver::ResolveQpc(
     const auto source_origin = WholeUnsigned(stage_anchor.source_origin);
     if (!output_origin || !source_origin || stage_anchor.output_rate == 0 ||
         stage_anchor.source_rate == 0) {
-        return {.status = JudgementClockStatus::CheckedArithmeticFailure};
+        return {
+            .status = JudgementClockStatus::CheckedArithmeticFailure,
+            .failure = stage_anchor.output_rate == 0 ||
+                    stage_anchor.source_rate == 0
+                ? JudgementClockFailure::InvalidClockRates
+                : JudgementClockFailure::RationalOperationUnrepresentable,
+        };
     }
     const auto source_origin_seconds = source_origin->Multiply(
         1, stage_anchor.source_rate);
@@ -268,18 +328,30 @@ JudgementClockResult JudgementClockResolver::ResolveQpc(
             .Multiply(1, 1000);
     const auto output_delta = endpoint.output_frame->Subtract(*output_origin);
     if (!source_origin_seconds || !game_offset_seconds || !output_delta) {
-        return {.status = JudgementClockStatus::CheckedArithmeticFailure};
+        return {
+            .status = JudgementClockStatus::CheckedArithmeticFailure,
+            .failure = JudgementClockFailure::
+                RationalOperationUnrepresentable,
+        };
     }
     const auto output_delta_seconds = output_delta->Multiply(
         1, stage_anchor.output_rate);
     const auto with_offset = source_origin_seconds->Add(
         *game_offset_seconds);
     if (!output_delta_seconds || !with_offset) {
-        return {.status = JudgementClockStatus::CheckedArithmeticFailure};
+        return {
+            .status = JudgementClockStatus::CheckedArithmeticFailure,
+            .failure = JudgementClockFailure::
+                RationalOperationUnrepresentable,
+        };
     }
     const auto judgement = with_offset->Add(*output_delta_seconds);
     if (!judgement) {
-        return {.status = JudgementClockStatus::CheckedArithmeticFailure};
+        return {
+            .status = JudgementClockStatus::CheckedArithmeticFailure,
+            .failure = JudgementClockFailure::
+                RationalOperationUnrepresentable,
+        };
     }
 
     return {

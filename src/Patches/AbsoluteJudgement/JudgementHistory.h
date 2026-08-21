@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <initializer_list>
 #include <optional>
 
 namespace gc::absolute_judgement {
@@ -38,11 +39,15 @@ enum class JudgementScopeKind : std::uint8_t {
 
 enum class JudgementHistoryError : std::uint8_t {
     NotInitialized,
+    BaselineMaskInvalid,
     TransportEpochMismatch,
     SequenceDiscontinuity,
+    SequenceExhausted,
     TransportStateMismatch,
     BackwardTime,
-    HistoryLost,
+    CapacityExhausted,
+    PrefixBeyondNext,
+    PromisedEntryMissing,
     InvalidControl,
     CheckedArithmeticFailure,
 };
@@ -55,9 +60,10 @@ struct JudgementHeldState {
 
 class JudgementHistory final {
 public:
-    void Reset(std::uint64_t transport_epoch,
-               std::uint64_t cutoff_sequence,
-               gc::input::GameplayHeldMask baseline) noexcept;
+    [[nodiscard]] std::expected<void, JudgementHistoryError> Reset(
+        std::uint64_t transport_epoch,
+        std::uint64_t cutoff_sequence,
+        gc::input::GameplayHeldMask baseline) noexcept;
 
     [[nodiscard]] std::expected<void, JudgementHistoryError> Append(
         const ResolvedGameplayTransition& transition) noexcept;
@@ -120,6 +126,9 @@ public:
     [[nodiscard]] std::uint64_t transport_epoch() const noexcept;
     [[nodiscard]] std::uint64_t next_sequence() const noexcept;
     [[nodiscard]] gc::input::GameplayHeldMask current_held() const noexcept;
+    [[nodiscard]] const std::array<std::uint64_t, 8>&
+    last_failure_operands() const noexcept;
+    [[nodiscard]] std::uint8_t last_failure_operand_count() const noexcept;
     [[nodiscard]] std::size_t retained_entry_count() const noexcept;
 
 private:
@@ -165,6 +174,9 @@ private:
     static void ApplyToState(CausalState& state,
                              const RetainedEntry& entry) noexcept;
     static bool IsValidMask(gc::input::GameplayHeldMask mask) noexcept;
+    [[nodiscard]] JudgementHistoryError RecordFailure(
+        JudgementHistoryError error,
+        std::initializer_list<std::uint64_t> operands = {}) const noexcept;
 
     [[nodiscard]] const RetainedEntry& EntryAt(std::size_t offset) const
         noexcept;
@@ -180,6 +192,8 @@ private:
     std::uint64_t next_sequence_{};
     std::uint64_t base_next_sequence_{};
     gc::input::GameplayHeldMask current_held_{};
+    mutable std::array<std::uint64_t, 8> last_failure_operands_{};
+    mutable std::uint8_t last_failure_operand_count_{};
     bool initialized_{};
 };
 

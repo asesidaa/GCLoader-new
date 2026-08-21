@@ -23,14 +23,26 @@ struct NativeJudgementIdentity {
 enum class JudgementStageError : std::uint8_t {
     AlreadyOpen,
     GenerationExhausted,
-    InputCapabilityUnavailable,
-    NativeIdentityInvalid,
-    NativeIdentityChanged,
+    TuneManagerMissing,
+    InputTransportInactiveAtStageEntry,
+    InputSequenceExhausted,
+    InputQpcFrequencyInvalidAtStageEntry,
+    StageNotOpen,
+    StageGenerationChanged,
+    TuneManagerChanged,
+    TuneMissing,
+    JudgementStateMissing,
+    ScoreStateMissing,
+    BoosterMissing,
+    TuneChanged,
+    JudgementStateChanged,
+    ScoreStateChanged,
+    BoosterChanged,
+    PlayerChanged,
     EndpointGenerationChanged,
-    InputGenerationChanged,
     QpcFrequencyChanged,
-    SafeFrameChanged,
-    CleanupIdentityChanged,
+    HoldSafeFrameNonZero,
+    SlideHoldSafeFrameNonZero,
 };
 
 class JudgementStage final {
@@ -59,10 +71,13 @@ public:
     [[nodiscard]] const gc::input::GameplayTransitionCutoff& cutoff()
         const noexcept;
     [[nodiscard]] std::uint64_t endpoint_generation() const noexcept;
+    [[nodiscard]] const gc::input::GameplayTransitionStatus&
+    failure_transport_status() const noexcept;
 
 private:
     NativeJudgementIdentity native_{};
     gc::input::GameplayTransitionCutoff cutoff_{};
+    gc::input::GameplayTransitionStatus failure_transport_status_{};
     std::uint64_t generation_{};
     std::uintptr_t tune_manager_{};
     std::uint64_t endpoint_generation_{};

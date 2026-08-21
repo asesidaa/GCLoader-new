@@ -1,7 +1,6 @@
 #include "Patches/AbsoluteJudgement/JudgementHistory.h"
 
 #include <algorithm>
-#include <cstdlib>
 #include <limits>
 
 // Native algebra authority (read-only, completed audit):
@@ -31,15 +30,20 @@ PairedLookback() noexcept
 
 } // namespace
 
-void JudgementHistory::Reset(const std::uint64_t transport_epoch,
-                             const std::uint64_t cutoff_sequence,
-                             const gc::input::GameplayHeldMask baseline)
+std::expected<void, JudgementHistoryError> JudgementHistory::Reset(
+    const std::uint64_t transport_epoch,
+    const std::uint64_t cutoff_sequence,
+    const gc::input::GameplayHeldMask baseline)
     noexcept
 {
     if (!IsValidMask(baseline))
     {
-        std::abort();
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::BaselineMaskInvalid,
+            {baseline, kOrdinaryHeldMask}));
     }
+    last_failure_operands_ = {};
+    last_failure_operand_count_ = 0;
     read_slot_ = 0;
     size_ = 0;
     transport_epoch_ = transport_epoch;
@@ -60,6 +64,7 @@ void JudgementHistory::Reset(const std::uint64_t transport_epoch,
     causal_time_floor_.reset();
     last_coordinate_.reset();
     initialized_ = true;
+    return {};
 }
 
 std::expected<void, JudgementHistoryError> JudgementHistory::Append(
@@ -91,7 +96,9 @@ std::expected<void, JudgementHistoryError> JudgementHistory::AppendEntry(
         (std::numeric_limits<std::uint64_t>::max)())
     {
         return std::unexpected(
-            JudgementHistoryError::SequenceDiscontinuity);
+            RecordFailure(
+                JudgementHistoryError::SequenceExhausted,
+                {transition.transport.sequence}));
     }
 
     const JudgementScopeCoordinate coordinate{
@@ -106,12 +113,17 @@ std::expected<void, JudgementHistoryError> JudgementHistory::AppendEntry(
             (time_order == 0 &&
              transition.transport.sequence <= last_coordinate_->sequence))
         {
-            return std::unexpected(JudgementHistoryError::BackwardTime);
+            return std::unexpected(RecordFailure(
+                JudgementHistoryError::BackwardTime,
+                {last_coordinate_->sequence,
+                 transition.transport.sequence}));
         }
     }
     if (size_ == kJudgementHistoryCapacity)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::CapacityExhausted,
+            {kJudgementHistoryCapacity, size_}));
     }
 
     EntryAt(size_) = RetainedEntry{
@@ -133,11 +145,14 @@ JudgementHistory::CountResolvedAtOrBefore(
 {
     if (!initialized_)
     {
-        return std::unexpected(JudgementHistoryError::NotInitialized);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::NotInitialized));
     }
     if (first_sequence > next_sequence_)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PrefixBeyondNext,
+            {first_sequence, next_sequence_}));
     }
 
     // A consumed state-only prefix may already have advanced the retained
@@ -178,12 +193,15 @@ JudgementHistory::ConvertResolvedToStateOnly(
 {
     if (!initialized_)
     {
-        return std::unexpected(JudgementHistoryError::NotInitialized);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::NotInitialized));
     }
     if (reason != StateOnlyReason::Overload ||
         sequence < base_next_sequence_ || sequence >= next_sequence_)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PromisedEntryMissing,
+            {sequence, base_next_sequence_, next_sequence_}));
     }
 
     for (std::size_t offset = 0; offset < size_; ++offset)
@@ -192,7 +210,10 @@ JudgementHistory::ConvertResolvedToStateOnly(
         const auto entry_sequence = entry.transition.transport.sequence;
         if (entry_sequence > sequence)
         {
-            return std::unexpected(JudgementHistoryError::HistoryLost);
+            return std::unexpected(
+                RecordFailure(
+                    JudgementHistoryError::PromisedEntryMissing,
+                    {sequence, base_next_sequence_, next_sequence_}));
         }
         if (entry_sequence != sequence)
         {
@@ -201,13 +222,17 @@ JudgementHistory::ConvertResolvedToStateOnly(
         if (!entry.event_eligible)
         {
             return std::unexpected(
-                JudgementHistoryError::TransportStateMismatch);
+                RecordFailure(
+                    JudgementHistoryError::TransportStateMismatch,
+                    {1, 0}));
         }
         entry.event_eligible = false;
         entry.state_only_reason = reason;
         return {};
     }
-    return std::unexpected(JudgementHistoryError::HistoryLost);
+    return std::unexpected(RecordFailure(
+        JudgementHistoryError::PromisedEntryMissing,
+        {sequence, base_next_sequence_, next_sequence_}));
 }
 
 std::expected<void, JudgementHistoryError> JudgementHistory::PruneBefore(
@@ -216,12 +241,22 @@ std::expected<void, JudgementHistoryError> JudgementHistory::PruneBefore(
 {
     if (!initialized_)
     {
-        return std::unexpected(JudgementHistoryError::NotInitialized);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::NotInitialized));
     }
-    if (earliest_history_prefix_end_sequence < base_next_sequence_ ||
-        earliest_history_prefix_end_sequence > next_sequence_)
+    if (earliest_history_prefix_end_sequence > next_sequence_)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PrefixBeyondNext,
+            {earliest_history_prefix_end_sequence, next_sequence_}));
+    }
+    if (earliest_history_prefix_end_sequence < base_next_sequence_)
+    {
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PromisedEntryMissing,
+            {earliest_history_prefix_end_sequence,
+             base_next_sequence_,
+             next_sequence_}));
     }
 
     const auto lookback = PairedLookback();
@@ -274,7 +309,9 @@ std::expected<bool, JudgementHistoryError> JudgementHistory::HeldAt(
 {
     if (control >= kJudgementLogicalControlCount)
     {
-        return std::unexpected(JudgementHistoryError::InvalidControl);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::InvalidControl,
+            {control, kJudgementLogicalControlCount}));
     }
     const auto state = StateAt(query_time, history_prefix_end_sequence);
     if (!state)
@@ -323,11 +360,14 @@ JudgementHistory::ReleasedInWindow(
 {
     if (!initialized_)
     {
-        return std::unexpected(JudgementHistoryError::NotInitialized);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::NotInitialized));
     }
     if (control >= kJudgementLogicalControlCount)
     {
-        return std::unexpected(JudgementHistoryError::InvalidControl);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::InvalidControl,
+            {control, kJudgementLogicalControlCount}));
     }
     if (history_prefix_end_sequence < base_next_sequence_ ||
         history_prefix_end_sequence > next_sequence_)
@@ -439,7 +479,9 @@ JudgementHistory::HeldAge(
 {
     if (control >= kJudgementLogicalControlCount)
     {
-        return std::unexpected(JudgementHistoryError::InvalidControl);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::InvalidControl,
+            {control, kJudgementLogicalControlCount}));
     }
     const auto state = StateAt(
         coordinate.judgement_seconds, history_prefix_end_sequence);
@@ -470,7 +512,9 @@ JudgementHistory::HeldAge(
         rise.accepted_rise->judgement_seconds.Compare(
             coordinate.judgement_seconds) > 0)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PromisedEntryMissing,
+            {coordinate.sequence, base_next_sequence_, next_sequence_}));
     }
 
     const auto elapsed = coordinate.judgement_seconds.Subtract(
@@ -550,6 +594,17 @@ gc::input::GameplayHeldMask JudgementHistory::current_held() const noexcept
     return current_held_;
 }
 
+const std::array<std::uint64_t, 8>&
+JudgementHistory::last_failure_operands() const noexcept
+{
+    return last_failure_operands_;
+}
+
+std::uint8_t JudgementHistory::last_failure_operand_count() const noexcept
+{
+    return last_failure_operand_count_;
+}
+
 std::size_t JudgementHistory::retained_entry_count() const noexcept
 {
     return size_;
@@ -561,17 +616,22 @@ JudgementHistory::ValidateTransport(
 {
     if (!initialized_)
     {
-        return std::unexpected(JudgementHistoryError::NotInitialized);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::NotInitialized));
     }
     if (transition.transport_epoch != transport_epoch_)
     {
         return std::unexpected(
-            JudgementHistoryError::TransportEpochMismatch);
+            RecordFailure(
+                JudgementHistoryError::TransportEpochMismatch,
+                {transport_epoch_, transition.transport_epoch}));
     }
     if (transition.sequence != next_sequence_)
     {
         return std::unexpected(
-            JudgementHistoryError::SequenceDiscontinuity);
+            RecordFailure(
+                JudgementHistoryError::SequenceDiscontinuity,
+                {next_sequence_, transition.sequence}));
     }
     if (!IsValidMask(transition.held_before) ||
         !IsValidMask(transition.held_after) ||
@@ -580,7 +640,9 @@ JudgementHistory::ValidateTransport(
         transition.held_before != current_held_)
     {
         return std::unexpected(
-            JudgementHistoryError::TransportStateMismatch);
+            RecordFailure(
+                JudgementHistoryError::TransportStateMismatch,
+                {current_held_, transition.held_before}));
     }
 
     const auto expected_rising = static_cast<gc::input::GameplayHeldMask>(
@@ -591,7 +653,12 @@ JudgementHistory::ValidateTransport(
         transition.falling != expected_falling)
     {
         return std::unexpected(
-            JudgementHistoryError::TransportStateMismatch);
+            RecordFailure(
+                JudgementHistoryError::TransportStateMismatch,
+                {static_cast<std::uint64_t>(expected_rising) |
+                     (static_cast<std::uint64_t>(expected_falling) << 16),
+                 static_cast<std::uint64_t>(transition.rising) |
+                     (static_cast<std::uint64_t>(transition.falling) << 16)}));
     }
     return {};
 }
@@ -603,17 +670,30 @@ JudgementHistory::StateAt(
 {
     if (!initialized_)
     {
-        return std::unexpected(JudgementHistoryError::NotInitialized);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::NotInitialized));
     }
-    if (history_prefix_end_sequence < base_next_sequence_ ||
-        history_prefix_end_sequence > next_sequence_)
+    if (history_prefix_end_sequence > next_sequence_)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PrefixBeyondNext,
+            {history_prefix_end_sequence, next_sequence_}));
+    }
+    if (history_prefix_end_sequence < base_next_sequence_)
+    {
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::PromisedEntryMissing,
+            {history_prefix_end_sequence, base_next_sequence_, next_sequence_}));
     }
     if (causal_time_floor_ &&
         query_time.Compare(causal_time_floor_->judgement_seconds) < 0)
     {
-        return std::unexpected(JudgementHistoryError::HistoryLost);
+        return std::unexpected(
+            RecordFailure(
+                JudgementHistoryError::PromisedEntryMissing,
+                {history_prefix_end_sequence,
+                 base_next_sequence_,
+                 next_sequence_}));
     }
 
     CausalState state = causal_base_;
@@ -646,7 +726,9 @@ std::expected<bool, JudgementHistoryError> JudgementHistory::Edge(
 {
     if (control >= kJudgementLogicalControlCount)
     {
-        return std::unexpected(JudgementHistoryError::InvalidControl);
+        return std::unexpected(RecordFailure(
+            JudgementHistoryError::InvalidControl,
+            {control, kJudgementLogicalControlCount}));
     }
     if (kind == JudgementScopeKind::Heartbeat)
     {
@@ -795,6 +877,23 @@ bool JudgementHistory::IsValidMask(
     const gc::input::GameplayHeldMask mask) noexcept
 {
     return (mask & ~kOrdinaryHeldMask) == 0;
+}
+
+JudgementHistoryError JudgementHistory::RecordFailure(
+    const JudgementHistoryError error,
+    const std::initializer_list<std::uint64_t> operands) const noexcept
+{
+    last_failure_operands_ = {};
+    last_failure_operand_count_ = 0;
+    for (const auto operand : operands)
+    {
+        if (last_failure_operand_count_ == last_failure_operands_.size())
+        {
+            break;
+        }
+        last_failure_operands_[last_failure_operand_count_++] = operand;
+    }
+    return error;
 }
 
 const JudgementHistory::RetainedEntry& JudgementHistory::EntryAt(

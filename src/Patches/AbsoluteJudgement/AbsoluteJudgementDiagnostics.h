@@ -5,8 +5,10 @@
 
 #include <Windows.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string_view>
 
@@ -36,9 +38,115 @@ enum class AbsoluteJudgementFatalReason : std::uint32_t {
     ScopeThreadMismatch,
     ScopeReceiverMismatch,
     ScopeLifetimeViolation,
-    StorageAllocationFailure,
-    UnexpectedInternalException,
 };
+
+// Stable, exact predicates are the authority for terminating the process.
+// AbsoluteJudgementFatalReason is retained only as a broad log category.
+enum class AbsoluteJudgementFatalPredicate : std::uint16_t {
+    None = 0,
+    StartupSitePrefixMismatch,
+    StartupHookCreateFailed,
+    StartupHookEnableFailed,
+    StartupHookTransactionInvalid,
+    GameImageAddressInvalid,
+    GameConfigurationMissing,
+    GameConfigurationReadFailed,
+    GlobalStateMissing,
+    GameplaySoundManagerMissing,
+    SemanticStageAlreadyOpen,
+    SemanticStageMissingAtOwnedLoop,
+    SemanticStageExitWithoutOpen,
+    SemanticStageReceiverMismatch,
+    CleanupWhileSemanticStageOpen,
+    StageGenerationExhausted,
+    QueryPerformanceCounterFailed,
+    AudioBackendNotWasapiExclusive,
+    ExactWasapiRouteUnavailable,
+    InputTransportRateNot1000,
+    InputTransportInactiveAtStageEntry,
+    InputTransportWorkerBecameInactive,
+    InputTransportEpochChanged,
+    InputQpcFrequencyInvalidAtStageEntry,
+    InputQpcFrequencyChanged,
+    InputManagerMissing,
+    BoosterMissing,
+    TuneMissing,
+    JudgementStateMissing,
+    ScoreStateMissing,
+    PlayerIndexInvalid,
+    TuneIdentityChanged,
+    JudgementStateIdentityChanged,
+    ScoreStateIdentityChanged,
+    PlayerIdentityChanged,
+    BoosterIdentityChanged,
+    HoldSafeFrameNonZero,
+    SlideHoldSafeFrameNonZero,
+    EndpointProviderMissingAtStageExit,
+    StageOriginUnboundAtStageExit,
+    EndpointGenerationChanged,
+    EndpointProviderIdentityChanged,
+    EndpointPublicationSequenceRegressed,
+    EndpointQpcFrequencyMismatch,
+    EndpointProjectionDiscontinuous,
+    StageOriginHistoryLost,
+    PlaybackHistoryObjectChangedBeforeAnchor,
+    PlaybackHistoryEndpointChangedBeforeAnchor,
+    TransportEvicted,
+    TransportSequenceDiscontinuous,
+    TransportMaskMismatch,
+    TransportDrainContradiction,
+    UnresolvedCapacityExhausted,
+    HistoryCapacityExhausted,
+    SequenceExhausted,
+    RationalOperationUnrepresentable,
+    HistoryNotInitialized,
+    HistoryPrefixBeyondNext,
+    HistoryPromisedEntryMissing,
+    HistoryBaselineMaskInvalid,
+    HistoryControlInvalid,
+    ResolvedCoordinateRegressed,
+    DeliveryOrderViolated,
+    UnresolvedFrontEmpty,
+    ScopeAlreadyActive,
+    ScopeTlsOwnerMismatch,
+    ScopeGenerationMismatch,
+    ScopeReceiverMismatch,
+    ScopeLifetimeMismatch,
+    PressedFrameMismatch,
+    DirectionOutputNull,
+    RecognitionScoreTopologyMismatch,
+    CommitTopologyMismatch,
+    FatalRecordInvalid,
+    StartupFatalPublisherReturned,
+    TerminateProcessReturned,
+    Count,
+};
+
+enum class AbsoluteJudgementFailureClass : std::uint8_t {
+    ExplicitlyUnsupported,
+    ResourceLimit,
+    ProvenInternalInvariant,
+};
+
+struct AbsoluteJudgementFatalRecord {
+    AbsoluteJudgementFatalPredicate predicate{
+        AbsoluteJudgementFatalPredicate::None};
+    AbsoluteJudgementFailureClass classification{
+        AbsoluteJudgementFailureClass::ProvenInternalInvariant};
+    std::uint64_t stage_generation{};
+    AbsoluteJudgementFatalReason category{
+        AbsoluteJudgementFatalReason::None};
+    std::array<std::uint64_t, 8> operands{};
+    std::uint8_t operand_count{};
+};
+
+[[nodiscard]] AbsoluteJudgementFatalRecord MakeAbsoluteJudgementFatalRecord(
+    AbsoluteJudgementFatalPredicate predicate,
+    std::uint64_t stage_generation,
+    AbsoluteJudgementFatalReason category,
+    std::initializer_list<std::uint64_t> operands = {}) noexcept;
+[[nodiscard]] std::string_view AbsoluteJudgementFatalPredicateName(
+    AbsoluteJudgementFatalPredicate predicate) noexcept;
 
 enum class AbsoluteJudgementScopeKind : std::uint8_t {
     Event,
@@ -149,6 +257,12 @@ struct AbsoluteJudgementStageCounters {
     AbsoluteJudgementQueryCounters queries{};
     AbsoluteJudgementScoreDeltas score_deltas{};
     AbsoluteJudgementTransientPublicationCounts transient_publications{};
+    std::uint64_t score_observation_read_failures{};
+    std::uint64_t score_counter_regressions{};
+    std::uint64_t transient_publication_read_failures{};
+    std::uint64_t delivery_delay_conversion_failures{};
+    std::uint64_t final_accounting_mismatches{};
+    std::uint64_t diagnostic_saturations{};
 };
 
 struct AbsoluteJudgementCounterSnapshot {
@@ -195,6 +309,12 @@ struct AbsoluteJudgementCounterSnapshot {
     AbsoluteJudgementQueryCounters queries{};
     AbsoluteJudgementScoreDeltas score_deltas{};
     AbsoluteJudgementTransientPublicationCounts transient_publications{};
+    std::uint64_t score_observation_read_failures{};
+    std::uint64_t score_counter_regressions{};
+    std::uint64_t transient_publication_read_failures{};
+    std::uint64_t delivery_delay_conversion_failures{};
+    std::uint64_t final_accounting_mismatches{};
+    std::uint64_t diagnostic_saturations{};
 };
 
 struct AbsoluteJudgementRuntimeSnapshot {
@@ -297,7 +417,7 @@ struct AbsoluteJudgementFatalSnapshot {
 };
 
 [[noreturn]] void FatalActiveStage(
-    AbsoluteJudgementFatalReason reason,
+    const AbsoluteJudgementFatalRecord& record,
     const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
 
 class AbsoluteJudgementDiagnostics final {
@@ -307,9 +427,7 @@ public:
         const noexcept;
 
     void ObserveTransportPendingDepth(std::uint64_t depth) noexcept;
-    void RecordBatch(
-        std::uint64_t size,
-        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    void RecordBatch(std::uint64_t size) noexcept;
     void ObserveBacklog(std::uint64_t depth) noexcept;
     void ObserveEventBacklog(std::uint64_t depth) noexcept;
     void ObserveDeliveryDelayQpc(std::uint64_t delay) noexcept;
@@ -333,14 +451,14 @@ public:
         const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
     void CheckCompletedBatchInvariantOrFatal(
         const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
-    void CheckFinalTransportIdentityOrFatal(
-        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
-    void AccumulateQueryCountersOrFatal(
-        const AbsoluteJudgementQueryCounters& counters,
-        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
-    void RecordTransientPublicationsOrFatal(
-        const AbsoluteJudgementTransientPublications& publications,
-        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    void CheckFinalTransportIdentity() noexcept;
+    void AccumulateQueryCounters(
+        const AbsoluteJudgementQueryCounters& counters) noexcept;
+    void RecordTransientPublications(
+        const AbsoluteJudgementTransientPublications& publications) noexcept;
+    void RecordScoreObservationReadFailure() noexcept;
+    void RecordTransientPublicationReadFailure() noexcept;
+    void RecordDeliveryDelayConversionFailure() noexcept;
     void CheckAndRecordCommittedOrderOrFatal(
         const gc::timing::CheckedRational& time,
         std::uint64_t sequence,
@@ -351,16 +469,15 @@ public:
         bool due_boundary,
         const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
     [[nodiscard]] AbsoluteJudgementScoreDeltas
-    CheckAndRecordNativeScoreCountersOrFatal(
-        const AbsoluteJudgementNativeScoreCounters& counters,
-        const AbsoluteJudgementFatalSnapshot& snapshot) noexcept;
+    ObserveNativeScoreCounters(
+        const AbsoluteJudgementNativeScoreCounters& counters) noexcept;
 
     [[nodiscard]] bool recognition_stopped() const noexcept;
 
 private:
     friend AbsoluteJudgementDiagnostics& JudgementDiagnostics() noexcept;
     friend void FatalActiveStage(
-        AbsoluteJudgementFatalReason,
+        const AbsoluteJudgementFatalRecord&,
         const AbsoluteJudgementFatalSnapshot&) noexcept;
 
     void ResetStageState() noexcept;
@@ -383,8 +500,8 @@ private:
     AbsoluteJudgementStageCounters stage_{};
     IntervalMaxima interval_maxima_{};
     AbsoluteJudgementCounterSnapshot last_summary_{};
-    std::atomic<AbsoluteJudgementFatalReason> first_fatal_reason_{
-        AbsoluteJudgementFatalReason::None};
+    std::atomic<AbsoluteJudgementFatalPredicate> first_fatal_predicate_{
+        AbsoluteJudgementFatalPredicate::None};
     std::atomic_bool recognition_stopped_{false};
     std::optional<gc::timing::CheckedRational> last_committed_time_;
     std::uint64_t last_committed_sequence_{};

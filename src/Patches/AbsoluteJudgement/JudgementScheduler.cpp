@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstdlib>
 #include <limits>
 #include <span>
 #include <utility>
@@ -17,50 +16,6 @@ namespace gc::absolute_judgement {
 namespace {
 
 using gc::timing::CheckedRational;
-
-AbsoluteJudgementFatalReason StageErrorReason(
-    const JudgementStageError error) noexcept {
-    switch (error) {
-    case JudgementStageError::InputCapabilityUnavailable:
-        return AbsoluteJudgementFatalReason::InputCapabilityUnavailable;
-    case JudgementStageError::EndpointGenerationChanged:
-        return AbsoluteJudgementFatalReason::EndpointGenerationChanged;
-    case JudgementStageError::InputGenerationChanged:
-        return AbsoluteJudgementFatalReason::InputGenerationChanged;
-    case JudgementStageError::SafeFrameChanged:
-        return AbsoluteJudgementFatalReason::SafeFrameChanged;
-    case JudgementStageError::GenerationExhausted:
-        return AbsoluteJudgementFatalReason::CheckedArithmeticFailure;
-    case JudgementStageError::AlreadyOpen:
-    case JudgementStageError::NativeIdentityInvalid:
-    case JudgementStageError::NativeIdentityChanged:
-    case JudgementStageError::QpcFrequencyChanged:
-    case JudgementStageError::CleanupIdentityChanged:
-        return AbsoluteJudgementFatalReason::NativeIdentityChanged;
-    }
-    return AbsoluteJudgementFatalReason::NativeStateMismatch;
-}
-
-AbsoluteJudgementFatalReason HistoryErrorReason(
-    const JudgementHistoryError error) noexcept {
-    switch (error) {
-    case JudgementHistoryError::TransportEpochMismatch:
-        return AbsoluteJudgementFatalReason::TransportEpochLost;
-    case JudgementHistoryError::SequenceDiscontinuity:
-    case JudgementHistoryError::TransportStateMismatch:
-        return AbsoluteJudgementFatalReason::TransportSequenceError;
-    case JudgementHistoryError::BackwardTime:
-        return AbsoluteJudgementFatalReason::BackwardTime;
-    case JudgementHistoryError::HistoryLost:
-        return AbsoluteJudgementFatalReason::RetainedHistoryLost;
-    case JudgementHistoryError::CheckedArithmeticFailure:
-        return AbsoluteJudgementFatalReason::CheckedArithmeticFailure;
-    case JudgementHistoryError::NotInitialized:
-    case JudgementHistoryError::InvalidControl:
-        return AbsoluteJudgementFatalReason::NativeStateMismatch;
-    }
-    return AbsoluteJudgementFatalReason::NativeStateMismatch;
-}
 
 bool SameScope(const ScheduledJudgementScope& left,
                const ScheduledJudgementScope& right) noexcept {
@@ -87,6 +42,20 @@ void JudgementScheduler::BeginSemanticStage(
     if (!stage_.open()) {
         ClearStageOwnedState();
     }
+    if (hold_safe_frame != 0) {
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HoldSafeFrameNonZero,
+            AbsoluteJudgementFatalReason::SafeFrameChanged,
+            {static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(hold_safe_frame))});
+    }
+    if (slide_hold_safe_frame != 0) {
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SlideHoldSafeFrameNonZero,
+            AbsoluteJudgementFatalReason::SafeFrameChanged,
+            {static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(slide_hold_safe_frame))});
+    }
     const auto result = stage_.Begin(
         tune_manager,
         stage_entry_qpc,
@@ -94,14 +63,14 @@ void JudgementScheduler::BeginSemanticStage(
         hold_safe_frame,
         slide_hold_safe_frame);
     if (!result) {
-        Fatal(StageErrorReason(result.error()));
+        FatalStageError(result.error());
     }
 
     const auto& cutoff = stage_.cutoff();
-    history_.Reset(
+    ApplyHistoryResultOrFatal(history_.Reset(
         cutoff.transport_epoch,
         cutoff.first_stage_sequence,
-        cutoff.held_baseline);
+        cutoff.held_baseline));
     next_drain_sequence_ = cutoff.first_stage_sequence;
     next_delivery_sequence_ = cutoff.first_stage_sequence;
     clock_resolver_.Reset(
@@ -122,13 +91,32 @@ void JudgementScheduler::BeginSemanticStage(
 void JudgementScheduler::EndSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
     if (!stage_.open()) {
-        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SemanticStageExitWithoutOpen,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {tune_manager});
     }
     if (tune_manager == 0 || tune_manager != stage_.tune_manager()) {
-        Fatal(AbsoluteJudgementFatalReason::NativeIdentityChanged);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SemanticStageReceiverMismatch,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.tune_manager(), tune_manager});
     }
     if (outstanding_scope_) {
-        Fatal(AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
+            AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
+    }
+    if (stage_.endpoint_generation() == 0) {
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                EndpointProviderMissingAtStageExit,
+            AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable);
+    }
+    if (!clock_resolver_.bound() || !stage_.active()) {
+        Fatal(
+            AbsoluteJudgementFatalPredicate::StageOriginUnboundAtStageExit,
+            AbsoluteJudgementFatalReason::ClockHistoryLost);
     }
 
     AccountCleanupDropsOrFatal();
@@ -170,7 +158,10 @@ JudgementScheduler::committed_boundary_index() const noexcept {
 
 void JudgementScheduler::ClearStageOwnedState() noexcept {
     clock_resolver_.Reset(0, 0, 0);
-    history_.Reset(0, 0, 0);
+    const auto reset = history_.Reset(0, 0, 0);
+    if (!reset) {
+        FatalHistoryError(reset.error());
+    }
     unresolved_read_slot_ = 0;
     unresolved_size_ = 0;
     next_drain_sequence_ = 0;
@@ -202,7 +193,7 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
     const AbsoluteJudgementOuterProbe& probe) noexcept {
     const auto native = stage_.BindOrValidateNative(probe.native);
     if (!native) {
-        Fatal(StageErrorReason(native.error()));
+        FatalStageError(native.error(), &probe.native);
     }
     if (!probe.endpoint) {
         return;
@@ -211,7 +202,23 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
         probe.endpoint->endpoint_generation(),
         probe.endpoint->qpc_frequency());
     if (!endpoint) {
-        Fatal(StageErrorReason(endpoint.error()));
+        if (endpoint.error() ==
+            JudgementStageError::EndpointGenerationChanged) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
+                AbsoluteJudgementFatalReason::EndpointGenerationChanged,
+                {stage_.endpoint_generation(),
+                 probe.endpoint->endpoint_generation()});
+        }
+        if (endpoint.error() == JudgementStageError::QpcFrequencyChanged) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::EndpointQpcFrequencyMismatch,
+                AbsoluteJudgementFatalReason::ClockDiscontinuous,
+                {static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency),
+                 static_cast<std::uint64_t>(
+                     probe.endpoint->qpc_frequency())});
+        }
+        FatalStageError(endpoint.error(), &probe.native);
     }
     JudgementDiagnostics().stage_counters().endpoint_publication_count =
         probe.endpoint->publication_count();
@@ -223,7 +230,10 @@ void JudgementScheduler::PrepareOuterCall(
         return;
     }
     if (outer_prepared_ || outstanding_scope_) {
-        Fatal(AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScopeAlreadyActive,
+            AbsoluteJudgementFatalReason::ScopeLifetimeViolation,
+            {outer_prepared_ ? 1u : 0u, outstanding_scope_ ? 1u : 0u});
     }
     outer_prepared_ = true;
     outer_horizon_.reset();
@@ -233,7 +243,7 @@ void JudgementScheduler::PrepareOuterCall(
     outer_event_barrier_recorded_ = false;
     outer_now_qpc_ = probe.now_qpc;
     last_qpc_ = probe.now_qpc;
-    IncrementOrFatal(JudgementDiagnostics().stage_counters().outer_calls);
+    IncrementDiagnostic(JudgementDiagnostics().stage_counters().outer_calls);
 
     ValidateStageBindingOrFatal(probe);
     DrainTransportOrFatal();
@@ -243,7 +253,11 @@ void JudgementScheduler::PrepareOuterCall(
     };
     if (!clock_resolver_.bound()) {
         if (probe.group2_cursor_selected && !probe.group2_observation) {
-            Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    EndpointProjectionDiscontinuous,
+                AbsoluteJudgementFatalReason::NativeStateMismatch,
+                {static_cast<std::uint64_t>(probe.now_qpc)});
         }
         if (probe.group2_cursor_selected && probe.group2_observation &&
             probe.endpoint) {
@@ -266,7 +280,22 @@ void JudgementScheduler::PrepareOuterCall(
                  clock_resolver_.anchor().endpoint_generation ||
              probe.endpoint.get() !=
                  clock_resolver_.anchor().endpoint.get())) {
-            Fatal(AbsoluteJudgementFatalReason::EndpointGenerationChanged);
+            const auto expected_provider = reinterpret_cast<std::uintptr_t>(
+                clock_resolver_.anchor().endpoint.get());
+            const auto actual_provider = reinterpret_cast<std::uintptr_t>(
+                probe.endpoint.get());
+            Fatal(
+                probe.endpoint->endpoint_generation() !=
+                        clock_resolver_.anchor().endpoint_generation
+                    ? AbsoluteJudgementFatalPredicate::
+                          EndpointGenerationChanged
+                    : AbsoluteJudgementFatalPredicate::
+                          EndpointProviderIdentityChanged,
+                AbsoluteJudgementFatalReason::EndpointGenerationChanged,
+                {clock_resolver_.anchor().endpoint_generation,
+                 probe.endpoint->endpoint_generation(),
+                 expected_provider,
+                 actual_provider});
         }
         entry_clock = clock_resolver_.ResolveQpc(
             stage_.cutoff().stage_entry_qpc);
@@ -298,7 +327,10 @@ void JudgementScheduler::DrainTransportOrFatal() noexcept {
     auto& diagnostics = JudgementDiagnostics();
     for (;;) {
         if (unresolved_size_ > unresolved_.size()) {
-            Fatal(AbsoluteJudgementFatalReason::RetainedHistoryLost);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::UnresolvedCapacityExhausted,
+                AbsoluteJudgementFatalReason::RetainedHistoryLost,
+                {unresolved_.size(), unresolved_size_});
         }
         const auto free_capacity = unresolved_.size() - unresolved_size_;
         const auto requested = (std::min)(
@@ -311,67 +343,141 @@ void JudgementScheduler::DrainTransportOrFatal() noexcept {
         if (count > requested ||
             count > (std::numeric_limits<std::uint64_t>::max)() -
                 static_cast<std::uint64_t>(status.depth)) {
-            Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::TransportDrainContradiction,
+                AbsoluteJudgementFatalReason::TransportSequenceError,
+                {count, requested, status.depth, status.next_sequence});
         }
         diagnostics.ObserveTransportPendingDepth(
             static_cast<std::uint64_t>(count) + status.depth);
-        if (!status.enabled || !status.active ||
-            status.transport_epoch != stage_.cutoff().transport_epoch ||
-            status.qpc_frequency != stage_.cutoff().qpc_frequency) {
-            Fatal(AbsoluteJudgementFatalReason::TransportEpochLost);
+        if (!status.enabled) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    InputTransportWorkerBecameInactive,
+                AbsoluteJudgementFatalReason::InputCapabilityUnavailable,
+                {status.enabled ? 1u : 0u, status.active ? 1u : 0u});
+        }
+        if (!status.active) {
+            if (status.next_sequence ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::SequenceExhausted,
+                    AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                    {status.next_sequence});
+            }
+            if (status.eviction_count != stage_.cutoff().eviction_count) {
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::TransportEvicted,
+                    AbsoluteJudgementFatalReason::TransportEviction,
+                    {stage_.cutoff().eviction_count,
+                     status.eviction_count});
+            }
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    InputTransportWorkerBecameInactive,
+                AbsoluteJudgementFatalReason::InputCapabilityUnavailable,
+                {1, 0});
+        }
+        if (status.transport_epoch != stage_.cutoff().transport_epoch) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::InputTransportEpochChanged,
+                AbsoluteJudgementFatalReason::TransportEpochLost,
+                {stage_.cutoff().transport_epoch, status.transport_epoch});
+        }
+        if (status.qpc_frequency != stage_.cutoff().qpc_frequency) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::InputQpcFrequencyChanged,
+                AbsoluteJudgementFatalReason::ClockDiscontinuous,
+                {static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency),
+                 static_cast<std::uint64_t>(status.qpc_frequency)});
         }
         if (status.eviction_count != stage_.cutoff().eviction_count) {
-            Fatal(AbsoluteJudgementFatalReason::TransportEviction);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::TransportEvicted,
+                AbsoluteJudgementFatalReason::TransportEviction,
+                {stage_.cutoff().eviction_count, status.eviction_count});
         }
         if (status.next_sequence < status.depth) {
-            Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::TransportDrainContradiction,
+                AbsoluteJudgementFatalReason::TransportSequenceError,
+                {count, requested, status.depth, status.next_sequence});
         }
 
         for (std::size_t index = 0; index < count; ++index) {
             const auto& record = drain_batch_[index];
-            if (record.transport_epoch != stage_.cutoff().transport_epoch ||
-                record.sequence != next_drain_sequence_ ||
-                record.sequence ==
-                    (std::numeric_limits<std::uint64_t>::max)()) {
-                IncrementOrFatal(
+            if (record.transport_epoch != stage_.cutoff().transport_epoch) {
+                IncrementDiagnostic(
                     diagnostics.stage_counters().sequence_errors);
-                Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::
+                        InputTransportEpochChanged,
+                    AbsoluteJudgementFatalReason::TransportEpochLost,
+                    {stage_.cutoff().transport_epoch,
+                     record.transport_epoch});
             }
-            IncrementOrFatal(
+            if (record.sequence != next_drain_sequence_) {
+                IncrementDiagnostic(
+                    diagnostics.stage_counters().sequence_errors);
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::
+                        TransportSequenceDiscontinuous,
+                    AbsoluteJudgementFatalReason::TransportSequenceError,
+                    {next_drain_sequence_, record.sequence});
+            }
+            if (record.sequence ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::SequenceExhausted,
+                    AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                    {record.sequence});
+            }
+            IncrementDiagnostic(
                 diagnostics.stage_counters().transport_records_drained);
             const auto rising = static_cast<std::uint64_t>(
                 std::popcount(record.rising));
             const auto falling = static_cast<std::uint64_t>(
                 std::popcount(record.falling));
             auto& counters = diagnostics.stage_counters();
-            if (rising > (std::numeric_limits<std::uint64_t>::max)() -
-                    counters.transport_rising_controls ||
-                falling > (std::numeric_limits<std::uint64_t>::max)() -
-                    counters.transport_falling_controls) {
-                Fatal(
-                    AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-            }
-            counters.transport_rising_controls += rising;
-            counters.transport_falling_controls += falling;
+            counters.transport_rising_controls = rising <=
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        counters.transport_rising_controls
+                ? counters.transport_rising_controls + rising
+                : (std::numeric_limits<std::uint64_t>::max)();
+            counters.transport_falling_controls = falling <=
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                        counters.transport_falling_controls
+                ? counters.transport_falling_controls + falling
+                : (std::numeric_limits<std::uint64_t>::max)();
             AppendUnresolvedOrFatal(record);
             ++next_drain_sequence_;
         }
         const auto first_remaining_sequence =
             status.next_sequence - status.depth;
         if (first_remaining_sequence != next_drain_sequence_) {
-            IncrementOrFatal(
+            IncrementDiagnostic(
                 diagnostics.stage_counters().sequence_errors);
-            Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    TransportSequenceDiscontinuous,
+                AbsoluteJudgementFatalReason::TransportSequenceError,
+                {next_drain_sequence_, first_remaining_sequence});
         }
         diagnostics.ObserveTransportPendingDepth(status.depth);
         if (status.depth != 0 && unresolved_size_ == unresolved_.size()) {
-            Fatal(AbsoluteJudgementFatalReason::RetainedHistoryLost);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::UnresolvedCapacityExhausted,
+                AbsoluteJudgementFatalReason::RetainedHistoryLost,
+                {unresolved_.size(), unresolved_size_});
         }
         if (status.depth == 0) {
             break;
         }
         if (count == 0) {
-            Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::TransportDrainContradiction,
+                AbsoluteJudgementFatalReason::TransportSequenceError,
+                {count, requested, status.depth, status.next_sequence});
         }
     }
 }
@@ -380,19 +486,54 @@ void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
     gc::input::GameplayTransitionCutoff cutoff{};
     if (!gc::input::CaptureGameplayTransitionCutoff(
             stage_.cutoff().stage_entry_qpc, &cutoff)) {
-        Fatal(AbsoluteJudgementFatalReason::TransportEpochLost);
+        const auto status = gc::input::ReadGameplayTransitionStatus();
+        if (status.next_sequence ==
+            (std::numeric_limits<std::uint64_t>::max)()) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::SequenceExhausted,
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                {status.next_sequence});
+        }
+        if (status.eviction_count != stage_.cutoff().eviction_count) {
+            Fatal(
+                AbsoluteJudgementFatalPredicate::TransportEvicted,
+                AbsoluteJudgementFatalReason::TransportEviction,
+                {stage_.cutoff().eviction_count, status.eviction_count});
+        }
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                InputTransportWorkerBecameInactive,
+            AbsoluteJudgementFatalReason::InputCapabilityUnavailable,
+            {status.enabled ? 1u : 0u, status.active ? 1u : 0u});
     }
     const auto& stage_cutoff = stage_.cutoff();
-    if (cutoff.transport_epoch != stage_cutoff.transport_epoch ||
-        cutoff.qpc_frequency != stage_cutoff.qpc_frequency) {
-        Fatal(AbsoluteJudgementFatalReason::TransportEpochLost);
+    if (cutoff.transport_epoch != stage_cutoff.transport_epoch) {
+        Fatal(
+            AbsoluteJudgementFatalPredicate::InputTransportEpochChanged,
+            AbsoluteJudgementFatalReason::TransportEpochLost,
+            {stage_cutoff.transport_epoch, cutoff.transport_epoch});
+    }
+    if (cutoff.qpc_frequency != stage_cutoff.qpc_frequency) {
+        Fatal(
+            AbsoluteJudgementFatalPredicate::InputQpcFrequencyChanged,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous,
+            {static_cast<std::uint64_t>(stage_cutoff.qpc_frequency),
+             static_cast<std::uint64_t>(cutoff.qpc_frequency)});
     }
     if (cutoff.eviction_count != stage_cutoff.eviction_count) {
-        Fatal(AbsoluteJudgementFatalReason::TransportEviction);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::TransportEvicted,
+            AbsoluteJudgementFatalReason::TransportEviction,
+            {stage_cutoff.eviction_count, cutoff.eviction_count});
     }
     if (cutoff.first_stage_sequence <
         stage_cutoff.first_stage_sequence) {
-        Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                TransportSequenceDiscontinuous,
+            AbsoluteJudgementFatalReason::TransportSequenceError,
+            {stage_cutoff.first_stage_sequence,
+             cutoff.first_stage_sequence});
     }
 
     auto& diagnostics = JudgementDiagnostics();
@@ -401,22 +542,20 @@ void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
         stage_cutoff.first_stage_sequence;
 
     std::uint64_t already_classified{};
-    const auto add_classified = [this, &already_classified](
+    const auto add_classified = [&already_classified](
                                     const std::uint64_t value) noexcept {
-        if (value > (std::numeric_limits<std::uint64_t>::max)() -
-                already_classified) {
-            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
-        }
-        already_classified += value;
+        already_classified = value <=
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    already_classified
+            ? already_classified + value
+            : (std::numeric_limits<std::uint64_t>::max)();
     };
     add_classified(counters.event_scopes);
     add_classified(counters.late_records);
     add_classified(counters.overload_drops);
-    if (counters.post_cutoff_records < already_classified) {
-        Fatal(AbsoluteJudgementFatalReason::TransportSequenceError);
-    }
-    counters.cleanup_drops =
-        counters.post_cutoff_records - already_classified;
+    counters.cleanup_drops = counters.post_cutoff_records >= already_classified
+        ? counters.post_cutoff_records - already_classified
+        : 0;
 
     unresolved_read_slot_ = 0;
     unresolved_size_ = 0;
@@ -424,13 +563,13 @@ void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
     marked_overload_count_ = 0;
     next_drain_sequence_ = cutoff.first_stage_sequence;
     next_delivery_sequence_ = cutoff.first_stage_sequence;
-    history_.Reset(
+    ApplyHistoryResultOrFatal(history_.Reset(
         cutoff.transport_epoch,
         cutoff.first_stage_sequence,
-        cutoff.held_baseline);
+        cutoff.held_baseline));
     diagnostics.ObserveTransportPendingDepth(0);
     diagnostics.SetPendingWork(0);
-    diagnostics.CheckFinalTransportIdentityOrFatal(FatalSnapshot());
+    diagnostics.CheckFinalTransportIdentity();
 }
 
 JudgementClockStatus
@@ -442,7 +581,7 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
     auto& counters = JudgementDiagnostics().stage_counters();
     while (unresolved_size_ != 0) {
         const auto& record = UnresolvedFront();
-        IncrementOrFatal(counters.exact_clock_reads);
+        IncrementDiagnostic(counters.exact_clock_reads);
         const auto resolved = clock_resolver_.ResolveQpc(record.qpc_ticks);
         last_qpc_ = record.qpc_ticks;
         last_output_frame_ = resolved.output_frame;
@@ -458,7 +597,7 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
         }
         if (resolved.status ==
             JudgementClockStatus::TemporarilyUnavailable) {
-            IncrementOrFatal(counters.unavailable_clock_reads);
+            IncrementDiagnostic(counters.unavailable_clock_reads);
             return JudgementClockStatus::TemporarilyUnavailable;
         }
         if (resolved.status != JudgementClockStatus::Resolved ||
@@ -466,7 +605,7 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
             FailForClockResult(resolved);
         }
 
-        IncrementOrFatal(counters.resolved_clock_reads);
+        IncrementDiagnostic(counters.resolved_clock_reads);
         const JudgementScopeCoordinate coordinate{
             .judgement_seconds = *resolved.judgement_seconds,
             .sequence = record.sequence,
@@ -477,14 +616,22 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
             if (order < 0 ||
                 (order == 0 &&
                  coordinate.sequence <= last_resolved_coordinate_->sequence)) {
-                Fatal(AbsoluteJudgementFatalReason::BackwardTime);
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::
+                        ResolvedCoordinateRegressed,
+                    AbsoluteJudgementFatalReason::BackwardTime,
+                    {last_resolved_coordinate_->sequence,
+                     coordinate.sequence});
             }
         }
         last_resolved_coordinate_ = coordinate;
 
         if (IsBehindCommittedFrontier(coordinate)) {
             if (next_delivery_sequence_ != record.sequence) {
-                Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+                Fatal(
+                    AbsoluteJudgementFatalPredicate::DeliveryOrderViolated,
+                    AbsoluteJudgementFatalReason::CommittedOrderViolation,
+                    {next_delivery_sequence_, record.sequence});
             }
             ApplyHistoryResultOrFatal(history_.AppendStateOnly(
                 {
@@ -493,13 +640,13 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
                 },
                 StateOnlyReason::AcceptedLate));
             next_delivery_sequence_ = record.sequence + 1;
-            IncrementOrFatal(counters.late_records);
+            IncrementDiagnostic(counters.late_records);
         } else {
             ApplyHistoryResultOrFatal(history_.Append({
                 .transport = record,
                 .judgement_seconds = *resolved.judgement_seconds,
             }));
-            IncrementOrFatal(pending_event_count_);
+            IncrementDiagnostic(pending_event_count_);
             JudgementDiagnostics().ObserveEventBacklog(
                 pending_event_count_);
         }
@@ -516,7 +663,7 @@ void JudgementScheduler::TryActivateOrWait(
     if (entry_clock.status == JudgementClockStatus::Pending ||
         entry_clock.status ==
             JudgementClockStatus::TemporarilyUnavailable) {
-        IncrementOrFatal(accumulated_clock_waits_);
+        IncrementDiagnostic(accumulated_clock_waits_);
         return;
     }
     if (entry_clock.status != JudgementClockStatus::Resolved ||
@@ -530,13 +677,23 @@ void JudgementScheduler::TryActivateOrWait(
             std::unexpected(gc::timing::RationalError::Overflow));
     if (!scaled || !ceiling ||
         *ceiling == (std::numeric_limits<std::int64_t>::min)()) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                RationalOperationUnrepresentable,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {1, 60, 1});
     }
     committed_boundary_index_ = *ceiling - 1;
     has_committed_boundary_index_ = true;
     stage_.Activate();
     if (!stage_.active()) {
-        Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {stage_.open() ? 1u : 0u,
+             stage_.bound() ? 1u : 0u,
+             stage_.endpoint_generation(),
+             stage_.active() ? 1u : 0u});
     }
     last_j_ = entry_clock.judgement_seconds;
     JudgementDiagnostics().SeedHeartbeatIndex(committed_boundary_index_);
@@ -575,7 +732,7 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
     }
 
     auto& counters = JudgementDiagnostics().stage_counters();
-    IncrementOrFatal(counters.exact_clock_reads);
+    IncrementDiagnostic(counters.exact_clock_reads);
     last_qpc_ = probe.now_qpc;
     const auto current = clock_resolver_.ResolveQpc(probe.now_qpc);
     last_output_frame_ = current.output_frame;
@@ -588,7 +745,7 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
     }
     if (current.status ==
         JudgementClockStatus::TemporarilyUnavailable) {
-        IncrementOrFatal(counters.unavailable_clock_reads);
+        IncrementDiagnostic(counters.unavailable_clock_reads);
         return;
     }
     if (current.status == JudgementClockStatus::Pending) {
@@ -599,7 +756,7 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
         FailForClockResult(current);
     }
 
-    IncrementOrFatal(counters.resolved_clock_reads);
+    IncrementDiagnostic(counters.resolved_clock_reads);
     SetReadyHorizonOrFatal(*current.judgement_seconds);
 }
 
@@ -607,10 +764,16 @@ void JudgementScheduler::SetReadyHorizonOrFatal(
     const CheckedRational& ready) noexcept {
     if (committed_frontier_ &&
         ready.Compare(committed_frontier_->judgement_seconds) < 0) {
-        Fatal(AbsoluteJudgementFatalReason::ClockDiscontinuous);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointProjectionDiscontinuous,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous,
+            {static_cast<std::uint64_t>(last_qpc_)});
     }
     if (!has_committed_boundary_index_) {
-        Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+            AbsoluteJudgementFatalReason::HeartbeatFrontierViolation,
+            {0, 0, 0, 0});
     }
     MarkReadyOverloadOrFatal(ready);
     const auto scaled = ready.Multiply(60, 1);
@@ -618,21 +781,34 @@ void JudgementScheduler::SetReadyHorizonOrFatal(
         std::expected<std::int64_t, gc::timing::RationalError>(
             std::unexpected(gc::timing::RationalError::Overflow));
     if (!scaled || !target) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                RationalOperationUnrepresentable,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {2, 60, 1});
     }
 
     bool capped{};
     if (*target > committed_boundary_index_) {
         if (committed_boundary_index_ >
             (std::numeric_limits<std::int64_t>::max)() - 3) {
-            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::SequenceExhausted,
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                {static_cast<std::uint64_t>(committed_boundary_index_)});
         }
         capped = *target > committed_boundary_index_ + 3;
     }
     if (capped) {
         outer_horizon_ = BoundaryAt(committed_boundary_index_ + 3);
         if (!outer_horizon_) {
-            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    RationalOperationUnrepresentable,
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                {3,
+                 static_cast<std::uint64_t>(committed_boundary_index_ + 3),
+                 60});
         }
     } else {
         outer_horizon_ = ready;
@@ -644,7 +820,7 @@ void JudgementScheduler::MarkReadyOverloadOrFatal(
     const auto ready_count = history_.CountResolvedAtOrBefore(
         next_delivery_sequence_, ready);
     if (!ready_count) {
-        Fatal(HistoryErrorReason(ready_count.error()));
+        FatalHistoryError(ready_count.error());
     }
     const auto required_marked = *ready_count > kProtectedReadyEventCount
         ? *ready_count - kProtectedReadyEventCount
@@ -657,7 +833,10 @@ void JudgementScheduler::ConsumeMarkedOverloadOrFatal(
     if (marked_overload_count_ == 0 || pending_event_count_ == 0 ||
         event.transport.sequence ==
             (std::numeric_limits<std::uint64_t>::max)()) {
-        Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::DeliveryOrderViolated,
+            AbsoluteJudgementFatalReason::CommittedOrderViolation,
+            {next_delivery_sequence_, event.transport.sequence});
     }
     ApplyHistoryResultOrFatal(history_.ConvertResolvedToStateOnly(
         event.transport.sequence, StateOnlyReason::Overload));
@@ -667,7 +846,7 @@ void JudgementScheduler::ConsumeMarkedOverloadOrFatal(
 
     auto& counters = JudgementDiagnostics().stage_counters();
     const bool first_drop = counters.overload_drops == 0;
-    IncrementOrFatal(counters.overload_drops);
+    IncrementDiagnostic(counters.overload_drops);
     if (first_drop) {
         counters.first_overload_drop_sequence = event.transport.sequence;
     }
@@ -691,14 +870,24 @@ JudgementScheduler::NextScope() noexcept {
     if (!has_committed_boundary_index_ ||
         committed_boundary_index_ ==
             (std::numeric_limits<std::int64_t>::max)()) {
-        Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+            AbsoluteJudgementFatalReason::HeartbeatFrontierViolation,
+            {has_committed_boundary_index_ ? 1u : 0u,
+             static_cast<std::uint64_t>(committed_boundary_index_),
+             outer_event_scope_count_,
+             outer_heartbeat_scope_count_});
     }
 
     for (;;) {
         const auto boundary_index = committed_boundary_index_ + 1;
         const auto boundary = BoundaryAt(boundary_index);
         if (!boundary) {
-            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    RationalOperationUnrepresentable,
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                {4, static_cast<std::uint64_t>(boundary_index), 60});
         }
         const auto* event = history_.FirstResolvedAtOrAfter(
             next_delivery_sequence_);
@@ -718,7 +907,7 @@ JudgementScheduler::NextScope() noexcept {
         }
         if (event_is_next && outer_heartbeat_scope_count_ != 0) {
             if (!outer_event_barrier_recorded_) {
-                IncrementOrFatal(JudgementDiagnostics().stage_counters()
+                IncrementDiagnostic(JudgementDiagnostics().stage_counters()
                                      .event_barrier_deferrals);
                 outer_event_barrier_recorded_ = true;
             }
@@ -729,7 +918,13 @@ JudgementScheduler::NextScope() noexcept {
             ? MakeEventScope(*event, *boundary)
             : MakeHeartbeatScope(*boundary);
         if (!result) {
-            Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::
+                    RationalOperationUnrepresentable,
+                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+                {5,
+                 event_is_next ? 1u : 0u,
+                 static_cast<std::uint64_t>(boundary_index)});
         }
         outstanding_scope_ = *result;
         return result;
@@ -793,7 +988,11 @@ void JudgementScheduler::CommitScope(
     const ScheduledJudgementScope& scope) noexcept {
     if (!outer_prepared_ || !outstanding_scope_ ||
         !SameScope(scope, *outstanding_scope_)) {
-        Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
+            AbsoluteJudgementFatalReason::CommittedOrderViolation,
+            {outer_prepared_ ? 1u : 0u,
+             outstanding_scope_ ? 1u : 0u});
     }
 
     auto& diagnostics = JudgementDiagnostics();
@@ -803,20 +1002,23 @@ void JudgementScheduler::CommitScope(
             scope.event->transport.sequence != scope.coordinate.sequence ||
             scope.event->transport.sequence ==
                 (std::numeric_limits<std::uint64_t>::max)()) {
-            Fatal(AbsoluteJudgementFatalReason::CommittedOrderViolation);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::DeliveryOrderViolated,
+                AbsoluteJudgementFatalReason::CommittedOrderViolation,
+                {next_delivery_sequence_, scope.coordinate.sequence});
         }
         next_delivery_sequence_ = scope.event->transport.sequence + 1;
         --pending_event_count_;
-        IncrementOrFatal(counters.event_scopes);
-        IncrementOrFatal(outer_event_scope_count_);
+        IncrementDiagnostic(counters.event_scopes);
+        IncrementDiagnostic(outer_event_scope_count_);
         if (outer_now_qpc_ >= scope.event->transport.qpc_ticks) {
             diagnostics.ObserveDeliveryDelayQpc(
                 static_cast<std::uint64_t>(
                     outer_now_qpc_ - scope.event->transport.qpc_ticks));
         }
     } else {
-        IncrementOrFatal(counters.heartbeat_scopes);
-        IncrementOrFatal(outer_heartbeat_scope_count_);
+        IncrementDiagnostic(counters.heartbeat_scopes);
+        IncrementDiagnostic(outer_heartbeat_scope_count_);
     }
 
     diagnostics.CheckAndRecordCommittedOrderOrFatal(
@@ -829,14 +1031,17 @@ void JudgementScheduler::CommitScope(
     if (scope.commits_boundary) {
         if (committed_boundary_index_ ==
             (std::numeric_limits<std::int64_t>::max)()) {
-            Fatal(AbsoluteJudgementFatalReason::HeartbeatFrontierViolation);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::SequenceExhausted,
+                AbsoluteJudgementFatalReason::HeartbeatFrontierViolation,
+                {static_cast<std::uint64_t>(committed_boundary_index_)});
         }
         ++committed_boundary_index_;
         diagnostics.CheckAndRecordHeartbeatIndexOrFatal(
             committed_boundary_index_, true, FatalSnapshot());
-        IncrementOrFatal(counters.committed_boundaries);
+        IncrementDiagnostic(counters.committed_boundaries);
         if (scope.kind == JudgementScopeKind::Event) {
-            IncrementOrFatal(counters.equal_boundary_substitutions);
+            IncrementDiagnostic(counters.equal_boundary_substitutions);
         }
     }
 
@@ -844,7 +1049,7 @@ void JudgementScheduler::CommitScope(
         scope.coordinate.judgement_seconds,
         CurrentHistoryPrefixEnd()));
     outstanding_scope_.reset();
-    IncrementOrFatal(outer_scope_count_);
+    IncrementDiagnostic(outer_scope_count_);
     diagnostics.SetPendingWork(PendingWorkCount());
 }
 
@@ -853,23 +1058,32 @@ void JudgementScheduler::FinishOuterCall() noexcept {
         return;
     }
     if (outstanding_scope_) {
-        Fatal(AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
+            AbsoluteJudgementFatalReason::ScopeLifetimeViolation,
+            {outstanding_scope_->coordinate.sequence});
     }
     auto& diagnostics = JudgementDiagnostics();
     if (outer_scope_count_ != 0) {
         auto& counters = diagnostics.stage_counters();
         if (outer_event_scope_count_ == 1 &&
             outer_heartbeat_scope_count_ == 0) {
-            IncrementOrFatal(counters.event_only_batches);
+            IncrementDiagnostic(counters.event_only_batches);
         } else if (outer_event_scope_count_ == 0 &&
                    outer_heartbeat_scope_count_ >= 1 &&
                    outer_heartbeat_scope_count_ <= 3) {
-            IncrementOrFatal(counters.heartbeat_only_batches);
+            IncrementDiagnostic(counters.heartbeat_only_batches);
         } else {
-            IncrementOrFatal(counters.mixed_event_batches);
-            Fatal(AbsoluteJudgementFatalReason::NativeCallCountMismatch);
+            IncrementDiagnostic(counters.mixed_event_batches);
+            Fatal(
+                AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+                AbsoluteJudgementFatalReason::NativeCallCountMismatch,
+                {outer_scope_count_,
+                 outer_event_scope_count_,
+                 outer_heartbeat_scope_count_,
+                 counters.mixed_event_batches});
         }
-        diagnostics.RecordBatch(outer_scope_count_, FatalSnapshot());
+        diagnostics.RecordBatch(outer_scope_count_);
         diagnostics.CheckCompletedBatchInvariantOrFatal(FatalSnapshot());
     }
     diagnostics.ObserveBacklog(PendingWorkCount());
@@ -888,28 +1102,32 @@ void JudgementScheduler::CheckNativeCallInvariantOrFatal() const noexcept {
 }
 
 AbsoluteJudgementScoreDeltas
-JudgementScheduler::CheckAndRecordNativeScoreCountersOrFatal(
+JudgementScheduler::ObserveNativeScoreCounters(
     const AbsoluteJudgementNativeScoreCounters& counters) const noexcept {
-    return JudgementDiagnostics().CheckAndRecordNativeScoreCountersOrFatal(
-        counters, FatalSnapshot());
+    return JudgementDiagnostics().ObserveNativeScoreCounters(counters);
 }
 
-void JudgementScheduler::AccumulateQueryCountersOrFatal(
+void JudgementScheduler::AccumulateQueryCounters(
     const AbsoluteJudgementQueryCounters& counters) const noexcept {
-    JudgementDiagnostics().AccumulateQueryCountersOrFatal(
-        counters, FatalSnapshot());
+    JudgementDiagnostics().AccumulateQueryCounters(counters);
 }
 
-void JudgementScheduler::RecordTransientPublicationsOrFatal(
+void JudgementScheduler::RecordTransientPublications(
     const AbsoluteJudgementTransientPublications& publications)
     const noexcept {
-    JudgementDiagnostics().RecordTransientPublicationsOrFatal(
-        publications, FatalSnapshot());
+    JudgementDiagnostics().RecordTransientPublications(publications);
 }
 
 [[noreturn]] void JudgementScheduler::FailActiveStage(
-    const AbsoluteJudgementFatalReason reason) const noexcept {
-    Fatal(reason);
+    const AbsoluteJudgementFatalPredicate predicate,
+    const AbsoluteJudgementFatalReason category,
+    const std::initializer_list<std::uint64_t> operands) const noexcept {
+    Fatal(predicate, category, operands);
+}
+
+[[noreturn]] void JudgementScheduler::FailHistoryInvariant(
+    const JudgementHistoryError error) const noexcept {
+    FatalHistoryError(error);
 }
 
 std::uint64_t JudgementScheduler::CurrentHistoryPrefixEnd() const noexcept {
@@ -969,7 +1187,10 @@ JudgementScheduler::NativeArguments(
 void JudgementScheduler::AppendUnresolvedOrFatal(
     const gc::input::GameplayTransitionRecord& record) noexcept {
     if (unresolved_size_ == unresolved_.size()) {
-        Fatal(AbsoluteJudgementFatalReason::RetainedHistoryLost);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::UnresolvedCapacityExhausted,
+            AbsoluteJudgementFatalReason::RetainedHistoryLost,
+            {unresolved_.size(), unresolved_size_});
     }
     const auto write_slot =
         (unresolved_read_slot_ + unresolved_size_) % unresolved_.size();
@@ -980,14 +1201,18 @@ void JudgementScheduler::AppendUnresolvedOrFatal(
 gc::input::GameplayTransitionRecord&
 JudgementScheduler::UnresolvedFront() noexcept {
     if (unresolved_size_ == 0) {
-        std::abort();
+        Fatal(
+            AbsoluteJudgementFatalPredicate::UnresolvedFrontEmpty,
+            AbsoluteJudgementFatalReason::RetainedHistoryLost);
     }
     return unresolved_[unresolved_read_slot_];
 }
 
 void JudgementScheduler::PopUnresolved() noexcept {
     if (unresolved_size_ == 0) {
-        Fatal(AbsoluteJudgementFatalReason::RetainedHistoryLost);
+        Fatal(
+            AbsoluteJudgementFatalPredicate::UnresolvedFrontEmpty,
+            AbsoluteJudgementFatalReason::RetainedHistoryLost);
     }
     unresolved_read_slot_ =
         (unresolved_read_slot_ + 1) % unresolved_.size();
@@ -997,32 +1222,272 @@ void JudgementScheduler::PopUnresolved() noexcept {
 void JudgementScheduler::ApplyHistoryResultOrFatal(
     const std::expected<void, JudgementHistoryError>& result) noexcept {
     if (!result) {
-        Fatal(HistoryErrorReason(result.error()));
+        FatalHistoryError(result.error());
     }
 }
 
-void JudgementScheduler::IncrementOrFatal(std::uint64_t& value) noexcept {
-    if (value == (std::numeric_limits<std::uint64_t>::max)()) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+void JudgementScheduler::IncrementDiagnostic(std::uint64_t& value) noexcept {
+    if (value != (std::numeric_limits<std::uint64_t>::max)()) {
+        ++value;
     }
-    ++value;
 }
 
 void JudgementScheduler::FailForClockResult(
     const JudgementClockResult& result) noexcept {
-    if (result.status ==
-        JudgementClockStatus::CheckedArithmeticFailure) {
-        Fatal(AbsoluteJudgementFatalReason::CheckedArithmeticFailure);
+    switch (result.failure) {
+    case JudgementClockFailure::InvalidStageBinding:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {stage_.generation(),
+             static_cast<std::uint64_t>(stage_.cutoff().stage_entry_qpc),
+             clock_resolver_.bound() ? 1u : 0u,
+             stage_.active() ? 1u : 0u});
+    case JudgementClockFailure::EndpointProviderChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointProviderIdentityChanged,
+            AbsoluteJudgementFatalReason::EndpointGenerationChanged);
+    case JudgementClockFailure::EndpointGenerationChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
+            AbsoluteJudgementFatalReason::EndpointGenerationChanged,
+            {stage_.endpoint_generation(), 0});
+    case JudgementClockFailure::PlaybackHistoryObjectChangedBeforeAnchor:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                PlaybackHistoryObjectChangedBeforeAnchor,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous);
+    case JudgementClockFailure::PlaybackHistoryEndpointChangedBeforeAnchor:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                PlaybackHistoryEndpointChangedBeforeAnchor,
+            AbsoluteJudgementFatalReason::EndpointGenerationChanged);
+    case JudgementClockFailure::StageOriginHistoryLost:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::StageOriginHistoryLost,
+            AbsoluteJudgementFatalReason::ClockHistoryLost);
+    case JudgementClockFailure::EndpointProjectionDiscontinuous:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointProjectionDiscontinuous,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous,
+            {static_cast<std::uint64_t>(last_qpc_)});
+    case JudgementClockFailure::InvalidClockRates:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointProjectionDiscontinuous,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous,
+            {static_cast<std::uint64_t>(last_qpc_)});
+    case JudgementClockFailure::RationalOperationUnrepresentable:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                RationalOperationUnrepresentable,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {6, static_cast<std::uint64_t>(last_qpc_), 0});
+    case JudgementClockFailure::None:
+        break;
     }
-    if (result.status ==
-        JudgementClockStatus::HistoryLostBeforeBinding) {
-        Fatal(AbsoluteJudgementFatalReason::ClockHistoryLost);
+    Fatal(
+        AbsoluteJudgementFatalPredicate::FatalRecordInvalid,
+        AbsoluteJudgementFatalReason::NativeStateMismatch,
+        {static_cast<std::uint64_t>(result.status),
+         static_cast<std::uint64_t>(result.failure)});
+}
+
+[[noreturn]] void JudgementScheduler::FatalStageError(
+    const JudgementStageError error,
+    const NativeJudgementIdentity* const observed) const noexcept {
+    const auto actual = observed != nullptr ? *observed
+                                            : NativeJudgementIdentity{};
+    switch (error) {
+    case JudgementStageError::AlreadyOpen:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SemanticStageAlreadyOpen,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {stage_.generation(), stage_.tune_manager()});
+    case JudgementStageError::GenerationExhausted:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::StageGenerationExhausted,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {stage_.generation()});
+    case JudgementStageError::TuneManagerMissing:
+    case JudgementStageError::TuneMissing:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::TuneMissing,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {actual.tune_manager, actual.tune});
+    case JudgementStageError::InputTransportInactiveAtStageEntry:
+        {
+        const auto& status = stage_.failure_transport_status();
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                InputTransportInactiveAtStageEntry,
+            AbsoluteJudgementFatalReason::InputCapabilityUnavailable,
+            {status.enabled ? 1u : 0u, status.active ? 1u : 0u});
+        }
+    case JudgementStageError::InputSequenceExhausted:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SequenceExhausted,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {(std::numeric_limits<std::uint64_t>::max)()});
+    case JudgementStageError::InputQpcFrequencyInvalidAtStageEntry:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                InputQpcFrequencyInvalidAtStageEntry,
+            AbsoluteJudgementFatalReason::InputCapabilityUnavailable,
+            {static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency)});
+    case JudgementStageError::StageNotOpen:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SemanticStageMissingAtOwnedLoop,
+            AbsoluteJudgementFatalReason::NativeStateMismatch);
+    case JudgementStageError::StageGenerationChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScopeGenerationMismatch,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.generation(), actual.stage_generation});
+    case JudgementStageError::TuneManagerChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SemanticStageReceiverMismatch,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.tune_manager(), actual.tune_manager});
+    case JudgementStageError::JudgementStateMissing:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::JudgementStateMissing,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {actual.tune, actual.player});
+    case JudgementStageError::ScoreStateMissing:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScoreStateMissing,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {actual.tune, actual.player});
+    case JudgementStageError::BoosterMissing:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::BoosterMissing,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {0, actual.booster});
+    case JudgementStageError::TuneChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::TuneIdentityChanged,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.native().tune, actual.tune});
+    case JudgementStageError::JudgementStateChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::JudgementStateIdentityChanged,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.native().judgement_state, actual.judgement_state});
+    case JudgementStageError::ScoreStateChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ScoreStateIdentityChanged,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.native().score_state, actual.score_state});
+    case JudgementStageError::BoosterChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::BoosterIdentityChanged,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.native().booster, actual.booster});
+    case JudgementStageError::PlayerChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::PlayerIdentityChanged,
+            AbsoluteJudgementFatalReason::NativeIdentityChanged,
+            {stage_.native().player, actual.player});
+    case JudgementStageError::EndpointGenerationChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
+            AbsoluteJudgementFatalReason::EndpointGenerationChanged,
+            {stage_.endpoint_generation(), 0});
+    case JudgementStageError::QpcFrequencyChanged:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::EndpointQpcFrequencyMismatch,
+            AbsoluteJudgementFatalReason::ClockDiscontinuous,
+            {static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency), 0});
+    case JudgementStageError::HoldSafeFrameNonZero:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HoldSafeFrameNonZero,
+            AbsoluteJudgementFatalReason::SafeFrameChanged,
+            {static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(actual.hold_safe_frame))});
+    case JudgementStageError::SlideHoldSafeFrameNonZero:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SlideHoldSafeFrameNonZero,
+            AbsoluteJudgementFatalReason::SafeFrameChanged,
+            {static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(
+                    actual.slide_hold_safe_frame))});
     }
-    if (result.status ==
-        JudgementClockStatus::UnsupportedContinuity) {
-        Fatal(AbsoluteJudgementFatalReason::ClockDiscontinuous);
+    Fatal(
+        AbsoluteJudgementFatalPredicate::FatalRecordInvalid,
+        AbsoluteJudgementFatalReason::NativeStateMismatch,
+        {static_cast<std::uint64_t>(error)});
+}
+
+[[noreturn]] void JudgementScheduler::FatalHistoryError(
+    const JudgementHistoryError error) const noexcept {
+    const auto& operands = history_.last_failure_operands();
+    switch (error) {
+    case JudgementHistoryError::NotInitialized:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HistoryNotInitialized,
+            AbsoluteJudgementFatalReason::NativeStateMismatch);
+    case JudgementHistoryError::BaselineMaskInvalid:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HistoryBaselineMaskInvalid,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::TransportEpochMismatch:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::InputTransportEpochChanged,
+            AbsoluteJudgementFatalReason::TransportEpochLost,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::SequenceDiscontinuity:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                TransportSequenceDiscontinuous,
+            AbsoluteJudgementFatalReason::TransportSequenceError,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::SequenceExhausted:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::SequenceExhausted,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {operands[0]});
+    case JudgementHistoryError::TransportStateMismatch:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::TransportMaskMismatch,
+            AbsoluteJudgementFatalReason::TransportSequenceError,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::BackwardTime:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ResolvedCoordinateRegressed,
+            AbsoluteJudgementFatalReason::BackwardTime,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::CapacityExhausted:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HistoryCapacityExhausted,
+            AbsoluteJudgementFatalReason::RetainedHistoryLost,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::PrefixBeyondNext:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HistoryPrefixBeyondNext,
+            AbsoluteJudgementFatalReason::RetainedHistoryLost,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::PromisedEntryMissing:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HistoryPromisedEntryMissing,
+            AbsoluteJudgementFatalReason::RetainedHistoryLost,
+            {operands[0], operands[1], operands[2]});
+    case JudgementHistoryError::InvalidControl:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::HistoryControlInvalid,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {operands[0], operands[1]});
+    case JudgementHistoryError::CheckedArithmeticFailure:
+        Fatal(
+            AbsoluteJudgementFatalPredicate::
+                RationalOperationUnrepresentable,
+            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
+            {7, 0, 0});
     }
-    Fatal(AbsoluteJudgementFatalReason::NativeStateMismatch);
+    Fatal(
+        AbsoluteJudgementFatalPredicate::FatalRecordInvalid,
+        AbsoluteJudgementFatalReason::NativeStateMismatch,
+        {static_cast<std::uint64_t>(error)});
 }
 
 AbsoluteJudgementRuntimeSnapshot
@@ -1090,8 +1555,13 @@ AbsoluteJudgementFatalSnapshot JudgementScheduler::FatalSnapshot()
 }
 
 [[noreturn]] void JudgementScheduler::Fatal(
-    const AbsoluteJudgementFatalReason reason) const noexcept {
-    FatalActiveStage(reason, FatalSnapshot());
+    const AbsoluteJudgementFatalPredicate predicate,
+    const AbsoluteJudgementFatalReason category,
+    const std::initializer_list<std::uint64_t> operands) const noexcept {
+    FatalActiveStage(
+        MakeAbsoluteJudgementFatalRecord(
+            predicate, stage_.generation(), category, operands),
+        FatalSnapshot());
 }
 
 } // namespace gc::absolute_judgement

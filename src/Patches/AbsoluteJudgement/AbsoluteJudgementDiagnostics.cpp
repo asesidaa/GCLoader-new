@@ -5,11 +5,13 @@
 #include <plog/Log.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <format>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace gc::absolute_judgement {
 
@@ -20,10 +22,18 @@ constexpr ULONGLONG kSummaryCadenceMilliseconds = 5'000;
 std::uint64_t SubtractMonotonic(
     std::uint64_t value,
     std::uint64_t baseline) noexcept {
-    if (value < baseline) {
-        std::abort();
-    }
-    return value - baseline;
+    return value >= baseline ? value - baseline : 0;
+}
+
+void AddSaturating(std::uint64_t& value,
+                   const std::uint64_t addend) noexcept {
+    value = addend <= (std::numeric_limits<std::uint64_t>::max)() - value
+        ? value + addend
+        : (std::numeric_limits<std::uint64_t>::max)();
+}
+
+void IncrementSaturating(std::uint64_t& value) noexcept {
+    AddSaturating(value, 1);
 }
 
 AbsoluteJudgementQueryCounters SubtractQueries(
@@ -116,13 +126,19 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     result.pending_work = value.pending_work;
     GC_SUBTRACT_COUNTER(recognition_calls);
     GC_SUBTRACT_COUNTER(score_calls);
-#undef GC_SUBTRACT_COUNTER
     result.queries = SubtractQueries(value.queries, baseline.queries);
     result.score_deltas =
         SubtractScoreDeltas(value.score_deltas, baseline.score_deltas);
     result.transient_publications = SubtractTransientPublications(
         value.transient_publications,
         baseline.transient_publications);
+    GC_SUBTRACT_COUNTER(score_observation_read_failures);
+    GC_SUBTRACT_COUNTER(score_counter_regressions);
+    GC_SUBTRACT_COUNTER(transient_publication_read_failures);
+    GC_SUBTRACT_COUNTER(delivery_delay_conversion_failures);
+    GC_SUBTRACT_COUNTER(final_accounting_mismatches);
+    GC_SUBTRACT_COUNTER(diagnostic_saturations);
+#undef GC_SUBTRACT_COUNTER
     return result;
 }
 
@@ -201,12 +217,292 @@ const char* FatalReasonName(
         return "scope_receiver_mismatch";
     case AbsoluteJudgementFatalReason::ScopeLifetimeViolation:
         return "scope_lifetime_violation";
-    case AbsoluteJudgementFatalReason::StorageAllocationFailure:
-        return "storage_allocation_failure";
-    case AbsoluteJudgementFatalReason::UnexpectedInternalException:
-        return "unexpected_internal_exception";
     }
     return "unknown";
+}
+
+struct FatalPredicateDescriptor final {
+    std::string_view name;
+    std::string_view expression;
+    std::array<std::string_view, 8> operand_labels;
+};
+
+FatalPredicateDescriptor FatalPredicateDescriptorFor(
+    const AbsoluteJudgementFatalPredicate predicate) noexcept {
+    using P = AbsoluteJudgementFatalPredicate;
+#define GC_FATAL_PREDICATE(name, expression, ...) \
+    case P::name: return {#name, expression, {__VA_ARGS__}}
+    switch (predicate) {
+    GC_FATAL_PREDICATE(None, "no terminating predicate selected");
+    GC_FATAL_PREDICATE(StartupSitePrefixMismatch,
+        "observed native bytes do not equal the supported prefix",
+        "site", "rva");
+    GC_FATAL_PREDICATE(StartupHookCreateFailed,
+        "hook creation returned failure", "site", "rva");
+    GC_FATAL_PREDICATE(StartupHookEnableFailed,
+        "hook enable returned failure", "site", "rva");
+    GC_FATAL_PREDICATE(StartupHookTransactionInvalid,
+        "install failure stage or site is outside its closed enum",
+        "stage", "site");
+    GC_FATAL_PREDICATE(GameImageAddressInvalid,
+        "checked game-image address derivation or read failed",
+        "base_or_address", "offset_or_rva");
+    GC_FATAL_PREDICATE(GameConfigurationMissing,
+        "native configuration accessor returned null");
+    GC_FATAL_PREDICATE(GameConfigurationReadFailed,
+        "a required native judgement configuration field was unreadable",
+        "config", "field_offset");
+    GC_FATAL_PREDICATE(GlobalStateMissing,
+        "native global-state accessor returned null or unreadable player storage",
+        "global");
+    GC_FATAL_PREDICATE(GameplaySoundManagerMissing,
+        "native sound-manager accessor returned null for the owned gameplay loop");
+    GC_FATAL_PREDICATE(SemanticStageAlreadyOpen,
+        "semantic entry observed while a stage is already open",
+        "open_generation", "entry_receiver");
+    GC_FATAL_PREDICATE(SemanticStageMissingAtOwnedLoop,
+        "owned judgement loop observed while no semantic stage is open");
+    GC_FATAL_PREDICATE(SemanticStageExitWithoutOpen,
+        "semantic exit observed while no semantic stage is open",
+        "exit_receiver");
+    GC_FATAL_PREDICATE(SemanticStageReceiverMismatch,
+        "semantic exit receiver differs from semantic entry receiver",
+        "expected_receiver", "actual_receiver");
+    GC_FATAL_PREDICATE(CleanupWhileSemanticStageOpen,
+        "stage-owned cleanup began while a semantic stage remained open",
+        "stage_generation");
+    GC_FATAL_PREDICATE(StageGenerationExhausted,
+        "next stage generation is zero or UINT64_MAX",
+        "candidate_generation");
+    GC_FATAL_PREDICATE(QueryPerformanceCounterFailed,
+        "QueryPerformanceCounter returned FALSE or a nonpositive tick",
+        "api_result", "qpc_ticks");
+    GC_FATAL_PREDICATE(AudioBackendNotWasapiExclusive,
+        "absolute-time judgement is enabled with a non-WASAPI-exclusive backend",
+        "configured_backend");
+    GC_FATAL_PREDICATE(ExactWasapiRouteUnavailable,
+        "the exact WASAPI timing route was not committed before judgement startup");
+    GC_FATAL_PREDICATE(InputTransportRateNot1000,
+        "configured input transport rate is not exactly 1000 Hz",
+        "configured_rate_hz");
+    GC_FATAL_PREDICATE(InputTransportInactiveAtStageEntry,
+        "stage-entry cutoff reports transport disabled or inactive",
+        "enabled", "active");
+    GC_FATAL_PREDICATE(InputTransportWorkerBecameInactive,
+        "an open stage observed its input worker inactive",
+        "enabled", "active");
+    GC_FATAL_PREDICATE(InputTransportEpochChanged,
+        "transport epoch differs from the stage-entry epoch",
+        "expected_epoch", "actual_epoch");
+    GC_FATAL_PREDICATE(InputQpcFrequencyInvalidAtStageEntry,
+        "stage-entry transport QPC frequency is nonpositive",
+        "qpc_frequency");
+    GC_FATAL_PREDICATE(InputQpcFrequencyChanged,
+        "transport QPC frequency differs from stage entry",
+        "expected_frequency", "actual_frequency");
+    GC_FATAL_PREDICATE(InputManagerMissing,
+        "native input-manager accessor returned null or unreadable storage",
+        "input_manager");
+    GC_FATAL_PREDICATE(BoosterMissing,
+        "native input manager has no readable booster device",
+        "input_manager", "booster");
+    GC_FATAL_PREDICATE(TuneMissing,
+        "owned judgement loop has no readable tune pointer",
+        "slot", "tune");
+    GC_FATAL_PREDICATE(JudgementStateMissing,
+        "native judgement-state collection has no selected player entry",
+        "tune", "player");
+    GC_FATAL_PREDICATE(ScoreStateMissing,
+        "native score-state collection has no selected player entry",
+        "tune", "player");
+    GC_FATAL_PREDICATE(PlayerIndexInvalid,
+        "native player index is unreadable or outside the fixed two-player topology",
+        "player");
+    GC_FATAL_PREDICATE(TuneIdentityChanged,
+        "bound tune pointer changed during one semantic stage",
+        "expected_tune", "actual_tune");
+    GC_FATAL_PREDICATE(JudgementStateIdentityChanged,
+        "bound judgement-state pointer changed during one semantic stage",
+        "expected_state", "actual_state");
+    GC_FATAL_PREDICATE(ScoreStateIdentityChanged,
+        "bound score-state pointer changed during one semantic stage",
+        "expected_state", "actual_state");
+    GC_FATAL_PREDICATE(PlayerIdentityChanged,
+        "bound player index changed during one semantic stage",
+        "expected_player", "actual_player");
+    GC_FATAL_PREDICATE(BoosterIdentityChanged,
+        "bound booster pointer changed during one semantic stage",
+        "expected_booster", "actual_booster");
+    GC_FATAL_PREDICATE(HoldSafeFrameNonZero,
+        "HoldSafeFrame is nonzero; only native default judgement is supported",
+        "value");
+    GC_FATAL_PREDICATE(SlideHoldSafeFrameNonZero,
+        "SlideHoldSafeFrame is nonzero; only native default judgement is supported",
+        "value");
+    GC_FATAL_PREDICATE(EndpointProviderMissingAtStageExit,
+        "semantic stage exited without ever observing an exact endpoint provider");
+    GC_FATAL_PREDICATE(StageOriginUnboundAtStageExit,
+        "semantic stage exited before its absolute origin could bind");
+    GC_FATAL_PREDICATE(EndpointGenerationChanged,
+        "exact endpoint generation changed during one semantic stage",
+        "expected_generation", "actual_generation");
+    GC_FATAL_PREDICATE(EndpointProviderIdentityChanged,
+        "exact endpoint provider object changed during one semantic stage",
+        "expected_provider", "actual_provider");
+    GC_FATAL_PREDICATE(EndpointPublicationSequenceRegressed,
+        "endpoint publication sequence moved backwards",
+        "previous_sequence", "current_sequence");
+    GC_FATAL_PREDICATE(EndpointQpcFrequencyMismatch,
+        "endpoint QPC frequency differs from input QPC frequency",
+        "input_frequency", "endpoint_frequency");
+    GC_FATAL_PREDICATE(EndpointProjectionDiscontinuous,
+        "fixed endpoint projection cannot represent a requested QPC coordinate",
+        "qpc_ticks");
+    GC_FATAL_PREDICATE(StageOriginHistoryLost,
+        "required Play epoch preceding stage entry is no longer retained");
+    GC_FATAL_PREDICATE(PlaybackHistoryObjectChangedBeforeAnchor,
+        "pending playback history provider changed before anchor binding",
+        "expected_provider", "actual_provider");
+    GC_FATAL_PREDICATE(PlaybackHistoryEndpointChangedBeforeAnchor,
+        "pending endpoint generation changed before anchor binding",
+        "expected_generation", "actual_generation");
+    GC_FATAL_PREDICATE(TransportEvicted,
+        "transport eviction count changed during the semantic stage",
+        "entry_evictions", "current_evictions");
+    GC_FATAL_PREDICATE(TransportSequenceDiscontinuous,
+        "transport sequence is not the exact next promised sequence",
+        "expected_sequence", "actual_sequence");
+    GC_FATAL_PREDICATE(TransportMaskMismatch,
+        "transport held/rising/falling masks contradict retained state",
+        "expected_mask", "actual_mask");
+    GC_FATAL_PREDICATE(TransportDrainContradiction,
+        "transport drain result contradicts its published status",
+        "drained", "requested", "depth", "next_sequence");
+    GC_FATAL_PREDICATE(UnresolvedCapacityExhausted,
+        "unresolved fixed-capacity queue has no free slot",
+        "capacity", "pending");
+    GC_FATAL_PREDICATE(HistoryCapacityExhausted,
+        "judgement history fixed-capacity queue has no free slot",
+        "capacity", "retained");
+    GC_FATAL_PREDICATE(SequenceExhausted,
+        "a sequence counter reached UINT64_MAX",
+        "sequence");
+    GC_FATAL_PREDICATE(RationalOperationUnrepresentable,
+        "checked rational or native integer conversion is unrepresentable",
+        "operation", "operand0", "operand1");
+    GC_FATAL_PREDICATE(HistoryNotInitialized,
+        "judgement history was queried before Reset established a baseline");
+    GC_FATAL_PREDICATE(HistoryPrefixBeyondNext,
+        "requested history prefix exceeds the next retained sequence",
+        "prefix_end", "next_sequence");
+    GC_FATAL_PREDICATE(HistoryPromisedEntryMissing,
+        "history promised a retained entry but lookup did not find it",
+        "sequence", "base_sequence", "next_sequence");
+    GC_FATAL_PREDICATE(HistoryBaselineMaskInvalid,
+        "stage-entry held baseline contains unsupported bits",
+        "baseline_mask", "allowed_mask");
+    GC_FATAL_PREDICATE(HistoryControlInvalid,
+        "an internal history query used a control outside the native logical range",
+        "control", "logical_control_count");
+    GC_FATAL_PREDICATE(ResolvedCoordinateRegressed,
+        "resolved timestamp/sequence coordinate is not strictly increasing",
+        "previous_sequence", "current_sequence");
+    GC_FATAL_PREDICATE(DeliveryOrderViolated,
+        "delivery cursor or outstanding scope contradicts the selected event",
+        "expected_sequence", "actual_sequence");
+    GC_FATAL_PREDICATE(UnresolvedFrontEmpty,
+        "unresolved front requested while unresolved size is zero");
+    GC_FATAL_PREDICATE(ScopeAlreadyActive,
+        "a query scope was installed while another scope was active",
+        "active_thread", "installing_thread");
+    GC_FATAL_PREDICATE(ScopeTlsOwnerMismatch,
+        "query scope TLS/global owner differs from the installing game thread",
+        "expected_thread", "actual_thread");
+    GC_FATAL_PREDICATE(ScopeGenerationMismatch,
+        "query hook stage generation differs from the active scope",
+        "expected_generation", "actual_generation");
+    GC_FATAL_PREDICATE(ScopeReceiverMismatch,
+        "query hook receiver differs from the active booster",
+        "expected_receiver", "actual_receiver");
+    GC_FATAL_PREDICATE(ScopeLifetimeMismatch,
+        "scope commit/destruction does not match the outstanding scope");
+    GC_FATAL_PREDICATE(PressedFrameMismatch,
+        "native pressed query requested a frame other than the active native frame",
+        "expected_frame", "requested_frame");
+    GC_FATAL_PREDICATE(DirectionOutputNull,
+        "native direction query supplied a null x or y output",
+        "x", "y");
+    GC_FATAL_PREDICATE(RecognitionScoreTopologyMismatch,
+        "recognition, score, and committed scope counts are not one-to-one",
+        "recognition", "score", "event_scopes", "heartbeat_scopes");
+    GC_FATAL_PREDICATE(CommitTopologyMismatch,
+        "batch/heartbeat/commit topology contradicts scheduler ownership",
+        "value0", "value1", "value2", "value3");
+    GC_FATAL_PREDICATE(FatalRecordInvalid,
+        "fatal emitter supplied None or an out-of-range predicate",
+        "supplied_predicate");
+    GC_FATAL_PREDICATE(StartupFatalPublisherReturned,
+        "startup fatal publisher returned instead of terminating");
+    GC_FATAL_PREDICATE(TerminateProcessReturned,
+        "TerminateProcess returned to the caller",
+        "return_value", "last_error");
+    case P::Count:
+        break;
+    }
+#undef GC_FATAL_PREDICATE
+    return {"invalid_predicate", "predicate value is outside its closed enum", {}};
+}
+
+AbsoluteJudgementFailureClass FailureClassFor(
+    const AbsoluteJudgementFatalPredicate predicate) noexcept {
+    using C = AbsoluteJudgementFailureClass;
+    using P = AbsoluteJudgementFatalPredicate;
+    switch (predicate) {
+    case P::AudioBackendNotWasapiExclusive:
+    case P::ExactWasapiRouteUnavailable:
+    case P::InputTransportRateNot1000:
+    case P::InputTransportInactiveAtStageEntry:
+    case P::InputTransportWorkerBecameInactive:
+    case P::InputTransportEpochChanged:
+    case P::InputQpcFrequencyInvalidAtStageEntry:
+    case P::InputQpcFrequencyChanged:
+    case P::InputManagerMissing:
+    case P::BoosterMissing:
+    case P::HoldSafeFrameNonZero:
+    case P::SlideHoldSafeFrameNonZero:
+    case P::EndpointProviderMissingAtStageExit:
+    case P::StageOriginUnboundAtStageExit:
+    case P::EndpointGenerationChanged:
+    case P::EndpointProviderIdentityChanged:
+    case P::EndpointQpcFrequencyMismatch:
+    case P::EndpointProjectionDiscontinuous:
+    case P::StageOriginHistoryLost:
+    case P::PlaybackHistoryObjectChangedBeforeAnchor:
+    case P::PlaybackHistoryEndpointChangedBeforeAnchor:
+        return C::ExplicitlyUnsupported;
+    case P::StageGenerationExhausted:
+    case P::TransportEvicted:
+    case P::UnresolvedCapacityExhausted:
+    case P::HistoryCapacityExhausted:
+    case P::SequenceExhausted:
+    case P::RationalOperationUnrepresentable:
+        return C::ResourceLimit;
+    default:
+        return C::ProvenInternalInvariant;
+    }
+}
+
+std::string_view FailureClassName(
+    const AbsoluteJudgementFailureClass classification) noexcept {
+    switch (classification) {
+    case AbsoluteJudgementFailureClass::ExplicitlyUnsupported:
+        return "explicitly_unsupported";
+    case AbsoluteJudgementFailureClass::ResourceLimit:
+        return "resource_limit";
+    case AbsoluteJudgementFailureClass::ProvenInternalInvariant:
+        return "proven_internal_invariant";
+    }
+    return "invalid_failure_class";
 }
 
 void AppendRational(
@@ -414,6 +710,26 @@ void AppendCounters(
     AppendScoreDeltas(message, prefix, counters.score_deltas);
     AppendTransientPublicationCounts(
         message, prefix, counters.transient_publications);
+    std::format_to(
+        std::back_inserter(message),
+        " {}score_observation_read_failures={}"
+        " {}score_counter_regressions={}"
+        " {}transient_publication_read_failures={}"
+        " {}delivery_delay_conversion_failures={}"
+        " {}final_accounting_mismatches={}"
+        " {}diagnostic_saturations={}",
+        prefix,
+        counters.score_observation_read_failures,
+        prefix,
+        counters.score_counter_regressions,
+        prefix,
+        counters.transient_publication_read_failures,
+        prefix,
+        counters.delivery_delay_conversion_failures,
+        prefix,
+        counters.final_accounting_mismatches,
+        prefix,
+        counters.diagnostic_saturations);
 }
 
 void AppendRuntime(
@@ -453,6 +769,31 @@ void AppendRuntime(
 
 } // namespace
 
+AbsoluteJudgementFatalRecord MakeAbsoluteJudgementFatalRecord(
+    const AbsoluteJudgementFatalPredicate predicate,
+    const std::uint64_t stage_generation,
+    const AbsoluteJudgementFatalReason category,
+    const std::initializer_list<std::uint64_t> operands) noexcept {
+    AbsoluteJudgementFatalRecord record{
+        .predicate = predicate,
+        .classification = FailureClassFor(predicate),
+        .stage_generation = stage_generation,
+        .category = category,
+    };
+    for (const auto operand : operands) {
+        if (record.operand_count == record.operands.size()) {
+            break;
+        }
+        record.operands[record.operand_count++] = operand;
+    }
+    return record;
+}
+
+std::string_view AbsoluteJudgementFatalPredicateName(
+    const AbsoluteJudgementFatalPredicate predicate) noexcept {
+    return FatalPredicateDescriptorFor(predicate).name;
+}
+
 AbsoluteJudgementDiagnostics& JudgementDiagnostics() noexcept {
     static AbsoluteJudgementDiagnostics diagnostics;
     return diagnostics;
@@ -473,14 +814,8 @@ void AbsoluteJudgementDiagnostics::ObserveTransportPendingDepth(
 }
 
 void AbsoluteJudgementDiagnostics::RecordBatch(
-    const std::uint64_t size,
-    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
-    if (stage_.batches == (std::numeric_limits<std::uint64_t>::max)()) {
-        FatalActiveStage(
-            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
-            snapshot);
-    }
-    ++stage_.batches;
+    const std::uint64_t size) noexcept {
+    IncrementSaturating(stage_.batches);
     stage_.maximum_batch = (std::max)(stage_.maximum_batch, size);
     interval_maxima_.batch = (std::max)(interval_maxima_.batch, size);
 }
@@ -559,6 +894,16 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .queries = stage_.queries,
         .score_deltas = stage_.score_deltas,
         .transient_publications = stage_.transient_publications,
+        .score_observation_read_failures =
+            stage_.score_observation_read_failures,
+        .score_counter_regressions = stage_.score_counter_regressions,
+        .transient_publication_read_failures =
+            stage_.transient_publication_read_failures,
+        .delivery_delay_conversion_failures =
+            stage_.delivery_delay_conversion_failures,
+        .final_accounting_mismatches =
+            stage_.final_accounting_mismatches,
+        .diagnostic_saturations = stage_.diagnostic_saturations,
     };
 }
 
@@ -591,8 +936,8 @@ void AbsoluteJudgementDiagnostics::ResetStageState() noexcept {
     last_native_score_ = {};
     has_native_score_ = false;
     recognition_stopped_.store(false, std::memory_order_release);
-    first_fatal_reason_.store(
-        AbsoluteJudgementFatalReason::None,
+    first_fatal_predicate_.store(
+        AbsoluteJudgementFatalPredicate::None,
         std::memory_order_release);
     next_summary_tick_ms_ = GetTickCount64() + kSummaryCadenceMilliseconds;
 }
@@ -643,7 +988,7 @@ void AbsoluteJudgementDiagnostics::LogSemanticStageOpen(
 
 void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
     const AbsoluteJudgementActivationRecord& record) noexcept {
-    ++stage_.absolute_stage_activations;
+    IncrementSaturating(stage_.absolute_stage_activations);
     auto message = std::format(
         "AbsoluteJudgement: absolute-stage-activation stage_generation={}"
         " native_manager={} tune={} judgement_state={} score_state={}"
@@ -706,7 +1051,7 @@ void AbsoluteJudgementDiagnostics::MaybeLogFiveSecondSummary(
 
 void AbsoluteJudgementDiagnostics::LogSemanticStageEnd(
     const AbsoluteJudgementSemanticStageEndRecord& record) noexcept {
-    ++stage_.semantic_stage_ends;
+    IncrementSaturating(stage_.semantic_stage_ends);
     const auto cumulative = SnapshotCounters();
     const auto interval = SnapshotIntervalCounters(cumulative);
     auto message = std::format(
@@ -782,15 +1127,27 @@ void AbsoluteJudgementDiagnostics::CheckNativeCallInvariantOrFatal(
     if (stage_.event_scopes >
         (std::numeric_limits<std::uint64_t>::max)() -
             stage_.heartbeat_scopes) {
-        FatalActiveStage(
-            AbsoluteJudgementFatalReason::NativeCallCountMismatch,
-            snapshot);
+        const bool first = stage_.diagnostic_saturations == 0;
+        IncrementSaturating(stage_.diagnostic_saturations);
+        if (first) {
+            PLOG_WARNING << "AbsoluteJudgement: diagnostic anomaly="
+                            "native_topology_counter_saturated";
+        }
+        return;
     }
     const auto scopes = stage_.event_scopes + stage_.heartbeat_scopes;
     if (stage_.recognition_calls != stage_.score_calls ||
         stage_.recognition_calls != scopes) {
         FatalActiveStage(
-            AbsoluteJudgementFatalReason::NativeCallCountMismatch,
+            MakeAbsoluteJudgementFatalRecord(
+                AbsoluteJudgementFatalPredicate::
+                    RecognitionScoreTopologyMismatch,
+                snapshot.native.stage_generation,
+                AbsoluteJudgementFatalReason::NativeCallCountMismatch,
+                {stage_.recognition_calls,
+                 stage_.score_calls,
+                 stage_.event_scopes,
+                 stage_.heartbeat_scopes}),
             snapshot);
     }
 }
@@ -800,13 +1157,19 @@ void AbsoluteJudgementDiagnostics::CheckCompletedBatchInvariantOrFatal(
     if (stage_.event_scopes != stage_.event_only_batches ||
         stage_.mixed_event_batches != 0) {
         FatalActiveStage(
-            AbsoluteJudgementFatalReason::NativeCallCountMismatch,
+            MakeAbsoluteJudgementFatalRecord(
+                AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+                snapshot.native.stage_generation,
+                AbsoluteJudgementFatalReason::NativeCallCountMismatch,
+                {stage_.event_scopes,
+                 stage_.event_only_batches,
+                 stage_.mixed_event_batches,
+                 stage_.batches}),
             snapshot);
     }
 }
 
-void AbsoluteJudgementDiagnostics::CheckFinalTransportIdentityOrFatal(
-    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
+void AbsoluteJudgementDiagnostics::CheckFinalTransportIdentity() noexcept {
     std::uint64_t classified{};
     const auto add = [&classified](const std::uint64_t value) noexcept {
         if (value > (std::numeric_limits<std::uint64_t>::max)() -
@@ -820,28 +1183,28 @@ void AbsoluteJudgementDiagnostics::CheckFinalTransportIdentityOrFatal(
         !add(stage_.late_records) ||
         !add(stage_.overload_drops) ||
         !add(stage_.cleanup_drops)) {
-        FatalActiveStage(
-            AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
-            snapshot);
+        IncrementSaturating(stage_.diagnostic_saturations);
+        IncrementSaturating(stage_.final_accounting_mismatches);
+        PLOG_WARNING << "AbsoluteJudgement: diagnostic anomaly="
+                        "final_transport_accounting_overflow";
+        return;
     }
     if (stage_.post_cutoff_records != classified) {
-        FatalActiveStage(
-            AbsoluteJudgementFatalReason::TransportSequenceError,
-            snapshot);
+        IncrementSaturating(stage_.final_accounting_mismatches);
+        PLOG_WARNING << std::format(
+            "AbsoluteJudgement: diagnostic anomaly="
+            "final_transport_accounting_mismatch post_cutoff_records={}"
+            " classified_records={}",
+            stage_.post_cutoff_records,
+            classified);
     }
 }
 
-void AbsoluteJudgementDiagnostics::AccumulateQueryCountersOrFatal(
-    const AbsoluteJudgementQueryCounters& counters,
-    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
-    const auto add = [&snapshot](std::uint64_t& total,
-                                 const std::uint64_t value) noexcept {
-        if (value > (std::numeric_limits<std::uint64_t>::max)() - total) {
-            FatalActiveStage(
-                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
-                snapshot);
-        }
-        total += value;
+void AbsoluteJudgementDiagnostics::AccumulateQueryCounters(
+    const AbsoluteJudgementQueryCounters& counters) noexcept {
+    const auto add = [](std::uint64_t& total,
+                        const std::uint64_t value) noexcept {
+        AddSaturating(total, value);
     };
     add(stage_.queries.pressed_calls, counters.pressed_calls);
     add(stage_.queries.pressed_true, counters.pressed_true);
@@ -856,20 +1219,14 @@ void AbsoluteJudgementDiagnostics::AccumulateQueryCountersOrFatal(
     add(stage_.queries.held_age_two_plus, counters.held_age_two_plus);
 }
 
-void AbsoluteJudgementDiagnostics::RecordTransientPublicationsOrFatal(
-    const AbsoluteJudgementTransientPublications& publications,
-    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
-    const auto increment = [&snapshot](std::uint64_t& total,
-                                       const bool published) noexcept {
+void AbsoluteJudgementDiagnostics::RecordTransientPublications(
+    const AbsoluteJudgementTransientPublications& publications) noexcept {
+    const auto increment = [](std::uint64_t& total,
+                              const bool published) noexcept {
         if (!published) {
             return;
         }
-        if (total == (std::numeric_limits<std::uint64_t>::max)()) {
-            FatalActiveStage(
-                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
-                snapshot);
-        }
-        ++total;
+        IncrementSaturating(total);
     };
     increment(
         stage_.transient_publications.arrange, publications.arrange);
@@ -877,6 +1234,21 @@ void AbsoluteJudgementDiagnostics::RecordTransientPublicationsOrFatal(
               publications.left_free_tap);
     increment(stage_.transient_publications.right_free_tap,
               publications.right_free_tap);
+}
+
+void AbsoluteJudgementDiagnostics::RecordScoreObservationReadFailure()
+    noexcept {
+    IncrementSaturating(stage_.score_observation_read_failures);
+}
+
+void AbsoluteJudgementDiagnostics::RecordTransientPublicationReadFailure()
+    noexcept {
+    IncrementSaturating(stage_.transient_publication_read_failures);
+}
+
+void AbsoluteJudgementDiagnostics::RecordDeliveryDelayConversionFailure()
+    noexcept {
+    IncrementSaturating(stage_.delivery_delay_conversion_failures);
 }
 
 void AbsoluteJudgementDiagnostics::CheckAndRecordCommittedOrderOrFatal(
@@ -888,7 +1260,12 @@ void AbsoluteJudgementDiagnostics::CheckAndRecordCommittedOrderOrFatal(
         if (order < 0 ||
             (order == 0 && sequence <= last_committed_sequence_)) {
             FatalActiveStage(
-                AbsoluteJudgementFatalReason::CommittedOrderViolation,
+                MakeAbsoluteJudgementFatalRecord(
+                    AbsoluteJudgementFatalPredicate::
+                        ResolvedCoordinateRegressed,
+                    snapshot.native.stage_generation,
+                    AbsoluteJudgementFatalReason::CommittedOrderViolation,
+                    {last_committed_sequence_, sequence}),
                 snapshot);
         }
     }
@@ -917,7 +1294,14 @@ void AbsoluteJudgementDiagnostics::CheckAndRecordHeartbeatIndexOrFatal(
     }
     if (!valid) {
         FatalActiveStage(
-            AbsoluteJudgementFatalReason::HeartbeatFrontierViolation,
+            MakeAbsoluteJudgementFatalRecord(
+                AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
+                snapshot.native.stage_generation,
+                AbsoluteJudgementFatalReason::HeartbeatFrontierViolation,
+                {static_cast<std::uint64_t>(last_heartbeat_index_),
+                 static_cast<std::uint64_t>(index),
+                 due_boundary ? 1u : 0u,
+                 has_heartbeat_index_ ? 1u : 0u}),
             snapshot);
     }
     last_heartbeat_index_ = index;
@@ -925,18 +1309,19 @@ void AbsoluteJudgementDiagnostics::CheckAndRecordHeartbeatIndexOrFatal(
 }
 
 AbsoluteJudgementScoreDeltas AbsoluteJudgementDiagnostics::
-CheckAndRecordNativeScoreCountersOrFatal(
-    const AbsoluteJudgementNativeScoreCounters& counters,
-    const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
+ObserveNativeScoreCounters(
+    const AbsoluteJudgementNativeScoreCounters& counters) noexcept {
     AbsoluteJudgementScoreDeltas deltas{};
     if (has_native_score_) {
         if (counters.miss < last_native_score_.miss ||
             counters.good < last_native_score_.good ||
             counters.cool < last_native_score_.cool ||
             counters.great < last_native_score_.great) {
-            FatalActiveStage(
-                AbsoluteJudgementFatalReason::ScoreCounterRegression,
-                snapshot);
+            IncrementSaturating(stage_.score_counter_regressions);
+            last_native_score_ = counters;
+            PLOG_WARNING << "AbsoluteJudgement: diagnostic anomaly="
+                            "native_score_counter_regression";
+            return deltas;
         }
         deltas = {
             .miss = counters.miss - last_native_score_.miss,
@@ -953,14 +1338,12 @@ CheckAndRecordNativeScoreCountersOrFatal(
             !can_add(stage_.score_deltas.good, deltas.good) ||
             !can_add(stage_.score_deltas.cool, deltas.cool) ||
             !can_add(stage_.score_deltas.great, deltas.great)) {
-            FatalActiveStage(
-                AbsoluteJudgementFatalReason::CheckedArithmeticFailure,
-                snapshot);
+            IncrementSaturating(stage_.diagnostic_saturations);
         }
-        stage_.score_deltas.miss += deltas.miss;
-        stage_.score_deltas.good += deltas.good;
-        stage_.score_deltas.cool += deltas.cool;
-        stage_.score_deltas.great += deltas.great;
+        AddSaturating(stage_.score_deltas.miss, deltas.miss);
+        AddSaturating(stage_.score_deltas.good, deltas.good);
+        AddSaturating(stage_.score_deltas.cool, deltas.cool);
+        AddSaturating(stage_.score_deltas.great, deltas.great);
     }
     last_native_score_ = counters;
     has_native_score_ = true;
@@ -972,35 +1355,132 @@ bool AbsoluteJudgementDiagnostics::recognition_stopped() const noexcept {
 }
 
 [[noreturn]] void FatalActiveStage(
-    AbsoluteJudgementFatalReason reason,
+    const AbsoluteJudgementFatalRecord& supplied_record,
     const AbsoluteJudgementFatalSnapshot& snapshot) noexcept {
     auto& diagnostics = JudgementDiagnostics();
-    diagnostics.recognition_stopped_.store(true, std::memory_order_release);
-    if (reason == AbsoluteJudgementFatalReason::None) {
-        reason = AbsoluteJudgementFatalReason::UnexpectedInternalException;
+    auto record = supplied_record;
+    const auto supplied_predicate_value =
+        static_cast<std::uint64_t>(record.predicate);
+    if (record.predicate == AbsoluteJudgementFatalPredicate::None ||
+        record.predicate >= AbsoluteJudgementFatalPredicate::Count) {
+        record = MakeAbsoluteJudgementFatalRecord(
+            AbsoluteJudgementFatalPredicate::FatalRecordInvalid,
+            snapshot.native.stage_generation,
+            AbsoluteJudgementFatalReason::NativeStateMismatch,
+            {supplied_predicate_value});
     }
 
-    auto expected = AbsoluteJudgementFatalReason::None;
-    const bool first = diagnostics.first_fatal_reason_.compare_exchange_strong(
+    auto expected = AbsoluteJudgementFatalPredicate::None;
+    const bool first =
+        diagnostics.first_fatal_predicate_.compare_exchange_strong(
         expected,
-        reason,
+        record.predicate,
         std::memory_order_acq_rel,
         std::memory_order_acquire);
-    if (!first) {
-        static_cast<void>(
-            WaitForSingleObject(GetCurrentProcess(), INFINITE));
+    diagnostics.recognition_stopped_.store(true, std::memory_order_release);
+
+    const auto terminate_after_log = []() noexcept -> void {
+        SetLastError(ERROR_SUCCESS);
+        const auto terminated = TerminateProcess(GetCurrentProcess(), 0xA7);
+        const auto last_error = GetLastError();
+        std::array<char, 512> emergency{};
+        const auto result = std::format_to_n(
+            emergency.data(),
+            emergency.size() - 1,
+            "AbsoluteJudgement: emergency-fatal predicate_id={}"
+            " predicate=TerminateProcessReturned"
+            " expression=TerminateProcess_returned_to_caller"
+            " return_value={} last_error={}",
+            static_cast<unsigned>(
+                AbsoluteJudgementFatalPredicate::TerminateProcessReturned),
+            terminated,
+            last_error);
+        const auto size = (std::min)(
+            static_cast<std::size_t>(result.size), emergency.size() - 1);
+        emergency[size] = '\0';
+        PLOG_FATAL << std::string_view(emergency.data(), size);
+        gc::session_log::FlushActiveProcessLog();
         RaiseFailFastException(nullptr, nullptr, 0);
         std::abort();
+    };
+
+    if (!first) {
+        std::array<char, 768> emergency{};
+        const auto descriptor = FatalPredicateDescriptorFor(record.predicate);
+        const auto result = std::format_to_n(
+            emergency.data(),
+            emergency.size() - 1,
+            "AbsoluteJudgement: concurrent-active-stage-fatal"
+            " first_predicate_id={} second_predicate_id={}"
+            " second_predicate={} second_expression={}"
+            " stage_generation={}",
+            static_cast<unsigned>(expected),
+            static_cast<unsigned>(record.predicate),
+            descriptor.name,
+            descriptor.expression,
+            record.stage_generation);
+        const auto size = (std::min)(
+            static_cast<std::size_t>(result.size), emergency.size() - 1);
+        emergency[size] = '\0';
+        PLOG_FATAL << std::string_view(emergency.data(), size);
+        gc::session_log::FlushActiveProcessLog();
+        terminate_after_log();
     }
 
     const auto counters = diagnostics.SnapshotCounters();
-    auto message = std::format(
-        "AbsoluteJudgement: active-stage-fatal reason={} mode={}"
-        " target_fps={} stage_generation={} native_manager={} tune={}"
-        " judgement_state={} score_state={} booster={} player={}"
-        " input_generation={} endpoint_generation={}"
-        " last_anchor_sequence={} recognition_stopped=1",
-        FatalReasonName(reason),
+    const auto descriptor = FatalPredicateDescriptorFor(record.predicate);
+    const auto last_j_present = snapshot.runtime.last_j.has_value();
+    const auto last_j_numerator = last_j_present
+        ? snapshot.runtime.last_j->numerator()
+        : 0;
+    const auto last_j_denominator = last_j_present
+        ? snapshot.runtime.last_j->denominator()
+        : 1;
+    const auto output_present = snapshot.runtime.last_output_frame.has_value();
+    const auto output_numerator = output_present
+        ? snapshot.runtime.last_output_frame->numerator()
+        : 0;
+    const auto output_denominator = output_present
+        ? snapshot.runtime.last_output_frame->denominator()
+        : 1;
+    std::array<char, 8192> message{};
+    const auto formatted = std::format_to_n(
+        message.data(),
+        message.size() - 1,
+        "AbsoluteJudgement: active-stage-fatal"
+        " predicate_id={} predicate={} expression={} class={} category={}"
+        " record_stage_generation={} operand_count={}"
+        " operand0_label={} operand0={} operand1_label={} operand1={}"
+        " operand2_label={} operand2={} operand3_label={} operand3={}"
+        " operand4_label={} operand4={} operand5_label={} operand5={}"
+        " operand6_label={} operand6={} operand7_label={} operand7={}"
+        " mode={} target_fps={} snapshot_stage_generation={}"
+        " native_manager={} tune={} judgement_state={} score_state={}"
+        " booster={} player={} input_generation={} endpoint_generation={}"
+        " last_anchor_sequence={} last_endpoint_position_present={}"
+        " last_endpoint_position={} last_output_frame_present={}"
+        " last_output_frame={}/{} last_qpc={} last_j_present={}"
+        " last_j={}/{} committed_boundary={} pending_work={}"
+        " last_sequence={} held_mask={} game_time_offset_ms={}"
+        " hold_safe_frame={} slide_hold_safe_frame={}"
+        " recognition_calls={} score_calls={} event_scopes={}"
+        " heartbeat_scopes={} post_cutoff_records={} late_records={}"
+        " overload_drops={} cleanup_drops={} recognition_stopped=1",
+        static_cast<unsigned>(record.predicate),
+        descriptor.name,
+        descriptor.expression,
+        FailureClassName(record.classification),
+        FatalReasonName(record.category),
+        record.stage_generation,
+        static_cast<unsigned>(record.operand_count),
+        descriptor.operand_labels[0], record.operands[0],
+        descriptor.operand_labels[1], record.operands[1],
+        descriptor.operand_labels[2], record.operands[2],
+        descriptor.operand_labels[3], record.operands[3],
+        descriptor.operand_labels[4], record.operands[4],
+        descriptor.operand_labels[5], record.operands[5],
+        descriptor.operand_labels[6], record.operands[6],
+        descriptor.operand_labels[7], record.operands[7],
         snapshot.enabled ? "absolute" : "stock",
         diagnostics.startup_target_fps(),
         snapshot.native.stage_generation,
@@ -1012,15 +1492,59 @@ bool AbsoluteJudgementDiagnostics::recognition_stopped() const noexcept {
         snapshot.native.player,
         snapshot.input_generation,
         snapshot.endpoint_generation,
-        snapshot.last_anchor_sequence);
-    AppendRuntime(message, snapshot.runtime);
-    AppendCounters(message, "", counters);
-    PLOG_FATAL << message;
+        snapshot.last_anchor_sequence,
+        snapshot.runtime.last_endpoint_position.has_value() ? 1 : 0,
+        snapshot.runtime.last_endpoint_position.value_or(0),
+        output_present ? 1 : 0,
+        output_numerator,
+        output_denominator,
+        snapshot.runtime.last_qpc,
+        last_j_present ? 1 : 0,
+        last_j_numerator,
+        last_j_denominator,
+        snapshot.runtime.committed_boundary,
+        snapshot.runtime.pending_work,
+        snapshot.runtime.last_sequence,
+        snapshot.runtime.held_mask,
+        snapshot.runtime.game_time_offset_ms,
+        snapshot.runtime.hold_safe_frame,
+        snapshot.runtime.slide_hold_safe_frame,
+        counters.recognition_calls,
+        counters.score_calls,
+        counters.event_scopes,
+        counters.heartbeat_scopes,
+        counters.post_cutoff_records,
+        counters.late_records,
+        counters.overload_drops,
+        counters.cleanup_drops);
+    const auto message_size = (std::min)(
+        static_cast<std::size_t>(formatted.size), message.size() - 1);
+    message[message_size] = '\0';
+    PLOG_FATAL << std::string_view(message.data(), message_size);
+    if (static_cast<std::size_t>(formatted.size) >= message.size()) {
+        PLOG_FATAL << "AbsoluteJudgement: fatal_record_truncated=1";
+    }
 
     gc::session_log::FlushActiveProcessLog();
-    TerminateProcess(GetCurrentProcess(), 0xA7);
-    RaiseFailFastException(nullptr, nullptr, 0);
-    std::abort();
+    std::array<wchar_t, 512> dialog{};
+    const auto dialog_result = std::format_to_n(
+        dialog.data(),
+        dialog.size() - 1,
+        L"GCLoader stopped absolute-time judgement because a proven "
+        L"contract failed.\n\nPredicate ID: {}\nStage generation: {}\n\n"
+        L"Keep loader-log.txt; it contains the exact predicate, operands, "
+        L"and runtime snapshot.",
+        static_cast<unsigned>(record.predicate),
+        record.stage_generation);
+    const auto dialog_size = (std::min)(
+        static_cast<std::size_t>(dialog_result.size), dialog.size() - 1);
+    dialog[dialog_size] = L'\0';
+    MessageBoxW(
+        nullptr,
+        dialog.data(),
+        L"GCLoader absolute-time judgement fatal error",
+        MB_OK | MB_ICONERROR | MB_SYSTEMMODAL | MB_SETFOREGROUND);
+    terminate_after_log();
 }
 
 } // namespace gc::absolute_judgement

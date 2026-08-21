@@ -1,8 +1,10 @@
 #pragma once
 
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 #include "Patches/AbsoluteJudgement/JudgementScope.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 
 #include <safetyhook.hpp>
@@ -21,9 +23,14 @@ void EndAbsoluteJudgementSemanticStage(
 
 [[noreturn]] void FailAbsoluteJudgementQueryInvariant(
     JudgementQueryInvariant invariant,
-    std::optional<JudgementHistoryError> history_error) noexcept;
+    std::optional<JudgementHistoryError> history_error,
+    std::uint64_t failure_operand0 = 0,
+    std::uint64_t failure_operand1 = 0,
+    std::uint8_t failure_operand_count = 0) noexcept;
 [[noreturn]] void FailAbsoluteJudgementActiveStage(
-    AbsoluteJudgementFatalReason reason) noexcept;
+    AbsoluteJudgementFatalPredicate predicate,
+    AbsoluteJudgementFatalReason category,
+    std::initializer_list<std::uint64_t> operands = {}) noexcept;
 
 // Deliberately not noexcept: allocation while registering a newly observed
 // authoritative playback history must reach the immediate loop-hook boundary.

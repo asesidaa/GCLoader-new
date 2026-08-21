@@ -32,8 +32,22 @@ enum class JudgementClockStatus : std::uint8_t {
     CheckedArithmeticFailure,
 };
 
+enum class JudgementClockFailure : std::uint8_t {
+    None,
+    InvalidStageBinding,
+    EndpointProviderChanged,
+    EndpointGenerationChanged,
+    PlaybackHistoryObjectChangedBeforeAnchor,
+    PlaybackHistoryEndpointChangedBeforeAnchor,
+    StageOriginHistoryLost,
+    EndpointProjectionDiscontinuous,
+    InvalidClockRates,
+    RationalOperationUnrepresentable,
+};
+
 struct JudgementClockResult final {
     JudgementClockStatus status{JudgementClockStatus::Pending};
+    JudgementClockFailure failure{JudgementClockFailure::None};
     std::optional<gc::timing::CheckedRational> output_frame;
     std::optional<gc::timing::CheckedRational> judgement_seconds;
     std::uint64_t endpoint_anchor_sequence{};

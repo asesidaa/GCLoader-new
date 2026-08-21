@@ -14,9 +14,12 @@
 #include "Input/Win32/Win32InputWindow.h"
 #include "Input/Win32/XInputApi.h"
 #include "Input/Win32/XInputController.h"
+#include "Logging/SessionLog.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -25,6 +28,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <expected>
+#include <format>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -48,6 +52,53 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 std::atomic<std::uint32_t> g_published_input{0};
+
+[[noreturn]] void FatalInputPublicationQpc(
+    const BOOL qpc_result,
+    const std::int64_t qpc_ticks) noexcept
+{
+    using gc::absolute_judgement::AbsoluteJudgementFatalPredicate;
+    using gc::absolute_judgement::AbsoluteJudgementFatalPredicateName;
+    constexpr auto predicate =
+        AbsoluteJudgementFatalPredicate::QueryPerformanceCounterFailed;
+    std::array<char, 768> log{};
+    const auto formatted = std::format_to_n(
+        log.data(),
+        log.size() - 1,
+        "AbsoluteJudgement: input-worker-fatal predicate_id={} predicate={}"
+        " expression=QueryPerformanceCounter_returned_FALSE_or_nonpositive"
+        " api_result={} qpc_ticks={}",
+        static_cast<unsigned>(predicate),
+        AbsoluteJudgementFatalPredicateName(predicate),
+        qpc_result,
+        qpc_ticks);
+    const auto size = (std::min)(
+        static_cast<std::size_t>(formatted.size), log.size() - 1);
+    log[size] = '\0';
+    PLOG_FATAL << std::string_view(log.data(), size);
+    gc::session_log::FlushActiveProcessLog();
+    MessageBoxW(
+        nullptr,
+        L"GCLoader stopped because QueryPerformanceCounter failed in the "
+        L"1000 Hz input publisher. Keep loader-log.txt for the exact record.",
+        L"GCLoader absolute-time input fatal error",
+        MB_OK | MB_ICONERROR | MB_SYSTEMMODAL | MB_SETFOREGROUND);
+    SetLastError(ERROR_SUCCESS);
+    const auto terminated = TerminateProcess(GetCurrentProcess(), 0xA7);
+    const auto last_error = GetLastError();
+    PLOG_FATAL << std::format(
+        "AbsoluteJudgement: input-worker-fatal predicate_id={} predicate={}"
+        " return_value={} last_error={}",
+        static_cast<unsigned>(
+            AbsoluteJudgementFatalPredicate::TerminateProcessReturned),
+        AbsoluteJudgementFatalPredicateName(
+            AbsoluteJudgementFatalPredicate::TerminateProcessReturned),
+        terminated,
+        last_error);
+    gc::session_log::FlushActiveProcessLog();
+    RaiseFailFastException(nullptr, nullptr, 0);
+    std::abort();
+}
 
 struct RuntimeState {
     std::mutex lifecycle_mutex;
@@ -289,60 +340,49 @@ public:
 
     void OnRawInput(HRAWINPUT handle) noexcept override
     {
-        try
+        const auto packet = packets_.Read(handle);
+        if (!packet)
         {
-            const auto packet = packets_.Read(handle);
-            if (!packet)
-            {
-                LogPacketError(packet.error());
-                return;
-            }
-
-            const RAWINPUT& input = **packet;
-            const bool foreground = CheckForeground();
-            if (!foreground)
-            {
-                return;
-            }
-
-            if (input.header.dwType == RIM_TYPEKEYBOARD)
-            {
-                const auto transition = DecodeRawKeyboard(input.data.keyboard);
-                if (!transition)
-                {
-                    return;
-                }
-                PLOG_DEBUG << "Input raw keyboard token="
-                           << FormatPhysicalKey(transition->key)
-                           << " pressed=" << transition->pressed;
-                mapper_->ApplyKeyboardTransition(
-                    transition->key, transition->pressed);
-                Publish();
-                return;
-            }
-
-            if (input.header.dwType == RIM_TYPEHID && raw_hid_)
-            {
-                const auto changed = raw_hid_->Apply(
-                    input.header.hDevice, input.data.hid);
-                if (!changed)
-                {
-                    LogPacketError(changed.error());
-                    return;
-                }
-                if (*changed)
-                {
-                    ApplyControllerState(*raw_hid_);
-                }
-            }
+            LogPacketError(packet.error());
+            return;
         }
-        catch (const std::exception& error)
+
+        const RAWINPUT& input = **packet;
+        const bool foreground = CheckForeground();
+        if (!foreground)
         {
-            LogPacketError(error.what());
+            return;
         }
-        catch (...)
+
+        if (input.header.dwType == RIM_TYPEKEYBOARD)
         {
-            LogPacketError("unknown Raw Input exception");
+            const auto transition = DecodeRawKeyboard(input.data.keyboard);
+            if (!transition)
+            {
+                return;
+            }
+            PLOG_DEBUG << "Input raw keyboard token="
+                       << FormatPhysicalKey(transition->key)
+                       << " pressed=" << transition->pressed;
+            mapper_->ApplyKeyboardTransition(
+                transition->key, transition->pressed);
+            Publish();
+            return;
+        }
+
+        if (input.header.dwType == RIM_TYPEHID && raw_hid_)
+        {
+            const auto changed = raw_hid_->Apply(
+                input.header.hDevice, input.data.hid);
+            if (!changed)
+            {
+                LogPacketError(changed.error());
+                return;
+            }
+            if (*changed)
+            {
+                ApplyControllerState(*raw_hid_);
+            }
         }
     }
 
@@ -350,28 +390,16 @@ public:
         WPARAM change,
         HANDLE device) noexcept override
     {
-        try
+        PLOG_INFO << "Input device change="
+                  << (change == GIDC_ARRIVAL ? "arrival" : "removal")
+                  << " handle=" << device;
+        if (xinput_)
         {
-            PLOG_INFO << "Input device change="
-                      << (change == GIDC_ARRIVAL ? "arrival" : "removal")
-                      << " handle=" << device;
-            if (xinput_)
-            {
-                xinput_->RequestReconnectProbe();
-            }
-            if (controller_identity_.backend == ControllerBackend::RawHid)
-            {
-                ReopenRawHid();
-            }
+            xinput_->RequestReconnectProbe();
         }
-        catch (const std::exception& error)
+        if (controller_identity_.backend == ControllerBackend::RawHid)
         {
-            PLOG_ERROR << "Input device-change handling failed: "
-                       << error.what();
-        }
-        catch (...)
-        {
-            PLOG_ERROR << "Input device-change handling failed: unknown exception";
+            ReopenRawHid();
         }
     }
 
@@ -382,45 +410,33 @@ public:
             return;
         }
         shut_down_ = true;
-        try
+        if (mapper_)
         {
-            if (mapper_)
-            {
-                mapper_->ClearAll();
-                Publish();
-            }
-            if (gameplay_epoch_begun_)
-            {
-                gameplay_epoch_begun_ = false;
-                EndGameplayTransitionEpoch();
-            }
-            if (evaluator_)
-            {
-                evaluator_->Clear();
-            }
-            g_published_input.store(0, std::memory_order_release);
-            raw_hid_.reset();
-            xinput_.reset();
-            if (timer_ != nullptr)
-            {
-                CancelWaitableTimer(timer_);
-                CloseHandle(timer_);
-                timer_ = nullptr;
-            }
-            if (window_)
-            {
-                window_->Destroy();
-                window_.reset();
-            }
+            mapper_->ClearAll();
+            Publish();
         }
-        catch (...)
+        if (gameplay_epoch_begun_)
         {
-            if (gameplay_epoch_begun_)
-            {
-                gameplay_epoch_begun_ = false;
-                EndGameplayTransitionEpoch();
-            }
-            g_published_input.store(0, std::memory_order_release);
+            gameplay_epoch_begun_ = false;
+            EndGameplayTransitionEpoch();
+        }
+        if (evaluator_)
+        {
+            evaluator_->Clear();
+        }
+        g_published_input.store(0, std::memory_order_release);
+        raw_hid_.reset();
+        xinput_.reset();
+        if (timer_ != nullptr)
+        {
+            CancelWaitableTimer(timer_);
+            CloseHandle(timer_);
+            timer_ = nullptr;
+        }
+        if (window_)
+        {
+            window_->Destroy();
+            window_.reset();
         }
     }
 
@@ -637,10 +653,15 @@ private:
     {
         const std::uint32_t next = mapper_ ? mapper_->GetInput() : 0;
         LARGE_INTEGER observed_qpc_ticks{};
-        if (absolute_publication_enabled_ &&
-            !QueryPerformanceCounter(&observed_qpc_ticks))
+        if (absolute_publication_enabled_)
         {
-            std::abort();
+            const auto qpc_result =
+                QueryPerformanceCounter(&observed_qpc_ticks);
+            if (!qpc_result || observed_qpc_ticks.QuadPart <= 0)
+            {
+                FatalInputPublicationQpc(
+                    qpc_result, observed_qpc_ticks.QuadPart);
+            }
         }
         const std::uint32_t previous =
             g_published_input.exchange(next, std::memory_order_acq_rel);
@@ -658,24 +679,19 @@ private:
 
     void LogPacketError(std::string_view error) noexcept
     {
-        try
+        const auto now = Clock::now();
+        if (!last_packet_error_ ||
+            now - *last_packet_error_ >= std::chrono::seconds(1))
         {
-            const auto now = Clock::now();
-            if (!last_packet_error_ ||
-                now - *last_packet_error_ >= std::chrono::seconds(1))
-            {
-                PLOG_WARNING << "Input packet/poll error: " << error
-                             << " suppressed=" << suppressed_packet_errors_;
-                last_packet_error_ = now;
-                suppressed_packet_errors_ = 0;
-            }
-            else
-            {
-                ++suppressed_packet_errors_;
-            }
+            PLOG_WARNING << "Input packet/poll error: " << error
+                         << " suppressed=" << suppressed_packet_errors_;
+            last_packet_error_ = now;
+            suppressed_packet_errors_ = 0;
         }
-        catch (...)
+        else if (suppressed_packet_errors_ !=
+                 (std::numeric_limits<std::uint32_t>::max)())
         {
+            ++suppressed_packet_errors_;
         }
     }
 
@@ -708,61 +724,28 @@ private:
 void WorkerMain(RuntimeState& state, HANDLE stop_event) noexcept
 {
     NativeInputWorker worker(stop_event);
-    bool startup_signaled = false;
-    try
+    const auto initialized = worker.Initialize();
+    if (!initialized)
     {
-        const auto initialized = worker.Initialize();
-        if (!initialized)
-        {
-            g_published_input.store(0, std::memory_order_release);
-            SignalStartup(state, false, initialized.error());
-            startup_signaled = true;
-            return;
-        }
-
-        SignalStartup(state, true, {});
-        startup_signaled = true;
-        PLOG_INFO << "Input polling worker started";
-
-        const auto run_result = worker.Run();
-        worker.Shutdown();
         g_published_input.store(0, std::memory_order_release);
-        if (!run_result)
-        {
-            PLOG_ERROR << "Input polling worker stopped unexpectedly: "
-                       << run_result.error();
-        }
-        else
-        {
-            PLOG_INFO << "Input polling worker stopped";
-        }
+        SignalStartup(state, false, initialized.error());
+        return;
     }
-    catch (const std::exception& error)
+
+    SignalStartup(state, true, {});
+    PLOG_INFO << "Input polling worker started";
+
+    const auto run_result = worker.Run();
+    worker.Shutdown();
+    g_published_input.store(0, std::memory_order_release);
+    if (!run_result)
     {
-        worker.Shutdown();
-        g_published_input.store(0, std::memory_order_release);
-        if (!startup_signaled)
-        {
-            SignalStartup(state, false, error.what());
-        }
-        else
-        {
-            PLOG_ERROR << "Input polling worker terminated: " << error.what();
-        }
+        PLOG_ERROR << "Input polling worker stopped unexpectedly: "
+                   << run_result.error();
     }
-    catch (...)
+    else
     {
-        worker.Shutdown();
-        g_published_input.store(0, std::memory_order_release);
-        if (!startup_signaled)
-        {
-            SignalStartup(
-                state, false, "Input worker initialization failed");
-        }
-        else
-        {
-            PLOG_ERROR << "Input polling worker terminated: unknown exception";
-        }
+        PLOG_INFO << "Input polling worker stopped";
     }
 }
 
@@ -795,23 +778,10 @@ InputPollingOpenResult OpenInputPollingRuntime()
         return {false, Win32Failure("CreateEventW(input stop)")};
     }
 
-    try
-    {
-        state.worker = std::thread(
-            [&state, stop_event = state.stop_event] {
-                WorkerMain(state, stop_event);
-            });
-    }
-    catch (const std::exception& error)
-    {
-        CloseHandle(state.stop_event);
-        state.stop_event = nullptr;
-        state.starting = false;
-        state.startup_condition.notify_all();
-        return {
-            false,
-            std::string("Create input worker thread failed: ") + error.what()};
-    }
+    state.worker = std::thread(
+        [&state, stop_event = state.stop_event] {
+            WorkerMain(state, stop_event);
+        });
 
     state.startup_condition.wait(lock, [&state] {
         return state.startup_ready;
@@ -839,42 +809,35 @@ InputPollingOpenResult OpenInputPollingRuntime()
 
 void CloseInputPollingRuntime() noexcept
 {
-    try
+    auto& state = Runtime();
+    std::unique_lock lock(state.lifecycle_mutex);
+    state.startup_condition.wait(lock, [&state] {
+        return !state.starting;
+    });
+    if (state.open_count == 0)
     {
-        auto& state = Runtime();
-        std::unique_lock lock(state.lifecycle_mutex);
-        state.startup_condition.wait(lock, [&state] {
-            return !state.starting;
-        });
-        if (state.open_count == 0)
-        {
-            return;
-        }
-        --state.open_count;
-        if (state.open_count != 0)
-        {
-            return;
-        }
+        return;
+    }
+    --state.open_count;
+    if (state.open_count != 0)
+    {
+        return;
+    }
 
-        if (state.stop_event != nullptr)
-        {
-            SetEvent(state.stop_event);
-        }
-        if (state.worker.joinable())
-        {
-            state.worker.join();
-        }
-        if (state.stop_event != nullptr)
-        {
-            CloseHandle(state.stop_event);
-            state.stop_event = nullptr;
-        }
-        g_published_input.store(0, std::memory_order_release);
-    }
-    catch (...)
+    if (state.stop_event != nullptr)
     {
-        g_published_input.store(0, std::memory_order_release);
+        SetEvent(state.stop_event);
     }
+    if (state.worker.joinable())
+    {
+        state.worker.join();
+    }
+    if (state.stop_event != nullptr)
+    {
+        CloseHandle(state.stop_event);
+        state.stop_event = nullptr;
+    }
+    g_published_input.store(0, std::memory_order_release);
 }
 
 std::uint32_t ReadPublishedInput() noexcept

@@ -185,6 +185,36 @@ acceptance:
   state-only immediately in sequence, and cannot affect a held-state query
   whose query time precedes that `J`.
 
+### Implemented failure-policy static trace
+
+The 2026-08-22 implementation also closes the audit's false-assertion and
+invisible-fatal defects. This is source/build evidence, not gameplay
+acceptance:
+
+- Every terminating emitter now constructs an
+  `AbsoluteJudgementFatalPredicate`; broad reason enums are secondary metadata
+  and cannot independently terminate the process.
+- The predicate descriptor coverage scan matched all 75 terminating enum
+  values plus the `None` sentinel. Each has a stable name, failed-expression
+  text, and fixed operand labels; history retains the actual failed operands
+  before returning an error.
+- Native recognition without its score call, an incomplete outstanding scope,
+  delivery/commit contradictions, unsupported zero-only configuration,
+  endpoint/input continuity loss, and fixed-capacity/core-rational exhaustion
+  remain fatal under their exact predicates.
+- Score/transient diagnostic reads, score regression/deltas, query/stat
+  counter overflow, delivery-delay conversion, diagnostic subtraction, and
+  final transport accounting are nonfatal observations.
+- The first active fatal uses fixed `std::format_to_n` storage, flushes the
+  exact record and snapshot, shows an untimed `MessageBoxW` containing the
+  predicate ID, then terminates. The previous repeated-fatal infinite wait is
+  gone, and every remaining abort is only the logged fallback after an
+  unexpected `TerminateProcess` return.
+- C++ `try`/`catch` recovery was removed from both the active hook and the
+  1000 Hz input runtime. Only native-memory SEH guards remain.
+- The corrected `msvc32-debug` `iDmacDrv32` target linked successfully. No
+  repository test or emulated oracle was created or run.
+
 ## Native lifecycle proof and current contradiction
 
 The Tune state machine establishes the following deterministic facts:

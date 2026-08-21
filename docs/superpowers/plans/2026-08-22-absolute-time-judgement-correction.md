@@ -925,7 +925,7 @@ git commit -m "Reconnect the absolute judgement scheduler"
 - Produces: `AbsoluteJudgementFatalRecord`
 - Produces: visible, flushed, no-timeout active fatal surface
 
-- [ ] **Step 1: Replace broad reasons as primary evidence**
+- [x] **Step 1: Replace broad reasons as primary evidence**
 
 Add:
 
@@ -1039,7 +1039,7 @@ Do not retain `NativeStateMismatch`, `RetainedHistoryLost`, or
 `CheckedArithmeticFailure` as the only logged fact. A broad category may remain
 secondary metadata.
 
-- [ ] **Step 2: Make all observations nonfatal**
+- [x] **Step 2: Make all observations nonfatal**
 
 Change these operations to saturate, invalidate, or log unavailable:
 
@@ -1058,7 +1058,7 @@ None may call `FatalActiveStage`, `FailActiveStage`, `std::abort`, or fail-fast.
 Keep recognition-without-score and incomplete scope commit fatal because native
 state is partially mutated.
 
-- [ ] **Step 3: Remove C++ exception control flow**
+- [x] **Step 3: Remove C++ exception control flow**
 
 Replace `HookLoopGuard`'s `try`, `catch(std::bad_alloc)`, and `catch(...)` with
 one direct call to `DispatchAbsoluteJudgementOuterCall(context)`. Remove
@@ -1069,7 +1069,7 @@ otherwise mark them retired and never emit them.
 Retain native-memory SEH guards because they are ABI probes, not C++ exception
 recovery.
 
-- [ ] **Step 4: Implement the visible active fatal surface**
+- [x] **Step 4: Implement the visible active fatal surface**
 
 The first fatal path must perform, in this order:
 
@@ -1094,7 +1094,7 @@ Use static predicate/operand labels and fixed `std::array<char, N>` /
 Do not allocate `std::string` while trying to report a fatal condition and do
 not add an exception handler around formatting.
 
-- [ ] **Step 5: Give every raw abort a preceding exact log**
+- [x] **Step 5: Give every raw abort a preceding exact log**
 
 Apply the audit's raw-abort inventory to:
 
@@ -1109,7 +1109,7 @@ Apply the audit's raw-abort inventory to:
 
 Diagnostic subtraction must lose its abort entirely.
 
-- [ ] **Step 6: Run the mechanical failure-surface scan**
+- [x] **Step 6: Run the mechanical failure-surface scan**
 
 ```powershell
 rg -n "try\s*\{|catch\s*\(|bad_alloc|UnexpectedInternalException|StorageAllocationFailure" `
@@ -1124,7 +1124,7 @@ For every termination line, record the immediately preceding stable predicate
 and operand construction in the task report. Expected: no C++ catch, no string
 stream, no raw unexplained abort.
 
-- [ ] **Step 7: Compile and commit the failure-policy correction**
+- [x] **Step 7: Compile and commit the failure-policy correction**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -1136,6 +1136,43 @@ git commit -m "Make absolute judgement failures predicate exact"
 ```
 
 Do not stage unrelated input changes.
+
+**Implemented failure-policy record (2026-08-22):**
+
+- The terminating contract is now a predicate record. All 75 terminating
+  predicate values, plus the non-terminating `None` sentinel, have a static
+  name, Boolean-expression description, and fixed operand-label set; failure
+  classification is derived centrally rather
+  than selected by the detecting call site.
+- Broad reason values remain secondary log categories only. History errors
+  were split into capacity, prefix, promised-entry, sequence-exhaustion, and
+  baseline-mask predicates, with the actual failed operands retained at the
+  point of detection.
+- Score reads/regressions/deltas, transient publication reads/counts,
+  query/stat counters, delivery-delay conversion, final accounting, and
+  diagnostic interval subtraction now invalidate, clamp, saturate, or warn.
+  None enters the active fatal path.
+- The active fatal path atomically latches the first exact predicate, blocks
+  further recognition on the game thread, formats into fixed storage, logs and
+  flushes, displays an untimed modal dialog containing the predicate ID, and
+  terminates. A concurrent fatal logs both IDs and terminates without the old
+  infinite wait.
+- Raw-abort inventory is closed: input QPC failure logs
+  `QueryPerformanceCounterFailed`; invalid history baseline returns
+  `HistoryBaselineMaskInvalid`; empty unresolved access logs
+  `UnresolvedFrontEmpty`; TLS rollback/destruction logs exact scope ownership;
+  startup-publisher return logs `StartupFatalPublisherReturned`; install
+  fallthrough logs `StartupHookTransactionInvalid`; and every unexpected
+  `TerminateProcess` return logs `TerminateProcessReturned` before fail-fast.
+- All C++ `try`/`catch` control flow was removed from the absolute judgement
+  path and its 1000 Hz input runtime. Native-memory `__try`/`__except` probes
+  remain because they are ABI guards, not exception recovery.
+- Mechanical scan found no string streams, retired broad exception reasons,
+  hidden process waits, or unexplained aborts in the task scope. The predicate
+  descriptor coverage scan reported `enum_count=76`,
+  `descriptor_count=76`, with no missing or extra entry (`None` included).
+- `msvc32-debug` target `iDmacDrv32` linked successfully after the correction.
+  This is static/build evidence only; it is not gameplay acceptance.
 
 ---
 

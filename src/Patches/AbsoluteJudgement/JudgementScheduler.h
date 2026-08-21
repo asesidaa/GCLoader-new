@@ -55,15 +55,19 @@ public:
     void FinishOuterCall() noexcept;
     void CheckNativeCallInvariantOrFatal() const noexcept;
     [[nodiscard]] AbsoluteJudgementScoreDeltas
-    CheckAndRecordNativeScoreCountersOrFatal(
+    ObserveNativeScoreCounters(
         const AbsoluteJudgementNativeScoreCounters& counters) const noexcept;
-    void AccumulateQueryCountersOrFatal(
+    void AccumulateQueryCounters(
         const AbsoluteJudgementQueryCounters& counters) const noexcept;
-    void RecordTransientPublicationsOrFatal(
+    void RecordTransientPublications(
         const AbsoluteJudgementTransientPublications& publications)
         const noexcept;
     [[noreturn]] void FailActiveStage(
-        AbsoluteJudgementFatalReason reason) const noexcept;
+        AbsoluteJudgementFatalPredicate predicate,
+        AbsoluteJudgementFatalReason category,
+        std::initializer_list<std::uint64_t> operands = {}) const noexcept;
+    [[noreturn]] void FailHistoryInvariant(
+        JudgementHistoryError error) const noexcept;
 
 private:
     static constexpr std::size_t kDrainBatchCapacity = 1024;
@@ -108,10 +112,17 @@ private:
     void PopUnresolved() noexcept;
     void ApplyHistoryResultOrFatal(
         const std::expected<void, JudgementHistoryError>& result) noexcept;
-    void IncrementOrFatal(std::uint64_t& value) noexcept;
+    void IncrementDiagnostic(std::uint64_t& value) noexcept;
     void FailForClockResult(const JudgementClockResult& result) noexcept;
     [[noreturn]] void Fatal(
-        AbsoluteJudgementFatalReason reason) const noexcept;
+        AbsoluteJudgementFatalPredicate predicate,
+        AbsoluteJudgementFatalReason category,
+        std::initializer_list<std::uint64_t> operands = {}) const noexcept;
+    [[noreturn]] void FatalStageError(
+        JudgementStageError error,
+        const NativeJudgementIdentity* observed = nullptr) const noexcept;
+    [[noreturn]] void FatalHistoryError(
+        JudgementHistoryError error) const noexcept;
     [[nodiscard]] AbsoluteJudgementFatalSnapshot FatalSnapshot() const
         noexcept;
     [[nodiscard]] AbsoluteJudgementRuntimeSnapshot RuntimeSnapshot() const

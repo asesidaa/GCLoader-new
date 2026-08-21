@@ -1,9 +1,10 @@
 #include "Patches/AbsoluteJudgement/JudgementScope.h"
 
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
+
 #include <Windows.h>
 
 #include <atomic>
-#include <cstdlib>
 #include <limits>
 
 // Native algebra and ABI-return authority (read-only, completed audit):
@@ -25,6 +26,9 @@ struct ActiveScopeResolution final {
     JudgementQueryDisposition disposition{JudgementQueryDisposition::Inactive};
     JudgementQueryInvariant invariant{JudgementQueryInvariant::None};
     std::optional<JudgementHistoryError> history_error;
+    std::uint64_t failure_operand0{};
+    std::uint64_t failure_operand1{};
+    std::uint8_t failure_operand_count{};
 };
 
 JudgementQueryInvariant MapHistoryError(JudgementHistoryError error) noexcept;
@@ -45,6 +49,9 @@ ActiveScopeResolution ResolveActiveScope(
             .data = data,
             .disposition = JudgementQueryDisposition::InvariantFailure,
             .invariant = JudgementQueryInvariant::ThreadMismatch,
+            .failure_operand0 = data->game_thread_id,
+            .failure_operand1 = GetCurrentThreadId(),
+            .failure_operand_count = 2,
         };
     }
     if (data->expected_booster != receiver)
@@ -53,6 +60,10 @@ ActiveScopeResolution ResolveActiveScope(
             .data = data,
             .disposition = JudgementQueryDisposition::InvariantFailure,
             .invariant = JudgementQueryInvariant::ReceiverMismatch,
+            .failure_operand0 = reinterpret_cast<std::uintptr_t>(
+                data->expected_booster),
+            .failure_operand1 = reinterpret_cast<std::uintptr_t>(receiver),
+            .failure_operand_count = 2,
         };
     }
     if (data->stage_generation != stage_generation)
@@ -61,6 +72,9 @@ ActiveScopeResolution ResolveActiveScope(
             .data = data,
             .disposition = JudgementQueryDisposition::InvariantFailure,
             .invariant = JudgementQueryInvariant::StageMismatch,
+            .failure_operand0 = data->stage_generation,
+            .failure_operand1 = stage_generation,
+            .failure_operand_count = 2,
         };
     }
     if (data->stage_generation == 0 || data->expected_booster == nullptr ||
@@ -146,13 +160,19 @@ JudgementQueryResult<Value> FromResolution(
         .value = {},
         .invariant = resolution.invariant,
         .history_error = resolution.history_error,
+        .failure_operand0 = resolution.failure_operand0,
+        .failure_operand1 = resolution.failure_operand1,
+        .failure_operand_count = resolution.failure_operand_count,
     };
 }
 
 template <typename Value>
 JudgementQueryResult<Value> InvariantResult(
     const JudgementQueryInvariant invariant,
-    const std::optional<JudgementHistoryError> history_error = std::nullopt)
+    const std::optional<JudgementHistoryError> history_error = std::nullopt,
+    const std::uint64_t failure_operand0 = 0,
+    const std::uint64_t failure_operand1 = 0,
+    const std::uint8_t failure_operand_count = 0)
     noexcept
 {
     return JudgementQueryResult<Value>{
@@ -160,6 +180,9 @@ JudgementQueryResult<Value> InvariantResult(
         .value = {},
         .invariant = invariant,
         .history_error = history_error,
+        .failure_operand0 = failure_operand0,
+        .failure_operand1 = failure_operand1,
+        .failure_operand_count = failure_operand_count,
     };
 }
 
@@ -171,6 +194,9 @@ JudgementQueryResult<Value> AnsweredResult(const Value value) noexcept
         .value = value,
         .invariant = JudgementQueryInvariant::None,
         .history_error = std::nullopt,
+        .failure_operand0 = 0,
+        .failure_operand1 = 0,
+        .failure_operand_count = 0,
     };
 }
 
@@ -179,7 +205,9 @@ JudgementQueryInvariant MapHistoryError(
 {
     switch (error)
     {
-    case JudgementHistoryError::HistoryLost:
+    case JudgementHistoryError::CapacityExhausted:
+    case JudgementHistoryError::PrefixBeyondNext:
+    case JudgementHistoryError::PromisedEntryMissing:
         return JudgementQueryInvariant::HistoryLost;
     case JudgementHistoryError::CheckedArithmeticFailure:
         return JudgementQueryInvariant::CheckedArithmeticFailure;
@@ -219,55 +247,46 @@ TranslateRequestedFrame(const JudgementScopeData& data,
     return *query_time;
 }
 
-bool CanIncrement(const std::uint64_t value) noexcept
+void IncrementSaturating(std::uint64_t& value) noexcept
 {
-    return value != (std::numeric_limits<std::uint64_t>::max)();
+    if (value != (std::numeric_limits<std::uint64_t>::max)())
+    {
+        ++value;
+    }
 }
 
-bool RecordBooleanQuery(std::uint64_t& calls,
+void RecordBooleanQuery(std::uint64_t& calls,
                         std::uint64_t& true_results,
                         const bool value) noexcept
 {
-    if (!CanIncrement(calls) || (value && !CanIncrement(true_results)))
-    {
-        return false;
-    }
-    ++calls;
+    IncrementSaturating(calls);
     if (value)
     {
-        ++true_results;
+        IncrementSaturating(true_results);
     }
-    return true;
 }
 
-bool RecordDirectionQuery(AbsoluteJudgementQueryCounters& counters,
+void RecordDirectionQuery(AbsoluteJudgementQueryCounters& counters,
                           const bool nonzero) noexcept
 {
-    return RecordBooleanQuery(
+    RecordBooleanQuery(
         counters.direction_calls, counters.direction_nonzero, nonzero);
 }
 
-bool RecordHeldAgeQuery(AbsoluteJudgementQueryCounters& counters,
+void RecordHeldAgeQuery(AbsoluteJudgementQueryCounters& counters,
                         const int age) noexcept
 {
     const bool age_one = age == 1;
     const bool age_two_plus = age >= 2;
-    if (!CanIncrement(counters.held_age_calls) ||
-        (age_one && !CanIncrement(counters.held_age_one)) ||
-        (age_two_plus && !CanIncrement(counters.held_age_two_plus)))
-    {
-        return false;
-    }
-    ++counters.held_age_calls;
+    IncrementSaturating(counters.held_age_calls);
     if (age_one)
     {
-        ++counters.held_age_one;
+        IncrementSaturating(counters.held_age_one);
     }
     if (age_two_plus)
     {
-        ++counters.held_age_two_plus;
+        IncrementSaturating(counters.held_age_two_plus);
     }
-    return true;
 }
 
 std::expected<bool, JudgementHistoryError> HeldForDirection(
@@ -289,11 +308,18 @@ ScopedJudgementQueryView::ScopedJudgementQueryView(
         data_.game_thread_id == 0)
     {
         install_invariant_ = JudgementQueryInvariant::ThreadMismatch;
+        install_failure_operand0_ = data_.game_thread_id;
+        install_failure_operand1_ = installing_thread_id_;
+        install_failure_operand_count_ = 2;
         return;
     }
     if (g_active_scope != nullptr)
     {
-        install_invariant_ = JudgementQueryInvariant::ScopeLifetimeViolation;
+        install_invariant_ = JudgementQueryInvariant::ScopeAlreadyActive;
+        install_failure_operand0_ =
+            g_active_scope_thread.load(std::memory_order_seq_cst);
+        install_failure_operand1_ = installing_thread_id_;
+        install_failure_operand_count_ = 2;
         return;
     }
 
@@ -304,7 +330,10 @@ ScopedJudgementQueryView::ScopedJudgementQueryView(
             std::memory_order_seq_cst,
             std::memory_order_seq_cst))
     {
-        install_invariant_ = JudgementQueryInvariant::ScopeLifetimeViolation;
+        install_invariant_ = JudgementQueryInvariant::ScopeAlreadyActive;
+        install_failure_operand0_ = inactive;
+        install_failure_operand1_ = installing_thread_id_;
+        install_failure_operand_count_ = 2;
         return;
     }
     g_active_scope = this;
@@ -315,6 +344,9 @@ ScopedJudgementQueryView::ScopedJudgementQueryView(
     {
         install_invariant_ = resolution.invariant;
         install_history_error_ = resolution.history_error;
+        install_failure_operand0_ = resolution.failure_operand0;
+        install_failure_operand1_ = resolution.failure_operand1;
+        install_failure_operand_count_ = resolution.failure_operand_count;
         g_active_scope = nullptr;
         std::uint32_t active = installing_thread_id_;
         if (!g_active_scope_thread.compare_exchange_strong(
@@ -323,7 +355,10 @@ ScopedJudgementQueryView::ScopedJudgementQueryView(
                 std::memory_order_seq_cst,
                 std::memory_order_seq_cst))
         {
-            std::abort();
+            FailAbsoluteJudgementActiveStage(
+                AbsoluteJudgementFatalPredicate::ScopeTlsOwnerMismatch,
+                AbsoluteJudgementFatalReason::ScopeThreadMismatch,
+                {installing_thread_id_, active});
         }
         return;
     }
@@ -338,7 +373,10 @@ ScopedJudgementQueryView::~ScopedJudgementQueryView() noexcept
     }
     if (g_active_scope != this || GetCurrentThreadId() != installing_thread_id_)
     {
-        std::abort();
+        FailAbsoluteJudgementActiveStage(
+            AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
+            AbsoluteJudgementFatalReason::ScopeLifetimeViolation,
+            {installing_thread_id_, GetCurrentThreadId()});
     }
     g_active_scope = nullptr;
 
@@ -349,7 +387,10 @@ ScopedJudgementQueryView::~ScopedJudgementQueryView() noexcept
             std::memory_order_seq_cst,
             std::memory_order_seq_cst))
     {
-        std::abort();
+        FailAbsoluteJudgementActiveStage(
+            AbsoluteJudgementFatalPredicate::ScopeTlsOwnerMismatch,
+            AbsoluteJudgementFatalReason::ScopeThreadMismatch,
+            {installing_thread_id_, active});
     }
 }
 
@@ -360,6 +401,9 @@ JudgementScopeInstallResult ScopedJudgementQueryView::install_result()
         .installed = installed_,
         .invariant = install_invariant_,
         .history_error = install_history_error_,
+        .failure_operand0 = install_failure_operand0_,
+        .failure_operand1 = install_failure_operand1_,
+        .failure_operand_count = install_failure_operand_count_,
     };
 }
 
@@ -388,7 +432,13 @@ JudgementQueryResult<std::uint8_t> QueryJudgementPressed(
     if (requested_frame != active.data->native_frame)
     {
         return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::InvalidFrame);
+            JudgementQueryInvariant::InvalidFrame,
+            std::nullopt,
+            static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(active.data->native_frame)),
+            static_cast<std::uint64_t>(
+                static_cast<std::uint32_t>(requested_frame)),
+            2);
     }
 
     const auto pressed = active.data->history->Pressed(
@@ -400,14 +450,10 @@ JudgementQueryResult<std::uint8_t> QueryJudgementPressed(
     {
         return HistoryFailure<std::uint8_t>(pressed.error());
     }
-    if (!RecordBooleanQuery(
-            active.data->diagnostics->pressed_calls,
-            active.data->diagnostics->pressed_true,
-            *pressed))
-    {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::DiagnosticOverflow);
-    }
+    RecordBooleanQuery(
+        active.data->diagnostics->pressed_calls,
+        active.data->diagnostics->pressed_true,
+        *pressed);
     return AnsweredResult<std::uint8_t>(*pressed ? 1 : 0);
 }
 
@@ -443,13 +489,9 @@ JudgementQueryResult<std::uint8_t> QueryJudgementHeld(
     {
         return HistoryFailure<std::uint8_t>(held.error());
     }
-    if (!RecordBooleanQuery(active.data->diagnostics->held_calls,
-                            active.data->diagnostics->held_true,
-                            *held))
-    {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::DiagnosticOverflow);
-    }
+    RecordBooleanQuery(active.data->diagnostics->held_calls,
+                       active.data->diagnostics->held_true,
+                       *held);
     return AnsweredResult<std::uint8_t>(*held ? 1 : 0);
 }
 
@@ -497,14 +539,10 @@ JudgementQueryResult<std::uint8_t> QueryJudgementReleased(
     {
         return HistoryFailure<std::uint8_t>(released.error());
     }
-    if (!RecordBooleanQuery(
-            active.data->diagnostics->released_calls,
-            active.data->diagnostics->released_true,
-            *released))
-    {
-        return InvariantResult<std::uint8_t>(
-            JudgementQueryInvariant::DiagnosticOverflow);
-    }
+    RecordBooleanQuery(
+        active.data->diagnostics->released_calls,
+        active.data->diagnostics->released_true,
+        *released);
     return AnsweredResult<std::uint8_t>(*released ? 1 : 0);
 }
 
@@ -525,18 +563,18 @@ JudgementQueryResult<int> QueryJudgementDirection(
     if (x == nullptr || y == nullptr)
     {
         return InvariantResult<int>(
-            JudgementQueryInvariant::InvalidDirectionArguments);
+            JudgementQueryInvariant::InvalidDirectionArguments,
+            std::nullopt,
+            reinterpret_cast<std::uintptr_t>(x),
+            reinterpret_cast<std::uintptr_t>(y),
+            2);
     }
     *x = 0.0F;
     *y = 0.0F;
 
     if (booster < 0 || booster > 2)
     {
-        if (!RecordDirectionQuery(*active.data->diagnostics, false))
-        {
-            return InvariantResult<int>(
-                JudgementQueryInvariant::DiagnosticOverflow);
-        }
+        RecordDirectionQuery(*active.data->diagnostics, false);
         return AnsweredResult<int>(static_cast<int>(
             reinterpret_cast<std::uintptr_t>(x)));
     }
@@ -634,11 +672,7 @@ JudgementQueryResult<int> QueryJudgementDirection(
     }
 
     const bool nonzero = result_x != 0.0F || result_y != 0.0F;
-    if (!RecordDirectionQuery(*active.data->diagnostics, nonzero))
-    {
-        return InvariantResult<int>(
-            JudgementQueryInvariant::DiagnosticOverflow);
-    }
+    RecordDirectionQuery(*active.data->diagnostics, nonzero);
     *x = result_x;
     *y = result_y;
     return AnsweredResult<int>(horizontal_result ? 1 : 0);
@@ -671,11 +705,7 @@ JudgementQueryResult<int> QueryJudgementHeldAge(
     {
         return HistoryFailure<int>(age.error());
     }
-    if (!RecordHeldAgeQuery(*active.data->diagnostics, *age))
-    {
-        return InvariantResult<int>(
-            JudgementQueryInvariant::DiagnosticOverflow);
-    }
+    RecordHeldAgeQuery(*active.data->diagnostics, *age);
     return AnsweredResult<int>(*age);
 }
 
