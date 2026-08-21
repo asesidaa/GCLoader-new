@@ -67,6 +67,7 @@ struct AbsoluteJudgementHooks final {
     safetyhook::InlineHook released;
     safetyhook::InlineHook direction;
     safetyhook::InlineHook held_age;
+    safetyhook::InlineHook timing_grade;
 };
 
 inline constexpr std::array<NativeSiteContract, 8> kSiteContracts{{
@@ -406,6 +407,40 @@ template <typename Hook>
     return std::nullopt;
 }
 
+[[nodiscard]] bool InstallTimingGradeDiagnosticHook(
+    const std::uintptr_t executable_base) {
+    std::uintptr_t address{};
+    if (!AddAddress(executable_base, kTimingGradeRva, &address) ||
+        !PrefixMatchesSafe(address, kTimingGradePrefix)) {
+        PLOG_WARNING << std::format(
+            "AbsoluteJudgement: diagnostic-hook feature=timing_grade"
+            " available=0 stage=preflight rva={:#x}",
+            kTimingGradeRva);
+        return false;
+    }
+
+    auto created = safetyhook::InlineHook::create(
+        reinterpret_cast<void*>(address),
+        reinterpret_cast<void*>(&HookTimingGrade),
+        safetyhook::InlineHook::StartDisabled);
+    if (!created) {
+        PLOG_WARNING << std::format(
+            "AbsoluteJudgement: diagnostic-hook feature=timing_grade"
+            " available=0 stage=create rva={:#x}",
+            kTimingGradeRva);
+        return false;
+    }
+    g_hooks.timing_grade = std::move(*created);
+    if (!EnableHook(g_hooks.timing_grade)) {
+        PLOG_WARNING << std::format(
+            "AbsoluteJudgement: diagnostic-hook feature=timing_grade"
+            " available=0 stage=enable rva={:#x}",
+            kTimingGradeRva);
+        return false;
+    }
+    return true;
+}
+
 template <typename Value>
 [[nodiscard]] Value AnswerQueryOrFatal(
     const JudgementQueryResult<Value>& result) noexcept {
@@ -535,6 +570,32 @@ int __fastcall HookHeldAge(
     return AnswerQueryOrFatal(query);
 }
 
+int __fastcall HookTimingGrade(
+    void* const self,
+    void*,
+    const float* const note,
+    const int recognition_ms) noexcept {
+    const bool record = ActiveJudgementScopeData() != nullptr &&
+        note != nullptr;
+    std::int32_t note_target_ms{};
+    if (record) {
+        note_target_ms = static_cast<std::int32_t>(
+            note[kTimingGradeNoteTargetFloatIndex]);
+    }
+
+    const int native_grade =
+        g_active_hooks->timing_grade.unsafe_thiscall<int>(
+            self, note, recognition_ms);
+    if (record) {
+        RecordActiveTimingGradeObservation(
+            reinterpret_cast<std::uintptr_t>(note),
+            recognition_ms,
+            note_target_ms,
+            native_grade);
+    }
+    return native_grade;
+}
+
 void InitializeAbsoluteJudgementOrFatal() noexcept {
     auto& config = ConfigManager::instance();
     const bool enabled = config.GetEnableAbsoluteTimeJudgement();
@@ -557,6 +618,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
             .backend = gc::config::AudioBackendName(backend),
             .exact_provider_capable = false,
             .installed_site_count = 0,
+            .timing_grade_diagnostic_hook = false,
         });
         if (target_fps != 60) {
             PLOG_WARNING
@@ -598,6 +660,8 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
     if (installation) {
         PublishInstallFailure(*installation);
     }
+    const bool timing_grade_diagnostic_hook =
+        InstallTimingGradeDiagnosticHook(executable_base);
 
     JudgementDiagnostics().LogStartup({
         .enabled = true,
@@ -606,6 +670,8 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
         .backend = gc::config::AudioBackendName(backend),
         .exact_provider_capable = true,
         .installed_site_count = 8,
+        .timing_grade_diagnostic_hook =
+            timing_grade_diagnostic_hook,
     });
 }
 

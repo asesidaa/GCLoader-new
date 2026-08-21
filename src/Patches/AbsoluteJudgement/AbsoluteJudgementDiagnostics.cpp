@@ -129,6 +129,12 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
     GC_SUBTRACT_COUNTER(recognition_calls);
     GC_SUBTRACT_COUNTER(score_calls);
     result.queries = SubtractQueries(value.queries, baseline.queries);
+    GC_SUBTRACT_COUNTER(timing_grade_calls);
+    GC_SUBTRACT_COUNTER(timing_grade_records);
+    GC_SUBTRACT_COUNTER(timing_grade_drops);
+    GC_SUBTRACT_COUNTER(raw_message_queue_age_samples);
+    result.maximum_raw_message_queue_age_ms =
+        value.maximum_raw_message_queue_age_ms;
     result.score_deltas =
         SubtractScoreDeltas(value.score_deltas, baseline.score_deltas);
     result.transient_publications = SubtractTransientPublications(
@@ -574,6 +580,40 @@ void AppendQueries(
         counters.held_age_two_plus);
 }
 
+void AppendTimingGradeObservations(
+    std::string& message,
+    const std::string_view prefix,
+    const AbsoluteJudgementTimingGradeObservations& observations) {
+    const auto recorded = (std::min)(
+        observations.size, observations.records.size());
+    std::format_to(
+        std::back_inserter(message),
+        " {}timing_grade_calls={} {}timing_grade_records={}"
+        " {}timing_grade_drops={}",
+        prefix,
+        observations.calls,
+        prefix,
+        recorded,
+        prefix,
+        observations.drops);
+    for (std::size_t index = 0; index < recorded; ++index) {
+        const auto& observation = observations.records[index];
+        std::format_to(
+            std::back_inserter(message),
+            " {}timing_begin index={} note={:#x} recognition_ms={}"
+            " note_target_ms={} signed_error_ms={} native_grade={}"
+            " {}timing_end",
+            prefix,
+            index,
+            observation.note_address,
+            observation.recognition_ms,
+            observation.note_target_ms,
+            observation.signed_error_ms,
+            observation.native_grade,
+            prefix);
+    }
+}
+
 void AppendScoreDeltas(
     std::string& message,
     std::string_view prefix,
@@ -623,6 +663,7 @@ bool HasTransientPublication(
 bool IsScopeTraceRelevant(
     const AbsoluteJudgementScopeRecord& record) noexcept {
     return record.kind == AbsoluteJudgementScopeKind::Event ||
+        record.timing_grades.calls != 0 ||
         HasScoreDelta(record.score_deltas) ||
         HasTransientPublication(record.transient_publications);
 }
@@ -654,13 +695,19 @@ void AppendScopeTraceEntry(
     AppendRational(message, "delivery_delay", record.delivery_delay);
     std::format_to(
         std::back_inserter(message),
+        " raw_message_queue_age_available={}"
+        " raw_message_queue_age_ms={}"
         " held_before={:#x} held_after={:#x} rise_mask={:#x}"
         " fall_mask={:#x}",
+        record.raw_message_queue_age_available ? 1 : 0,
+        record.raw_message_queue_age_ms,
         record.held_before,
         record.held_after,
         record.rising,
         record.falling);
     AppendQueries(message, "scope_", record.queries);
+    AppendTimingGradeObservations(
+        message, "scope_", record.timing_grades);
     AppendScoreDeltas(message, "scope_", record.score_deltas);
     std::format_to(
         std::back_inserter(message),
@@ -778,6 +825,22 @@ void AppendCounters(
         prefix,
         counters.score_calls);
     AppendQueries(message, prefix, counters.queries);
+    std::format_to(
+        std::back_inserter(message),
+        " {}timing_grade_calls={} {}timing_grade_records={}"
+        " {}timing_grade_drops={}"
+        " {}raw_message_queue_age_samples={}"
+        " {}maximum_raw_message_queue_age_ms={}",
+        prefix,
+        counters.timing_grade_calls,
+        prefix,
+        counters.timing_grade_records,
+        prefix,
+        counters.timing_grade_drops,
+        prefix,
+        counters.raw_message_queue_age_samples,
+        prefix,
+        counters.maximum_raw_message_queue_age_ms);
     AppendScoreDeltas(message, prefix, counters.score_deltas);
     AppendTransientPublicationCounts(
         message, prefix, counters.transient_publications);
@@ -968,6 +1031,13 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .recognition_calls = stage_.recognition_calls,
         .score_calls = stage_.score_calls,
         .queries = stage_.queries,
+        .timing_grade_calls = stage_.timing_grade_calls,
+        .timing_grade_records = stage_.timing_grade_records,
+        .timing_grade_drops = stage_.timing_grade_drops,
+        .raw_message_queue_age_samples =
+            stage_.raw_message_queue_age_samples,
+        .maximum_raw_message_queue_age_ms =
+            stage_.maximum_raw_message_queue_age_ms,
         .score_deltas = stage_.score_deltas,
         .transient_publications = stage_.transient_publications,
         .scope_trace_records = stage_.scope_trace_records,
@@ -995,6 +1065,8 @@ AbsoluteJudgementDiagnostics::SnapshotIntervalCounters(
     interval.maximum_event_backlog = interval_maxima_.event_backlog;
     interval.maximum_delivery_delay_qpc =
         interval_maxima_.delivery_delay_qpc;
+    interval.maximum_raw_message_queue_age_ms =
+        interval_maxima_.raw_message_queue_age_ms;
     return interval;
 }
 
@@ -1039,13 +1111,15 @@ void AbsoluteJudgementDiagnostics::LogStartup(
     const AbsoluteJudgementStartupRecord& record) noexcept {
     PLOG_INFO << std::format(
         "AbsoluteJudgement: startup mode={} target_fps={} input_rate_hz={}"
-        " backend={} exact_provider_capable={} rounded_fallback=0 sites={}",
+        " backend={} exact_provider_capable={} rounded_fallback=0 sites={}"
+        " timing_grade_diagnostic_hook={}",
         record.enabled ? "absolute" : "stock",
         record.target_fps,
         record.input_rate_hz,
         record.backend,
         record.exact_provider_capable ? 1 : 0,
-        record.installed_site_count);
+        record.installed_site_count,
+        record.timing_grade_diagnostic_hook ? 1 : 0);
 }
 
 void AbsoluteJudgementDiagnostics::LogSemanticStageOpen(
@@ -1216,6 +1290,26 @@ void AbsoluteJudgementDiagnostics::LogSemanticStageEnd(
 
 void AbsoluteJudgementDiagnostics::ObserveScope(
     const AbsoluteJudgementScopeRecord& record) noexcept {
+    const auto timing_grade_records = static_cast<std::uint64_t>(
+        (std::min)(
+            record.timing_grades.size,
+            record.timing_grades.records.size()));
+    AddSaturating(
+        stage_.timing_grade_calls, record.timing_grades.calls);
+    AddSaturating(stage_.timing_grade_records, timing_grade_records);
+    AddSaturating(
+        stage_.timing_grade_drops, record.timing_grades.drops);
+    if (record.raw_message_queue_age_available) {
+        IncrementSaturating(stage_.raw_message_queue_age_samples);
+        stage_.maximum_raw_message_queue_age_ms = (std::max)(
+            stage_.maximum_raw_message_queue_age_ms,
+            static_cast<std::uint64_t>(
+                record.raw_message_queue_age_ms));
+        interval_maxima_.raw_message_queue_age_ms = (std::max)(
+            interval_maxima_.raw_message_queue_age_ms,
+            static_cast<std::uint64_t>(
+                record.raw_message_queue_age_ms));
+    }
     if (IsScopeTraceRelevant(record)) {
         if (scope_trace_size_ < scope_trace_.size()) {
             scope_trace_[scope_trace_size_] = record;
@@ -1250,12 +1344,18 @@ void AbsoluteJudgementDiagnostics::ObserveScope(
     AppendRational(message, "delivery_delay", record.delivery_delay);
     std::format_to(
         std::back_inserter(message),
+        " raw_message_queue_age_available={}"
+        " raw_message_queue_age_ms={}"
         " held_before={} held_after={} rise_mask={} fall_mask={}",
+        record.raw_message_queue_age_available ? 1 : 0,
+        record.raw_message_queue_age_ms,
         record.held_before,
         record.held_after,
         record.rising,
         record.falling);
     AppendQueries(message, "", record.queries);
+    AppendTimingGradeObservations(
+        message, "", record.timing_grades);
     std::format_to(
         std::back_inserter(message),
         " recognition_completed={} score_completed={}",

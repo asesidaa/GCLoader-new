@@ -527,6 +527,8 @@ private:
         gc::input::GameplayHeldMask rising{};
         gc::input::GameplayHeldMask falling{};
         std::optional<std::int64_t> event_qpc;
+        bool raw_message_queue_age_available{};
+        std::uint32_t raw_message_queue_age_ms{};
         if (scope.kind == JudgementScopeKind::Event) {
             if (scope.event == nullptr) {
                 Fail(
@@ -540,6 +542,10 @@ private:
             rising = scope.event->transport.rising;
             falling = scope.event->transport.falling;
             event_qpc = scope.event->transport.qpc_ticks;
+            raw_message_queue_age_available =
+                scope.event->transport.raw_message_queue_age_available;
+            raw_message_queue_age_ms =
+                scope.event->transport.raw_message_queue_age_ms;
         } else {
             const auto held = scheduler_.history().OrdinaryHeldAt(
                 scope.coordinate.judgement_seconds,
@@ -552,6 +558,7 @@ private:
         }
 
         AbsoluteJudgementQueryCounters scope_queries{};
+        AbsoluteJudgementTimingGradeObservations scope_timing_grades{};
         AbsoluteJudgementScoreDeltas score_deltas{};
         AbsoluteJudgementTransientPublications transient_publications{};
         {
@@ -572,6 +579,7 @@ private:
                     scope.history_prefix_end_sequence,
                 .history = &scheduler_.history(),
                 .diagnostics = &scope_queries,
+                .timing_grades = &scope_timing_grades,
             });
             const auto install = query_view.install_result();
             if (!install.installed) {
@@ -688,11 +696,15 @@ private:
             .native_ms = scope.native_ms,
             .native_frame = scope.native_frame,
             .delivery_delay = delivery_delay,
+            .raw_message_queue_age_available =
+                raw_message_queue_age_available,
+            .raw_message_queue_age_ms = raw_message_queue_age_ms,
             .held_before = held_before,
             .held_after = held_after,
             .rising = rising,
             .falling = falling,
             .queries = scope_queries,
+            .timing_grades = scope_timing_grades,
             .recognition_completed = true,
             .score_completed = true,
             .score_deltas = score_deltas,

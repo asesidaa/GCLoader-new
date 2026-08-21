@@ -412,6 +412,37 @@ const JudgementScopeData* ActiveJudgementScopeData() noexcept
     return g_active_scope == nullptr ? nullptr : &g_active_scope->data_;
 }
 
+void RecordActiveTimingGradeObservation(
+    const std::uintptr_t note_address,
+    const std::int32_t recognition_ms,
+    const std::int32_t note_target_ms,
+    const std::int32_t native_grade) noexcept
+{
+    const auto* active = ActiveJudgementScopeData();
+    if (active == nullptr || active->timing_grades == nullptr)
+    {
+        return;
+    }
+
+    auto& observations = *active->timing_grades;
+    IncrementSaturating(observations.calls);
+    if (observations.size >= observations.records.size())
+    {
+        IncrementSaturating(observations.drops);
+        return;
+    }
+
+    observations.records[observations.size] = {
+        .note_address = note_address,
+        .recognition_ms = recognition_ms,
+        .note_target_ms = note_target_ms,
+        .signed_error_ms = static_cast<std::int64_t>(recognition_ms) -
+            static_cast<std::int64_t>(note_target_ms),
+        .native_grade = native_grade,
+    };
+    ++observations.size;
+}
+
 JudgementQueryResult<std::uint8_t> QueryJudgementPressed(
     const void* receiver,
     const std::uint64_t stage_generation,

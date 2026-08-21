@@ -1615,6 +1615,76 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   must remain bounded, observation-only, and associated with the existing
   per-scope trace.
 
+### 2026-08-22 approved dense-note diagnostic extension
+
+- The completed E-044 evidence proves
+  `GameplayJudgementState_ComputeTimingGrade` at VA `0x5D0E00`, hence RVA
+  `0x1D0E00`, with ABI
+  `int __thiscall(state, float* note, int recognition_ms)`. It converts
+  `note[44]` at byte offset `0xB0` to `note_target_ms`, grades the absolute
+  difference, and returns the native `0..3` result. Its supported-binary
+  prefix was rechecked directly against `game471.exe` SHA-256
+  `FEAD3BD4D0E0985F101965EDC417DD2B96522F8716FF789D84618FEB0D7A2522`:
+  `55 8B EC 83 EC 4C 89 4D CC 8B 45 08 D9 80 B0 00 00 00`.
+- Add one guarded inline hook at that proven function only to observe its
+  already-computed transaction. The hook must call the original function
+  exactly once, return its value unchanged, and record only while a loader
+  judgement scope is active on the calling thread. Prefix, creation, or enable
+  failure makes this diagnostic unavailable and is logged; it is not a new
+  activation fatal and cannot select stock judgement or another fallback.
+- Each scope owns a fixed array of at most 16 timing observations. An entry
+  contains the note address for within-run identity, native recognition ms,
+  native note-target ms, signed `recognition_ms - note_target_ms`, and returned
+  native grade. Total calls, stored entries, and diagnostic-only overflow
+  drops are counted. No note, window, candidate, score, sound, or scheduler
+  state is written.
+- At `WM_INPUT` handler entry, compute Raw Input message-queue age as the
+  wrap-safe unsigned 32-bit difference `GetTickCount() - GetMessageTime()`.
+  Attach it only to a transition published from that Raw Input message.
+  Timer-polled XInput, lifecycle clears, foreground clears, and other
+  non-message publications report it unavailable. This value measures Windows
+  message-queue residence through handler entry; it does not claim USB,
+  keyboard-scan, or total physical-input latency.
+- Extend the existing selective per-scope trace rather than create a second
+  hot-path log stream. Each relevant scope reports Raw Input queue-age
+  availability/value and its bounded native timing-grade observations.
+  Five-second/stage summaries report sample/call/store/drop counts and the
+  maximum observed message-queue age. A timing-grade call itself also makes a
+  heartbeat scope trace-relevant. All counter saturation, observation absence,
+  and trace overflow remain diagnostic-only.
+- Static verification consists of complete Debug and Release builds, the
+  existing PE32/export checks, and a new formally derived x86 cleanup check
+  requiring `HookTimingGrade` to emit `ret 8`. No repository test, replay, or
+  loader-side judgement oracle is added. Only the next 240-FPS game run can
+  establish whether dense non-GREAT results correlate with signed native
+  timing error, Raw Input queue age, or candidate selection.
+
+#### Diagnostic extension implementation and build record
+
+- The timing-grade site remains separate from the eight mandatory judgement
+  hooks. Its prefix/create/enable result is reported by
+  `timing_grade_diagnostic_hook`; failure logs
+  `diagnostic-hook feature=timing_grade available=0` and does not terminate or
+  change the judgement route.
+- Raw Input queue age is captured before packet decoding and foreground work,
+  transported only beside an actual changed snapshot, and copied into the
+  matching event scope. XInput timer publications and synthetic/lifecycle
+  clears retain `available=0`.
+- Per-scope timing storage is fixed at 16 entries with explicit call/store/drop
+  counts. The native return and every native or loader judgement argument are
+  unchanged. No exception handler, fallback, test, replay, or second hot-path
+  log stream was added.
+- Fresh complete `msvc32-debug` and `msvc32-release` preset graphs succeeded.
+  No CTest or repository test target was run. Debug DLL SHA-256 is
+  `C773256A4316BBD131F5AD734FCA071750B02FD0F07CA45921FCF781544AA4CB`;
+  Release DLL SHA-256 is
+  `3620272A4EF2C58F00CCBB5D416110E7F5D889CCE211BBAB5CC167CFB6F3DAD2`.
+- The persistent ABI inspection passed PE32/x86/GUI, the `.def` export
+  contract, semantic and loop hook symbols, and optimized cleanup returns
+  `8/8/8/10h/4/8`. The final `8` is the newly proven
+  `HookTimingGrade -> ret 8` contract. These results are static/build evidence,
+  not game acceptance.
+
 ---
 
 ## Plan self-review coverage

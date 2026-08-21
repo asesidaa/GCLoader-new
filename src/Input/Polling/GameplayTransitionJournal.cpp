@@ -170,7 +170,8 @@ bool CaptureGameplayTransitionCutoff(
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,
     std::uint32_t next_fastio,
-    std::int64_t observed_qpc_ticks) noexcept
+    std::int64_t observed_qpc_ticks,
+    const std::optional<std::uint32_t> raw_message_queue_age_ms) noexcept
 {
     const GameplayHeldMask previous =
         GameplayMaskFromFastIo(previous_fastio);
@@ -209,6 +210,10 @@ void PublishGameplayTransition(
         .transport_epoch = transport.transport_epoch,
         .sequence = transport.next_sequence,
         .qpc_ticks = observed_qpc_ticks,
+        .raw_message_queue_age_available =
+            raw_message_queue_age_ms.has_value(),
+        .raw_message_queue_age_ms =
+            raw_message_queue_age_ms.value_or(0),
         .held_before = previous,
         .held_after = next,
         .rising = static_cast<GameplayHeldMask>(next & ~previous),

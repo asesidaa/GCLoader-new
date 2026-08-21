@@ -67,6 +67,7 @@ struct JudgementScopeData final {
     std::uint64_t history_prefix_end_sequence{};
     const JudgementHistory* history{};
     AbsoluteJudgementQueryCounters* diagnostics{};
+    AbsoluteJudgementTimingGradeObservations* timing_grades{};
 };
 
 class ScopedJudgementQueryView final {
@@ -97,6 +98,11 @@ private:
 };
 
 [[nodiscard]] const JudgementScopeData* ActiveJudgementScopeData() noexcept;
+void RecordActiveTimingGradeObservation(
+    std::uintptr_t note_address,
+    std::int32_t recognition_ms,
+    std::int32_t note_target_ms,
+    std::int32_t native_grade) noexcept;
 
 [[nodiscard]] JudgementQueryResult<std::uint8_t> QueryJudgementPressed(
     const void* receiver,

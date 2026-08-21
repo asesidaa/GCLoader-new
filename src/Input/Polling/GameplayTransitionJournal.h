@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace gc::input {
@@ -13,6 +14,8 @@ struct GameplayTransitionRecord {
     std::uint64_t transport_epoch{};
     std::uint64_t sequence{};
     std::int64_t qpc_ticks{};
+    bool raw_message_queue_age_available{};
+    std::uint32_t raw_message_queue_age_ms{};
     GameplayHeldMask held_before{};
     GameplayHeldMask held_after{};
     GameplayHeldMask rising{};
@@ -49,7 +52,9 @@ bool CaptureGameplayTransitionCutoff(
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,
     std::uint32_t next_fastio,
-    std::int64_t observed_qpc_ticks) noexcept;
+    std::int64_t observed_qpc_ticks,
+    std::optional<std::uint32_t> raw_message_queue_age_ms =
+        std::nullopt) noexcept;
 std::size_t DrainGameplayTransitions(
     std::span<GameplayTransitionRecord> output,
     GameplayTransitionStatus* status) noexcept;

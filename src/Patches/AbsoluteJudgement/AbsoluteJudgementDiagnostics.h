@@ -192,6 +192,25 @@ struct AbsoluteJudgementQueryCounters {
     std::uint64_t held_age_two_plus{};
 };
 
+inline constexpr std::size_t kTimingGradeObservationCapacity = 16;
+
+struct AbsoluteJudgementTimingGradeObservation {
+    std::uintptr_t note_address{};
+    std::int32_t recognition_ms{};
+    std::int32_t note_target_ms{};
+    std::int64_t signed_error_ms{};
+    std::int32_t native_grade{};
+};
+
+struct AbsoluteJudgementTimingGradeObservations {
+    std::uint64_t calls{};
+    std::uint64_t drops{};
+    std::size_t size{};
+    std::array<AbsoluteJudgementTimingGradeObservation,
+               kTimingGradeObservationCapacity>
+        records{};
+};
+
 struct AbsoluteJudgementTransientPublications {
     bool arrange{};
     bool left_free_tap{};
@@ -256,6 +275,11 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t recognition_calls{};
     std::uint64_t score_calls{};
     AbsoluteJudgementQueryCounters queries{};
+    std::uint64_t timing_grade_calls{};
+    std::uint64_t timing_grade_records{};
+    std::uint64_t timing_grade_drops{};
+    std::uint64_t raw_message_queue_age_samples{};
+    std::uint64_t maximum_raw_message_queue_age_ms{};
     AbsoluteJudgementScoreDeltas score_deltas{};
     AbsoluteJudgementTransientPublicationCounts transient_publications{};
     std::uint64_t scope_trace_records{};
@@ -310,6 +334,11 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t recognition_calls{};
     std::uint64_t score_calls{};
     AbsoluteJudgementQueryCounters queries{};
+    std::uint64_t timing_grade_calls{};
+    std::uint64_t timing_grade_records{};
+    std::uint64_t timing_grade_drops{};
+    std::uint64_t raw_message_queue_age_samples{};
+    std::uint64_t maximum_raw_message_queue_age_ms{};
     AbsoluteJudgementScoreDeltas score_deltas{};
     AbsoluteJudgementTransientPublicationCounts transient_publications{};
     std::uint64_t scope_trace_records{};
@@ -344,6 +373,7 @@ struct AbsoluteJudgementStartupRecord {
     std::string_view backend;
     bool exact_provider_capable{};
     std::uint32_t installed_site_count{};
+    bool timing_grade_diagnostic_hook{};
 };
 
 struct AbsoluteJudgementSemanticStageOpenRecord {
@@ -401,11 +431,14 @@ struct AbsoluteJudgementScopeRecord {
     std::int32_t native_frame{};
     gc::timing::CheckedRational delivery_delay =
         gc::timing::CheckedRational::Whole(0);
+    bool raw_message_queue_age_available{};
+    std::uint32_t raw_message_queue_age_ms{};
     gc::input::GameplayHeldMask held_before{};
     gc::input::GameplayHeldMask held_after{};
     gc::input::GameplayHeldMask rising{};
     gc::input::GameplayHeldMask falling{};
     AbsoluteJudgementQueryCounters queries{};
+    AbsoluteJudgementTimingGradeObservations timing_grades{};
     bool recognition_completed{};
     bool score_completed{};
     AbsoluteJudgementScoreDeltas score_deltas{};
@@ -506,6 +539,7 @@ private:
         std::uint64_t backlog{};
         std::uint64_t event_backlog{};
         std::uint64_t delivery_delay_qpc{};
+        std::uint64_t raw_message_queue_age_ms{};
     };
 
     // Diagnostic-only storage. This exceeds the scheduler's maximum number

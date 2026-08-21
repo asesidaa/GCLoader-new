@@ -340,6 +340,8 @@ public:
 
     void OnRawInput(HRAWINPUT handle) noexcept override
     {
+        const std::uint32_t raw_message_queue_age_ms =
+            GetTickCount() - static_cast<DWORD>(GetMessageTime());
         const auto packet = packets_.Read(handle);
         if (!packet)
         {
@@ -366,7 +368,7 @@ public:
                        << " pressed=" << transition->pressed;
             mapper_->ApplyKeyboardTransition(
                 transition->key, transition->pressed);
-            Publish();
+            Publish(raw_message_queue_age_ms);
             return;
         }
 
@@ -381,7 +383,8 @@ public:
             }
             if (*changed)
             {
-                ApplyControllerState(*raw_hid_);
+                ApplyControllerState(
+                    *raw_hid_, raw_message_queue_age_ms);
             }
         }
     }
@@ -617,11 +620,14 @@ private:
         }
     }
 
-    void ApplyControllerState(const ControllerStateView& view)
+    void ApplyControllerState(
+        const ControllerStateView& view,
+        const std::optional<std::uint32_t> raw_message_queue_age_ms =
+            std::nullopt)
     {
         const auto states = evaluator_->Update(view);
         mapper_->ApplyControllerBindingStates(states);
-        Publish();
+        Publish(raw_message_queue_age_ms);
     }
 
     bool CheckForeground()
@@ -649,7 +655,9 @@ private:
         return foreground;
     }
 
-    void Publish()
+    void Publish(
+        const std::optional<std::uint32_t> raw_message_queue_age_ms =
+            std::nullopt)
     {
         const std::uint32_t next = mapper_ ? mapper_->GetInput() : 0;
         LARGE_INTEGER observed_qpc_ticks{};
@@ -670,7 +678,10 @@ private:
             if (absolute_publication_enabled_)
             {
                 PublishGameplayTransition(
-                    previous, next, observed_qpc_ticks.QuadPart);
+                    previous,
+                    next,
+                    observed_qpc_ticks.QuadPart,
+                    raw_message_queue_age_ms);
             }
             PLOG_DEBUG << "Input snapshot fastio=0x" << std::hex << next
                        << std::dec;

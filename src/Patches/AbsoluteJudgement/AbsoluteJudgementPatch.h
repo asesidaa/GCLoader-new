@@ -26,5 +26,10 @@ int __fastcall HookDirection(
     int frame) noexcept;
 int __fastcall HookHeldAge(
     void* self, void*, unsigned int id) noexcept;
+int __fastcall HookTimingGrade(
+    void* self,
+    void*,
+    const float* note,
+    int recognition_ms) noexcept;
 
 } // namespace gc::absolute_judgement

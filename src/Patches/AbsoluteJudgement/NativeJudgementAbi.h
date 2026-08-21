@@ -16,6 +16,7 @@ inline constexpr std::uintptr_t kHeldRva = 0x22DF50;
 inline constexpr std::uintptr_t kReleasedRva = 0x22DD30;
 inline constexpr std::uintptr_t kDirectionRva = 0x22E480;
 inline constexpr std::uintptr_t kHeldAgeRva = 0x22DAA0;
+inline constexpr std::uintptr_t kTimingGradeRva = 0x1D0E00;
 
 inline constexpr std::array<std::uint8_t, 13> kSemanticStageEntryPrefix{
     0x8B, 0x8D, 0x4C, 0xFD, 0xFF, 0xFF, 0xC7,
@@ -48,6 +49,11 @@ inline constexpr std::array<std::uint8_t, 16> kHeldAgePrefix{
     0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x08, 0x89, 0x4D,
     0xF8, 0xC7, 0x45, 0xFC, 0x00, 0x00, 0x00, 0x00,
 };
+inline constexpr std::array<std::uint8_t, 18> kTimingGradePrefix{
+    0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x4C, 0x89, 0x4D,
+    0xCC, 0x8B, 0x45, 0x08, 0xD9, 0x80, 0xB0, 0x00,
+    0x00, 0x00,
+};
 
 inline constexpr std::uintptr_t kLoopTailRva = 0x2402D0;
 inline constexpr std::uintptr_t kRecognitionRva = 0x1D68E0;
@@ -77,6 +83,7 @@ inline constexpr std::size_t kScoreGreatOffset = 132;
 inline constexpr std::size_t kJudgementArrangePublicationOffset = 0xAA;
 inline constexpr std::size_t kJudgementLeftFreeTapPublicationOffset = 0xED;
 inline constexpr std::size_t kJudgementRightFreeTapPublicationOffset = 0xEE;
+inline constexpr std::size_t kTimingGradeNoteTargetFloatIndex = 44;
 inline constexpr int kGameplaySoundGroup = 2;
 
 using RecognitionFn = void(__thiscall*)(void*, int, int);
@@ -86,6 +93,7 @@ using HeldFn = std::uint8_t(__thiscall*)(void*, int, int);
 using ReleasedFn = std::uint8_t(__thiscall*)(void*, int, int);
 using DirectionFn = int(__thiscall*)(void*, int, float*, float*, int);
 using HeldAgeFn = int(__thiscall*)(void*, unsigned int);
+using TimingGradeFn = int(__thiscall*)(void*, const float*, int);
 
 using AccessorFn = void*(__cdecl*)();
 using GetGroupCursorFn = int(__thiscall*)(void*, int);
