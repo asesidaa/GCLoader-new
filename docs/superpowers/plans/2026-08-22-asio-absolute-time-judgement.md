@@ -67,6 +67,9 @@ evidence. They are not implementation authority and must not be deleted.
 - [ ] Keep all timestamp-to-frame calculations checked and rational. Never
   accumulate rounded milliseconds or frames, including at 144, 165, or 240 FPS.
 - [ ] Stage only explicitly named files in each commit.
+- [ ] Keep ConfigGUI synchronized with runtime validation: its label, help,
+  inline warning, Debug/Release artifact, and deployed executable must all
+  accept and describe both supported exact-clock backends.
 
 ## Lifecycle clarification required by the live code
 
@@ -761,6 +764,7 @@ git commit -m "Wire exact judgement clock into ASIO lifecycle"
 - Modify: `src/Patches/AbsoluteJudgement/JudgementScheduler.cpp`
 - Modify: `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h`
 - Modify: `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp`
+- Modify: `tools/ConfigGUI/Main.cpp`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
 - [ ] **Step 1: Accept exactly WASAPI or ASIO in configuration**
@@ -769,6 +773,18 @@ Change validation to accept absolute judgement only for
 `wasapi_exclusive` or `asio`; keep DirectSound rejected and keep exactly
 `input_poll_hz = 1000`. Update the error text to name both supported backends.
 With the feature disabled, all three audio backends retain existing behavior.
+
+Update `tools/ConfigGUI/Main.cpp` at the same boundary:
+
+- rename the checkbox from `Absolute-time judgement (WASAPI)` to the
+  backend-neutral `Absolute-time judgement`;
+- make its tooltip state that WASAPI exclusive or ASIO is required;
+- show the inline save warning only when the selected backend is neither
+  WASAPI exclusive nor ASIO; and
+- name both accepted backends in that warning.
+
+The GUI already gates saving through the shared `ValidateInputConfig`; do not
+duplicate another semantic validator in the editor model.
 
 - [ ] **Step 2: Separate hook capability from the lazily created actual provider**
 
@@ -844,9 +860,13 @@ fatal records rather than recoverable counters.
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
     -Preset msvc32-debug -Target iDmacDrv32
+
+& 'H:\gc\temp\build-asio-audio-backend.ps1' `
+    -Preset msvc32-debug -Target ConfigGUI
 ```
 
-Expected proof: build exits 0 with both configured exact domains accepted.
+Expected proof: both builds exit 0; the DLL accepts both configured exact
+domains and the GUI presents the same rule.
 
 - [ ] **Step 7: Record and commit Task 6**
 
@@ -859,6 +879,7 @@ git add -- `
   src/Patches/AbsoluteJudgement/JudgementScheduler.cpp `
   src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h `
   src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp `
+  tools/ConfigGUI/Main.cpp `
   docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md
 git commit -m "Enable ASIO absolute-time judgement route"
 ```
@@ -899,7 +920,8 @@ Review every changed source line directly; do not use agents. Confirm:
 - no stage or judgement timeout/fallback exists;
 - no callback allocation, lock, log, or format exists;
 - every newly touched failure is directly observed and clearly logged; and
-- `src/Patches/Framerate/**` has no diff.
+- `src/Patches/Framerate/**` has no diff; and
+- ConfigGUI's visible rule and shared save validation agree exactly.
 
 Fix any issue inline, rebuild Debug, and amend the owning task with a new focused
 commit. Do not proceed on a known static issue.
@@ -925,29 +947,38 @@ compiled platform route, not runtime correctness.
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
     -Preset msvc32-release -Target iDmacDrv32 -Fresh
 
+& 'H:\gc\temp\build-asio-audio-backend.ps1' `
+    -Preset msvc32-release -Target ConfigGUI
+
 & 'H:\gc\temp\inspect-asio-audio-backend-abi.ps1' `
     -BaselineCommit $implementationBaseline
 ```
 
-Expected proof: both scripts exit 0; the candidate is PE32/x86, preserves all
-15 exports and hook calling conventions, imports the three WinMM functions,
-and passes the scoped source-diff constraints. Do not run CTest.
+Expected proof: all commands exit 0; the DLL candidate is PE32/x86, preserves
+all 15 exports and hook calling conventions, imports the three WinMM functions,
+the matching ConfigGUI executable is freshly built, and the scoped source-diff
+constraints pass. Do not run CTest.
 
 - [ ] **Step 4: Persist a guarded PowerShell 7 deployment script**
 
 Create `H:\gc\temp\deploy-asio-absolute-judgement.ps1` that:
 
-1. resolves the candidate
-   `build-msvc32-release\dist\iDmacDrv32.dll` and runtime
-   `H:\gc\iDmacDrv32.dll` to explicit absolute paths;
-2. refuses to continue while `game471` is running; it does not terminate the
-   process;
+1. resolves both candidates
+   `build-msvc32-release\dist\iDmacDrv32.dll` and
+   `build-msvc32-release\dist\ConfigGUI.exe`, plus runtime destinations
+   `H:\gc\iDmacDrv32.dll` and `H:\gc\ConfigGUI.exe`, to explicit absolute
+   paths;
+2. refuses to continue while `game471` or `ConfigGUI` is running; it does not
+   terminate either process;
 3. creates
    `H:\gc\deploy-backups\asio-absolute-judgement-<timestamp>`;
-4. copies the currently deployed DLL there as `iDmacDrv32.pre-asio.dll`;
-5. copies the verified candidate over the runtime DLL with `Copy-Item -Force`;
-6. computes both SHA-256 hashes and throws if they differ; and
-7. prints candidate hash, deployed hash, and backup path.
+4. copies the currently deployed DLL and GUI there as
+   `iDmacDrv32.pre-asio.dll` and `ConfigGUI.pre-asio.exe`;
+5. copies both verified candidates over their runtime destinations with
+   `Copy-Item -Force`;
+6. computes candidate/deployed SHA-256 pairs for both artifacts and throws if
+   either pair differs; and
+7. prints both candidate hashes, both deployed hashes, and the backup path.
 
 The script must use no recursive delete, wildcard target, unresolved
 environment-variable destination, or nested shell.
@@ -960,13 +991,14 @@ The user has already authorized deployment after implementation:
 & 'H:\gc\temp\deploy-asio-absolute-judgement.ps1'
 ```
 
-Expected proof: script exits 0, candidate/deployed SHA-256 values match, and a
-timestamped rollback DLL exists. Do not edit `H:\gc\config.toml` automatically.
+Expected proof: script exits 0, both candidate/deployed SHA-256 pairs match,
+and timestamped rollback copies of the DLL and GUI exist. Do not edit
+`H:\gc\config.toml` automatically.
 
 - [ ] **Step 6: Record static completion without claiming runtime acceptance**
 
-Record the task commit hashes, Release hash, deployed hash, and backup path in
-the Execution Record. Commit only this plan update if it changed:
+Record the task commit hashes, both Release/deployed hash pairs, and backup path
+in the Execution Record. Commit only this plan update if it changed:
 
 ```powershell
 git add -- docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md
@@ -1023,6 +1055,6 @@ Update this table during inline execution; do not record imagined results.
 | 3. Generic resolver/scheduler | Pending | — | Debug x86 build pending |
 | 4. Exact ASIO history | Pending | — | Debug x86 build pending |
 | 5. ASIO lifecycle wiring | Pending | — | Debug x86 build pending |
-| 6. Config/route/diagnostics | Pending | — | Debug x86 build pending |
-| 7. Release/static/deploy | Pending | — | Release hash and backup pending |
+| 6. Runtime/GUI config, route, diagnostics | Pending | — | Debug x86 DLL and ConfigGUI builds pending |
+| 7. Release/static/deploy | Pending | — | DLL/ConfigGUI Release hashes and backups pending |
 | Runtime acceptance | Pending user run | — | 240-FPS ASIO log and offset comparison pending |
