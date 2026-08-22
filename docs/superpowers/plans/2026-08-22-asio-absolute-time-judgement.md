@@ -261,7 +261,7 @@ Add `ExactOutputClock.cpp` to `src/Audio/CMakeLists.txt`, then run:
 Expected proof: CMake/Ninja exits 0 and produces
 `build-msvc32-debug\dist\iDmacDrv32.dll`. Do not run CTest.
 
-- [ ] **Step 6: Record and commit Task 1**
+- [x] **Step 6: Record and commit Task 1**
 
 Update the Execution Record with the build result. Stage only the files listed
 for Task 1 and commit:
@@ -298,7 +298,7 @@ git commit -m "Refactor exact output clock provider"
 - Modify: `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Make each journal record carry one inseparable observation**
+- [x] **Step 1: Make each journal record carry one inseparable observation**
 
 In `GameplayTransitionJournal.h` replace the standalone record QPC field with:
 
@@ -317,7 +317,7 @@ accept `AbsoluteHostTime`. Update every QPC comparison and diagnostic access to
 use `.qpc_ticks`. The stage-entry handoff count remains based on QPC exactly as
 today; multimedia time does not introduce a second cutoff or loss policy.
 
-- [ ] **Step 2: Capture the two clocks adjacently at the existing input observation point**
+- [x] **Step 2: Capture the two clocks adjacently at the existing input observation point**
 
 In `InputPollingRuntime::Publish`, when absolute publication is enabled:
 
@@ -330,7 +330,7 @@ Capture both values on every enabled poll at the same existing observation
 point so branch timing does not retimestamp only changed polls. Do not reject a
 multimedia value of zero. Add `winmm` to `gc_input`'s explicit link libraries.
 
-- [ ] **Step 3: Carry the paired stage-entry watermark**
+- [x] **Step 3: Carry the paired stage-entry watermark**
 
 Capture QPC and `timeGetTime()` adjacently in
 `BeginAbsoluteJudgementSemanticStage` immediately before the synchronized
@@ -343,7 +343,7 @@ Update reset, cleanup cutoff recapture, delivery-delay, and fatal-snapshot code
 to read `.qpc_ticks`. Add `stage_entry_multimedia_time_ms` beside
 `stage_entry_qpc` in the bounded semantic-stage-open diagnostic.
 
-- [ ] **Step 4: Build without changing judgement behavior**
+- [x] **Step 4: Build without changing judgement behavior**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -1050,8 +1050,8 @@ Update this table during inline execution; do not record imagined results.
 | Task | Status | Commit | Evidence / remaining acceptance |
 |---|---|---|---|
 | Plan baseline | Complete | `1ed5ee2` | Isolated worktree; only the user-owned August 20 plan was dirty |
-| 1. Neutral provider/WASAPI preservation | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0; `ResolveQpc` body unchanged |
-| 2. Dual-domain capture | Pending | — | Debug x86 build pending |
+| 1. Neutral provider/WASAPI preservation | Complete | `8a7a2b5` | Debug x86 `iDmacDrv32` build exited 0; `ResolveQpc` body unchanged |
+| 2. Dual-domain capture | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0; QPC remains ordering/loss authority |
 | 3. Generic resolver/scheduler | Pending | — | Debug x86 build pending |
 | 4. Exact ASIO history | Pending | — | Debug x86 build pending |
 | 5. ASIO lifecycle wiring | Pending | — | Debug x86 build pending |

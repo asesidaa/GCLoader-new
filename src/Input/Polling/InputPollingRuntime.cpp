@@ -18,6 +18,7 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 
 #include <Windows.h>
+#include <timeapi.h>
 
 #include <algorithm>
 #include <array>
@@ -660,9 +661,10 @@ private:
             std::nullopt)
     {
         const std::uint32_t next = mapper_ ? mapper_->GetInput() : 0;
-        LARGE_INTEGER observed_qpc_ticks{};
+        gc::timing::AbsoluteHostTime observed_time{};
         if (absolute_publication_enabled_)
         {
+            LARGE_INTEGER observed_qpc_ticks{};
             const auto qpc_result =
                 QueryPerformanceCounter(&observed_qpc_ticks);
             if (!qpc_result || observed_qpc_ticks.QuadPart <= 0)
@@ -670,6 +672,10 @@ private:
                 FatalInputPublicationQpc(
                     qpc_result, observed_qpc_ticks.QuadPart);
             }
+            observed_time = {
+                .qpc_ticks = observed_qpc_ticks.QuadPart,
+                .multimedia_time_ms = timeGetTime(),
+            };
         }
         const std::uint32_t previous =
             g_published_input.exchange(next, std::memory_order_acq_rel);
@@ -680,7 +686,7 @@ private:
                 PublishGameplayTransition(
                     previous,
                     next,
-                    observed_qpc_ticks.QuadPart,
+                    observed_time,
                     raw_message_queue_age_ms);
             }
             PLOG_DEBUG << "Input snapshot fastio=0x" << std::hex << next

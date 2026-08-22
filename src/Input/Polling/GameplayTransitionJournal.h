@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Timing/AbsoluteHostTime.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -13,7 +15,7 @@ inline constexpr std::size_t kGameplayTransitionCapacity = 65'536;
 struct GameplayTransitionRecord {
     std::uint64_t transport_epoch{};
     std::uint64_t sequence{};
-    std::int64_t qpc_ticks{};
+    gc::timing::AbsoluteHostTime observed_time{};
     bool raw_message_queue_age_available{};
     std::uint32_t raw_message_queue_age_ms{};
     GameplayHeldMask held_before{};
@@ -39,7 +41,7 @@ struct GameplayTransitionCutoff {
     std::uint64_t eviction_count{};
     GameplayHeldMask held_baseline{};
     std::int64_t qpc_frequency{};
-    std::int64_t stage_entry_qpc{};
+    gc::timing::AbsoluteHostTime stage_entry_time{};
     std::uint64_t stage_entry_handoff_drops{};
 };
 
@@ -47,12 +49,12 @@ bool PrepareGameplayTransitionTransport(bool enabled) noexcept;
 void BeginGameplayTransitionEpoch(GameplayHeldMask baseline) noexcept;
 void EndGameplayTransitionEpoch() noexcept;
 bool CaptureGameplayTransitionCutoff(
-    std::int64_t stage_entry_qpc,
+    gc::timing::AbsoluteHostTime stage_entry_time,
     GameplayTransitionCutoff* output) noexcept;
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,
     std::uint32_t next_fastio,
-    std::int64_t observed_qpc_ticks,
+    gc::timing::AbsoluteHostTime observed_time,
     std::optional<std::uint32_t> raw_message_queue_age_ms =
         std::nullopt) noexcept;
 std::size_t DrainGameplayTransitions(

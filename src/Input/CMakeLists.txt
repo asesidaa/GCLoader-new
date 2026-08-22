@@ -39,4 +39,5 @@ target_link_libraries(gc_input PUBLIC
         gc_input_win32
         ntdll
         safetyhook::safetyhook
+        winmm
 )

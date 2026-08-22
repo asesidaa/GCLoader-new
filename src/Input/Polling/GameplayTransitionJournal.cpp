@@ -128,10 +128,10 @@ void EndGameplayTransitionEpoch() noexcept
 }
 
 bool CaptureGameplayTransitionCutoff(
-    const std::int64_t stage_entry_qpc,
+    const gc::timing::AbsoluteHostTime stage_entry_time,
     GameplayTransitionCutoff* output) noexcept
 {
-    if (output == nullptr || stage_entry_qpc <= 0)
+    if (output == nullptr || stage_entry_time.qpc_ticks <= 0)
     {
         return false;
     }
@@ -148,7 +148,7 @@ bool CaptureGameplayTransitionCutoff(
     {
         const auto& record = transport.records[
             (transport.read_slot + index) % kGameplayTransitionCapacity];
-        if (record.qpc_ticks >= stage_entry_qpc)
+        if (record.observed_time.qpc_ticks >= stage_entry_time.qpc_ticks)
         {
             ++handoff_drops;
         }
@@ -160,7 +160,7 @@ bool CaptureGameplayTransitionCutoff(
         .eviction_count = transport.eviction_count,
         .held_baseline = transport.published_held,
         .qpc_frequency = transport.qpc_frequency,
-        .stage_entry_qpc = stage_entry_qpc,
+        .stage_entry_time = stage_entry_time,
         .stage_entry_handoff_drops = handoff_drops,
     };
     ClearQueue(transport);
@@ -170,7 +170,7 @@ bool CaptureGameplayTransitionCutoff(
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,
     std::uint32_t next_fastio,
-    std::int64_t observed_qpc_ticks,
+    const gc::timing::AbsoluteHostTime observed_time,
     const std::optional<std::uint32_t> raw_message_queue_age_ms) noexcept
 {
     const GameplayHeldMask previous =
@@ -209,7 +209,7 @@ void PublishGameplayTransition(
     transport.records[write_slot] = GameplayTransitionRecord{
         .transport_epoch = transport.transport_epoch,
         .sequence = transport.next_sequence,
-        .qpc_ticks = observed_qpc_ticks,
+        .observed_time = observed_time,
         .raw_message_queue_age_available =
             raw_message_queue_age_ms.has_value(),
         .raw_message_queue_age_ms =

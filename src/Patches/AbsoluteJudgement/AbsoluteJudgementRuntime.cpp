@@ -6,6 +6,7 @@
 #include "Patches/AbsoluteJudgement/NativeJudgementAbi.h"
 
 #include <Windows.h>
+#include <timeapi.h>
 
 #include <plog/Log.h>
 
@@ -209,11 +210,11 @@ public:
 
     void BeginSemanticStage(
         const std::uintptr_t tune_manager,
-        const std::int64_t stage_entry_qpc) noexcept {
+        const gc::timing::AbsoluteHostTime stage_entry_time) noexcept {
         const auto configuration = ReadConfigurationOrFatal();
         scheduler_.BeginSemanticStage(
             tune_manager,
-            stage_entry_qpc,
+            stage_entry_time,
             configuration.game_time_offset_ms,
             configuration.hold_safe_frame,
             configuration.slide_hold_safe_frame);
@@ -557,7 +558,7 @@ private:
             held_after = scope.event->transport.held_after;
             rising = scope.event->transport.rising;
             falling = scope.event->transport.falling;
-            event_qpc = scope.event->transport.qpc_ticks;
+            event_qpc = scope.event->transport.observed_time.qpc_ticks;
             raw_message_queue_age_available =
                 scope.event->transport.raw_message_queue_age_available;
             raw_message_queue_age_ms =
@@ -770,7 +771,11 @@ void BeginAbsoluteJudgementSemanticStage(
             {qpc_result ? 1u : 0u,
              static_cast<std::uint64_t>(stage_entry_qpc.QuadPart)});
     }
-    Runtime().BeginSemanticStage(tune_manager, stage_entry_qpc.QuadPart);
+    const gc::timing::AbsoluteHostTime stage_entry_time{
+        .qpc_ticks = stage_entry_qpc.QuadPart,
+        .multimedia_time_ms = timeGetTime(),
+    };
+    Runtime().BeginSemanticStage(tune_manager, stage_entry_time);
 }
 
 void EndAbsoluteJudgementSemanticStage(

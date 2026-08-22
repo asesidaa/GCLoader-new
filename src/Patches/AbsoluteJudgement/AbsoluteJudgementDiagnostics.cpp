@@ -1131,6 +1131,7 @@ void AbsoluteJudgementDiagnostics::LogSemanticStageOpen(
         " native_manager={} input_generation={} cutoff_sequence={}"
         " first_eligible_sequence={} held_baseline={}"
         " transport_fault_baseline={} stage_entry_qpc={}"
+        " stage_entry_multimedia_time_ms={}"
         " stage_entry_handoff_drops={}",
         record.loader_stage_generation,
         record.native_manager,
@@ -1140,6 +1141,7 @@ void AbsoluteJudgementDiagnostics::LogSemanticStageOpen(
         record.held_baseline,
         record.transport_fault_baseline,
         record.stage_entry_qpc,
+        record.stage_entry_multimedia_time_ms,
         record.stage_entry_handoff_drops);
 }
 

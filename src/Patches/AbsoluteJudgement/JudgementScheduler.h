@@ -36,7 +36,7 @@ class JudgementScheduler final {
 public:
     void BeginSemanticStage(
         std::uintptr_t tune_manager,
-        std::int64_t stage_entry_qpc,
+        gc::timing::AbsoluteHostTime stage_entry_time,
         std::int32_t game_time_offset_ms,
         std::int32_t hold_safe_frame,
         std::int32_t slide_hold_safe_frame) noexcept;

@@ -385,6 +385,7 @@ struct AbsoluteJudgementSemanticStageOpenRecord {
     gc::input::GameplayHeldMask held_baseline{};
     std::uint64_t transport_fault_baseline{};
     std::int64_t stage_entry_qpc{};
+    std::uint32_t stage_entry_multimedia_time_ms{};
     std::uint64_t stage_entry_handoff_drops{};
 };
 

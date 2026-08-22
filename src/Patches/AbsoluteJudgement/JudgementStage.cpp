@@ -12,7 +12,7 @@ std::atomic_uint64_t g_next_stage_generation{1};
 
 std::expected<void, JudgementStageError> JudgementStage::Begin(
     const std::uintptr_t tune_manager,
-    const std::int64_t stage_entry_qpc,
+    const gc::timing::AbsoluteHostTime stage_entry_time,
     const std::int32_t game_time_offset_ms,
     const std::int32_t hold_safe_frame,
     const std::int32_t slide_hold_safe_frame) noexcept {
@@ -38,7 +38,7 @@ std::expected<void, JudgementStageError> JudgementStage::Begin(
         return std::unexpected(JudgementStageError::TuneManagerMissing);
     }
     if (!gc::input::CaptureGameplayTransitionCutoff(
-            stage_entry_qpc, &cutoff_) || cutoff_.transport_epoch == 0) {
+            stage_entry_time, &cutoff_) || cutoff_.transport_epoch == 0) {
         failure_transport_status_ =
             gc::input::ReadGameplayTransitionStatus();
         if (failure_transport_status_.next_sequence ==

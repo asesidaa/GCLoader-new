@@ -35,7 +35,7 @@ bool SameScope(const ScheduledJudgementScope& left,
 
 void JudgementScheduler::BeginSemanticStage(
     const std::uintptr_t tune_manager,
-    const std::int64_t stage_entry_qpc,
+    const gc::timing::AbsoluteHostTime stage_entry_time,
     const std::int32_t game_time_offset_ms,
     const std::int32_t hold_safe_frame,
     const std::int32_t slide_hold_safe_frame) noexcept {
@@ -58,7 +58,7 @@ void JudgementScheduler::BeginSemanticStage(
     }
     const auto result = stage_.Begin(
         tune_manager,
-        stage_entry_qpc,
+        stage_entry_time,
         game_time_offset_ms,
         hold_safe_frame,
         slide_hold_safe_frame);
@@ -74,7 +74,7 @@ void JudgementScheduler::BeginSemanticStage(
     next_drain_sequence_ = cutoff.first_stage_sequence;
     next_delivery_sequence_ = cutoff.first_stage_sequence;
     clock_resolver_.Reset(
-        stage_.generation(), stage_entry_qpc, game_time_offset_ms);
+        stage_.generation(), stage_entry_time.qpc_ticks, game_time_offset_ms);
     JudgementDiagnostics().LogSemanticStageOpen({
         .loader_stage_generation = stage_.generation(),
         .native_manager = tune_manager,
@@ -83,7 +83,9 @@ void JudgementScheduler::BeginSemanticStage(
         .first_eligible_sequence = cutoff.first_stage_sequence,
         .held_baseline = cutoff.held_baseline,
         .transport_fault_baseline = cutoff.eviction_count,
-        .stage_entry_qpc = cutoff.stage_entry_qpc,
+        .stage_entry_qpc = cutoff.stage_entry_time.qpc_ticks,
+        .stage_entry_multimedia_time_ms =
+            cutoff.stage_entry_time.multimedia_time_ms,
         .stage_entry_handoff_drops = cutoff.stage_entry_handoff_drops,
     });
 }
@@ -298,7 +300,7 @@ void JudgementScheduler::PrepareOuterCall(
                  actual_provider});
         }
         entry_clock = clock_resolver_.ResolveQpc(
-            stage_.cutoff().stage_entry_qpc);
+            stage_.cutoff().stage_entry_time.qpc_ticks);
     }
 
     TryActivateOrWait(entry_clock);
@@ -485,7 +487,7 @@ void JudgementScheduler::DrainTransportOrFatal() noexcept {
 void JudgementScheduler::AccountCleanupDropsOrFatal() noexcept {
     gc::input::GameplayTransitionCutoff cutoff{};
     if (!gc::input::CaptureGameplayTransitionCutoff(
-            stage_.cutoff().stage_entry_qpc, &cutoff)) {
+            stage_.cutoff().stage_entry_time, &cutoff)) {
         const auto status = gc::input::ReadGameplayTransitionStatus();
         if (status.next_sequence ==
             (std::numeric_limits<std::uint64_t>::max)()) {
@@ -582,8 +584,9 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
     while (unresolved_size_ != 0) {
         const auto& record = UnresolvedFront();
         IncrementDiagnostic(counters.exact_clock_reads);
-        const auto resolved = clock_resolver_.ResolveQpc(record.qpc_ticks);
-        last_qpc_ = record.qpc_ticks;
+        const auto resolved = clock_resolver_.ResolveQpc(
+            record.observed_time.qpc_ticks);
+        last_qpc_ = record.observed_time.qpc_ticks;
         last_output_frame_ = resolved.output_frame;
         last_j_ = resolved.judgement_seconds;
         if (resolved.endpoint_anchor_sequence != 0) {
@@ -1026,10 +1029,12 @@ void JudgementScheduler::CommitScope(
         --pending_event_count_;
         IncrementDiagnostic(counters.event_scopes);
         IncrementDiagnostic(outer_event_scope_count_);
-        if (outer_now_qpc_ >= scope.event->transport.qpc_ticks) {
+        if (outer_now_qpc_ >=
+            scope.event->transport.observed_time.qpc_ticks) {
             diagnostics.ObserveDeliveryDelayQpc(
                 static_cast<std::uint64_t>(
-                    outer_now_qpc_ - scope.event->transport.qpc_ticks));
+                    outer_now_qpc_ -
+                    scope.event->transport.observed_time.qpc_ticks));
         }
     } else {
         IncrementDiagnostic(counters.heartbeat_scopes);
@@ -1255,7 +1260,8 @@ void JudgementScheduler::FailForClockResult(
             AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
             AbsoluteJudgementFatalReason::NativeStateMismatch,
             {stage_.generation(),
-             static_cast<std::uint64_t>(stage_.cutoff().stage_entry_qpc),
+             static_cast<std::uint64_t>(
+                 stage_.cutoff().stage_entry_time.qpc_ticks),
              clock_resolver_.bound() ? 1u : 0u,
              stage_.active() ? 1u : 0u});
     case JudgementClockFailure::EndpointProviderChanged:
