@@ -58,11 +58,11 @@ using gc::timing::CheckedRational;
 
 void JudgementClockResolver::Reset(
     const std::uint64_t stage_generation,
-    const std::int64_t stage_entry_qpc,
+    const gc::timing::AbsoluteHostTime stage_entry_time,
     const std::int32_t game_time_offset_ms) noexcept {
     binding_ = {
         .stage_generation = stage_generation,
-        .stage_entry_qpc = stage_entry_qpc,
+        .stage_entry_time = stage_entry_time,
         .game_time_offset_ms = game_time_offset_ms,
     };
 }
@@ -78,13 +78,13 @@ const JudgementStageClockAnchor& JudgementClockResolver::anchor()
 
 JudgementClockResult JudgementClockResolver::TryBind(
     const gc::audio::GameplayAudioCursorObservation& selected,
-    std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint,
+    std::shared_ptr<const gc::audio::ExactOutputClock> endpoint,
     const std::span<ExactPlaybackEpoch> scratch) noexcept {
     if (bound()) {
-        return ResolveQpc(binding_.stage_entry_qpc);
+        return Resolve(binding_.stage_entry_time);
     }
     if (binding_.stage_generation == 0 ||
-        binding_.stage_entry_qpc <= 0) {
+        binding_.stage_entry_time.qpc_ticks <= 0) {
         return {
             .status = JudgementClockStatus::UnsupportedContinuity,
             .failure = JudgementClockFailure::InvalidStageBinding,
@@ -94,7 +94,7 @@ JudgementClockResult JudgementClockResolver::TryBind(
         return {.status = JudgementClockStatus::Pending};
     }
 
-    const auto endpoint_generation = endpoint->endpoint_generation();
+    const auto endpoint_generation = endpoint->info().endpoint_generation;
     if (endpoint_generation == 0) {
         return {
             .status = JudgementClockStatus::UnsupportedContinuity,
@@ -103,7 +103,7 @@ JudgementClockResult JudgementClockResolver::TryBind(
     }
     if (binding_.pending_endpoint) {
         if (binding_.pending_endpoint.get() != endpoint.get() ||
-            binding_.pending_endpoint->endpoint_generation() !=
+            binding_.pending_endpoint->info().endpoint_generation !=
                 endpoint_generation) {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
@@ -167,8 +167,8 @@ JudgementClockResult JudgementClockResolver::TryBind(
         };
     }
 
-    const auto entry_output = endpoint->ResolveQpc(
-        binding_.stage_entry_qpc);
+    const auto entry_output = endpoint->Resolve(
+        binding_.stage_entry_time);
     if (entry_output.endpoint_generation != endpoint_generation) {
         return {
             .status = JudgementClockStatus::UnsupportedContinuity,
@@ -277,17 +277,17 @@ JudgementClockResult JudgementClockResolver::TryBind(
         .endpoint = std::move(binding_.pending_endpoint),
     };
     binding_.pending_history.reset();
-    return ResolveQpc(binding_.stage_entry_qpc);
+    return Resolve(binding_.stage_entry_time);
 }
 
-JudgementClockResult JudgementClockResolver::ResolveQpc(
-    const std::int64_t qpc_ticks) const noexcept {
+JudgementClockResult JudgementClockResolver::Resolve(
+    const gc::timing::AbsoluteHostTime& timestamp) const noexcept {
     if (!bound()) {
         return {.status = JudgementClockStatus::Pending};
     }
     const auto& stage_anchor = *binding_.anchor;
     if (!stage_anchor.endpoint || stage_anchor.endpoint_generation == 0 ||
-        stage_anchor.endpoint->endpoint_generation() !=
+        stage_anchor.endpoint->info().endpoint_generation !=
             stage_anchor.endpoint_generation) {
         return {
             .status = JudgementClockStatus::UnsupportedContinuity,
@@ -297,7 +297,7 @@ JudgementClockResult JudgementClockResolver::ResolveQpc(
         };
     }
 
-    const auto endpoint = stage_anchor.endpoint->ResolveQpc(qpc_ticks);
+    const auto endpoint = stage_anchor.endpoint->Resolve(timestamp);
     if (endpoint.endpoint_generation != stage_anchor.endpoint_generation) {
         return {
             .status = JudgementClockStatus::UnsupportedContinuity,

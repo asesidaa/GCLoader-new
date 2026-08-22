@@ -18,8 +18,8 @@ struct AbsoluteJudgementOuterProbe {
     bool group2_cursor_selected{};
     std::optional<gc::audio::GameplayAudioCursorObservation>
         group2_observation;
-    std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint;
-    std::int64_t now_qpc{};
+    std::shared_ptr<const gc::audio::ExactOutputClock> endpoint;
+    gc::timing::AbsoluteHostTime now{};
 };
 
 struct ScheduledJudgementScope {

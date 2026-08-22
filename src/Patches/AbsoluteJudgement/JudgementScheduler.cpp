@@ -74,7 +74,7 @@ void JudgementScheduler::BeginSemanticStage(
     next_drain_sequence_ = cutoff.first_stage_sequence;
     next_delivery_sequence_ = cutoff.first_stage_sequence;
     clock_resolver_.Reset(
-        stage_.generation(), stage_entry_time.qpc_ticks, game_time_offset_ms);
+        stage_.generation(), stage_entry_time, game_time_offset_ms);
     JudgementDiagnostics().LogSemanticStageOpen({
         .loader_stage_generation = stage_.generation(),
         .native_manager = tune_manager,
@@ -159,7 +159,7 @@ JudgementScheduler::committed_boundary_index() const noexcept {
 }
 
 void JudgementScheduler::ClearStageOwnedState() noexcept {
-    clock_resolver_.Reset(0, 0, 0);
+    clock_resolver_.Reset(0, {}, 0);
     const auto reset = history_.Reset(0, 0, 0);
     if (!reset) {
         FatalHistoryError(reset.error());
@@ -200,9 +200,10 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
     if (!probe.endpoint) {
         return;
     }
+    const auto endpoint_info = probe.endpoint->info();
     const auto endpoint = stage_.BindEndpointOrValidate(
-        probe.endpoint->endpoint_generation(),
-        probe.endpoint->qpc_frequency());
+        endpoint_info.endpoint_generation,
+        endpoint_info.qpc_frequency);
     if (!endpoint) {
         if (endpoint.error() ==
             JudgementStageError::EndpointGenerationChanged) {
@@ -210,7 +211,7 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
                 AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
                 AbsoluteJudgementFatalReason::EndpointGenerationChanged,
                 {stage_.endpoint_generation(),
-                 probe.endpoint->endpoint_generation()});
+                 endpoint_info.endpoint_generation});
         }
         if (endpoint.error() == JudgementStageError::QpcFrequencyChanged) {
             Fatal(
@@ -218,12 +219,12 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
                 AbsoluteJudgementFatalReason::ClockDiscontinuous,
                 {static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency),
                  static_cast<std::uint64_t>(
-                     probe.endpoint->qpc_frequency())});
+                     endpoint_info.qpc_frequency)});
         }
         FatalStageError(endpoint.error(), &probe.native);
     }
     JudgementDiagnostics().stage_counters().endpoint_publication_count =
-        probe.endpoint->publication_count();
+        probe.endpoint->counters().publication_count;
 }
 
 void JudgementScheduler::PrepareOuterCall(
@@ -243,8 +244,8 @@ void JudgementScheduler::PrepareOuterCall(
     outer_event_scope_count_ = 0;
     outer_heartbeat_scope_count_ = 0;
     outer_event_barrier_recorded_ = false;
-    outer_now_qpc_ = probe.now_qpc;
-    last_qpc_ = probe.now_qpc;
+    outer_now_qpc_ = probe.now.qpc_ticks;
+    last_qpc_ = probe.now.qpc_ticks;
     IncrementDiagnostic(JudgementDiagnostics().stage_counters().outer_calls);
 
     ValidateStageBindingOrFatal(probe);
@@ -259,7 +260,7 @@ void JudgementScheduler::PrepareOuterCall(
                 AbsoluteJudgementFatalPredicate::
                     EndpointProjectionDiscontinuous,
                 AbsoluteJudgementFatalReason::NativeStateMismatch,
-                {static_cast<std::uint64_t>(probe.now_qpc)});
+                {static_cast<std::uint64_t>(probe.now.qpc_ticks)});
         }
         if (probe.group2_cursor_selected && probe.group2_observation &&
             probe.endpoint) {
@@ -277,8 +278,11 @@ void JudgementScheduler::PrepareOuterCall(
             }
         }
     } else {
+        const auto endpoint_info = probe.endpoint
+            ? probe.endpoint->info()
+            : gc::audio::ExactOutputClockInfo{};
         if (probe.endpoint &&
-            (probe.endpoint->endpoint_generation() !=
+            (endpoint_info.endpoint_generation !=
                  clock_resolver_.anchor().endpoint_generation ||
              probe.endpoint.get() !=
                  clock_resolver_.anchor().endpoint.get())) {
@@ -287,7 +291,7 @@ void JudgementScheduler::PrepareOuterCall(
             const auto actual_provider = reinterpret_cast<std::uintptr_t>(
                 probe.endpoint.get());
             Fatal(
-                probe.endpoint->endpoint_generation() !=
+                endpoint_info.endpoint_generation !=
                         clock_resolver_.anchor().endpoint_generation
                     ? AbsoluteJudgementFatalPredicate::
                           EndpointGenerationChanged
@@ -295,12 +299,12 @@ void JudgementScheduler::PrepareOuterCall(
                           EndpointProviderIdentityChanged,
                 AbsoluteJudgementFatalReason::EndpointGenerationChanged,
                 {clock_resolver_.anchor().endpoint_generation,
-                 probe.endpoint->endpoint_generation(),
+                 endpoint_info.endpoint_generation,
                  expected_provider,
                  actual_provider});
         }
-        entry_clock = clock_resolver_.ResolveQpc(
-            stage_.cutoff().stage_entry_time.qpc_ticks);
+        entry_clock = clock_resolver_.Resolve(
+            stage_.cutoff().stage_entry_time);
     }
 
     TryActivateOrWait(entry_clock);
@@ -584,8 +588,8 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
     while (unresolved_size_ != 0) {
         const auto& record = UnresolvedFront();
         IncrementDiagnostic(counters.exact_clock_reads);
-        const auto resolved = clock_resolver_.ResolveQpc(
-            record.observed_time.qpc_ticks);
+        const auto resolved = clock_resolver_.Resolve(
+            record.observed_time);
         last_qpc_ = record.observed_time.qpc_ticks;
         last_output_frame_ = resolved.output_frame;
         last_j_ = resolved.judgement_seconds;
@@ -751,8 +755,8 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
 
     auto& counters = JudgementDiagnostics().stage_counters();
     IncrementDiagnostic(counters.exact_clock_reads);
-    last_qpc_ = probe.now_qpc;
-    const auto current = clock_resolver_.ResolveQpc(probe.now_qpc);
+    last_qpc_ = probe.now.qpc_ticks;
+    const auto current = clock_resolver_.Resolve(probe.now);
     last_output_frame_ = current.output_frame;
     last_j_ = current.judgement_seconds;
     if (current.endpoint_anchor_sequence != 0) {

@@ -353,7 +353,7 @@ to read `.qpc_ticks`. Add `stage_entry_multimedia_time_ms` beside
 Expected proof: build exits 0. At this task boundary WASAPI still selects only
 the QPC member, so judgement behavior is unchanged.
 
-- [ ] **Step 5: Record and commit Task 2**
+- [x] **Step 5: Record and commit Task 2**
 
 Stage only the Task 2 files plus this plan and commit:
 
@@ -387,7 +387,7 @@ git commit -m "Capture dual-domain judgement timestamps"
 - Modify: `src/Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.cpp`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Generalize resolver ownership and signatures**
+- [x] **Step 1: Generalize resolver ownership and signatures**
 
 Replace all concrete `shared_ptr<const ExactWasapiClock>` members with
 `shared_ptr<const ExactOutputClock>`. Change the resolver contract to:
@@ -420,7 +420,7 @@ At every former concrete accessor, read endpoint generation/QPC frequency from
 object identity remains the `shared_ptr` target address already compared by the
 scheduler.
 
-- [ ] **Step 2: Generalize scheduler probes and all three resolution sites**
+- [x] **Step 2: Generalize scheduler probes and all three resolution sites**
 
 Change `AbsoluteJudgementOuterProbe` to carry:
 
@@ -440,7 +440,7 @@ and fatal operands. Do not use multimedia timestamps for sequence ordering;
 journal sequence remains authoritative when two transitions share one
 millisecond tick.
 
-- [ ] **Step 3: Capture both clocks for each outer horizon**
+- [x] **Step 3: Capture both clocks for each outer horizon**
 
 In `AbsoluteJudgementRuntime.cpp`, replace repeated raw QPC snippets with one
 small `noexcept` helper that captures a positive QPC or emits the existing
@@ -452,7 +452,7 @@ Do not add provider-domain validation in this task; configuration still rejects
 ASIO, and Task 6 adds the explicit lazy-start validation point after the ASIO
 provider exists.
 
-- [ ] **Step 4: Build the preserved WASAPI route**
+- [x] **Step 4: Build the preserved WASAPI route**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -1051,8 +1051,8 @@ Update this table during inline execution; do not record imagined results.
 |---|---|---|---|
 | Plan baseline | Complete | `1ed5ee2` | Isolated worktree; only the user-owned August 20 plan was dirty |
 | 1. Neutral provider/WASAPI preservation | Complete | `8a7a2b5` | Debug x86 `iDmacDrv32` build exited 0; `ResolveQpc` body unchanged |
-| 2. Dual-domain capture | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0; QPC remains ordering/loss authority |
-| 3. Generic resolver/scheduler | Pending | — | Debug x86 build pending |
+| 2. Dual-domain capture | Complete | `ff83f6a` | Debug x86 `iDmacDrv32` build exited 0; QPC remains ordering/loss authority |
+| 3. Generic resolver/scheduler | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0 after one stale reset-call correction; judgement formula diff unchanged |
 | 4. Exact ASIO history | Pending | — | Debug x86 build pending |
 | 5. ASIO lifecycle wiring | Pending | — | Debug x86 build pending |
 | 6. Runtime/GUI config, route, diagnostics | Pending | — | Debug x86 DLL and ConfigGUI builds pending |

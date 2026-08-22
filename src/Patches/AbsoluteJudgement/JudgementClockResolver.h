@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
-#include "Audio/Wasapi/ExactWasapiClock.h"
+#include "Audio/ExactOutputClock.h"
 
 #include <cstdint>
 #include <memory>
@@ -20,7 +20,7 @@ struct JudgementStageClockAnchor final {
     std::uint32_t output_rate{};
     std::uint32_t source_rate{};
     std::int32_t game_time_offset_ms{};
-    std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint;
+    std::shared_ptr<const gc::audio::ExactOutputClock> endpoint;
 };
 
 enum class JudgementClockStatus : std::uint8_t {
@@ -56,11 +56,11 @@ struct JudgementClockResult final {
 
 struct JudgementClockBinding final {
     std::uint64_t stage_generation{};
-    std::int64_t stage_entry_qpc{};
+    gc::timing::AbsoluteHostTime stage_entry_time{};
     std::int32_t game_time_offset_ms{};
     std::uint64_t pending_buffer_instance_id{};
     std::uint64_t pending_endpoint_generation{};
-    std::shared_ptr<const gc::audio::ExactWasapiClock> pending_endpoint;
+    std::shared_ptr<const gc::audio::ExactOutputClock> pending_endpoint;
     std::shared_ptr<gc::audio::AudioCursorTimeline> pending_history;
     std::optional<JudgementStageClockAnchor> anchor;
 };
@@ -69,7 +69,7 @@ class JudgementClockResolver final {
 public:
     void Reset(
         std::uint64_t stage_generation,
-        std::int64_t stage_entry_qpc,
+        gc::timing::AbsoluteHostTime stage_entry_time,
         std::int32_t game_time_offset_ms) noexcept;
 
     [[nodiscard]] bool bound() const noexcept;
@@ -77,11 +77,11 @@ public:
 
     [[nodiscard]] JudgementClockResult TryBind(
         const gc::audio::GameplayAudioCursorObservation& selected,
-        std::shared_ptr<const gc::audio::ExactWasapiClock> endpoint,
+        std::shared_ptr<const gc::audio::ExactOutputClock> endpoint,
         std::span<gc::audio::ExactPlaybackEpoch> scratch) noexcept;
 
-    [[nodiscard]] JudgementClockResult ResolveQpc(
-        std::int64_t qpc_ticks) const noexcept;
+    [[nodiscard]] JudgementClockResult Resolve(
+        const gc::timing::AbsoluteHostTime& timestamp) const noexcept;
 
 private:
     JudgementClockBinding binding_{};

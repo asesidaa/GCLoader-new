@@ -1,7 +1,7 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
 
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
-#include "Audio/Wasapi/ExactWasapiClock.h"
+#include "Audio/ExactOutputClock.h"
 #include "Patches/AbsoluteJudgement/JudgementScheduler.h"
 #include "Patches/AbsoluteJudgement/NativeJudgementAbi.h"
 
@@ -280,6 +280,24 @@ public:
         Fail(failure.predicate, failure.category);
     }
 
+    [[nodiscard]] gc::timing::AbsoluteHostTime
+    CaptureAbsoluteHostTimeOrFatal() const noexcept {
+        LARGE_INTEGER qpc{};
+        const auto qpc_result = QueryPerformanceCounter(&qpc);
+        if (!qpc_result || qpc.QuadPart <= 0) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::
+                    QueryPerformanceCounterFailed,
+                AbsoluteJudgementFatalReason::ClockDiscontinuous,
+                {qpc_result ? 1u : 0u,
+                 static_cast<std::uint64_t>(qpc.QuadPart)});
+        }
+        return {
+            .qpc_ticks = qpc.QuadPart,
+            .multimedia_time_ms = timeGetTime(),
+        };
+    }
+
     void DispatchOuterCall(safetyhook::Context& context) {
         const auto native = ResolveNativeIdentityOrFatal(context);
 
@@ -307,23 +325,15 @@ public:
             }
         }
 
-        auto endpoint = gc::audio::AcquireExactWasapiClock();
-        LARGE_INTEGER now{};
-        const auto qpc_result = QueryPerformanceCounter(&now);
-        if (!qpc_result || now.QuadPart <= 0) {
-            Fail(
-                AbsoluteJudgementFatalPredicate::QueryPerformanceCounterFailed,
-                AbsoluteJudgementFatalReason::ClockDiscontinuous,
-                {qpc_result ? 1u : 0u,
-                 static_cast<std::uint64_t>(now.QuadPart)});
-        }
+        auto endpoint = gc::audio::AcquireExactOutputClock();
+        const auto now = CaptureAbsoluteHostTimeOrFatal();
 
         AbsoluteJudgementOuterProbe probe{
             .native = native,
             .group2_cursor_selected = group2_cursor_selected,
             .group2_observation = std::move(observation),
             .endpoint = std::move(endpoint),
-            .now_qpc = now.QuadPart,
+            .now = now,
         };
         scheduler_.PrepareOuterCall(probe);
         while (const auto scope = scheduler_.NextScope()) {
@@ -676,11 +686,12 @@ private:
 
         gc::timing::CheckedRational delivery_delay =
             gc::timing::CheckedRational::Whole(0);
-        if (event_qpc && probe.now_qpc >= *event_qpc &&
+        if (event_qpc && probe.now.qpc_ticks >= *event_qpc &&
             probe.endpoint) {
+            const auto endpoint_info = probe.endpoint->info();
             const auto resolved_delay = gc::timing::CheckedRational::Create(
-                probe.now_qpc - *event_qpc,
-                probe.endpoint->qpc_frequency());
+                probe.now.qpc_ticks - *event_qpc,
+                endpoint_info.qpc_frequency);
             if (!resolved_delay) {
                 JudgementDiagnostics().
                     RecordDeliveryDelayConversionFailure();
@@ -761,20 +772,8 @@ void InitializeAbsoluteJudgementRuntime(
 
 void BeginAbsoluteJudgementSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
-    LARGE_INTEGER stage_entry_qpc{};
-    const auto qpc_result = QueryPerformanceCounter(&stage_entry_qpc);
-    if (!qpc_result ||
-        stage_entry_qpc.QuadPart <= 0) {
-        Runtime().Fail(
-            AbsoluteJudgementFatalPredicate::QueryPerformanceCounterFailed,
-            AbsoluteJudgementFatalReason::ClockDiscontinuous,
-            {qpc_result ? 1u : 0u,
-             static_cast<std::uint64_t>(stage_entry_qpc.QuadPart)});
-    }
-    const gc::timing::AbsoluteHostTime stage_entry_time{
-        .qpc_ticks = stage_entry_qpc.QuadPart,
-        .multimedia_time_ms = timeGetTime(),
-    };
+    const auto stage_entry_time =
+        Runtime().CaptureAbsoluteHostTimeOrFatal();
     Runtime().BeginSemanticStage(tune_manager, stage_entry_time);
 }
 
