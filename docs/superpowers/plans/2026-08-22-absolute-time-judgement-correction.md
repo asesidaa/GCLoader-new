@@ -1772,12 +1772,14 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
 - The original system does have one direct constant-phase calibration:
   `JudgTimeOffset`. In the common tap path, the native late/opening gates are
   shifted by that setting and the grade helper receives
-  `recognition_ms - JudgTimeOffset`. It can compensate a repeatable installation
+  `recognition_ms + JudgTimeOffset`. It can compensate a repeatable installation
   bias affecting the entire play, but it cannot detect or cancel a phase slip
-  beginning partway through a dense section. The installed
-  `H:\gc\data\system.cfg` currently has both `JudgTimeOffset = 0` and
-  `GameTimeOffset = 0`; the 137-call runtime identity check independently
-  confirms that no nonzero judgement offset was applied in this run.
+  beginning partway through a dense section. At the time of the original
+  zero-offset run, installed `H:\gc\data\system.cfg` had both
+  `JudgTimeOffset = 0` and `GameTimeOffset = 0`; the 137-call runtime identity
+  check independently confirmed that no nonzero judgement offset was applied
+  in that run. The effective plus-sign relation is runtime-proven below and
+  corrects the earlier mistaken minus-sign wording.
 - Original 60-FPS operation captures one physical snapshot per native frame
   and assigns recognition time as
   `trunc(frame * 16.666666 ms)`. This independently snaps each edge to a coarse
@@ -1803,6 +1805,59 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   recovery to reproduce. A `JudgTimeOffset` change becomes justified only if
   repeated runtime evidence shows a stable whole-stage bias; using it to hide
   a run-local slip would move every other note incorrectly.
+
+#### Controlled full-song `JudgTimeOffset` comparison
+
+- Zero-offset evidence is `H:\gc\loader-log-240.txt`, last written
+  `2026-08-22 16:09:05.507 +08:00`, SHA-256
+  `7E1BEE86F81CC6D7CE0CE2E2318BB9E557D3A546F643045048E1D68885432CC3`.
+  The comparison evidence is `H:\gc\loader-log.txt`, last written
+  `2026-08-22 16:18:25.260 +08:00`, SHA-256
+  `44FC247913AD6C75A6959FF7DE3BB3E0207A436193A4D4390B1FDA417D58C6E0`,
+  with `JudgTimeOffset = -12` and `GameTimeOffset = 0`. Each log contains one
+  semantic-stage open, one coherent activation, one semantic-stage end, no
+  fatal, and a complete play of the same chart.
+- Offset application is exact and global. All 534 timing-grade calls in the
+  zero run have `grade_recognition_ms - scheduler_native_ms = 0`; all 545 calls
+  in the `-12` run have that difference exactly `-12`. Thus the effective
+  native rule is
+  `grade_recognition_ms = absolute_native_ms + JudgTimeOffset`, with no
+  per-note drift or partial application.
+- The unadjusted absolute input-event timing distributions support a stable
+  late operator/setup bias across the two independent plays. The zero run's scored timing calls
+  have raw mean/median `+15.37/+17 ms`; the `-12` run has raw mean/median
+  `+18.11/+17 ms`. Raw 90th percentiles are `+50` and `+51 ms`. The observed
+  central raw input phase therefore did not become 12 ms earlier in the second run.
+  Applying `-12` moves the judged mean/median to `+6.11/+5 ms`, lowers mean
+  absolute error from `28.23` to `21.75 ms`, and lowers the absolute-error 90th
+  percentile from `55` to `44 ms`.
+- Both runs publish exactly 556 scored native results and zero MISS. The
+  zero-offset result is `53 GOOD / 109 COOL / 394 GREAT`; the `-12` result is
+  `25 GOOD / 74 COOL / 457 GREAT`. GREAT therefore rises from 70.9% to 82.2%,
+  a gain of 63 notes or 11.3 percentage points. Among 499 directly aligned
+  timing-graded authored targets, 100 grades improve, 360 remain equal, and 39
+  worsen. This is a chart-wide improvement rather than a score-count mismatch.
+- The adjustment does not eliminate genuine run-local phase slips. Both logs'
+  longest positive-sign run begins at the same authored 90000-ms target. At
+  zero offset it lasts 43 scored timing calls through 97826 ms with mean
+  `+40.4 ms`; at `-12` it lasts 31 calls through 95739 ms with adjusted mean
+  `+38.1 ms`. The second run's unadjusted mean in that interval is `+50.1 ms`,
+  so the offset shortened and improved the visible run while correctly leaving
+  the remaining input lateness observable. The zero run's longest
+  consecutive below-GREAT run is 17 calls; the `-12` run's is seven.
+- Loader transport does not explain the result difference. Both runs have zero
+  timing/scope-trace drops, late records, sequence errors, overload/cleanup
+  drops, or unavailable clock reads. Mean timing-scope delivery is
+  `3.042/3.147 ms`, queue-age maxima are both 16 ms, and maximum event backlog
+  is `3/2` for zero/`-12`. The native offset and the independently similar raw
+  late bias explain the observed improvement.
+- The evidence supports `-12` as a materially better calibration for this
+  operator/setup than zero. It does not prove `-12` is universally optimal or
+  justify any loader-side adaptive offset. More repeated full-song plays could
+  estimate a stable personal/setup calibration, while dense-section deviations
+  remain truthful per-note absolute timing. The loader timestamp begins at the
+  Raw Input boundary, so these logs alone cannot formally separate human bias
+  from fixed keyboard/USB latency before Windows delivers the message.
 
 ---
 
