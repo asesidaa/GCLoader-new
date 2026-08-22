@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <mutex>
 #include <new>
 #include <optional>
 #include <utility>
@@ -20,15 +19,6 @@ constexpr int kStableReadAttempts = 3;
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 static_assert(std::atomic<bool>::is_always_lock_free);
-
-struct ActiveExactWasapiClockRegistry {
-    std::mutex mutex;
-    std::weak_ptr<ExactWasapiClock> provider;
-    std::uint64_t endpoint_generation{};
-};
-
-ActiveExactWasapiClockRegistry g_active_provider;
-std::atomic<std::uint64_t> g_next_endpoint_generation{1};
 
 struct RawQpcParts {
     std::int64_t whole_seconds{};
@@ -169,12 +159,14 @@ ExactWasapiClock::ExactWasapiClock(
     std::uint32_t output_sample_rate,
     std::uint64_t clock_frequency,
     std::int64_t qpc_frequency,
+    std::uint32_t period_frames,
     std::size_t capacity,
     std::unique_ptr<Slot[]> slots) noexcept
     : endpoint_generation_(endpoint_generation),
       output_sample_rate_(output_sample_rate),
       clock_frequency_(clock_frequency),
       qpc_frequency_(qpc_frequency),
+      period_frames_(period_frames),
       capacity_(capacity),
       slots_(std::move(slots)) {}
 
@@ -224,6 +216,7 @@ std::shared_ptr<ExactWasapiClock> ExactWasapiClock::Create(
         output_sample_rate,
         clock_frequency,
         qpc_frequency,
+        period_frames,
         static_cast<std::size_t>(capacity),
         std::move(slots));
     if (provider == nullptr) {
@@ -534,6 +527,62 @@ ExactOutputClockResult ExactWasapiClock::ResolveQpc(
     };
 }
 
+ExactOutputClockResult ExactWasapiClock::Resolve(
+    const gc::timing::AbsoluteHostTime& timestamp) const noexcept {
+    const auto result = ResolveQpc(timestamp.qpc_ticks);
+    switch (result.status) {
+    case ExactClockStatus::Resolved:
+        resolved_queries_.fetch_add(1, kExactClockAtomicOrder);
+        break;
+    case ExactClockStatus::Pending:
+        pending_queries_.fetch_add(1, kExactClockAtomicOrder);
+        break;
+    case ExactClockStatus::TemporarilyUnavailable:
+        temporarily_unavailable_queries_.fetch_add(
+            1, kExactClockAtomicOrder);
+        break;
+    case ExactClockStatus::HistoryLost:
+        history_lost_queries_.fetch_add(1, kExactClockAtomicOrder);
+        break;
+    case ExactClockStatus::Discontinuous:
+        discontinuous_queries_.fetch_add(1, kExactClockAtomicOrder);
+        break;
+    case ExactClockStatus::NoPlayback:
+    case ExactClockStatus::OutsidePlayback:
+        break;
+    }
+    return result;
+}
+
+ExactOutputClockInfo ExactWasapiClock::info() const noexcept {
+    return {
+        .domain = ExactOutputClockDomain::WasapiQpc,
+        .endpoint_generation = endpoint_generation_,
+        .qpc_frequency = qpc_frequency_,
+        .output_sample_rate = output_sample_rate_,
+        .period_frames = period_frames_,
+        .output_latency_frames = 0,
+        .timestamp_quantum_ns = 0,
+    };
+}
+
+ExactOutputClockCounters ExactWasapiClock::counters() const noexcept {
+    return {
+        .publication_count =
+            published_count_.load(kExactClockAtomicOrder),
+        .resolved_queries =
+            resolved_queries_.load(kExactClockAtomicOrder),
+        .pending_queries =
+            pending_queries_.load(kExactClockAtomicOrder),
+        .temporarily_unavailable_queries =
+            temporarily_unavailable_queries_.load(kExactClockAtomicOrder),
+        .history_lost_queries =
+            history_lost_queries_.load(kExactClockAtomicOrder),
+        .discontinuous_queries =
+            discontinuous_queries_.load(kExactClockAtomicOrder),
+    };
+}
+
 std::uint64_t ExactWasapiClock::endpoint_generation() const noexcept {
     return endpoint_generation_;
 }
@@ -548,67 +597,13 @@ std::uint64_t ExactWasapiClock::publication_count() const noexcept {
 
 std::shared_ptr<const ExactWasapiClock>
 AcquireExactWasapiClock() noexcept {
-    std::lock_guard lock(g_active_provider.mutex);
-    auto provider = g_active_provider.provider.lock();
+    auto provider = AcquireExactOutputClock();
     if (provider == nullptr ||
-        provider->endpoint_generation() !=
-            g_active_provider.endpoint_generation) {
+        provider->info().domain != ExactOutputClockDomain::WasapiQpc) {
         return nullptr;
     }
-    return provider;
+    return std::static_pointer_cast<const ExactWasapiClock>(
+        std::move(provider));
 }
-
-namespace detail {
-
-std::uint64_t NextExactWasapiClockGeneration() noexcept {
-    auto generation =
-        g_next_endpoint_generation.load(kExactClockAtomicOrder);
-    for (;;) {
-        if (generation == 0 ||
-            generation == std::numeric_limits<std::uint64_t>::max()) {
-            return 0;
-        }
-        if (g_next_endpoint_generation.compare_exchange_weak(
-                generation,
-                generation + 1,
-                kExactClockAtomicOrder,
-                kExactClockAtomicOrder)) {
-            return generation;
-        }
-    }
-}
-
-bool RegisterExactWasapiClock(
-    const std::shared_ptr<ExactWasapiClock>& provider) noexcept {
-    if (provider == nullptr || provider->endpoint_generation() == 0) {
-        return false;
-    }
-    std::lock_guard lock(g_active_provider.mutex);
-    auto previous = g_active_provider.provider.lock();
-    if (g_active_provider.endpoint_generation ==
-        provider->endpoint_generation()) {
-        return previous == provider;
-    }
-    if (previous != nullptr) {
-        previous->Invalidate();
-    }
-    g_active_provider.provider = provider;
-    g_active_provider.endpoint_generation =
-        provider->endpoint_generation();
-    return true;
-}
-
-void UnregisterExactWasapiClock(
-    std::uint64_t expected_generation) noexcept {
-    std::lock_guard lock(g_active_provider.mutex);
-    if (g_active_provider.endpoint_generation !=
-        expected_generation) {
-        return;
-    }
-    g_active_provider.provider.reset();
-    g_active_provider.endpoint_generation = 0;
-}
-
-} // namespace detail
 
 } // namespace gc::audio

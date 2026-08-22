@@ -36,9 +36,9 @@ evidence. They are not implementation authority and must not be deleted.
 
 ## Mandatory execution rules
 
-- [ ] Work inline in
+- [x] Work inline in
   `H:\gc\artifacts\GCLoader\.worktrees\asio-audio-backend`; use no agents.
-- [ ] Preserve the user-owned modification to
+- [x] Preserve the user-owned modification to
   `docs/superpowers/plans/2026-08-20-absolute-time-judgement.md`. Never edit,
   stage, revert, or reformat it.
 - [ ] Use `apply_patch` for source and script edits. Use PowerShell 7 directly;
@@ -110,7 +110,7 @@ number of songs, with Test Mode entry remaining an explicit valid stage exit.
 - Modify: `src/Audio/CMakeLists.txt`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Capture the implementation baseline**
+- [x] **Step 1: Capture the implementation baseline**
 
 Run from the worktree:
 
@@ -124,7 +124,7 @@ Expected source baseline: the plan commit created from this document. Record the
 hash in the Execution Record. The only unrelated dirty path must remain the
 August 20 plan named above.
 
-- [ ] **Step 2: Add one paired host-time value type**
+- [x] **Step 2: Add one paired host-time value type**
 
 Create `src/Timing/AbsoluteHostTime.h` as a header-only value type so Input and
 Audio depend on Timing rather than on each other:
@@ -147,7 +147,7 @@ struct AbsoluteHostTime final {
 Do not add a validity helper that rejects `multimedia_time_ms == 0`. QPC retains
 its existing positive-value contract.
 
-- [ ] **Step 3: Define the provider domain, immutable information, counters, and registry**
+- [x] **Step 3: Define the provider domain, immutable information, counters, and registry**
 
 Create `src/Audio/ExactOutputClock.h` with these public concepts:
 
@@ -215,7 +215,7 @@ matching/invalidation behavior.
 Neither exact-output provider may emit either status. Do not revive
 `OutsidePlayback` as an input disposition.
 
-- [ ] **Step 4: Adapt `ExactWasapiClock` as a behavior-preserving provider**
+- [x] **Step 4: Adapt `ExactWasapiClock` as a behavior-preserving provider**
 
 Derive `ExactWasapiClock` from `ExactOutputClock` and add:
 
@@ -249,7 +249,7 @@ Retain `period_frames` as a new immutable metadata member in
 `ExactWasapiClock`; it is diagnostic-only and must not enter the accepted
 resolution calculation.
 
-- [ ] **Step 5: Add the registry source to `gc_audio` and build**
+- [x] **Step 5: Add the registry source to `gc_audio` and build**
 
 Add `ExactOutputClock.cpp` to `src/Audio/CMakeLists.txt`, then run:
 
@@ -1049,8 +1049,8 @@ Update this table during inline execution; do not record imagined results.
 
 | Task | Status | Commit | Evidence / remaining acceptance |
 |---|---|---|---|
-| Plan baseline | Pending | — | Record implementation baseline before Task 1 |
-| 1. Neutral provider/WASAPI preservation | Pending | — | Debug x86 build pending |
+| Plan baseline | Complete | `1ed5ee2` | Isolated worktree; only the user-owned August 20 plan was dirty |
+| 1. Neutral provider/WASAPI preservation | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0; `ResolveQpc` body unchanged |
 | 2. Dual-domain capture | Pending | — | Debug x86 build pending |
 | 3. Generic resolver/scheduler | Pending | — | Debug x86 build pending |
 | 4. Exact ASIO history | Pending | — | Debug x86 build pending |

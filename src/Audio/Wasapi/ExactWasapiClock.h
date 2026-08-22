@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Audio/ExactAudioTime.h"
+#include "Audio/ExactOutputClock.h"
 
 #include <atomic>
 #include <cstddef>
@@ -18,9 +18,9 @@ struct ExactWasapiAnchor {
     std::uint64_t submitted_output_tail{};
 };
 
-class ExactWasapiClock final {
+class ExactWasapiClock final : public ExactOutputClock {
 public:
-    ~ExactWasapiClock();
+    ~ExactWasapiClock() override;
 
     static std::shared_ptr<ExactWasapiClock> Create(
         std::uint64_t endpoint_generation,
@@ -29,7 +29,11 @@ public:
         std::int64_t qpc_frequency,
         std::uint32_t period_frames) noexcept;
     void Publish(const ExactWasapiAnchor&) noexcept;
-    void Invalidate() noexcept;
+    void Invalidate() noexcept override;
+    [[nodiscard]] ExactOutputClockResult Resolve(
+        const gc::timing::AbsoluteHostTime& timestamp) const noexcept override;
+    [[nodiscard]] ExactOutputClockInfo info() const noexcept override;
+    [[nodiscard]] ExactOutputClockCounters counters() const noexcept override;
     ExactOutputClockResult ResolveQpc(
         std::int64_t raw_qpc_ticks) const noexcept;
     [[nodiscard]] std::uint64_t endpoint_generation() const noexcept;
@@ -44,6 +48,7 @@ private:
         std::uint32_t output_sample_rate,
         std::uint64_t clock_frequency,
         std::int64_t qpc_frequency,
+        std::uint32_t period_frames,
         std::size_t capacity,
         std::unique_ptr<Slot[]> slots) noexcept;
 
@@ -55,10 +60,16 @@ private:
     std::uint32_t output_sample_rate_{};
     std::uint64_t clock_frequency_{};
     std::int64_t qpc_frequency_{};
+    std::uint32_t period_frames_{};
     std::size_t capacity_{};
     std::unique_ptr<Slot[]> slots_;
     std::atomic<std::uint64_t> published_count_{};
     std::atomic<bool> invalidated_{};
+    mutable std::atomic<std::uint64_t> resolved_queries_{};
+    mutable std::atomic<std::uint64_t> pending_queries_{};
+    mutable std::atomic<std::uint64_t> temporarily_unavailable_queries_{};
+    mutable std::atomic<std::uint64_t> history_lost_queries_{};
+    mutable std::atomic<std::uint64_t> discontinuous_queries_{};
     std::uint64_t writer_publication_count_{};
     bool writer_has_anchor_{};
     ExactWasapiAnchor writer_previous_{};
@@ -66,16 +77,5 @@ private:
 
 std::shared_ptr<const ExactWasapiClock>
 AcquireExactWasapiClock() noexcept;
-
-namespace detail {
-
-[[nodiscard]] std::uint64_t
-NextExactWasapiClockGeneration() noexcept;
-[[nodiscard]] bool RegisterExactWasapiClock(
-    const std::shared_ptr<ExactWasapiClock>& provider) noexcept;
-void UnregisterExactWasapiClock(
-    std::uint64_t expected_generation) noexcept;
-
-} // namespace detail
 
 } // namespace gc::audio

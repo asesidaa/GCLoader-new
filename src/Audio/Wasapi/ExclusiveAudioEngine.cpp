@@ -280,7 +280,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
 
         if (enable_absolute_time_judgement_) {
             const auto endpoint_generation =
-                detail::NextExactWasapiClockGeneration();
+                detail::NextExactOutputClockGeneration();
             if (endpoint_generation == 0 ||
                 presented_clock_actions.qpc_frequency == 0 ||
                 presented_clock_actions.qpc_frequency >
@@ -304,7 +304,7 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
                     presented_clock_actions.qpc_frequency),
                 frames);
             if (exact_clock_ == nullptr ||
-                !detail::RegisterExactWasapiClock(exact_clock_)) {
+                !detail::RegisterExactOutputClock(exact_clock_)) {
                 failure = {
                     AudioFailureStage::InitializeMixer,
                     E_OUTOFMEMORY,
@@ -517,7 +517,7 @@ void ExclusiveAudioEngine::CleanupExactClock() noexcept {
     const auto endpoint_generation =
         exact_clock_->endpoint_generation();
     exact_clock_->Invalidate();
-    detail::UnregisterExactWasapiClock(endpoint_generation);
+    detail::UnregisterExactOutputClock(endpoint_generation);
     exact_clock_.reset();
 }
 
