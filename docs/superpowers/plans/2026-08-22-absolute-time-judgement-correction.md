@@ -1760,6 +1760,50 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   chart acquire their first long positive run at the same authored target or
   at varying targets.
 
+#### Original-system countermeasures and limits
+
+- The original timing-grade path has no prior-error or prior-grade feedback.
+  `GameplayJudgementState_ComputeTimingGrade` receives the current note and one
+  adjusted recognition millisecond, computes the absolute difference from the
+  authored target, and returns the grade from the native windows. Candidate
+  construction continues to use authored descriptor times and the first
+  incomplete descriptor per row. No proven native path shifts later note
+  targets or subtracts an error merely because the preceding result was SLOW.
+- The original system does have one direct constant-phase calibration:
+  `JudgTimeOffset`. In the common tap path, the native late/opening gates are
+  shifted by that setting and the grade helper receives
+  `recognition_ms - JudgTimeOffset`. It can compensate a repeatable installation
+  bias affecting the entire play, but it cannot detect or cancel a phase slip
+  beginning partway through a dense section. The installed
+  `H:\gc\data\system.cfg` currently has both `JudgTimeOffset = 0` and
+  `GameTimeOffset = 0`; the 137-call runtime identity check independently
+  confirms that no nonzero judgement offset was applied in this run.
+- Original 60-FPS operation captures one physical snapshot per native frame
+  and assigns recognition time as
+  `trunc(frame * 16.666666 ms)`. This independently snaps each edge to a coarse
+  frame boundary and can add up to one frame of apparent variation, so a sign
+  or grade near a boundary may look less stable than with exact timestamps.
+  It is not feedback or re-phasing: a sustained positive physical phase remains
+  positive apart from that quantization noise.
+- Native grade windows tolerate a bounded FAST/SLOW error but do not recenter
+  the following note. If a note becomes overdue, `sub_5D0BE0` can mark that
+  component MISS and allow candidate progression. E-046 proves that a same-row
+  follower is not in the fixed candidate list and cannot reuse the missed
+  note's pressed edge in that recognition step. This is failure/skip
+  progression, not recovery of an accepted SLOW sequence.
+- The native prior-four-frame lookback is forgiveness for paired control IDs
+  `15..19`, allowing the two physical booster components to arrive on nearby
+  frames. It does not apply to timing phase between consecutive chart notes.
+  Held-age, long-note interval, component aggregation, and free-input gates
+  likewise preserve their native mechanics without providing tap-sequence
+  phase correction.
+- Therefore the original system's relevant protections are constant offset
+  calibration, coarse frame quantization, judgement windows, and eventual
+  MISS progression. There is no proven dynamic anti-SLOW latch or tempo-phase
+  recovery to reproduce. A `JudgTimeOffset` change becomes justified only if
+  repeated runtime evidence shows a stable whole-stage bias; using it to hide
+  a run-local slip would move every other note incorrectly.
+
 ---
 
 ## Plan self-review coverage
