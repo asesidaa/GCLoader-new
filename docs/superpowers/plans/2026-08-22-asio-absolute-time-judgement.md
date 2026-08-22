@@ -902,7 +902,7 @@ git commit -m "Enable ASIO absolute-time judgement route"
 - Create outside repo: `H:\gc\temp\deploy-asio-absolute-judgement.ps1`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Review the complete source diff inline**
+- [x] **Step 1: Review the complete source diff inline**
 
 Run:
 
@@ -932,7 +932,7 @@ Review every changed source line directly; do not use agents. Confirm:
 Fix any issue inline, rebuild Debug, and amend the owning task with a new focused
 commit. Do not proceed on a known static issue.
 
-- [ ] **Step 2: Extend the persisted ABI inspection script**
+- [x] **Step 2: Extend the persisted ABI inspection script**
 
 Keep the existing x86/PE32/subsystem, 15 exports, hook symbols, and x86 return
 cleanup checks. Add a required `-BaselineCommit` parameter and make the script
@@ -947,7 +947,7 @@ Add `dumpbin /imports` assertions for `WINMM.dll` and the imported symbols
 `timeGetTime`, `timeBeginPeriod`, and `timeEndPeriod`. These checks prove the
 compiled platform route, not runtime correctness.
 
-- [ ] **Step 3: Run a fresh x86 Release build and static inspection**
+- [x] **Step 3: Run a fresh x86 Release build and static inspection**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -965,7 +965,7 @@ all 15 exports and hook calling conventions, imports the three WinMM functions,
 the matching ConfigGUI executable is freshly built, and the scoped source-diff
 constraints pass. Do not run CTest.
 
-- [ ] **Step 4: Persist a guarded PowerShell 7 deployment script**
+- [x] **Step 4: Persist a guarded PowerShell 7 deployment script**
 
 Create `H:\gc\temp\deploy-asio-absolute-judgement.ps1` that:
 
@@ -989,7 +989,7 @@ Create `H:\gc\temp\deploy-asio-absolute-judgement.ps1` that:
 The script must use no recursive delete, wildcard target, unresolved
 environment-variable destination, or nested shell.
 
-- [ ] **Step 5: Deploy the verified DLL**
+- [x] **Step 5: Deploy the verified DLL and ConfigGUI**
 
 The user has already authorized deployment after implementation:
 
@@ -1001,7 +1001,7 @@ Expected proof: script exits 0, both candidate/deployed SHA-256 pairs match,
 and timestamped rollback copies of the DLL and GUI exist. Do not edit
 `H:\gc\config.toml` automatically.
 
-- [ ] **Step 6: Record static completion without claiming runtime acceptance**
+- [x] **Step 6: Record static completion without claiming runtime acceptance**
 
 Record the task commit hashes, both Release/deployed hash pairs, and backup path
 in the Execution Record. Commit only this plan update if it changed:
@@ -1061,6 +1061,18 @@ Update this table during inline execution; do not record imagined results.
 | 3. Generic resolver/scheduler | Complete | `0079b5b` | Debug x86 `iDmacDrv32` build exited 0 after one stale reset-call correction; judgement formula diff unchanged |
 | 4. Exact ASIO history | Complete | `58b3db9` | Unwired provider built in Debug x86; 60-second preallocated ring and rational modular resolver reviewed inline |
 | 5. ASIO lifecycle wiring | Complete | `2ede19a` | Debug x86 `iDmacDrv32` build exited 0; callback and teardown paths reviewed inline |
-| 6. Runtime/GUI config, route, diagnostics | Complete | Pending commit | Debug x86 DLL and ConfigGUI builds exited 0; shared validator and visible GUI rule agree |
-| 7. Release/static/deploy | Pending | — | DLL/ConfigGUI Release hashes and backups pending |
+| 6. Runtime/GUI config, route, diagnostics | Complete | `3f2f94f` | Debug x86 DLL and ConfigGUI builds exited 0; shared validator and visible GUI rule agree |
+| 7. Release/static/deploy | Complete | This record commit | Fresh x86 Release DLL and GUI builds plus ABI/import inspection exited 0; both verified artifacts deployed with backups |
 | Runtime acceptance | Pending user run | — | 240-FPS ASIO log and offset comparison pending |
+
+Deployment record, 2026-08-22:
+
+- Candidate and deployed DLL SHA-256:
+  `FC100264989FA9505C21C279B84F06AD0921A92829EDFB4439E93BB24825B661`
+- Candidate and deployed ConfigGUI SHA-256:
+  `EEBD6E0F21E5A6139E641A97B1C90BCA39DB9E527476E770DD75F11CAEA96D52`
+- Backup path:
+  `H:\gc\deploy-backups\asio-absolute-judgement-20260822-201611960`
+- Static scope: PE32/x86, 15 exports, hook return cleanup, WinMM imports,
+  source-diff constraints, and Release builds passed. Runtime gameplay
+  acceptance remains pending the user run.
