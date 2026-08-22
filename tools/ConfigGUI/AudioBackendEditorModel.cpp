@@ -95,6 +95,7 @@ const char* FailureStageName(gc::audio::AsioFailureStage stage) noexcept {
     case probe_crash: return "probe_crash";
     case control_panel: return "control_panel";
     case control_panel_crash: return "control_panel_crash";
+    case multimedia_timer: return "multimedia_timer";
     }
     return "unknown";
 }
@@ -106,6 +107,7 @@ const char* ResultDomainName(gc::audio::AsioResultDomain domain) noexcept {
     case asio: return "asio";
     case hresult: return "hresult";
     case win32: return "win32";
+    case winmm: return "winmm";
     }
     return "unknown";
 }

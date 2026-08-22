@@ -736,7 +736,7 @@ allowed.
 Expected proof: build exits 0. Configuration still prevents enabling the new
 judgement route until Task 6.
 
-- [ ] **Step 9: Record and commit Task 5**
+- [x] **Step 9: Record and commit Task 5**
 
 ```powershell
 git add -- `
@@ -768,7 +768,7 @@ git commit -m "Wire exact judgement clock into ASIO lifecycle"
 - Modify: `tools/ConfigGUI/Main.cpp`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Accept exactly WASAPI or ASIO in configuration**
+- [x] **Step 1: Accept exactly WASAPI or ASIO in configuration**
 
 Change validation to accept absolute judgement only for
 `wasapi_exclusive` or `asio`; keep DirectSound rejected and keep exactly
@@ -791,7 +791,7 @@ Also extend the GUI's shared ASIO failure formatter with
 `multimedia_timer` and `winmm` so every value accepted by the updated probe
 protocol has a stable visible name rather than `unknown`.
 
-- [ ] **Step 2: Separate hook capability from the lazily created actual provider**
+- [x] **Step 2: Separate hook capability from the lazily created actual provider**
 
 At DLL attach:
 
@@ -808,7 +808,7 @@ At DLL attach:
 Do not call `AcquireExactOutputClock()` at DLL attach; the engine has not yet
 been created there.
 
-- [ ] **Step 3: Validate the actual provider on the first and every owned call**
+- [x] **Step 3: Validate the actual provider on the first and every owned call**
 
 At the start of `DispatchOuterCall`, before the gameplay group cursor query and
 before `scheduler_.PrepareOuterCall`:
@@ -834,7 +834,7 @@ Pass the already validated provider into the outer probe. Remove the old
 "null means wait until stage exit" behavior; `Pending` applies to provider data,
 not provider existence.
 
-- [ ] **Step 4: Log the bound provider facts at stage activation**
+- [x] **Step 4: Log the bound provider facts at stage activation**
 
 Extend the bounded activation record with:
 
@@ -850,7 +850,7 @@ and exact gameplay playback origin are proven. Existing ASIO startup logging
 already supplies driver name, selected channels, buffer/callback period, and
 reported latency; do not duplicate verbose driver metadata.
 
-- [ ] **Step 5: Distinguish scheduler `Pending` from temporary unavailability**
+- [x] **Step 5: Distinguish scheduler `Pending` from temporary unavailability**
 
 Add a `pending_clock_reads` stage counter and include it in periodic/final
 summaries. At the unresolved-event and current-horizon sites that already
@@ -860,7 +860,7 @@ concurrent reads. Provider-owned counters separately include stage-origin bind
 queries. History-lost and discontinuous results remain immediate, fully logged
 fatal records rather than recoverable counters.
 
-- [ ] **Step 6: Build the complete route**
+- [x] **Step 6: Build the complete route**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -873,7 +873,7 @@ fatal records rather than recoverable counters.
 Expected proof: both builds exit 0; the DLL accepts both configured exact
 domains and the GUI presents the same rule.
 
-- [ ] **Step 7: Record and commit Task 6**
+- [x] **Step 7: Record and commit Task 6**
 
 ```powershell
 git add -- `
@@ -1060,7 +1060,7 @@ Update this table during inline execution; do not record imagined results.
 | 2. Dual-domain capture | Complete | `ff83f6a` | Debug x86 `iDmacDrv32` build exited 0; QPC remains ordering/loss authority |
 | 3. Generic resolver/scheduler | Complete | `0079b5b` | Debug x86 `iDmacDrv32` build exited 0 after one stale reset-call correction; judgement formula diff unchanged |
 | 4. Exact ASIO history | Complete | `58b3db9` | Unwired provider built in Debug x86; 60-second preallocated ring and rational modular resolver reviewed inline |
-| 5. ASIO lifecycle wiring | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0; callback and teardown paths reviewed inline |
-| 6. Runtime/GUI config, route, diagnostics | Pending | — | Debug x86 DLL and ConfigGUI builds pending |
+| 5. ASIO lifecycle wiring | Complete | `2ede19a` | Debug x86 `iDmacDrv32` build exited 0; callback and teardown paths reviewed inline |
+| 6. Runtime/GUI config, route, diagnostics | Complete | Pending commit | Debug x86 DLL and ConfigGUI builds exited 0; shared validator and visible GUI rule agree |
 | 7. Release/static/deploy | Pending | — | DLL/ConfigGUI Release hashes and backups pending |
 | Runtime acceptance | Pending user run | — | 240-FPS ASIO log and offset comparison pending |

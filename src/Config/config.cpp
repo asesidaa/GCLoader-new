@@ -48,11 +48,13 @@ std::expected<void, std::string> ValidateInputConfig(
         return std::unexpected(input_validation.error());
     }
 
+    const auto audio_backend = value.experimental().audio_backend();
     if (value.experimental().enable_absolute_time_judgement() &&
-        value.experimental().audio_backend() != AudioBackend::wasapi_exclusive) {
+        audio_backend != AudioBackend::wasapi_exclusive &&
+        audio_backend != AudioBackend::asio) {
         return std::unexpected(
             "Absolute-time judgement requires "
-            "[experimental].audio_backend = 'wasapi_exclusive'");
+            "[experimental].audio_backend = 'wasapi_exclusive' or 'asio'");
     }
     if (value.experimental().enable_absolute_time_judgement() &&
         value.input_poll_hz() != 1000) {

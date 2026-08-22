@@ -1,6 +1,7 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
 
 #include "Audio/AudioPatch.h"
+#include "Audio/ExactOutputClock.h"
 #include "Config/config.h"
 #include "Input/Polling/GameplayTransitionJournal.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
@@ -609,6 +610,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
     const auto target_fps = config.GetTargetFps();
     const auto input_rate_hz = config.GetInputPollHertz();
     const auto backend = config.GetAudioBackend();
+    const bool audio_hook_committed = gc::audio::IsAudioHookCommitted();
     JudgementDiagnostics().SetStartupTargetFps(target_fps);
     if (!enabled) {
         JudgementDiagnostics().LogStartup({
@@ -616,7 +618,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
             .target_fps = target_fps,
             .input_rate_hz = input_rate_hz,
             .backend = gc::config::AudioBackendName(backend),
-            .exact_provider_capable = false,
+            .audio_hook_committed = audio_hook_committed,
             .installed_site_count = 0,
             .timing_grade_diagnostic_hook = false,
         });
@@ -628,10 +630,19 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
         return;
     }
 
-    if (backend != gc::config::AudioBackend::wasapi_exclusive) {
+    gc::audio::ExactOutputClockDomain expected_domain{};
+    switch (backend) {
+    case gc::config::AudioBackend::wasapi_exclusive:
+        expected_domain = gc::audio::ExactOutputClockDomain::WasapiQpc;
+        break;
+    case gc::config::AudioBackend::asio:
+        expected_domain =
+            gc::audio::ExactOutputClockDomain::AsioMultimediaMilliseconds;
+        break;
+    default:
         PublishStartupFatal(
             AbsoluteJudgementFatalPredicate::
-                AudioBackendNotWasapiExclusive,
+                AudioBackendUnsupportedForAbsoluteJudgement,
             std::format(
                 "stage=capability configured_backend={}",
                 static_cast<std::uint32_t>(backend)));
@@ -642,9 +653,9 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
             std::format(
                 "stage=capability configured_rate_hz={}", input_rate_hz));
     }
-    if (!gc::audio::IsAudioHookCommitted()) {
+    if (!audio_hook_committed) {
         PublishStartupFatal(
-            AbsoluteJudgementFatalPredicate::ExactWasapiRouteUnavailable,
+            AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
             "stage=capability audio_hook_committed=0");
     }
 
@@ -655,7 +666,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
             AbsoluteJudgementFatalPredicate::GameImageAddressInvalid,
             "stage=executable_base module_handle=0");
     }
-    InitializeAbsoluteJudgementRuntime(executable_base);
+    InitializeAbsoluteJudgementRuntime(executable_base, expected_domain);
     const auto installation = InstallHooks(executable_base);
     if (installation) {
         PublishInstallFailure(*installation);
@@ -668,7 +679,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
         .target_fps = target_fps,
         .input_rate_hz = input_rate_hz,
         .backend = gc::config::AudioBackendName(backend),
-        .exact_provider_capable = true,
+        .audio_hook_committed = audio_hook_committed,
         .installed_site_count = 8,
         .timing_grade_diagnostic_hook =
             timing_grade_diagnostic_hook,

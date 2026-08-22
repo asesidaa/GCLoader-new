@@ -1423,7 +1423,7 @@ void DrawExperimental(
     bool absolute_time_judgement =
         experimental.enable_absolute_time_judgement();
     if (ImGui::Checkbox(
-            "Absolute-time judgement (WASAPI)",
+            "Absolute-time judgement",
             &absolute_time_judgement))
     {
         experimental.enable_absolute_time_judgement = absolute_time_judgement;
@@ -1435,16 +1435,17 @@ void DrawExperimental(
     {
         ImGui::SetTooltip(
             "Uses exact audio time for gameplay judgement at every FPS.\n"
-            "Requires WASAPI exclusive, input_poll_hz = 1000, and restart.\n"
+            "Requires WASAPI exclusive or ASIO, input_poll_hz = 1000, and restart.\n"
             "Only HoldSafeFrame = 0 and SlideHoldSafeFrame = 0 are supported.");
     }
     if (absolute_time_judgement &&
         experimental.audio_backend() !=
-            gc::config::AudioBackend::wasapi_exclusive)
+            gc::config::AudioBackend::wasapi_exclusive &&
+        experimental.audio_backend() != gc::config::AudioBackend::asio)
     {
         ImGui::TextColored(
             ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
-            "Select WASAPI exclusive before saving.");
+            "Select WASAPI exclusive or ASIO before saving.");
     }
 
     bool timer_freeze = experimental.enable_timer_freeze_patches();

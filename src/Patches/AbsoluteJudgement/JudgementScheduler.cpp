@@ -198,7 +198,9 @@ void JudgementScheduler::ValidateStageBindingOrFatal(
         FatalStageError(native.error(), &probe.native);
     }
     if (!probe.endpoint) {
-        return;
+        Fatal(
+            AbsoluteJudgementFatalPredicate::ExactOutputProviderMissing,
+            AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable);
     }
     const auto endpoint_info = probe.endpoint->info();
     const auto endpoint = stage_.BindEndpointOrValidate(
@@ -262,8 +264,7 @@ void JudgementScheduler::PrepareOuterCall(
                 AbsoluteJudgementFatalReason::NativeStateMismatch,
                 {static_cast<std::uint64_t>(probe.now.qpc_ticks)});
         }
-        if (probe.group2_cursor_selected && probe.group2_observation &&
-            probe.endpoint) {
+        if (probe.group2_cursor_selected && probe.group2_observation) {
             entry_clock = clock_resolver_.TryBind(
                 *probe.group2_observation,
                 probe.endpoint,
@@ -278,14 +279,11 @@ void JudgementScheduler::PrepareOuterCall(
             }
         }
     } else {
-        const auto endpoint_info = probe.endpoint
-            ? probe.endpoint->info()
-            : gc::audio::ExactOutputClockInfo{};
-        if (probe.endpoint &&
-            (endpoint_info.endpoint_generation !=
+        const auto endpoint_info = probe.endpoint->info();
+        if (endpoint_info.endpoint_generation !=
                  clock_resolver_.anchor().endpoint_generation ||
              probe.endpoint.get() !=
-                 clock_resolver_.anchor().endpoint.get())) {
+                 clock_resolver_.anchor().endpoint.get()) {
             const auto expected_provider = reinterpret_cast<std::uintptr_t>(
                 clock_resolver_.anchor().endpoint.get());
             const auto actual_provider = reinterpret_cast<std::uintptr_t>(
@@ -600,6 +598,7 @@ JudgementScheduler::ResolveUnresolvedPrefixOrFatal() noexcept {
             last_endpoint_position_ = resolved.endpoint_position;
         }
         if (resolved.status == JudgementClockStatus::Pending) {
+            IncrementDiagnostic(counters.pending_clock_reads);
             return JudgementClockStatus::Pending;
         }
         if (resolved.status ==
@@ -709,6 +708,8 @@ void JudgementScheduler::TryActivateOrWait(
     last_j_ = entry_clock.judgement_seconds;
     JudgementDiagnostics().SeedHeartbeatIndex(committed_boundary_index_);
     const auto& anchor = clock_resolver_.anchor();
+    const auto provider_info = anchor.endpoint->info();
+    const auto provider_counters = anchor.endpoint->counters();
     JudgementDiagnostics().LogAbsoluteStageActivation({
         .native = {
             .stage_generation = stage_.native().stage_generation,
@@ -721,6 +722,17 @@ void JudgementScheduler::TryActivateOrWait(
         },
         .input_generation = stage_.cutoff().transport_epoch,
         .endpoint_generation = stage_.endpoint_generation(),
+        .provider_domain = gc::audio::ExactOutputClockDomainName(
+            provider_info.domain),
+        .endpoint_qpc_frequency = provider_info.qpc_frequency,
+        .provider_output_rate = provider_info.output_sample_rate,
+        .provider_period_frames = provider_info.period_frames,
+        .provider_output_latency_frames =
+            provider_info.output_latency_frames,
+        .provider_timestamp_quantum_ns =
+            provider_info.timestamp_quantum_ns,
+        .provider_publication_count =
+            provider_counters.publication_count,
         .buffer_instance_id = anchor.buffer_instance_id,
         .playback_generation = anchor.playback_generation,
         .output_origin = anchor.output_origin,
@@ -771,6 +783,7 @@ void JudgementScheduler::SelectOuterHorizonOrFatal(
         return;
     }
     if (current.status == JudgementClockStatus::Pending) {
+        IncrementDiagnostic(counters.pending_clock_reads);
         return;
     }
     if (current.status != JudgementClockStatus::Resolved ||

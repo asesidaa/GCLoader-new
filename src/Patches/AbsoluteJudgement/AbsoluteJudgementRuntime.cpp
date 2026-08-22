@@ -204,8 +204,11 @@ struct ExactFailure final {
 
 class AbsoluteJudgementRuntime final {
 public:
-    void Initialize(const std::uintptr_t executable_base) noexcept {
+    void Initialize(
+        const std::uintptr_t executable_base,
+        const gc::audio::ExactOutputClockDomain expected_domain) noexcept {
         executable_base_ = executable_base;
+        expected_domain_ = expected_domain;
     }
 
     void BeginSemanticStage(
@@ -299,6 +302,23 @@ public:
     }
 
     void DispatchOuterCall(safetyhook::Context& context) {
+        auto endpoint = gc::audio::AcquireExactOutputClock();
+        if (!endpoint) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::ExactOutputProviderMissing,
+                AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable,
+                {static_cast<std::uint64_t>(expected_domain_)});
+        }
+        const auto endpoint_info = endpoint->info();
+        if (endpoint_info.domain != expected_domain_) {
+            Fail(
+                AbsoluteJudgementFatalPredicate::
+                    ExactOutputProviderDomainMismatch,
+                AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable,
+                {static_cast<std::uint64_t>(expected_domain_),
+                 static_cast<std::uint64_t>(endpoint_info.domain)});
+        }
+
         const auto native = ResolveNativeIdentityOrFatal(context);
 
         std::optional<gc::audio::GameplayAudioCursorObservation> observation;
@@ -325,7 +345,6 @@ public:
             }
         }
 
-        auto endpoint = gc::audio::AcquireExactOutputClock();
         const auto now = CaptureAbsoluteHostTimeOrFatal();
 
         AbsoluteJudgementOuterProbe probe{
@@ -755,6 +774,7 @@ private:
 
     std::uintptr_t executable_base_{};
     std::uintptr_t native_manager_{};
+    gc::audio::ExactOutputClockDomain expected_domain_{};
     JudgementScheduler scheduler_;
 };
 
@@ -766,8 +786,9 @@ AbsoluteJudgementRuntime& Runtime() noexcept {
 } // namespace
 
 void InitializeAbsoluteJudgementRuntime(
-    const std::uintptr_t executable_base) noexcept {
-    Runtime().Initialize(executable_base);
+    const std::uintptr_t executable_base,
+    const gc::audio::ExactOutputClockDomain expected_domain) noexcept {
+    Runtime().Initialize(executable_base, expected_domain);
 }
 
 void BeginAbsoluteJudgementSemanticStage(

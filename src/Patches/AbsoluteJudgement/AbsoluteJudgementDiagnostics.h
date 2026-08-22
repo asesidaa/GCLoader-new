@@ -61,8 +61,10 @@ enum class AbsoluteJudgementFatalPredicate : std::uint16_t {
     CleanupWhileSemanticStageOpen,
     StageGenerationExhausted,
     QueryPerformanceCounterFailed,
-    AudioBackendNotWasapiExclusive,
-    ExactWasapiRouteUnavailable,
+    AudioBackendUnsupportedForAbsoluteJudgement,
+    ExactAudioHookRouteUnavailable,
+    ExactOutputProviderMissing,
+    ExactOutputProviderDomainMismatch,
     InputTransportRateNot1000,
     InputTransportInactiveAtStageEntry,
     InputTransportWorkerBecameInactive,
@@ -252,6 +254,7 @@ struct AbsoluteJudgementStageCounters {
     std::uint64_t last_overload_drop_sequence{};
 
     std::uint64_t exact_clock_reads{};
+    std::uint64_t pending_clock_reads{};
     std::uint64_t resolved_clock_reads{};
     std::uint64_t unavailable_clock_reads{};
     std::uint64_t endpoint_publication_count{};
@@ -311,6 +314,7 @@ struct AbsoluteJudgementCounterSnapshot {
     std::uint64_t last_overload_drop_sequence{};
 
     std::uint64_t exact_clock_reads{};
+    std::uint64_t pending_clock_reads{};
     std::uint64_t resolved_clock_reads{};
     std::uint64_t unavailable_clock_reads{};
     std::uint64_t endpoint_publication_count{};
@@ -371,7 +375,7 @@ struct AbsoluteJudgementStartupRecord {
     std::uint32_t target_fps{};
     std::uint32_t input_rate_hz{};
     std::string_view backend;
-    bool exact_provider_capable{};
+    bool audio_hook_committed{};
     std::uint32_t installed_site_count{};
     bool timing_grade_diagnostic_hook{};
 };
@@ -393,6 +397,13 @@ struct AbsoluteJudgementActivationRecord {
     AbsoluteJudgementNativeIdentityDiagnostic native{};
     std::uint64_t input_generation{};
     std::uint64_t endpoint_generation{};
+    std::string_view provider_domain;
+    std::int64_t endpoint_qpc_frequency{};
+    std::uint32_t provider_output_rate{};
+    std::uint32_t provider_period_frames{};
+    std::uint32_t provider_output_latency_frames{};
+    std::uint32_t provider_timestamp_quantum_ns{};
+    std::uint64_t provider_publication_count{};
     std::uint64_t buffer_instance_id{};
     std::uint64_t playback_generation{};
     std::uint64_t output_origin{};

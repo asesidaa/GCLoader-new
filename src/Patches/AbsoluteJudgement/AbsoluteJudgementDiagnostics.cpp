@@ -112,6 +112,7 @@ AbsoluteJudgementCounterSnapshot SubtractCounters(
         value.first_overload_drop_sequence;
     result.last_overload_drop_sequence = value.last_overload_drop_sequence;
     GC_SUBTRACT_COUNTER(exact_clock_reads);
+    GC_SUBTRACT_COUNTER(pending_clock_reads);
     GC_SUBTRACT_COUNTER(resolved_clock_reads);
     GC_SUBTRACT_COUNTER(unavailable_clock_reads);
     result.endpoint_publication_count = value.endpoint_publication_count;
@@ -287,11 +288,17 @@ FatalPredicateDescriptor FatalPredicateDescriptorFor(
     GC_FATAL_PREDICATE(QueryPerformanceCounterFailed,
         "QueryPerformanceCounter returned FALSE or a nonpositive tick",
         "api_result", "qpc_ticks");
-    GC_FATAL_PREDICATE(AudioBackendNotWasapiExclusive,
-        "absolute-time judgement is enabled with a non-WASAPI-exclusive backend",
+    GC_FATAL_PREDICATE(AudioBackendUnsupportedForAbsoluteJudgement,
+        "absolute-time judgement is enabled with a backend other than WASAPI exclusive or ASIO",
         "configured_backend");
-    GC_FATAL_PREDICATE(ExactWasapiRouteUnavailable,
-        "the exact WASAPI timing route was not committed before judgement startup");
+    GC_FATAL_PREDICATE(ExactAudioHookRouteUnavailable,
+        "the audio hook required to create the configured exact output clock was not committed before judgement startup");
+    GC_FATAL_PREDICATE(ExactOutputProviderMissing,
+        "an owned judgement call has no exact output-clock provider for the configured backend",
+        "expected_domain");
+    GC_FATAL_PREDICATE(ExactOutputProviderDomainMismatch,
+        "the active exact output-clock provider domain differs from the configured backend",
+        "expected_domain", "actual_domain");
     GC_FATAL_PREDICATE(InputTransportRateNot1000,
         "configured input transport rate is not exactly 1000 Hz",
         "configured_rate_hz");
@@ -468,8 +475,10 @@ AbsoluteJudgementFailureClass FailureClassFor(
     using C = AbsoluteJudgementFailureClass;
     using P = AbsoluteJudgementFatalPredicate;
     switch (predicate) {
-    case P::AudioBackendNotWasapiExclusive:
-    case P::ExactWasapiRouteUnavailable:
+    case P::AudioBackendUnsupportedForAbsoluteJudgement:
+    case P::ExactAudioHookRouteUnavailable:
+    case P::ExactOutputProviderMissing:
+    case P::ExactOutputProviderDomainMismatch:
     case P::InputTransportRateNot1000:
     case P::InputTransportInactiveAtStageEntry:
     case P::InputTransportWorkerBecameInactive:
@@ -768,10 +777,13 @@ void AppendCounters(
         counters.last_overload_drop_sequence);
     std::format_to(
         std::back_inserter(message),
-        " {}clock_reads={} {}clock_resolved={} {}clock_unavailable={}"
+        " {}clock_reads={} {}clock_pending={} {}clock_resolved={}"
+        " {}clock_unavailable={}"
         " {}endpoint_publication_count={} {}rounded_fallback=0",
         prefix,
         counters.exact_clock_reads,
+        prefix,
+        counters.pending_clock_reads,
         prefix,
         counters.resolved_clock_reads,
         prefix,
@@ -1008,6 +1020,7 @@ AbsoluteJudgementDiagnostics::SnapshotCounters() const noexcept {
         .last_overload_drop_sequence =
             stage_.last_overload_drop_sequence,
         .exact_clock_reads = stage_.exact_clock_reads,
+        .pending_clock_reads = stage_.pending_clock_reads,
         .resolved_clock_reads = stage_.resolved_clock_reads,
         .unavailable_clock_reads = stage_.unavailable_clock_reads,
         .endpoint_publication_count = stage_.endpoint_publication_count,
@@ -1111,13 +1124,13 @@ void AbsoluteJudgementDiagnostics::LogStartup(
     const AbsoluteJudgementStartupRecord& record) noexcept {
     PLOG_INFO << std::format(
         "AbsoluteJudgement: startup mode={} target_fps={} input_rate_hz={}"
-        " backend={} exact_provider_capable={} rounded_fallback=0 sites={}"
+        " backend={} audio_hook_committed={} rounded_fallback=0 sites={}"
         " timing_grade_diagnostic_hook={}",
         record.enabled ? "absolute" : "stock",
         record.target_fps,
         record.input_rate_hz,
         record.backend,
-        record.exact_provider_capable ? 1 : 0,
+        record.audio_hook_committed ? 1 : 0,
         record.installed_site_count,
         record.timing_grade_diagnostic_hook ? 1 : 0);
 }
@@ -1152,6 +1165,11 @@ void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
         "AbsoluteJudgement: absolute-stage-activation stage_generation={}"
         " native_manager={} tune={} judgement_state={} score_state={}"
         " booster={} player={} input_generation={} endpoint_generation={}"
+        " provider_domain={} endpoint_qpc_frequency={}"
+        " provider_output_rate={} provider_period_frames={}"
+        " provider_output_latency_frames={}"
+        " provider_timestamp_quantum_ns={}"
+        " provider_publication_count={}"
         " buffer_instance_id={} playback_generation={} output_origin={}"
         " source_origin={} output_rate={} source_rate={}",
         record.native.stage_generation,
@@ -1163,6 +1181,13 @@ void AbsoluteJudgementDiagnostics::LogAbsoluteStageActivation(
         record.native.player,
         record.input_generation,
         record.endpoint_generation,
+        record.provider_domain,
+        record.endpoint_qpc_frequency,
+        record.provider_output_rate,
+        record.provider_period_frames,
+        record.provider_output_latency_frames,
+        record.provider_timestamp_quantum_ns,
+        record.provider_publication_count,
         record.buffer_instance_id,
         record.playback_generation,
         record.output_origin,
