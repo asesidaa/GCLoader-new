@@ -1,5 +1,7 @@
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
 
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
+
 #include <Windows.h>
 
 #include <plog/Log.h>
@@ -904,6 +906,8 @@ void* __fastcall MainConstructorHook(
         if (g_runtime == nullptr || !g_runtime->main_constructor_hook) {
             return nullptr;
         }
+        gc::absolute_judgement::
+            EndAbsoluteJudgementSemanticStageForTestMode();
         void* result =
             g_runtime->main_constructor_hook.unsafe_thiscall<void*>(
                 self, parent);

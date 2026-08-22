@@ -18,6 +18,7 @@ void BeginAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
 void EndAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
+void EndAbsoluteJudgementSemanticStageForTestMode() noexcept;
 [[nodiscard]] bool AbsoluteJudgementSemanticStageOpen() noexcept;
 [[nodiscard]] std::uint64_t AbsoluteJudgementStageGeneration() noexcept;
 

@@ -166,8 +166,14 @@ The only gameplay lifecycle is:
   frame-zero input initialization and before the BGM `Play` call.
 - Native state 18 is `ACTIVE_STAGE`. Only it runs input progression,
   recognition, and score.
-- The state-18 branch that selects state 19 is `STAGE_EXIT`. The loader closes
-  the semantic epoch on that branch; that iteration performs no judgement.
+- Natural completion through the state-18 branch that selects state 19 is one
+  `STAGE_EXIT`. The loader closes the semantic epoch on that branch; that
+  iteration performs no judgement.
+- Entering Test Mode while a song is active is also `STAGE_EXIT`. This valid
+  termination bypasses the state-18-to-19 hook. Invocation of the already
+  hooked Test Mode main-form constructor is the committed Test Mode signal;
+  it closes the semantic epoch if one is open. If natural completion already
+  closed it, Test Mode entry is a no-op.
 - Cleanup at `0x662080` later destroys native storage. It must find the semantic
   stage already closed and must not perform stage accounting.
 
@@ -198,9 +204,11 @@ Records before that cutoff are non-stage input and cannot create stage edges.
 Every record at or after the cutoff belongs to the stage, including input before
 the first BGM origin and input after natural audio drain but before stage exit.
 
-The exact new entry and exit patch RVAs and guarded bytes must be recorded from
-the already-audited supported state-machine path before source mutation. This
-is an implementation-site proof, not another lifecycle design decision.
+The exact entry and natural-exit patch RVAs and guarded bytes are recorded from
+the already-audited supported state-machine path. Test Mode termination reuses
+the existing Test Mode main-form constructor hook at RVA `0x173EA0`; it does
+not add another native hook. These are implementation-site proofs, not another
+lifecycle design decision.
 
 ## 6. One continuous absolute stage clock
 

@@ -7,6 +7,9 @@
 
 #include <Windows.h>
 
+#include <plog/Log.h>
+
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -220,6 +223,19 @@ public:
     void EndSemanticStage(const std::uintptr_t tune_manager) noexcept {
         scheduler_.EndSemanticStage(tune_manager);
         native_manager_ = 0;
+    }
+
+    void EndSemanticStageForTestMode() noexcept {
+        if (!scheduler_.SemanticStageOpen()) {
+            return;
+        }
+
+        const auto stage_generation = scheduler_.stage_generation();
+        EndSemanticStage(native_manager_);
+        PLOG_INFO << std::format(
+            "AbsoluteJudgement: semantic-stage-termination"
+            " source=test_mode_entry stage_generation={}",
+            stage_generation);
     }
 
     [[nodiscard]] bool SemanticStageOpen() const noexcept {
@@ -760,6 +776,10 @@ void BeginAbsoluteJudgementSemanticStage(
 void EndAbsoluteJudgementSemanticStage(
     const std::uintptr_t tune_manager) noexcept {
     Runtime().EndSemanticStage(tune_manager);
+}
+
+void EndAbsoluteJudgementSemanticStageForTestMode() noexcept {
+    Runtime().EndSemanticStageForTestMode();
 }
 
 bool AbsoluteJudgementSemanticStageOpen() noexcept {

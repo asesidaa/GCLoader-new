@@ -131,15 +131,20 @@ The relevant game lifecycle is:
   stage BGM pair, initializes gameplay fields, and selects state 18.
 - `ACTIVE_STAGE` is native state 18. Only this state executes the audio-sync,
   input-frame, recognition, and score path.
-- `STAGE_EXIT_TRANSITION` is the state-18 end branch that selects state 19. It
-  performs no input-frame, recognition, or score call on that iteration.
+- `STAGE_EXIT_TRANSITION` is either natural completion through the state-18
+  end branch that selects state 19, or committed Test Mode entry while a song
+  is active. The natural branch performs no input-frame, recognition, or score
+  call on that iteration; Test Mode termination bypasses that branch.
 - Native object cleanup at `0x662080` occurs later and is not the stage exit.
 
 For lossless entry behavior, the loader cutoff belongs at the start of the
 states-16/17 shared transition block, before the native frame-zero input
-initialization and BGM Play call. The loader stage closes when the state-18 end
-branch is selected. This pair must run for every song/retry cycle, independent
-of whether the enclosing Tune object is reused or reconstructed.
+initialization and BGM Play call. Natural completion closes the loader stage
+when the state-18 end branch is selected. Entering Test Mode during an active
+song is a second valid exit which bypasses that branch; committed Test Mode
+entry must therefore close the same loader stage. Every song/retry cycle must
+still have exactly one entry and one exit, independent of whether the enclosing
+Tune object is reused or reconstructed.
 
 Object construction and destruction may arm and destroy loader storage. They
 must not open or close semantic gameplay input history.
@@ -154,12 +159,28 @@ and a byte-for-byte `dumpbin /disasm:bytes` check of the supported
 | Meaning | VA / RVA | Guarded whole instructions | Tune receiver | Hook / continuation | Ordering proof |
 |---|---|---|---|---|---|
 | Semantic stage entry | `0x6641CC` / `0x2641CC` | `8B 8D 4C FD FF FF C7 41 10 00 00 00 00` (`mov ecx,[ebp-0x2B4]`; `mov dword ptr [ecx+0x10],0`) | pointer stored at `[EBP-0x2B4]` | SafetyHook MidHook before the guarded instructions; relocated instructions resume at `0x6641D9` | This is the jump-table case-17 block. A committed case 16 sets state 17 at `0x6641BF..0x6641CB` and falls into it; an existing state 17 enters it directly. The hook therefore runs once at the common transition before Tune frame zero is stored, before `GameplayInput_SetCurrentFrameAndFillHistory` at `0x6641F7`, and before the BGM-pair `Play` at `0x664235`. |
-| Semantic stage exit | `0x664D9A` / `0x264D9A` | `8B 95 4C FD FF FF C7 42 04 13 00 00 00` (`mov edx,[ebp-0x2B4]`; `mov dword ptr [edx+4],19`) | pointer stored at `[EBP-0x2B4]` | SafetyHook MidHook before the guarded instructions; relocated instructions resume at `0x664DA7` | The state-18 end predicate is tested at `0x664D8F..0x664D98`; only its taken exit path reaches this site. The original write selects state 19, then `0x664DA7` jumps past audio sync, input-frame update, and the judgement call at `0x664E06`. |
+| Natural semantic stage exit | `0x664D9A` / `0x264D9A` | `8B 95 4C FD FF FF C7 42 04 13 00 00 00` (`mov edx,[ebp-0x2B4]`; `mov dword ptr [edx+4],19`) | pointer stored at `[EBP-0x2B4]` | SafetyHook MidHook before the guarded instructions; relocated instructions resume at `0x664DA7` | The state-18 end predicate is tested at `0x664D8F..0x664D98`; only its taken exit path reaches this site. The original write selects state 19, then `0x664DA7` jumps past audio sync, input-frame update, and the judgement call at `0x664E06`. |
 
 The entry's two predecessors are controlled forms of the same native
 transition, not unrelated call paths. Neither site splits an instruction, both
 callbacks run before the state mutation they delimit, and both recover the
 same unambiguous receiver from the active Tune-run stack frame.
+
+### 2026-08-22 Test Mode termination correction
+
+Runtime evidence disproved the earlier assumption that every active-song exit
+reaches `0x664D9A`. Entering Test Mode stopped the active song and reached the
+timing-settings UI without a `semantic-stage-end`; the following song entry
+then hit the false `SemanticStageAlreadyOpen` fatal for generation 1. Changing
+`JudgTimeOffset` was not causal; it merely happened inside that Test Mode visit.
+
+The correction reuses the existing Test Mode main-form constructor inline hook
+at RVA `0x173EA0`. At committed Test Mode entry it asks the absolute-judgement
+runtime to end the currently open stage using its stored Tune manager. A
+normally closed stage is a no-op, so the natural exit and Test Mode exit remain
+exactly-once alternatives. The runtime emits one
+`semantic-stage-termination source=test_mode_entry` record after the scheduler
+has completed its existing end accounting.
 
 ### Implemented corrected-scheduler static trace
 
@@ -226,6 +247,7 @@ The Tune state machine establishes the following deterministic facts:
 | States 16/17 shared transition | Frame-zero input setup, BGM Play, select state 18 | Begin one semantic stage before frame-zero capture |
 | State 18 normal iteration | Audio sync, input frame progression, `0x6401E0` judgement/score | Loader owns the scheduled judgement calls |
 | State 18 end branch | Select state 19; no judgement on that iteration | Close that semantic stage |
+| Test Mode main-form construction during state 18 | The game has committed to Test Mode and bypassed the normal state-19 branch | Close the open semantic stage; no-op if already closed |
 | `0x662080` | Later native destruction | Destroy/validate storage only |
 
 The current hooks instead call `BeginNativeStage` after successful
@@ -366,8 +388,8 @@ Classification: `DEFECT`.
 
 Correction: construction may allocate/arm storage only. Begin at every shared
 states-16/17 stage-entry transition before frame-zero input capture. End at
-every state-18-to-19 exit transition. Cleanup only validates/destroys inactive
-storage.
+every natural state-18-to-19 exit transition and at committed Test Mode entry
+when a stage remains open. Cleanup only validates/destroys inactive storage.
 
 ### D-02 — silent stock fallback at the judgement loop
 
@@ -1082,8 +1104,9 @@ document:
 - every raw `abort`, `TerminateProcess`, and fail-fast site in the current input
   patch is classified above;
 - the NON_STAGE -> STAGE -> NON_STAGE lifecycle is tied to the native Tune
-  transition into state 18 and the native state-18 exit to state 19, rather
-  than to object construction and later destruction;
+  transition into state 18 and to either natural state-18 exit to state 19 or
+  committed Test Mode termination, rather than to object construction and
+  later destruction;
 - the latest runtime log is reconciled with one complete sequence trace: the
   two pre-stage records were misclassified and deleted, then the stale lower
   cursor produced the reported false `retained_history_lost` fatal;

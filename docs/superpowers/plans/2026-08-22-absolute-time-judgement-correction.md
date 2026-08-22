@@ -199,6 +199,10 @@ windows for:
 2. the state-18 end branch immediately before it writes/selects state 19 and
    skips judgement for that iteration.
 
+These are the entry and natural-exit sites. The later runtime correction for
+Test Mode termination reuses the independently existing Test Mode main-form
+constructor hook and adds no third native patch site to this transaction.
+
 Append one table to the authoritative audit containing, for both sites:
 
 - loaded VA and image-relative RVA;
@@ -246,6 +250,7 @@ void BeginAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
 void EndAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
+void EndAbsoluteJudgementSemanticStageForTestMode() noexcept;
 [[nodiscard]] bool AbsoluteJudgementSemanticStageOpen() noexcept;
 ```
 
@@ -289,7 +294,10 @@ void JudgementScheduler::EndSemanticStage(
 ```
 
 It accounts accepted cleanup loss, logs semantic end, clears stage-owned state,
-and closes the generation before native state 19 begins.
+and closes the generation before native state 19 begins. The Test Mode entry
+callback invokes the separate no-argument API above; it closes an open stage
+through the same scheduler and stored Tune manager, or does nothing when the
+natural path already closed the stage.
 
 - [ ] **Step 6: Make the owned loop fail closed**
 
@@ -310,9 +318,10 @@ from falling back.
 
 Rename `NativeStageOpen`, `native_stage_open`, and construction/cleanup log
 labels to `semantic_stage_*` throughout the owned module. Do not retain a
-construction or cleanup interception merely to observe lifecycle state: the
-audited state-18 exit transition is the sole semantic close, and the installed
-set remains exactly eight sites.
+construction or cleanup interception merely to observe lifecycle state. The
+audited state-18 exit transition remains the natural semantic close, while the
+existing Test Mode constructor hook handles that valid bypass. The absolute
+judgement transaction's installed set remains exactly eight sites.
 
 - [ ] **Step 8: Run focused static checks and compile**
 
@@ -1894,6 +1903,24 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   utility. That utility must use robust session/inlier selection and actual
   fixed native grade boundaries; it must not fit every GOOD/MISS or local
   dense-passage slip as stable bias.
+
+#### Runtime lifecycle correction: Test Mode terminates an active song
+
+- `H:\gc\loader-log.txt` recorded generation 1 opening and activating, then
+  gameplay stopping when Test Mode was entered, but no semantic-stage end.
+  The next valid song entry terminated on `SemanticStageAlreadyOpen`.
+- The numeric `JudgTimeOffset` change was saved successfully and was not the
+  cause. The defect was the plan's incomplete exit coverage: Test Mode
+  termination bypasses the natural state-18-to-19 exit site.
+- The bounded correction reuses the existing Test Mode main-form constructor
+  hook at RVA `0x173EA0`. It closes the absolute stage only when one is open,
+  through the existing scheduler and stored Tune manager, then records
+  `source=test_mode_entry`. No new native hook, fallback, timeout, exception
+  handling, or synthetic test is introduced.
+- Runtime acceptance is: active song -> enter Test Mode -> leave Test Mode ->
+  load another song. The first stage must log exactly one semantic end plus the
+  Test Mode termination source, and the next stage must open as a fresh
+  generation without a fatal.
 
 ---
 

@@ -11,5 +11,6 @@ target_include_directories(gc_test_mode_timing PRIVATE
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_test_mode_timing PRIVATE
+        gc_runtime_patches
         safetyhook::safetyhook
 )
