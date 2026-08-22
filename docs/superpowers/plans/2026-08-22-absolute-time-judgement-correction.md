@@ -1859,6 +1859,42 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   Raw Input boundary, so these logs alone cannot formally separate human bias
   from fixed keyboard/USB latency before Windows delivers the message.
 
+#### Robust validation candidate after excluding human-error tails
+
+- The live configuration was rechecked before choosing the next experiment:
+  `JudgTimeOffset = -12`, `GameTimeOffset = 0`, and `GreatMinTime = 32`.
+  The next value is a validation candidate, not an automatic configuration
+  change.
+- Calibration must not give every result equal influence. Large isolated
+  FAST/SLOW errors and sustained passage-specific slips are player-performance
+  evidence, not reliable estimates of the stable timing center. The candidate
+  therefore uses only timing records attached to a scored native result,
+  reconstructs unadjusted error as
+  `raw_error = signed_error_ms - configured JudgTimeOffset`, and checks several
+  robust exclusions rather than optimizing one unfiltered histogram.
+- The two independent scored samples contain 504 and 515 timing records. Their
+  raw medians are independently identical at `+17 ms`; median absolute
+  deviations are `18` and `17 ms`. This agreement is insensitive to the
+  magnitude of the largest human errors (`-103..+174 ms` across both samples).
+- For a conservative common fixed GREAT interval of `[-33,+33] ms`, excluding
+  2.5%, 5%, or 7.5% from each timing tail leaves the first run's maximum-GREAT
+  plateau at offsets `-19..-12` and the second run's plateau at `-19..-18`.
+  Minimum-absolute-error tie breaking selects `-17` and `-18` respectively;
+  the pooled maximum is `-19`. A separate two-MAD inlier rule selects `-17`
+  for the first run, `-18` for the second run, and `-18` for the pooled data.
+  A more aggressive 10%-per-tail trim selects `-17` pooled. The robust result
+  is therefore a narrow `-17..-19 ms` region, not evidence for an exact
+  single-millisecond optimum.
+- `JudgTimeOffset = -18` is the midpoint validation candidate. Under the
+  two-MAD inlier rule it retains 809 of 816 pooled inliers as predicted GREAT.
+  The full-sample sensitivity counts are 811 at `-19`, 809 at `-18`, 805 at
+  `-17`, and 801 at the current `-12`; the two-record edge over `-18` is too
+  small to privilege `-19` after only two imperfect plays. A new independent
+  full-song session at `-18` is required before specifying the calibration
+  utility. That utility must use robust session/inlier selection and actual
+  fixed native grade boundaries; it must not fit every GOOD/MISS or local
+  dense-passage slip as stable bias.
+
 ---
 
 ## Plan self-review coverage
