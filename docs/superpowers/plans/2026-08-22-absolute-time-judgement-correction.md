@@ -1705,6 +1705,61 @@ the corresponding `H:\gc\loader-log.txt` is reviewed.
   latency sample. `scope_timing_grade_drops`, interval/cumulative timing drops,
   and scope-trace drops should all remain zero for a useful diagnosis.
 
+### 2026-08-22 persistent-SLOW runtime finding
+
+- Evidence is `H:\gc\loader-log.txt`, last written `2026-08-22 15:42:11`,
+  SHA-256
+  `496EE31D81FB9EDB2548248F9595501A62FD24C26B355E782D222F3D0CEFCA28`.
+  The 240-FPS run opened one coherent semantic stage and recorded 137 native
+  timing-grade calls. Thirteen calls were the first, non-scoring component of
+  a valid two-input note, leaving 124 scored timing results. Diagnostic,
+  scope-trace, scheduler-overload, clock, and cleanup drops/failures were all
+  zero. Observed event backlog was at most two in the periodic summary and at
+  most one on a timing-grade scope.
+- The operator-observed persistent SLOW interval is present in the native
+  results. The longest same-sign run contains 39 consecutive scored timings,
+  from target 20870 ms through 26413 ms. Every signed error is positive; the
+  range is +4 through +67 ms, the mean is +35.28 ms, and 20 results are below
+  GREAT. Only two of those 39 inputs have a nonzero coarse Raw Input queue-age
+  sample. The longest consecutive below-GREAT run contains nine fresh notes,
+  target 23152 ms through 24239 ms, with signed errors +37 through +67 ms and
+  queue age zero for all nine.
+- This run disproves a post-SLOW loader/native judgement latch. For all 137
+  observations, `recognition_ms == native_ms` and truncating the exact
+  `mapped_j` to native milliseconds also equals `native_ms`. Scored note
+  targets never regress, and a note address is never timed again after that
+  note scores. The thirteen repeated addresses occur only before score while
+  completing valid two-input notes. Therefore later SLOW results are computed
+  against fresh, monotonically advancing native targets rather than a stale
+  candidate or retained grade.
+- The first long positive phase starts deterministically. At target 20761 ms,
+  recognition is 20733 ms and the result is -28 ms FAST-side. The next target
+  advances 109 ms while recognition advances 151 ms, adding 42 ms and producing
+  +14 ms. The following target advances 217 ms while recognition advances
+  269 ms, adding another 52 ms and producing +66 ms COOL. Both transition
+  inputs have Raw Input queue age zero; the +66-ms result has only 0.84 ms of
+  loader delivery delay. In general the next signed error is exactly the prior
+  error plus `(next recognition interval - next chart-target interval)`.
+- Consequently the first visible SLOW is an observation of an already-shifted
+  input phase, not the cause of a state transition. If later inputs follow the
+  chart cadence without being earlier by the accumulated offset, that positive
+  offset persists naturally and dense notes make a corrective shorter interval
+  difficult. The run does recover: +66, +47, and +40 ms are followed by +5 ms
+  GREAT at target 21522 ms; the long positive-sign run eventually crosses to
+  -3 ms at target 26630 ms, with additional FAST-side results later.
+- This evidence rules out loader scheduling backlog, loader delivery delay,
+  measured Windows message-queue residence, stale native candidate selection,
+  mapped-time conversion, and a clock/lifecycle failure as the source of the
+  persistent sign. It does not distinguish player/keyboard timing, latency
+  before `WM_INPUT` reaches the Windows queue, or a repeatable audio-to-input
+  phase/calibration effect. Raw Input queue age is not a hardware timestamp.
+  No correction or offset reset is justified by this run: automatically
+  cancelling the positive error would convert genuinely late absolute input
+  into artificial on-time judgement and violate the preserved design goal.
+  The next decisive runtime comparison is whether repeated plays of the same
+  chart acquire their first long positive run at the same authored target or
+  at varying targets.
+
 ---
 
 ## Plan self-review coverage
