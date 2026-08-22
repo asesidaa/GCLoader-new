@@ -463,7 +463,7 @@ Expected proof: build exits 0; all judgement scheduling now uses the neutral
 contract, while the only constructible provider is still WASAPI and delegates
 to unchanged `ResolveQpc` math.
 
-- [ ] **Step 5: Record and commit Task 3**
+- [x] **Step 5: Record and commit Task 3**
 
 ```powershell
 git add -- `
@@ -487,7 +487,7 @@ git commit -m "Drive judgement through exact output clock interface"
 - Modify: `src/Audio/CMakeLists.txt`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Define the ASIO anchor and provider**
+- [x] **Step 1: Define the ASIO anchor and provider**
 
 Use a concrete class deriving from `ExactOutputClock` and an anchor containing:
 
@@ -508,7 +508,7 @@ Use the same versioned-slot, three-attempt stable-read pattern as
 `ExactWasapiClock`; all slot fields and counters read by another thread must be
 lock-free atomics.
 
-- [ ] **Step 2: Publish only stable, successfully rendered ASIO anchors**
+- [x] **Step 2: Publish only stable, successfully rendered ASIO anchors**
 
 `Publish` must verify the fixed generation, nonzero strictly increasing
 sequence, strictly increasing presented frame, nondecreasing submitted tail,
@@ -521,7 +521,7 @@ Return `false` after invalidating on any publication-contract failure so the
 ASIO owner can latch `AsioFailureStage::runtime_clock`. Return `true` only after
 the slot is fully published. Do not log or allocate here.
 
-- [ ] **Step 3: Resolve a multimedia event tick with modular signed arithmetic**
+- [x] **Step 3: Resolve a multimedia event tick with modular signed arithmetic**
 
 For each retained anchor, compute:
 
@@ -560,14 +560,14 @@ floating-point value. Return:
 Never emit `NoPlayback` or `OutsidePlayback`. The playback timeline—not this
 provider—binds the stage origin, and `O(T) < O0` remains a valid signed result.
 
-- [ ] **Step 4: Expose immutable provider information and cumulative counters**
+- [x] **Step 4: Expose immutable provider information and cumulative counters**
 
 Report `domain=AsioMultimediaMilliseconds`, `timestamp_quantum_ns=1'000'000`,
 and the exact generation, QPC frequency, 48-kHz output rate, period frames, and
 reported output latency. Count publications and each returned query status with
 atomics; do not add per-query log records.
 
-- [ ] **Step 5: Add the provider to `gc_audio` and build it unused**
+- [x] **Step 5: Add the provider to `gc_audio` and build it unused**
 
 Add `Asio/ExactAsioClock.cpp` to `src/Audio/CMakeLists.txt` (not the lower-level
 `gc_asio` target, which would create the wrong dependency direction), then run:
@@ -1052,8 +1052,8 @@ Update this table during inline execution; do not record imagined results.
 | Plan baseline | Complete | `1ed5ee2` | Isolated worktree; only the user-owned August 20 plan was dirty |
 | 1. Neutral provider/WASAPI preservation | Complete | `8a7a2b5` | Debug x86 `iDmacDrv32` build exited 0; `ResolveQpc` body unchanged |
 | 2. Dual-domain capture | Complete | `ff83f6a` | Debug x86 `iDmacDrv32` build exited 0; QPC remains ordering/loss authority |
-| 3. Generic resolver/scheduler | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0 after one stale reset-call correction; judgement formula diff unchanged |
-| 4. Exact ASIO history | Pending | — | Debug x86 build pending |
+| 3. Generic resolver/scheduler | Complete | `0079b5b` | Debug x86 `iDmacDrv32` build exited 0 after one stale reset-call correction; judgement formula diff unchanged |
+| 4. Exact ASIO history | Complete | Pending commit | Unwired provider built in Debug x86; 60-second preallocated ring and rational modular resolver reviewed inline |
 | 5. ASIO lifecycle wiring | Pending | — | Debug x86 build pending |
 | 6. Runtime/GUI config, route, diagnostics | Pending | — | Debug x86 DLL and ConfigGUI builds pending |
 | 7. Release/static/deploy | Pending | — | DLL/ConfigGUI Release hashes and backups pending |
