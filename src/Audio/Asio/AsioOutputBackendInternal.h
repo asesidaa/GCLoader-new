@@ -7,6 +7,7 @@
 #include "Audio/Mixer/AudioRenderCore.h"
 
 #include <Windows.h>
+#include <timeapi.h>
 
 #include <atomic>
 #include <cstdint>
@@ -79,6 +80,8 @@ struct AsioOutputBackendActions
     void (*drain_messages)(void* context) noexcept{};
     std::uint64_t (*tick_count_ms)(void* context) noexcept{};
     std::uint32_t (*time_get_time_ms)(void* context) noexcept{};
+    MMRESULT (*begin_timer_period)(void* context, UINT period_ms) noexcept{};
+    MMRESULT (*end_timer_period)(void* context, UINT period_ms) noexcept{};
     AsioCallbackRuntimeActions callback_runtime_actions{};
     DWORD summary_interval_ms{kAsioRuntimeSummaryIntervalMs};
 };
@@ -95,6 +98,7 @@ StartAsioOutputBackendAndWait(
     std::shared_ptr<IAsioOutputObserver>,
     std::shared_ptr<const ma_allocation_callbacks>,
     DWORD startup_clock_timeout_ms,
+    bool enable_absolute_time_judgement,
     const AsioOutputBackendActions&,
     AsioFailure*) noexcept;
 

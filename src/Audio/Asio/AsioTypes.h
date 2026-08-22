@@ -55,6 +55,7 @@ enum class AsioFailureStage : std::uint8_t {
     probe_crash,
     control_panel,
     control_panel_crash,
+    multimedia_timer,
 };
 
 enum class AsioResultDomain : std::uint8_t {
@@ -62,6 +63,7 @@ enum class AsioResultDomain : std::uint8_t {
     asio,
     hresult,
     win32,
+    winmm,
 };
 
 struct AsioFailure {

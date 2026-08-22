@@ -580,7 +580,7 @@ Add `Asio/ExactAsioClock.cpp` to `src/Audio/CMakeLists.txt` (not the lower-level
 Expected proof: build exits 0. The provider exists but is not registered or
 published yet, so the active runtime route remains unchanged.
 
-- [ ] **Step 6: Record and commit Task 4**
+- [x] **Step 6: Record and commit Task 4**
 
 ```powershell
 git add -- `
@@ -606,7 +606,7 @@ git commit -m "Implement exact ASIO output clock history"
 - Modify: `src/Audio/AudioPatch.cpp`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
-- [ ] **Step 1: Add explicit WinMM failure vocabulary**
+- [x] **Step 1: Add explicit WinMM failure vocabulary**
 
 Append (do not renumber existing values) `multimedia_timer` to
 `AsioFailureStage` and `winmm` to `AsioResultDomain`. Update:
@@ -620,7 +620,7 @@ Append (do not renumber existing values) `multimedia_timer` to
 This is shared diagnostic vocabulary only; it does not change ASIO probe or
 control-panel behavior.
 
-- [ ] **Step 2: Inject and pair the multimedia timer APIs**
+- [x] **Step 2: Inject and pair the multimedia timer APIs**
 
 Add these actions to `AsioOutputBackendActions` and production wrappers around
 the corresponding WinMM calls:
@@ -648,7 +648,7 @@ ASIO startup failure, append the `timeEndPeriod(1)` stage/domain/result as a
 bounded `std::format` secondary detail on the startup `AsioFailure`; otherwise
 report it as the primary teardown/runtime failure.
 
-- [ ] **Step 3: Create and register the exact provider before `ASIOStart`**
+- [x] **Step 3: Create and register the exact provider before `ASIOStart`**
 
 After session latency, callback-runtime QPC frequency, driver buffers, and
 render core are known—but before `render_ready_` and `session_->Start()`:
@@ -663,7 +663,7 @@ The existing pre-commit audio fallback may then start WASAPI. The exact ASIO
 provider must be invalidated/unregistered during the failed ASIO teardown before
 WASAPI registers its own provider.
 
-- [ ] **Step 4: Publish beside the existing presented cursor only after successful render**
+- [x] **Step 4: Publish beside the existing presented cursor only after successful render**
 
 For each stable callback, after successful render/conversion and after proving
 the submitted tail addition representable:
@@ -679,7 +679,7 @@ the submitted tail addition representable:
 Do not use callback-entry QPC. Do not log, lock, allocate, or format in this
 path.
 
-- [ ] **Step 5: Configure exact gameplay playback history in ASIO `CreateVoice`**
+- [x] **Step 5: Configure exact gameplay playback history in ASIO `CreateVoice`**
 
 Mirror the accepted WASAPI rule when the feature is enabled and
 `usage == GameplayNativeCandidate`:
@@ -693,7 +693,7 @@ Mirror the accepted WASAPI rule when the feature is enabled and
 Do not add any sound call or note policy. This step only exposes the existing
 output/source playback history to the existing judgement clock binder.
 
-- [ ] **Step 6: Enforce teardown ordering**
+- [x] **Step 6: Enforce teardown ordering**
 
 Preserve the ASIO control-thread owner and order teardown as:
 
@@ -714,7 +714,7 @@ so the startup paths can preserve the secondary result described above instead
 of losing it behind the original failure. Card scans, songs, results, and Test
 Mode do not touch this backend/process lifetime.
 
-- [ ] **Step 7: Add provider counters to bounded ASIO summaries**
+- [x] **Step 7: Add provider counters to bounded ASIO summaries**
 
 Extend `AsioRuntimeCountersSnapshot` and the existing ASIO summary formatter
 with exact-anchor publications and resolved/pending/temporarily-unavailable/
@@ -726,7 +726,7 @@ Do not add stream-insertion formatting for these fields. Either append one
 formatter wholly to `std::format`; no new `ostringstream` expression is
 allowed.
 
-- [ ] **Step 8: Build the wired ASIO backend**
+- [x] **Step 8: Build the wired ASIO backend**
 
 ```powershell
 & 'H:\gc\temp\build-asio-audio-backend.ps1' `
@@ -764,6 +764,7 @@ git commit -m "Wire exact judgement clock into ASIO lifecycle"
 - Modify: `src/Patches/AbsoluteJudgement/JudgementScheduler.cpp`
 - Modify: `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h`
 - Modify: `src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp`
+- Modify: `tools/ConfigGUI/AudioBackendEditorModel.cpp`
 - Modify: `tools/ConfigGUI/Main.cpp`
 - Record: `docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md`
 
@@ -785,6 +786,10 @@ Update `tools/ConfigGUI/Main.cpp` at the same boundary:
 
 The GUI already gates saving through the shared `ValidateInputConfig`; do not
 duplicate another semantic validator in the editor model.
+
+Also extend the GUI's shared ASIO failure formatter with
+`multimedia_timer` and `winmm` so every value accepted by the updated probe
+protocol has a stable visible name rather than `unknown`.
 
 - [ ] **Step 2: Separate hook capability from the lazily created actual provider**
 
@@ -879,6 +884,7 @@ git add -- `
   src/Patches/AbsoluteJudgement/JudgementScheduler.cpp `
   src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h `
   src/Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp `
+  tools/ConfigGUI/AudioBackendEditorModel.cpp `
   tools/ConfigGUI/Main.cpp `
   docs/superpowers/plans/2026-08-22-asio-absolute-time-judgement.md
 git commit -m "Enable ASIO absolute-time judgement route"
@@ -1053,8 +1059,8 @@ Update this table during inline execution; do not record imagined results.
 | 1. Neutral provider/WASAPI preservation | Complete | `8a7a2b5` | Debug x86 `iDmacDrv32` build exited 0; `ResolveQpc` body unchanged |
 | 2. Dual-domain capture | Complete | `ff83f6a` | Debug x86 `iDmacDrv32` build exited 0; QPC remains ordering/loss authority |
 | 3. Generic resolver/scheduler | Complete | `0079b5b` | Debug x86 `iDmacDrv32` build exited 0 after one stale reset-call correction; judgement formula diff unchanged |
-| 4. Exact ASIO history | Complete | Pending commit | Unwired provider built in Debug x86; 60-second preallocated ring and rational modular resolver reviewed inline |
-| 5. ASIO lifecycle wiring | Pending | — | Debug x86 build pending |
+| 4. Exact ASIO history | Complete | `58b3db9` | Unwired provider built in Debug x86; 60-second preallocated ring and rational modular resolver reviewed inline |
+| 5. ASIO lifecycle wiring | Complete | Pending commit | Debug x86 `iDmacDrv32` build exited 0; callback and teardown paths reviewed inline |
 | 6. Runtime/GUI config, route, diagnostics | Pending | — | Debug x86 DLL and ConfigGUI builds pending |
 | 7. Release/static/deploy | Pending | — | DLL/ConfigGUI Release hashes and backups pending |
 | Runtime acceptance | Pending user run | — | 240-FPS ASIO log and offset comparison pending |

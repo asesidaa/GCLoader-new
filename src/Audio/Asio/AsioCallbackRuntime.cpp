@@ -22,7 +22,7 @@ static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
 static_assert(std::atomic<bool>::is_always_lock_free);
 static_assert(std::atomic<AsioCallbackRuntime*>::is_always_lock_free);
 static_assert(
-    static_cast<unsigned>(AsioFailureStage::control_panel_crash) <=
+    static_cast<unsigned>(AsioFailureStage::multimedia_timer) <=
     std::numeric_limits<std::uint8_t>::max());
 
 bool ProductionQueryPerformanceCounter(

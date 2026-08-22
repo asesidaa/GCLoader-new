@@ -60,6 +60,12 @@ struct AsioRuntimeCountersSnapshot
     std::uint64_t non_finite_output_blocks{};
     float maximum_absolute_output_sample{};
     std::uint64_t qpc_frequency{};
+    std::uint64_t exact_anchor_publications{};
+    std::uint64_t exact_resolved_queries{};
+    std::uint64_t exact_pending_queries{};
+    std::uint64_t exact_temporarily_unavailable_queries{};
+    std::uint64_t exact_history_lost_queries{};
+    std::uint64_t exact_discontinuous_queries{};
     std::uint64_t pending_cursor_queries{};
     std::uint64_t unmapped_cursor_failures{};
     MixerDiagnosticsSnapshot mixer{};
@@ -92,6 +98,7 @@ StartAsioOutputBackendAndWait(
     std::shared_ptr<IAsioOutputObserver>,
     std::shared_ptr<const ma_allocation_callbacks>,
     DWORD,
+    bool,
     const AsioOutputBackendActions&,
     AsioFailure*) noexcept;
 } // namespace detail
@@ -107,6 +114,7 @@ public:
         std::shared_ptr<IAsioOutputObserver>,
         std::shared_ptr<const ma_allocation_callbacks>,
         DWORD startup_clock_timeout_ms,
+        bool enable_absolute_time_judgement,
         AsioFailure*) noexcept;
     ~AsioOutputBackend();
 
@@ -136,6 +144,7 @@ private:
         std::shared_ptr<IAsioOutputObserver>,
         std::shared_ptr<const ma_allocation_callbacks>,
         DWORD,
+        bool,
         const detail::AsioOutputBackendActions&,
         AsioFailure*) noexcept;
 

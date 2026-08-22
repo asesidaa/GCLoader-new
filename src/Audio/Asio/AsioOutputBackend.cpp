@@ -5,8 +5,10 @@
 
 #include "Audio/Asio/AsioCallbackRuntime.h"
 #include "Audio/Asio/AsioClock.h"
+#include "Audio/Asio/ExactAsioClock.h"
 #include "Audio/Asio/AsioSampleConverter.h"
 #include "Audio/Asio/AsioSession.h"
+#include "Audio/ExactOutputClock.h"
 #include "Audio/Mixer/AudioRenderCore.h"
 
 #include <Windows.h>
@@ -21,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <initializer_list>
 #include <limits>
 #include <memory>
@@ -109,6 +112,16 @@ std::uint32_t ProductionTimeGetTimeMs(void*) noexcept
     return timeGetTime();
 }
 
+MMRESULT ProductionBeginTimerPeriod(void*, UINT period_ms) noexcept
+{
+    return timeBeginPeriod(period_ms);
+}
+
+MMRESULT ProductionEndTimerPeriod(void*, UINT period_ms) noexcept
+{
+    return timeEndPeriod(period_ms);
+}
+
 AsioFailure Failure(
     AsioFailureStage stage,
     std::string detail,
@@ -123,9 +136,30 @@ AsioFailure Failure(
     };
 }
 
-bool ActionsComplete(const AsioOutputBackendActions& actions) noexcept
+void AppendSecondaryFailure(
+    AsioFailure& primary,
+    const AsioFailure& secondary) noexcept
 {
-    return actions.initialize_com != nullptr &&
+    std::array<char, 320> suffix{};
+    const auto formatted = std::format_to_n(
+        suffix.data(),
+        suffix.size() - 1,
+        " secondary_stage={} secondary_domain={} secondary_result={}"
+        " secondary_detail={}",
+        static_cast<unsigned>(secondary.stage),
+        static_cast<unsigned>(secondary.domain),
+        secondary.result,
+        secondary.detail);
+    const auto size = (std::min)(
+        static_cast<std::size_t>(formatted.size), suffix.size() - 1);
+    primary.detail.append(suffix.data(), size);
+}
+
+bool ActionsComplete(
+    const AsioOutputBackendActions& actions,
+    const bool enable_absolute_time_judgement) noexcept
+{
+    const bool base_complete = actions.initialize_com != nullptr &&
         actions.uninitialize_com != nullptr &&
         actions.create_manual_event != nullptr &&
         actions.signal_event != nullptr &&
@@ -135,6 +169,10 @@ bool ActionsComplete(const AsioOutputBackendActions& actions) noexcept
         actions.drain_messages != nullptr &&
         actions.tick_count_ms != nullptr &&
         actions.time_get_time_ms != nullptr;
+    return base_complete &&
+        (!enable_absolute_time_judgement ||
+         (actions.begin_timer_period != nullptr &&
+          actions.end_timer_period != nullptr));
 }
 
 DWORD BoundedDeadline(DWORD requested) noexcept
@@ -171,6 +209,8 @@ const char* RuntimeFailureDetail(AsioFailureStage stage) noexcept
         return "ASIO buffer disposal failed during teardown";
     case AsioFailureStage::restore_sample_rate:
         return "ASIO sample-rate restoration failed during teardown";
+    case AsioFailureStage::multimedia_timer:
+        return "timeEndPeriod(1) failed during ASIO absolute-clock teardown";
     default:
         return "ASIO runtime failed; restart required";
     }
@@ -361,6 +401,8 @@ AsioOutputBackendActions ProductionAsioOutputBackendActions() noexcept
         .drain_messages = &ProductionDrainMessages,
         .tick_count_ms = &ProductionTickCountMs,
         .time_get_time_ms = &ProductionTimeGetTimeMs,
+        .begin_timer_period = &ProductionBeginTimerPeriod,
+        .end_timer_period = &ProductionEndTimerPeriod,
         .callback_runtime_actions =
             ProductionAsioCallbackRuntimeActions(),
         .summary_interval_ms = kAsioRuntimeSummaryIntervalMs,
@@ -378,6 +420,7 @@ public:
         std::shared_ptr<IAsioOutputObserver> observer,
         std::shared_ptr<const ma_allocation_callbacks> allocations,
         DWORD startup_clock_timeout_ms,
+        bool enable_absolute_time_judgement,
         AsioOutputBackendActions actions)
         : game_window_(game_window),
           request_(std::move(request)),
@@ -387,6 +430,8 @@ public:
           mixer_allocations_(std::move(allocations)),
           startup_clock_timeout_ms_(
               BoundedDeadline(startup_clock_timeout_ms)),
+          enable_absolute_time_judgement_(
+              enable_absolute_time_judgement),
           actions_(actions)
     {
     }
@@ -473,6 +518,28 @@ public:
                 *result = MA_INVALID_OPERATION;
             }
             return nullptr;
+        }
+        if (enable_absolute_time_judgement_ &&
+            usage == VoiceUsage::GameplayNativeCandidate)
+        {
+            const auto buffer_instance_id = timeline != nullptr
+                ? timeline->exact_buffer_instance_id()
+                : 0;
+            const auto endpoint_generation = exact_clock_ != nullptr
+                ? exact_clock_->info().endpoint_generation
+                : 0;
+            if (exact_clock_ == nullptr || timeline == nullptr ||
+                buffer_instance_id == 0 || endpoint_generation == 0 ||
+                !timeline->ConfigureExactPlaybackHistory(
+                    buffer_instance_id, endpoint_generation))
+            {
+                if (result != nullptr)
+                {
+                    *result = MA_INVALID_OPERATION;
+                }
+                LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                return nullptr;
+            }
         }
         return render_core_->CreateVoice(
             format,
@@ -568,18 +635,26 @@ private:
         auto initialized = InitializeBackend();
         if (!initialized)
         {
-            TeardownOnControlThread();
+            auto failure = std::move(initialized.error());
+            if (const auto teardown_failure = TeardownOnControlThread())
+            {
+                AppendSecondaryFailure(failure, *teardown_failure);
+            }
             actions_.uninitialize_com(actions_.context);
-            CompleteStartupFailure(std::move(initialized.error()));
+            CompleteStartupFailure(std::move(failure));
             return;
         }
 
         auto stable = WaitForStableRender();
         if (!stable)
         {
-            TeardownOnControlThread();
+            auto failure = std::move(stable.error());
+            if (const auto teardown_failure = TeardownOnControlThread())
+            {
+                AppendSecondaryFailure(failure, *teardown_failure);
+            }
             actions_.uninitialize_com(actions_.context);
-            CompleteStartupFailure(std::move(stable.error()));
+            CompleteStartupFailure(std::move(failure));
             return;
         }
 
@@ -589,11 +664,25 @@ private:
         actions_.signal_event(actions_.context, startup_event_);
 
         auto runtime_failure = MonitorCommittedRuntime();
-        TeardownOnControlThread();
+        const auto teardown_failure = TeardownOnControlThread();
         if (!runtime_failure &&
             first_fault_claimed_.load(std::memory_order_acquire))
         {
             runtime_failure = BuildLatchedFailure();
+        }
+        if (teardown_failure)
+        {
+            if (!runtime_failure)
+            {
+                runtime_failure = *teardown_failure;
+            }
+            else if (runtime_failure->stage != teardown_failure->stage ||
+                     runtime_failure->domain != teardown_failure->domain ||
+                     runtime_failure->result != teardown_failure->result)
+            {
+                AppendSecondaryFailure(
+                    *runtime_failure, *teardown_failure);
+            }
         }
         const auto counters = SnapshotCounters();
         if (runtime_failure)
@@ -617,6 +706,21 @@ private:
                 return std::unexpected(Failure(
                     AsioFailureStage::init,
                     "ASIO runtime dependencies and game HWND are required"));
+            }
+
+            if (enable_absolute_time_judgement_)
+            {
+                const auto timer_result = actions_.begin_timer_period(
+                    actions_.context, 1);
+                if (timer_result != TIMERR_NOERROR)
+                {
+                    return std::unexpected(Failure(
+                        AsioFailureStage::multimedia_timer,
+                        "timeBeginPeriod(1) failed before ASIO startup",
+                        AsioResultDomain::winmm,
+                        timer_result));
+                }
+                timer_period_active_ = true;
             }
 
             auto registration = ResolveAsioDriver(
@@ -701,6 +805,42 @@ private:
             clock_tracker_.Reset(
                 request_.buffer_frames,
                 session_->report().output_latency_frames);
+            if (enable_absolute_time_judgement_)
+            {
+                const auto callback = callback_runtime_->Snapshot();
+                const auto endpoint_generation =
+                    detail::NextExactOutputClockGeneration();
+                if (endpoint_generation == 0 ||
+                    callback.qpc_frequency == 0 ||
+                    callback.qpc_frequency >
+                        static_cast<std::uint64_t>(
+                            (std::numeric_limits<std::int64_t>::max)()))
+                {
+                    return std::unexpected(Failure(
+                        AsioFailureStage::startup_clock,
+                        "ASIO exact clock generation or QPC frequency is invalid"));
+                }
+                exact_clock_ = ExactAsioClock::Create(
+                    endpoint_generation,
+                    48'000,
+                    static_cast<std::int64_t>(callback.qpc_frequency),
+                    request_.buffer_frames,
+                    session_->report().output_latency_frames);
+                if (exact_clock_ == nullptr)
+                {
+                    return std::unexpected(Failure(
+                        AsioFailureStage::startup_clock,
+                        "Could not allocate the ASIO exact clock history"));
+                }
+                exact_endpoint_generation_ = endpoint_generation;
+                if (!detail::RegisterExactOutputClock(exact_clock_))
+                {
+                    return std::unexpected(Failure(
+                        AsioFailureStage::startup_clock,
+                        "Could not register the ASIO exact clock provider"));
+                }
+                exact_clock_registered_ = true;
+            }
             endpoint_buffer_frames_.store(
                 request_.buffer_frames,
                 std::memory_order_release);
@@ -879,7 +1019,26 @@ private:
         }
     }
 
-    void TeardownOnControlThread() noexcept
+    std::optional<AsioFailure> ReleaseTimerPeriod() noexcept
+    {
+        if (!timer_period_active_)
+        {
+            return std::nullopt;
+        }
+        timer_period_active_ = false;
+        const auto result = actions_.end_timer_period(actions_.context, 1);
+        if (result == TIMERR_NOERROR)
+        {
+            return std::nullopt;
+        }
+        return Failure(
+            AsioFailureStage::multimedia_timer,
+            "timeEndPeriod(1) failed during ASIO absolute-clock teardown",
+            AsioResultDomain::winmm,
+            result);
+    }
+
+    std::optional<AsioFailure> TeardownOnControlThread() noexcept
     {
         stopping_.store(true, std::memory_order_release);
         render_ready_.store(false, std::memory_order_release);
@@ -908,6 +1067,20 @@ private:
             final_callback_snapshot_ = callback_runtime_->Snapshot();
             has_final_callback_snapshot_ = true;
         }
+        if (exact_clock_ != nullptr)
+        {
+            final_exact_clock_counters_ = exact_clock_->counters();
+            has_final_exact_clock_counters_ = true;
+            exact_clock_->Invalidate();
+            if (exact_clock_registered_)
+            {
+                detail::UnregisterExactOutputClock(
+                    exact_endpoint_generation_);
+            }
+            exact_clock_registered_ = false;
+            exact_endpoint_generation_ = 0;
+            exact_clock_.reset();
+        }
         if (session_ != nullptr)
         {
             if (auto closed = session_->Close(); !closed)
@@ -925,6 +1098,15 @@ private:
         {
             channel = {};
         }
+        auto timer_failure = ReleaseTimerPeriod();
+        if (timer_failure)
+        {
+            LatchRuntimeFault(
+                timer_failure->stage,
+                timer_failure->domain,
+                timer_failure->result);
+        }
+        return timer_failure;
     }
 
     void CompleteStartupFailure(AsioFailure failure) noexcept
@@ -1005,9 +1187,38 @@ private:
             LatchRuntimeFault(AsioFailureStage::runtime_clock);
             return;
         }
+        const auto submitted_output_tail =
+            decision.render_output_frame_begin + request_.buffer_frames;
+        if (enable_absolute_time_judgement_)
+        {
+            if (exact_clock_ == nullptr ||
+                exact_endpoint_generation_ == 0 ||
+                exact_anchor_sequence_ ==
+                    (std::numeric_limits<std::uint64_t>::max)())
+            {
+                ClearAsioBlock(request.buffer_index);
+                LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                return;
+            }
+            const auto next_sequence = exact_anchor_sequence_ + 1;
+            if (!exact_clock_->Publish({
+                    .sequence = next_sequence,
+                    .endpoint_generation = exact_endpoint_generation_,
+                    .presented_output_frame =
+                        decision.presented_output_frame,
+                    .system_time_ns = decision.system_time_ns,
+                    .submitted_output_tail = submitted_output_tail,
+                }))
+            {
+                ClearAsioBlock(request.buffer_index);
+                LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                return;
+            }
+            exact_anchor_sequence_ = next_sequence;
+        }
         presented_clock_->Publish(
             decision,
-            decision.render_output_frame_begin + request_.buffer_frames);
+            submitted_output_tail);
         if (!CallOutputReady())
         {
             return;
@@ -1147,6 +1358,11 @@ private:
             : has_final_callback_snapshot_
                 ? final_callback_snapshot_
                 : AsioCallbackRuntimeSnapshot{};
+        const auto exact = exact_clock_ != nullptr
+            ? exact_clock_->counters()
+            : has_final_exact_clock_counters_
+                ? final_exact_clock_counters_
+                : ExactOutputClockCounters{};
         const auto render = render_diagnostics_.Snapshot();
         return {
             .callbacks = callback.callbacks,
@@ -1220,6 +1436,13 @@ private:
             .maximum_absolute_output_sample =
                 render.maximum_absolute_output_sample,
             .qpc_frequency = callback.qpc_frequency,
+            .exact_anchor_publications = exact.publication_count,
+            .exact_resolved_queries = exact.resolved_queries,
+            .exact_pending_queries = exact.pending_queries,
+            .exact_temporarily_unavailable_queries =
+                exact.temporarily_unavailable_queries,
+            .exact_history_lost_queries = exact.history_lost_queries,
+            .exact_discontinuous_queries = exact.discontinuous_queries,
             .pending_cursor_queries =
                 pending_cursor_queries_.load(std::memory_order_relaxed),
             .unmapped_cursor_failures =
@@ -1237,7 +1460,9 @@ private:
     std::shared_ptr<IAsioOutputObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
     DWORD startup_clock_timeout_ms_{};
+    bool enable_absolute_time_judgement_{};
     AsioOutputBackendActions actions_{};
+    bool timer_period_active_{};
 
     std::thread control_thread_;
     HANDLE startup_event_{};
@@ -1253,6 +1478,12 @@ private:
     std::unique_ptr<AsioSession> session_;
     std::unique_ptr<AsioCallbackRuntime> callback_runtime_;
     std::unique_ptr<AudioRenderCore> render_core_;
+    std::shared_ptr<ExactAsioClock> exact_clock_;
+    ExactOutputClockCounters final_exact_clock_counters_{};
+    bool has_final_exact_clock_counters_{};
+    bool exact_clock_registered_{};
+    std::uint64_t exact_endpoint_generation_{};
+    std::uint64_t exact_anchor_sequence_{};
     AsioPresentedClockPublication* presented_clock_{};
     AsioClockTracker clock_tracker_;
     std::array<ASIOSampleType, 2> channel_types_{};
@@ -1283,6 +1514,7 @@ std::unique_ptr<AsioOutputBackend> StartAsioOutputBackendAndWait(
     std::shared_ptr<IAsioOutputObserver> observer,
     std::shared_ptr<const ma_allocation_callbacks> allocations,
     DWORD startup_clock_timeout_ms,
+    bool enable_absolute_time_judgement,
     const AsioOutputBackendActions& actions,
     AsioFailure* failure) noexcept
 {
@@ -1290,7 +1522,7 @@ std::unique_ptr<AsioOutputBackend> StartAsioOutputBackendAndWait(
     {
         *failure = {};
     }
-    if (!ActionsComplete(actions))
+    if (!ActionsComplete(actions, enable_absolute_time_judgement))
     {
         if (failure != nullptr)
         {
@@ -1310,6 +1542,7 @@ std::unique_ptr<AsioOutputBackend> StartAsioOutputBackendAndWait(
             std::move(observer),
             std::move(allocations),
             startup_clock_timeout_ms,
+            enable_absolute_time_judgement,
             actions);
         auto backend = std::unique_ptr<AsioOutputBackend>(
             new AsioOutputBackend(std::move(state)));
@@ -1384,6 +1617,7 @@ std::unique_ptr<AsioOutputBackend> AsioOutputBackend::StartAndWait(
     std::shared_ptr<IAsioOutputObserver> observer,
     std::shared_ptr<const ma_allocation_callbacks> allocations,
     DWORD startup_clock_timeout_ms,
+    bool enable_absolute_time_judgement,
     AsioFailure* failure) noexcept
 {
     return detail::StartAsioOutputBackendAndWait(
@@ -1394,6 +1628,7 @@ std::unique_ptr<AsioOutputBackend> AsioOutputBackend::StartAndWait(
         std::move(observer),
         std::move(allocations),
         startup_clock_timeout_ms,
+        enable_absolute_time_judgement,
         detail::ProductionAsioOutputBackendActions(),
         failure);
 }

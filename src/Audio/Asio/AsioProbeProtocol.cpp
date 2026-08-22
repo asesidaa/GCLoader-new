@@ -341,11 +341,11 @@ bool IsKnownProbeMode(std::uint32_t value) noexcept {
 bool IsKnownFailureStage(std::uint32_t value) noexcept {
     return value <=
         static_cast<std::uint32_t>(
-            AsioFailureStage::control_panel_crash);
+            AsioFailureStage::multimedia_timer);
 }
 
 bool IsKnownResultDomain(std::uint32_t value) noexcept {
-    return value <= static_cast<std::uint32_t>(AsioResultDomain::win32);
+    return value <= static_cast<std::uint32_t>(AsioResultDomain::winmm);
 }
 
 bool IsKnownSampleType(std::int32_t value) noexcept {

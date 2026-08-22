@@ -130,6 +130,7 @@ const char* asio_failure_stage_name(AsioFailureStage stage) noexcept {
     case AsioFailureStage::probe_crash: return "probe_crash";
     case AsioFailureStage::control_panel: return "control_panel";
     case AsioFailureStage::control_panel_crash: return "control_panel_crash";
+    case AsioFailureStage::multimedia_timer: return "multimedia_timer";
     }
     return "unknown";
 }
@@ -140,6 +141,7 @@ const char* asio_result_domain_name(AsioResultDomain domain) noexcept {
     case AsioResultDomain::asio: return "asio";
     case AsioResultDomain::hresult: return "hresult";
     case AsioResultDomain::win32: return "win32";
+    case AsioResultDomain::winmm: return "winmm";
     }
     return "unknown";
 }
@@ -604,7 +606,17 @@ std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters) {
         << " active_voices=" << counters.mixer.active_voices
         << " maximum_simultaneous_voices="
         << counters.mixer.maximum_simultaneous_voices;
-    return stream.str();
+    return stream.str() + std::format(
+        " exact_anchor_publications={} exact_resolved_queries={}"
+        " exact_pending_queries={}"
+        " exact_temporarily_unavailable_queries={}"
+        " exact_history_lost_queries={} exact_discontinuous_queries={}",
+        counters.exact_anchor_publications,
+        counters.exact_resolved_queries,
+        counters.exact_pending_queries,
+        counters.exact_temporarily_unavailable_queries,
+        counters.exact_history_lost_queries,
+        counters.exact_discontinuous_queries);
 }
 
 void emit_info(
@@ -843,9 +855,12 @@ private:
 class ProductionAsioOutputBackendFactory final
     : public IAsioOutputBackendFactory {
 public:
-    explicit ProductionAsioOutputBackendFactory(
-        detail::AudioPatchPlatformActions actions) noexcept
-        : actions_(actions) {}
+    ProductionAsioOutputBackendFactory(
+        detail::AudioPatchPlatformActions actions,
+        const bool enable_absolute_time_judgement) noexcept
+        : actions_(actions),
+          enable_absolute_time_judgement_(
+              enable_absolute_time_judgement) {}
 
     std::unique_ptr<IAudioEngineServices> Start(
         HWND game_window,
@@ -861,6 +876,7 @@ public:
                 std::move(observer),
                 {},
                 2'000,
+                enable_absolute_time_judgement_,
                 failure);
         } catch (...) {
             if (failure != nullptr) {
@@ -875,6 +891,7 @@ public:
 
 private:
     detail::AudioPatchPlatformActions actions_{};
+    bool enable_absolute_time_judgement_{};
 };
 
 class ProductionAudioBackendControllerReporter final
@@ -1017,7 +1034,9 @@ struct ProductionDetourState {
               production_platform_actions(),
               diagnostics,
               enable_absolute_time_judgement),
-          asio(production_platform_actions()),
+          asio(
+              production_platform_actions(),
+              enable_absolute_time_judgement),
           factory(config, wasapi, asio, reporter) {
         report_audio_buffer_handoff(
             production_platform_actions(),
