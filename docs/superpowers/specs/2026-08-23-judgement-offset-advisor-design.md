@@ -245,13 +245,19 @@ retained distribution, preserving future timing margin on both sides. It also
 prevents the current offset from being retained merely because it happens to
 lie somewhere inside a broad finite-sample plateau.
 
-If two adjacent integers have identical absolute-error loss, their arithmetic
-midpoint is rounded to the nearest integer with an exact half rounded away from
-zero. Each estimator therefore contributes exactly one centered integer choice.
+If one connected minimum-loss candidate interval contains more than one integer,
+select its arithmetic midpoint and round an exact half away from zero. If the
+same minimum loss occurs in disconnected maximum-GREAT candidate intervals,
+the estimator is ambiguous rather than evidence for either timing mode. The
+advisor retains its statistics but produces no cross-estimator suggestion for
+that run. This is the conservative handling for a theoretically possible,
+balanced bimodal population; ordinary single-player runs are expected to have
+one connected winning interval.
 
 ### Cross-estimator recommendation
 
-Collect the four centered integer choices, one from each estimator.
+Collect the four centered integer choices, one from each unambiguous estimator.
+All four estimators must be unambiguous before a suggestion can be produced.
 
 - `Estimator range` is their minimum through maximum.
 - The estimator spread is `maximum - minimum` in milliseconds.
@@ -322,6 +328,8 @@ Result states are:
 - one usable song: provisional suggestion when estimator spread permits;
 - two or more usable songs: stable suggestion when estimator spread permits;
 - estimator spread above 3 ms: statistics and range without a suggestion; and
+- a disconnected equal optimum in any estimator: no suggestion and the concise
+  result `Data is too diverse to give a suggestion.`; and
 - varied applied offsets within one run: allowed, normalized per observation,
   and displayed as varied rather than as one last observed value.
 
