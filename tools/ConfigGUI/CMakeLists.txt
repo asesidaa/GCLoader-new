@@ -15,6 +15,7 @@ add_library(gc_config_gui_model STATIC
         AudioBackendEditorModel.cpp
         AudioOperationWorker.cpp
         InputEditorModel.cpp
+        JudgementOffsetAdvisor.cpp
 )
 target_include_directories(gc_config_gui_model PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
