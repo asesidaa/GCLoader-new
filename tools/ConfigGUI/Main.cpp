@@ -3,6 +3,7 @@
 #include "AudioBackendEditorModel.h"
 #include "AudioOperationWorker.h"
 #include "InputEditorModel.h"
+#include "JudgementOffsetAdvisor.h"
 #include "Win32D3D11Host.h"
 
 #include "Audio/Asio/AsioDriverCatalog.h"
@@ -32,6 +33,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <format>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -46,6 +48,11 @@
 namespace {
 
 constexpr std::array<USHORT, 4> kRawInputUsages{0x06, 0x05, 0x04, 0x08};
+
+struct JudgementOffsetAdvisorUiState {
+    std::optional<gc::config_gui::JudgementOffsetAnalysis> analysis;
+    std::string error;
+};
 
 class GuiComApartment final {
 public:
@@ -1377,12 +1384,232 @@ void DrawAsioSettings(
     }
 }
 
+std::string FormatSignedMilliseconds(const std::int32_t value)
+{
+    return value == 0
+        ? std::string{"0 ms"}
+        : std::format("{:+} ms", value);
+}
+
+std::string FormatSignedMilliseconds(const double value)
+{
+    return value == 0.0
+        ? std::string{"0 ms"}
+        : std::format("{:+} ms", value);
+}
+
+std::string FormatMilliseconds(const double value)
+{
+    return std::format("{} ms", value);
+}
+
+std::string FormatEstimatorRange(
+    const std::int32_t minimum,
+    const std::int32_t maximum)
+{
+    return std::format("{}..{} ms", minimum, maximum);
+}
+
+void DrawJudgementOffsetAdvisor(
+    const std::filesystem::path& log_path,
+    JudgementOffsetAdvisorUiState& state)
+{
+    ImGui::TextUnformatted("Judgement offset advisor");
+    ImGui::SameLine();
+    if (ImGui::Button("Analyze latest run"))
+    {
+        auto result =
+            gc::config_gui::AnalyzeJudgementOffsetLog(log_path);
+        if (result)
+        {
+            state.analysis = std::move(*result);
+            state.error.clear();
+        }
+        else
+        {
+            state.analysis.reset();
+            state.error = result.error().message;
+        }
+    }
+
+    if (!state.error.empty())
+    {
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.35F, 0.35F, 1.0F),
+            "%s",
+            state.error.c_str());
+    }
+    if (!state.analysis)
+    {
+        return;
+    }
+
+    const auto& analysis = *state.analysis;
+    auto suggestion = std::string{"No suggestion"};
+    auto estimator_range = std::string{"Unavailable"};
+    auto projected_great = std::string{"Unavailable"};
+    if (analysis.estimate)
+    {
+        const auto& estimate = *analysis.estimate;
+        if (estimate.data_too_diverse)
+        {
+            estimator_range = "Diverse";
+        }
+        else if (estimate.estimator_min_ms &&
+            estimate.estimator_max_ms)
+        {
+            estimator_range = FormatEstimatorRange(
+                *estimate.estimator_min_ms,
+                *estimate.estimator_max_ms);
+        }
+
+        if (estimate.suggested_offset_ms)
+        {
+            suggestion = FormatSignedMilliseconds(
+                *estimate.suggested_offset_ms);
+            if (analysis.suggestion_strength ==
+                gc::config_gui::JudgementOffsetSuggestionStrength::provisional)
+            {
+                suggestion = std::format("{} (provisional)", suggestion);
+            }
+        }
+        if (estimate.projected_eligible_great)
+        {
+            projected_great = std::format(
+                "{} / {}",
+                *estimate.projected_eligible_great,
+                analysis.eligible_judgements);
+        }
+    }
+
+    auto observed_offset = std::string{"Unavailable"};
+    switch (analysis.observed_gameplay_offset.kind)
+    {
+    case gc::config_gui::ObservedGameplayOffsetKind::unavailable:
+        break;
+    case gc::config_gui::ObservedGameplayOffsetKind::uniform:
+        observed_offset = FormatSignedMilliseconds(
+            analysis.observed_gameplay_offset.uniform_offset_ms);
+        break;
+    case gc::config_gui::ObservedGameplayOffsetKind::varied:
+        observed_offset = "Varied";
+        break;
+    }
+
+    if (ImGui::BeginTable(
+            "##JudgementOffsetSummary",
+            2,
+            ImGuiTableFlags_SizingFixedFit))
+    {
+        auto row = [](const char* label, const std::string& value)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(label);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(value.c_str());
+        };
+
+        row("Suggested JudgTimeOffset", suggestion);
+        row("Estimator range", estimator_range);
+        row("Last observed gameplay offset", observed_offset);
+        row("Complete songs", std::format("{}", analysis.songs.size()));
+        row(
+            "Eligible judgements",
+            std::format("{}", analysis.eligible_judgements));
+        row(
+            "Observed eligible GREAT",
+            std::format(
+                "{} / {}",
+                analysis.observed_eligible_great,
+                analysis.eligible_judgements));
+        row("Projected eligible GREAT", projected_great);
+        ImGui::EndTable();
+    }
+
+    if (analysis.estimate && analysis.estimate->data_too_diverse)
+    {
+        ImGui::TextUnformatted(
+            "Data is too diverse to give a suggestion.");
+    }
+
+    ImGui::TextUnformatted("Native results");
+    const auto native_results = std::format(
+        "MISS {}   GOOD {}   COOL {}   GREAT {}",
+        analysis.native_results.miss,
+        analysis.native_results.good,
+        analysis.native_results.cool,
+        analysis.native_results.great);
+    ImGui::TextUnformatted(native_results.c_str());
+
+    if (analysis.songs.empty())
+    {
+        return;
+    }
+
+    constexpr auto table_flags =
+        ImGuiTableFlags_Borders |
+        ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_SizingFixedFit;
+    if (!ImGui::BeginTable(
+            "##JudgementOffsetSongs",
+            8,
+            table_flags))
+    {
+        return;
+    }
+
+    ImGui::TableSetupColumn("Song");
+    ImGui::TableSetupColumn("Samples");
+    ImGui::TableSetupColumn("Median error before offset");
+    ImGui::TableSetupColumn("MAD");
+    ImGui::TableSetupColumn("MISS");
+    ImGui::TableSetupColumn("GOOD");
+    ImGui::TableSetupColumn("COOL");
+    ImGui::TableSetupColumn("GREAT");
+    ImGui::TableHeadersRow();
+
+    for (std::size_t index = 0; index < analysis.songs.size(); ++index)
+    {
+        const auto& song = analysis.songs[index];
+        const auto song_number = std::format("{}", index + 1);
+        const auto samples = std::format("{}", song.eligible_judgements);
+        const auto median = song.eligible_judgements == 0
+            ? std::string{"Unavailable"}
+            : FormatSignedMilliseconds(
+                  song.median_error_before_offset_ms);
+        const auto mad = song.eligible_judgements == 0
+            ? std::string{"Unavailable"}
+            : FormatMilliseconds(
+                  song.median_absolute_deviation_ms);
+        const std::array cells{
+            song_number,
+            samples,
+            median,
+            mad,
+            std::format("{}", song.native_results.miss),
+            std::format("{}", song.native_results.good),
+            std::format("{}", song.native_results.cool),
+            std::format("{}", song.native_results.great),
+        };
+        ImGui::TableNextRow();
+        for (std::size_t column = 0; column < cells.size(); ++column)
+        {
+            ImGui::TableSetColumnIndex(static_cast<int>(column));
+            ImGui::TextUnformatted(cells[column].c_str());
+        }
+    }
+    ImGui::EndTable();
+}
+
 void DrawExperimental(
     InputConfig& config,
     AudioBackendEditorModel& audio_editor,
     AudioOperationWorker& audio_worker,
     std::string& panel_status,
     std::string& panel_error,
+    const std::filesystem::path& judgement_log_path,
+    JudgementOffsetAdvisorUiState& judgement_offset_advisor,
     bool& dirty)
 {
     ImGui::SeparatorText("Experimental");
@@ -1447,6 +1674,10 @@ void DrawExperimental(
             ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
             "Select WASAPI exclusive or ASIO before saving.");
     }
+
+    DrawJudgementOffsetAdvisor(
+        judgement_log_path,
+        judgement_offset_advisor);
 
     bool timer_freeze = experimental.enable_timer_freeze_patches();
     if (ImGui::Checkbox("Timer freeze patches", &timer_freeze))
@@ -1579,6 +1810,9 @@ int main(int argc, char** argv)
     }
 
     const std::string config_path = argc > 1 ? argv[1] : "config.toml";
+    const std::filesystem::path config_file_path{config_path};
+    const auto judgement_log_path =
+        config_file_path.parent_path() / "loader-log.txt";
     auto loaded = LoadConfig(config_path);
     if (!loaded)
     {
@@ -1626,6 +1860,7 @@ int main(int argc, char** argv)
     std::string save_status;
     std::string panel_status;
     std::string panel_error;
+    JudgementOffsetAdvisorUiState judgement_offset_advisor;
     AudioOperationWorker audio_worker;
     bool save_modal_open = false;
     constexpr ImVec4 clear_color(0.45F, 0.56F, 0.60F, 1.0F);
@@ -1896,6 +2131,8 @@ int main(int argc, char** argv)
             audio_worker,
             panel_status,
             panel_error,
+            judgement_log_path,
+            judgement_offset_advisor,
             dirty);
 
         config.controller = editor.config();
