@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -13,6 +14,8 @@ enum class ProcessRole {
     Service,
 };
 
+inline constexpr std::size_t kServiceRequestPipelineHookCount = 15;
+
 struct NesysFeaturePlan {
     bool enabled{false};
     bool network_virtualization{false};
@@ -21,6 +24,7 @@ struct NesysFeaturePlan {
     bool server_address_override{false};
     bool registry_config_override{false};
     bool thread_priority_override{false};
+    bool request_pipeline_diagnostics{false};
     bool service_launcher{false};
     bool service_ping_redirect{false};
     std::size_t api_hook_count{0};

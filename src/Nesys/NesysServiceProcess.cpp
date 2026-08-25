@@ -1,8 +1,6 @@
 #include "Nesys/NesysServiceProcess.h"
 
 #include <cctype>
-#include <iterator>
-
 namespace gc::nesys_service {
 namespace {
 
@@ -204,6 +202,11 @@ NesysFeaturePlan ResolveNesysFeaturePlan(
     if (registry_enabled) {
         plan.registry_config_override = true;
         plan.api_hook_count += 3;
+    }
+
+    if (plan.enabled && role == ProcessRole::Service) {
+        plan.request_pipeline_diagnostics = true;
+        plan.api_hook_count += kServiceRequestPipelineHookCount;
     }
 
     if (plan.enabled) {

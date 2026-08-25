@@ -8,6 +8,7 @@
 #include <Windows.h>
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <span>
 
@@ -17,6 +18,7 @@ struct OriginalKernel32Api {
     decltype(&::CreateFileA) create_file_a{};
     decltype(&::CreateFileW) create_file_w{};
     decltype(&::WriteFile) write_file{};
+    decltype(&::FlushFileBuffers) flush_file_buffers{};
     decltype(&::ReadFile) read_file{};
     decltype(&::CloseHandle) close_handle{};
     decltype(&::GetCommModemStatus) get_comm_modem_status{};
@@ -58,7 +60,7 @@ public:
         gc::rfid::Runtime& rfid,
         gc::testmode_storage::Hooks& storage,
         gc::system_path::SystemPathRouter& system,
-        OriginalKernel32Api originals = {}) noexcept;
+        const OriginalKernel32Api& originals = {}) noexcept;
 
     void Activate() noexcept;
     void Deactivate() noexcept;
@@ -77,6 +79,7 @@ public:
     BOOL WriteFile(
         HANDLE file, LPCVOID buffer, DWORD bytes_to_write,
         LPDWORD bytes_written, LPOVERLAPPED overlapped) noexcept;
+    BOOL FlushFileBuffers(HANDLE file) noexcept;
     BOOL ReadFile(
         HANDLE file, LPVOID buffer, DWORD bytes_to_read,
         LPDWORD bytes_read, LPOVERLAPPED overlapped) noexcept;
@@ -123,6 +126,7 @@ private:
         LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
     static BOOL WINAPI WriteFileDetour(
         HANDLE, LPCVOID, DWORD, LPDWORD, LPOVERLAPPED);
+    static BOOL WINAPI FlushFileBuffersDetour(HANDLE);
     static BOOL WINAPI ReadFileDetour(
         HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
     static BOOL WINAPI CloseHandleDetour(HANDLE);

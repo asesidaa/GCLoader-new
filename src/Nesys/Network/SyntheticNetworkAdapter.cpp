@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <cwchar>
 #include <iomanip>

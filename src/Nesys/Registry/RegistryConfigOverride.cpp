@@ -1,6 +1,7 @@
 #include "Nesys/Registry/RegistryConfigOverride.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <memory>
 #include <utility>

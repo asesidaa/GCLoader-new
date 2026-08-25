@@ -96,7 +96,7 @@ MinHookApi ProductionMinHookApi() noexcept {
 }
 
 OwnedMinHookTransaction::OwnedMinHookTransaction(
-    MinHookApi api) noexcept
+    const MinHookApi& api) noexcept
     : api_(api) {
 }
 

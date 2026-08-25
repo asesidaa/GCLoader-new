@@ -2,6 +2,7 @@
 
 #include "Nesys/NesysHookTransaction.h"
 #include "Nesys/ThreadPriorityOverride.h"
+#include "Nesys/Diagnostics/RequestPipelineDiagnostics.h"
 #include "Nesys/Launcher/NesysServiceLauncher.h"
 #include "Nesys/Registry/RegistryConfigOverride.h"
 #include "Nesys/Network/ServerAddressOverride.h"
@@ -11,7 +12,9 @@
 #include <Windows.h>
 
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdint>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <iomanip>
 #include <intrin.h>
 #include <memory>
@@ -157,6 +160,9 @@ bool initialize_feature_plan(
     if (plan.thread_priority_override) {
         AppendThreadPriorityOverrideHookRequest(requests);
     }
+    if (plan.request_pipeline_diagnostics) {
+        diagnostics::AppendServiceRequestPipelineHookRequests(requests);
+    }
     if (role == ProcessRole::Service) {
         append_service_exit_diagnostic_hook_request(requests);
     }
@@ -239,6 +245,13 @@ bool initialize_feature_plan(
             PLOG_INFO
                 << "NesysServicePatch: component active"
                 << " name=thread_priority_override";
+        }
+        if (plan.request_pipeline_diagnostics) {
+            PLOG_INFO
+                << "NesysServicePatch: component active"
+                << " name=request_pipeline_diagnostics"
+                << " owned_api_hooks="
+                << kServiceRequestPipelineHookCount;
         }
         if (plan.service_launcher) {
             PLOG_INFO

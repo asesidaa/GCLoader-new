@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdint>
 #include <iomanip>
 #include <intrin.h>

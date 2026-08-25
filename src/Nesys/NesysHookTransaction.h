@@ -56,7 +56,7 @@ MinHookApi ProductionMinHookApi() noexcept;
 
 class OwnedMinHookTransaction {
 public:
-    explicit OwnedMinHookTransaction(MinHookApi api) noexcept;
+    explicit OwnedMinHookTransaction(const MinHookApi& api) noexcept;
     ~OwnedMinHookTransaction();
 
     OwnedMinHookTransaction(const OwnedMinHookTransaction&) = delete;

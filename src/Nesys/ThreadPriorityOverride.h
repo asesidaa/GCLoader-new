@@ -5,6 +5,7 @@
 
 #include <Windows.h>
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdint>
 #include <optional>
 #include <vector>

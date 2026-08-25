@@ -1,10 +1,13 @@
 #include "Win32Hooks/Kernel32Hooks.h"
 
+#include "Nesys/Diagnostics/RequestPipelineDiagnostics.h"
+
 #include "Rfid/Trace.h"
 #include "plog/Log.h"
 
 #include <cstddef>
 #include <functional>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <iomanip>
 #include <limits>
 #include <span>
@@ -53,7 +56,7 @@ Kernel32Hooks::Kernel32Hooks(
     gc::rfid::Runtime& rfid,
     gc::testmode_storage::Hooks& storage,
     gc::system_path::SystemPathRouter& system,
-    OriginalKernel32Api originals) noexcept
+    const OriginalKernel32Api& originals) noexcept
     : rfid_{rfid},
       storage_{storage},
       system_{system},
@@ -66,6 +69,9 @@ void Kernel32Hooks::Activate() noexcept
     active_ = this;
 }
 
+// These hook operations mutate logical subsystem and Win32 state through the
+// wrapper's owned references; shallow const would misstate that contract.
+// ReSharper disable CppMemberFunctionMayBeConst
 void Kernel32Hooks::Deactivate() noexcept
 {
     if (active_ == this) {
@@ -106,6 +112,8 @@ HookRequestSet Kernel32Hooks::BuildRequests() noexcept
     append("CreateFileA", CreateFileADetour, &originals_.create_file_a);
     append("CreateFileW", CreateFileWDetour, &originals_.create_file_w);
     append("WriteFile", WriteFileDetour, &originals_.write_file);
+    append("FlushFileBuffers", FlushFileBuffersDetour,
+           &originals_.flush_file_buffers);
     append("ReadFile", ReadFileDetour, &originals_.read_file);
     append("CloseHandle", CloseHandleDetour, &originals_.close_handle);
     append("GetCommModemStatus", GetCommModemStatusDetour,
@@ -188,10 +196,26 @@ HANDLE Kernel32Hooks::CreateFileA(
     }
 
     const auto routed = storage_.RoutePathA(file_name);
+    const bool nesys_pipe =
+        gc::nesys_service::diagnostics::IsNesysPipeNameA(file_name);
+    const auto started_ms = nesys_pipe
+        ? gc::nesys_service::diagnostics::MonotonicMilliseconds()
+        : 0;
     SetLastError(incoming_last_error);
-    return originals_.create_file_a(
+    const HANDLE result = originals_.create_file_a(
         routed.get(), desired_access, share_mode, security_attributes,
         creation_disposition, flags_and_attributes, template_file);
+    const DWORD last_error = GetLastError();
+    if (nesys_pipe) {
+        gc::nesys_service::diagnostics::ObserveGamePipeOpenA(
+            file_name,
+            result,
+            started_ms,
+            gc::nesys_service::diagnostics::MonotonicMilliseconds(),
+            last_error);
+    }
+    SetLastError(last_error);
+    return result;
 }
 
 HANDLE Kernel32Hooks::CreateFileW(
@@ -230,10 +254,26 @@ HANDLE Kernel32Hooks::CreateFileW(
     }
 
     const auto routed = storage_.RoutePathW(file_name);
+    const bool nesys_pipe =
+        gc::nesys_service::diagnostics::IsNesysPipeNameW(file_name);
+    const auto started_ms = nesys_pipe
+        ? gc::nesys_service::diagnostics::MonotonicMilliseconds()
+        : 0;
     SetLastError(incoming_last_error);
-    return originals_.create_file_w(
+    const HANDLE result = originals_.create_file_w(
         routed.get(), desired_access, share_mode, security_attributes,
         creation_disposition, flags_and_attributes, template_file);
+    const DWORD last_error = GetLastError();
+    if (nesys_pipe) {
+        gc::nesys_service::diagnostics::ObserveGamePipeOpenW(
+            file_name,
+            result,
+            started_ms,
+            gc::nesys_service::diagnostics::MonotonicMilliseconds(),
+            last_error);
+    }
+    SetLastError(last_error);
+    return result;
 }
 
 BOOL Kernel32Hooks::WriteFile(
@@ -244,8 +284,26 @@ BOOL Kernel32Hooks::WriteFile(
     LPOVERLAPPED overlapped) noexcept
 {
     if (file != gc::rfid::EmulatedComHandle()) {
-        return originals_.write_file(
+        const bool nesys_pipe =
+            gc::nesys_service::diagnostics::IsTrackedNesysPipeHandle(file);
+        const auto started_ms = nesys_pipe
+            ? gc::nesys_service::diagnostics::MonotonicMilliseconds()
+            : 0;
+        const BOOL result = originals_.write_file(
             file, buffer, bytes_to_write, bytes_written, overlapped);
+        const DWORD last_error = GetLastError();
+        if (nesys_pipe) {
+            gc::nesys_service::diagnostics::ObserveGamePipeWrite(
+                file,
+                buffer,
+                bytes_to_write,
+                result,
+                last_error,
+                started_ms,
+                gc::nesys_service::diagnostics::MonotonicMilliseconds());
+        }
+        SetLastError(last_error);
+        return result;
     }
     if (bytes_written != nullptr) {
         *bytes_written = 0;
@@ -283,6 +341,27 @@ BOOL Kernel32Hooks::WriteFile(
     }
     *bytes_written = static_cast<DWORD>(*result);
     return TRUE;
+}
+
+BOOL Kernel32Hooks::FlushFileBuffers(HANDLE file) noexcept
+{
+    const bool nesys_pipe =
+        gc::nesys_service::diagnostics::IsTrackedNesysPipeHandle(file);
+    const auto started_ms = nesys_pipe
+        ? gc::nesys_service::diagnostics::MonotonicMilliseconds()
+        : 0;
+    const BOOL result = originals_.flush_file_buffers(file);
+    const DWORD last_error = GetLastError();
+    if (nesys_pipe) {
+        gc::nesys_service::diagnostics::ObserveGamePipeFlush(
+            file,
+            result,
+            last_error,
+            started_ms,
+            gc::nesys_service::diagnostics::MonotonicMilliseconds());
+    }
+    SetLastError(last_error);
+    return result;
 }
 
 BOOL Kernel32Hooks::ReadFile(
@@ -336,7 +415,15 @@ BOOL Kernel32Hooks::ReadFile(
 BOOL Kernel32Hooks::CloseHandle(HANDLE object) noexcept
 {
     if (object != gc::rfid::EmulatedComHandle()) {
-        return originals_.close_handle(object);
+        const bool nesys_pipe =
+            gc::nesys_service::diagnostics::IsTrackedNesysPipeHandle(object);
+        const BOOL result = originals_.close_handle(object);
+        const DWORD last_error = GetLastError();
+        if (nesys_pipe) {
+            gc::nesys_service::diagnostics::ObserveGameHandleClose(object);
+        }
+        SetLastError(last_error);
+        return result;
     }
     rfid_.CloseCom2();
     return TRUE;
@@ -745,6 +832,7 @@ BOOL Kernel32Hooks::MoveFileW(
         existing->matched ? existing->path.c_str() : existing_path,
         destination->matched ? destination->path.c_str() : new_path);
 }
+// ReSharper restore CppMemberFunctionMayBeConst
 
 HANDLE WINAPI Kernel32Hooks::CreateFileADetour(
     LPCSTR name, DWORD access, DWORD share, LPSECURITY_ATTRIBUTES security,
@@ -772,6 +860,13 @@ BOOL WINAPI Kernel32Hooks::WriteFileDetour(
 {
     return GuardDetour(FALSE, [&] {
         return active_->WriteFile(file, buffer, size, count, overlapped);
+    });
+}
+
+BOOL WINAPI Kernel32Hooks::FlushFileBuffersDetour(HANDLE file)
+{
+    return GuardDetour(FALSE, [&] {
+        return active_->FlushFileBuffers(file);
     });
 }
 
