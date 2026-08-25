@@ -1,78 +1,193 @@
 #pragma once
 
-#include "Config/config.h"
+#include "Config/AudioConfig.h"
+#include "Config/NativeInputConfig.h"
+#include "Config/RegistryConfig.h"
+#include "Config/TargetFps.h"
 #include "SystemPath/SystemRoot.h"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <string>
 #include <string_view>
 
-namespace gc::config {
+namespace gc::config
+{
+    enum class LoaderLogLevel : std::uint8_t
+    {
+        Info,
+        Debug,
+        Verbose,
+    };
 
-struct ConfigDocumentMigrations {
-    bool registry_paths{};
-    bool audio_backend{};
+    struct NesysConfig
+    {
+        rfl::Rename<"server_ip", std::string> server_ip{"127.0.0.1"};
+    };
 
-    [[nodiscard]] bool any() const noexcept {
-        return registry_paths || audio_backend;
-    }
-};
+    struct LoggingConfig
+    {
+        rfl::Rename<"level", LoaderLogLevel> level{LoaderLogLevel::Info};
+    };
 
-struct ParsedInputConfigDocument {
-    InputConfig config;
-    ConfigDocumentMigrations migrations;
-};
+    using WasapiBufferMillisecondsConfigValue = unsigned long;
+    static_assert(
+        sizeof(WasapiBufferMillisecondsConfigValue) == sizeof(std::uint32_t));
 
-[[nodiscard]] std::expected<ParsedInputConfigDocument, std::string>
-ParseAndValidateInputConfigDocument(std::string_view text);
+    struct ExperimentalConfig
+    {
+        rfl::Rename<"target_fps", TargetFpsConfigValue>
+        target_fps{kMinimumTargetFps};
+        rfl::Rename<"enable_absolute_time_judgement", bool>
+        enable_absolute_time_judgement{false};
+        rfl::Rename<"enable_testmode_storage_redirect", bool>
+        enable_testmode_storage_redirect{false};
+        rfl::Rename<"enable_timer_freeze_patches", bool>
+        enable_timer_freeze_patches{false};
+        rfl::Rename<"unlock_all_songs_and_difficulties", bool>
+        unlock_all_songs_and_difficulties{false};
+        rfl::Rename<"enable_nesys_service_adapter_patch", bool>
+        enable_nesys_service_adapter_patch{true};
+        rfl::Rename<"audio_backend", AudioBackend>
+        audio_backend{AudioBackend::directsound};
+        rfl::Rename<
+            "wasapi_exclusive_buffer_ms",
+            WasapiBufferMillisecondsConfigValue>
+        wasapi_exclusive_buffer_ms{10};
+        rfl::Rename<"asio_driver_name", std::string> asio_driver_name;
+        rfl::Rename<"asio_buffer_frames", unsigned long>
+        asio_buffer_frames{0};
+        rfl::Rename<"asio_output_base_channel", unsigned long>
+        asio_output_base_channel{0};
+    };
 
-struct AtomicConfigWriteActions {
-    void* context{};
-    std::expected<void, std::string> (*write)(
-        void*,
-        const std::filesystem::path&,
-        std::string_view) noexcept{};
-    std::expected<void, std::string> (*replace)(
-        void*,
-        const std::filesystem::path& destination,
-        const std::filesystem::path& replacement) noexcept{};
-    void (*remove)(
-        void*,
-        const std::filesystem::path&) noexcept{};
-};
+    struct ConfigDocument
+    {
+        rfl::Rename<"input_schema_version", std::uint32_t>
+        input_schema_version{kInputSchemaVersion};
+        rfl::Rename<"input_poll_hz", std::uint32_t> input_poll_hz{1000};
+        rfl::Rename<"input_mode", input::InputMode>
+        input_mode{input::InputMode::Keyboard};
+        rfl::Rename<"gameplay_input_style", input::GameplayInputStyle>
+        gameplay_input_style{input::GameplayInputStyle::Arcade};
+        rfl::Rename<"axis_press_threshold_percent", std::uint32_t>
+        axis_press_threshold_percent{50};
+        rfl::Rename<"axis_release_threshold_percent", std::uint32_t>
+        axis_release_threshold_percent{40};
+        rfl::Rename<"keyboard", NativeKeyboardConfig> keyboard;
+        rfl::Rename<"controller", ControllerConfig> controller;
+        rfl::Rename<"nesys", NesysConfig> nesys;
+        rfl::Rename<"registry", ::RegistryConfig> registry;
+        rfl::Rename<"logging", LoggingConfig> logging;
+        rfl::Rename<"experimental", ExperimentalConfig> experimental;
+    };
 
-[[nodiscard]] AtomicConfigWriteActions
-ProductionAtomicConfigWriteActions() noexcept;
+    enum class ConfigDocumentLoadErrorCode : std::uint8_t
+    {
+        toml_syntax,
+        obsolete_schema,
+        unsupported_schema,
+        strict_shape,
+        serialization,
+    };
 
-[[nodiscard]] std::expected<void, std::string>
-WriteInputConfigAtomically(
-    const std::filesystem::path& config_path,
-    const InputConfig& config,
-    const AtomicConfigWriteActions& actions =
-        ProductionAtomicConfigWriteActions()) noexcept;
+    struct ConfigDocumentLoadError
+    {
+        ConfigDocumentLoadErrorCode code{};
+        std::string message;
+    };
 
-struct GameSystemPathPreparationActions {
-    gc::system_path::DirectoryActions directories;
-    AtomicConfigWriteActions config_write;
-};
+    struct ConfigDocumentMigrations
+    {
+        bool registry_paths{};
+        bool audio_backend{};
 
-[[nodiscard]] GameSystemPathPreparationActions
-ProductionGameSystemPathPreparationActions() noexcept;
+        [[nodiscard]] bool any() const noexcept
+        {
+            return registry_paths || audio_backend;
+        }
+    };
 
-struct PreparedGameSystemPathConfig {
-    InputConfig config;
-    gc::system_path::RuntimeRoot runtime;
-    bool persisted{};
-};
+    struct ParsedConfigDocument
+    {
+        ConfigDocument document;
+        ConfigDocumentMigrations migrations;
+    };
 
-[[nodiscard]] std::expected<PreparedGameSystemPathConfig, std::string>
-PrepareAndPersistGameSystemPathConfiguration(
-    InputConfig config,
-    bool document_migrated,
-    const std::filesystem::path& config_path,
-    bool native_testmode_storage_available,
-    const GameSystemPathPreparationActions& actions =
-        ProductionGameSystemPathPreparationActions()) noexcept;
+    [[nodiscard]] std::expected<ParsedConfigDocument, ConfigDocumentLoadError>
+    ParseConfigDocument(std::string_view text) noexcept;
 
+    [[nodiscard]] std::expected<std::string, ConfigDocumentLoadError>
+    SerializeConfigDocument(const ConfigDocument& document) noexcept;
+
+    struct AtomicConfigWriteActions
+    {
+        void* context{};
+        std::expected<void, std::string> (*write)(
+            void*,
+            const std::filesystem::path&,
+            std::string_view) noexcept{};
+        std::expected<void, std::string> (*replace)(
+            void*,
+            const std::filesystem::path& destination,
+            const std::filesystem::path& replacement) noexcept{};
+        void (*remove)(void*, const std::filesystem::path&) noexcept{};
+    };
+
+    [[nodiscard]] AtomicConfigWriteActions
+    ProductionAtomicConfigWriteActions() noexcept;
+
+    enum class ConfigPersistenceStage : std::uint8_t
+    {
+        serialize,
+        temporary_write,
+        atomic_replace,
+    };
+
+    struct ConfigPersistenceError
+    {
+        ConfigPersistenceStage stage{};
+        std::string message;
+    };
+
+    [[nodiscard]] std::expected<void, ConfigPersistenceError>
+    WriteConfigDocumentAtomically(
+        const std::filesystem::path& path,
+        const ConfigDocument& document,
+        const AtomicConfigWriteActions& actions =
+            ProductionAtomicConfigWriteActions()) noexcept;
+
+    // Temporary compatibility for consumers migrated in later tasks.
+    [[nodiscard]] std::expected<void, std::string>
+    WriteInputConfigAtomically(
+        const std::filesystem::path& config_path,
+        const ConfigDocument& config,
+        const AtomicConfigWriteActions& actions =
+            ProductionAtomicConfigWriteActions()) noexcept;
+
+    struct GameSystemPathPreparationActions
+    {
+        gc::system_path::DirectoryActions directories;
+        AtomicConfigWriteActions config_write;
+    };
+
+    [[nodiscard]] GameSystemPathPreparationActions
+    ProductionGameSystemPathPreparationActions() noexcept;
+
+    struct PreparedGameSystemPathConfig
+    {
+        ConfigDocument config;
+        gc::system_path::RuntimeRoot runtime;
+        bool persisted{};
+    };
+
+    [[nodiscard]] std::expected<PreparedGameSystemPathConfig, std::string>
+    PrepareAndPersistGameSystemPathConfiguration(
+        ConfigDocument config,
+        bool document_migrated,
+        const std::filesystem::path& config_path,
+        bool native_testmode_storage_available,
+        const GameSystemPathPreparationActions& actions =
+            ProductionGameSystemPathPreparationActions()) noexcept;
 } // namespace gc::config
