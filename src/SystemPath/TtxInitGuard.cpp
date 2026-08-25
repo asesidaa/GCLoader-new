@@ -103,7 +103,7 @@ int InvokeTtxUdlInitGuard(
     unsigned int update_step,
     unsigned int update_options,
     const RuntimeRoot& root,
-    TtxGuardRuntimeActions actions) noexcept
+    const TtxGuardRuntimeActions& actions) noexcept
 {
     if (actions.call_original == nullptr) {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -130,7 +130,7 @@ int InvokeTtxUdlInitGuard(
 }
 
 std::expected<void, TtxGuardInstallError> InstallTtxInitGuard(
-    TtxGuardInstallActions actions) noexcept
+    const TtxGuardInstallActions& actions) noexcept
 {
     if (actions.detour == nullptr || actions.get_module == nullptr ||
         actions.get_export == nullptr || actions.get_last_error == nullptr ||

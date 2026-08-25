@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <iomanip>
 #include <limits>
@@ -130,6 +131,8 @@ bool ApplyNegativeResultRedirect(
     return true;
 }
 
+// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 void OnDeviceLostTail(safetyhook::Context& context) noexcept {
     try {
         static_cast<void>(ApplyRendererDeviceLostCleanup(
@@ -327,8 +330,8 @@ void LogInstallFailure(const RendererInstallError& error) noexcept {
 } // namespace
 
 bool ApplyRendererDeviceLostCleanup(
-    safetyhook::Context& context,
-    RendererDeviceLostActions actions) noexcept {
+    const safetyhook::Context& context,
+    const RendererDeviceLostActions& actions) noexcept {
     if (context.esi == 0 || actions.clear_initialized == nullptr ||
         actions.detach_index_buffer == nullptr ||
         actions.release_index_buffer == nullptr) {
@@ -424,7 +427,7 @@ bool ApplyRendererDeviceLossUnlockCompletion(
 std::expected<void, RendererInstallError>
 InstallRendererDeviceLossPatch(
     std::uintptr_t image_base,
-    RendererInstallActions actions) noexcept {
+    const RendererInstallActions& actions) noexcept {
     if (actions.context == nullptr || actions.read == nullptr ||
         actions.install_hook == nullptr || actions.reset_hook == nullptr) {
         return std::unexpected(RendererInstallError{

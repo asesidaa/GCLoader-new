@@ -87,7 +87,7 @@ std::optional<DecodeEvent> Decoder::PushDecoded(
         if (expected == actual) {
             auto complete = packet_;
             Reset();
-            return DecodeEvent{std::move(complete)};
+            return DecodeEvent{complete};
         }
 
         const ChecksumFailure failure{

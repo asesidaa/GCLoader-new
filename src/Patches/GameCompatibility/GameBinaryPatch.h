@@ -99,7 +99,7 @@ struct GameBinaryPatchResult {
     GameBinaryPatchError>
 InstallGameBinaryPatch(
     std::uintptr_t image_base,
-    GameBinaryPatchActions actions) noexcept;
+    const GameBinaryPatchActions& actions) noexcept;
 
 [[nodiscard]] GameBinaryPatchActions
 ProductionGameBinaryPatchActions() noexcept;

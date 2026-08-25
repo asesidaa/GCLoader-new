@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -79,6 +80,8 @@ ReplyWriter::ReplyWriter(Acknowledgement& reply) noexcept
 {
 }
 
+// Appending mutates the acknowledgement referenced by this writer.
+// ReSharper disable once CppMemberFunctionMayBeConst
 bool ReplyWriter::Append(std::uint8_t value) noexcept
 {
     if (reply_.size >= reply_.payload.size()) {
@@ -89,6 +92,8 @@ bool ReplyWriter::Append(std::uint8_t value) noexcept
     return true;
 }
 
+// Appending mutates the acknowledgement referenced by this writer.
+// ReSharper disable once CppMemberFunctionMayBeConst
 bool ReplyWriter::Append(
     std::span<const std::uint8_t> values) noexcept
 {
@@ -102,6 +107,8 @@ bool ReplyWriter::Append(
     return true;
 }
 
+// Status updates mutate the acknowledgement referenced by this writer.
+// ReSharper disable once CppMemberFunctionMayBeConst
 void ReplyWriter::SetStatus(Status value) noexcept
 {
     reply_.payload.front() = value.value;
@@ -110,6 +117,8 @@ void ReplyWriter::SetStatus(Status value) noexcept
     }
 }
 
+// Overflow handling mutates the acknowledgement referenced by this writer.
+// ReSharper disable once CppMemberFunctionMayBeConst
 void ReplyWriter::SetOverflow() noexcept
 {
     reply_.payload.front() = status::acknowledgement_overflow.value;
@@ -121,6 +130,8 @@ Device::Device(gc::rfid::State& state) noexcept
 {
 }
 
+// Packet handling mutates the RFID state referenced by the device.
+// ReSharper disable once CppMemberFunctionMayBeConst
 std::optional<DeviceResponse> Device::HandlePacket(
     const DecodedPacket& packet) noexcept
 {

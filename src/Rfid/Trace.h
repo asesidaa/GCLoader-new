@@ -15,7 +15,6 @@ namespace gc::rfid::trace {
         return "<empty>";
     }
 
-    constexpr char digits[] = "0123456789abcdef";
     const auto shown = std::min(bytes.size(), limit);
     std::string result;
     result.reserve(shown * 3 + 32);
@@ -23,6 +22,7 @@ namespace gc::rfid::trace {
         if (index != 0) {
             result.push_back(' ');
         }
+        static constexpr char digits[] = "0123456789abcdef";
         const auto value = std::to_integer<unsigned int>(bytes[index]);
         result.push_back(digits[value >> 4]);
         result.push_back(digits[value & 0x0F]);

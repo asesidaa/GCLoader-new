@@ -49,7 +49,7 @@ ProductionAtomicConfigWriteActions() noexcept;
 WriteInputConfigAtomically(
     const std::filesystem::path& config_path,
     const InputConfig& config,
-    AtomicConfigWriteActions actions =
+    const AtomicConfigWriteActions& actions =
         ProductionAtomicConfigWriteActions()) noexcept;
 
 struct GameSystemPathPreparationActions {
@@ -72,7 +72,7 @@ PrepareAndPersistGameSystemPathConfiguration(
     bool document_migrated,
     const std::filesystem::path& config_path,
     bool native_testmode_storage_available,
-    GameSystemPathPreparationActions actions =
+    const GameSystemPathPreparationActions& actions =
         ProductionGameSystemPathPreparationActions()) noexcept;
 
 } // namespace gc::config

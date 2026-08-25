@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <span>

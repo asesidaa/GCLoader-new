@@ -4,6 +4,7 @@
 #include "Input/Types/InputTypes.h"
 #include "Input/Win32/InputCapture.h"
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <expected>
 #include <optional>

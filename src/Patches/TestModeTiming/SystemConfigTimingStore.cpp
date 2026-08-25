@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -471,8 +472,8 @@ std::expected<RewrittenConfig, ConfigEditError> RewriteTimingAssignments(
         Replacement{*game, offsets.game_ms},
         Replacement{*judge, offsets.judge_ms},
     };
-    std::sort(
-        replacements.begin(), replacements.end(),
+    std::ranges::sort(
+        replacements,
         [](const Replacement& left, const Replacement& right) {
             return left.token.begin > right.token.begin;
         });
@@ -499,11 +500,13 @@ Win32FileApi ProductionWin32FileApi() noexcept {
 
 SystemConfigTimingStore::SystemConfigTimingStore(
     std::filesystem::path path,
-    Win32FileApi api)
+    const Win32FileApi& api)
     : path_(std::move(path)),
       api_(api) {}
 
 std::expected<SaveOutcome, SystemConfigError>
+// Saving mutates the persisted system config through the file API.
+// ReSharper disable once CppMemberFunctionMayBeConst
 SystemConfigTimingStore::Save(TimingOffsets offsets) noexcept {
     try {
         auto input = ReadAllBytes(path_, api_);

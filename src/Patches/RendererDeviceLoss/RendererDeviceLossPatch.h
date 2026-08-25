@@ -188,8 +188,8 @@ struct RendererDeviceLostActions {
 };
 
 [[nodiscard]] bool ApplyRendererDeviceLostCleanup(
-    safetyhook::Context& context,
-    RendererDeviceLostActions actions) noexcept;
+    const safetyhook::Context& context,
+    const RendererDeviceLostActions& actions) noexcept;
 
 [[nodiscard]] bool ApplyRendererDeviceLossRetry(
     safetyhook::Context& context,
@@ -261,7 +261,7 @@ struct RendererInstallActions {
 [[nodiscard]] std::expected<void, RendererInstallError>
 InstallRendererDeviceLossPatch(
     std::uintptr_t image_base,
-    RendererInstallActions actions) noexcept;
+    const RendererInstallActions& actions) noexcept;
 
 [[nodiscard]] bool RendererDeviceLossPatchInit() noexcept;
 

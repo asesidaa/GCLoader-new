@@ -22,8 +22,8 @@ public:
     RoutePathA(LPCSTR path) const noexcept;
     [[nodiscard]] std::expected<RouteResult, DWORD>
     RoutePathW(LPCWSTR path) const noexcept;
-    [[nodiscard]] std::expected<std::filesystem::path, DWORD>
-    ConvertAnsiPath(LPCSTR path) const noexcept;
+    [[nodiscard]] static std::expected<std::filesystem::path, DWORD>
+    ConvertAnsiPath(LPCSTR path) noexcept;
     [[nodiscard]] bool enabled() const noexcept;
 
 private:

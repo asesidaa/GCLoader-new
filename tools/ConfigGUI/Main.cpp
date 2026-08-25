@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -34,6 +35,7 @@
 #include <filesystem>
 #include <fstream>
 #include <format>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -563,11 +565,6 @@ public:
         return std::exchange(close_popup_requested_, false);
     }
 
-    [[nodiscard]] bool capture_active() const noexcept
-    {
-        return capture_mode_ != CaptureMode::None;
-    }
-
     [[nodiscard]] const std::string& capture_label() const noexcept
     {
         return capture_label_;
@@ -693,6 +690,8 @@ private:
         return static_cast<std::size_t>(identity.device_id[0] - '0');
     }
 
+    // This accessor intentionally grants mutable controller state for capture.
+    // ReSharper disable once CppMemberFunctionMayBeConst
     gc::input::ControllerStateView* SelectedControllerView() noexcept
     {
         const auto identity = editor_.SelectedIdentity();
@@ -1245,8 +1244,7 @@ void DrawAsioSettings(
     if (ImGui::Button("Inspect ASIO driver"))
     {
         panel_status.clear();
-        auto request = audio_editor.BeginInspection();
-        if (request)
+        if (auto request = audio_editor.BeginInspection())
         {
             const auto started = audio_worker.StartInspection(*request);
             if (!started)
@@ -1684,6 +1682,25 @@ void DrawExperimental(
     {
         experimental.enable_timer_freeze_patches = timer_freeze;
         dirty = true;
+    }
+    bool song_unlock =
+        experimental.unlock_all_songs_and_difficulties();
+    if (ImGui::Checkbox(
+            "Unlock all songs and difficulties",
+            &song_unlock))
+    {
+        experimental.unlock_all_songs_and_difficulties = song_unlock;
+        dirty = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            "Unlocks all songs, difficulties, and eligible EXTRA charts.\n"
+            "Does not enable tournament mode or alter items, judgement, "
+            "scoring, events, or card saving.\n"
+            "Requires restart.");
     }
     bool storage_redirect = experimental.enable_testmode_storage_redirect();
     if (ImGui::Checkbox("Test-mode storage redirect", &storage_redirect))

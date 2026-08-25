@@ -27,7 +27,7 @@ class Runtime {
 public:
     explicit Runtime(
         int card_virtual_key,
-        CardWorkerApi worker_api = ProductionCardWorkerApi()) noexcept;
+        const CardWorkerApi& worker_api = ProductionCardWorkerApi()) noexcept;
 
     [[nodiscard]] std::expected<HANDLE, DWORD> OpenCom2() noexcept;
     void CloseCom2() noexcept;

@@ -159,14 +159,14 @@ std::expected<std::size_t, DWORD> ComPortState::Write(
 
     decoder_.Consume(bytes, [this](jvs::DecodeEvent event) {
         std::visit(
-            [this](auto&& decoded) {
-                using Event = std::remove_cvref_t<decltype(decoded)>;
-                if constexpr (std::same_as<Event, jvs::DecodedPacket>) {
+            [this]<typename Event>(Event&& decoded) {
+                using Decoded = std::remove_cvref_t<Event>;
+                if constexpr (std::same_as<Decoded, jvs::DecodedPacket>) {
                     if (auto response = device_.HandlePacket(decoded)) {
                         QueueResponse(std::move(*response));
                     }
                 } else if constexpr (
-                    std::same_as<Event, jvs::ChecksumFailure>) {
+                    std::same_as<Decoded, jvs::ChecksumFailure>) {
                     PLOG_WARNING
                         << "RFID JVS checksum failure address=0x"
                         << std::hex
@@ -179,7 +179,7 @@ std::expected<std::size_t, DWORD> ComPortState::Write(
                         << " byte_count="
                         << static_cast<unsigned int>(decoded.byte_count);
                     if (auto response =
-                            device_.HandleChecksumFailure(decoded)) {
+                            jvs::Device::HandleChecksumFailure(decoded)) {
                         QueueResponse(jvs::DeviceResponse{*response});
                     }
                 } else {
@@ -258,7 +258,7 @@ State& ComPortState::device_state() noexcept
     return state_;
 }
 
-void ComPortState::QueueResponse(jvs::DeviceResponse response) noexcept
+void ComPortState::QueueResponse(const jvs::DeviceResponse& response) noexcept
 {
     if (pending_reply_) {
         RecordSequencingViolation();

@@ -3,6 +3,7 @@
 #include "plog/Log.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 
 namespace gc::win32_hooks {
@@ -36,7 +37,7 @@ MinHookApi ProductionMinHookApi() noexcept
 
 MinHookTransaction::MinHookTransaction(
     ResolverApi resolver,
-    MinHookApi minhook) noexcept
+    const MinHookApi& minhook) noexcept
     : resolver_{resolver},
       minhook_{minhook}
 {

@@ -113,7 +113,7 @@ bool WriteVtable(
     void* object,
     const std::uintptr_t* vtable) noexcept {
     __try {
-        *reinterpret_cast<const std::uintptr_t**>(object) = vtable;
+        *static_cast<const std::uintptr_t**>(object) = vtable;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -222,7 +222,7 @@ bool SynchronizeSelection(
 }
 
 bool ReadCarrierGrid(
-    TimingRuntimeState& runtime,
+    const TimingRuntimeState& runtime,
     void* self,
     void** grid) noexcept {
     return self == runtime.carrier &&
@@ -571,10 +571,10 @@ private:
 
 std::array<std::uintptr_t, kSoundVtableSlots> BuildCarrierVtable(
     std::span<const std::uintptr_t, kSoundVtableSlots> native,
-    CarrierCallbacks callbacks,
+    const CarrierCallbacks& callbacks,
     std::uintptr_t image_base) noexcept {
     std::array<std::uintptr_t, kSoundVtableSlots> result{};
-    std::copy(native.begin(), native.end(), result.begin());
+    std::ranges::copy(native, result.begin());
     result[2] = callbacks.activate;
     result[5] = image_base + kBaseUpdateRva;
     result[6] = callbacks.render;
@@ -820,6 +820,8 @@ void* __fastcall CarrierRender(
     }
 }
 
+// The native fastcall hook ABI fixes the mutable self pointer type.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 int __fastcall CarrierConfirm(
     void* self,
     void*,
@@ -841,6 +843,8 @@ int __fastcall CarrierConfirm(
     }
 }
 
+// The native fastcall hook ABI fixes the mutable self pointer type.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 int __fastcall CarrierBack(
     void* self,
     void*,
@@ -858,6 +862,8 @@ int __fastcall CarrierBack(
     }
 }
 
+// The native fastcall hook ABI fixes the mutable self pointer type.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 int __fastcall CarrierIncrement(
     void* self,
     void*,
@@ -878,6 +884,8 @@ int __fastcall CarrierIncrement(
     }
 }
 
+// The native fastcall hook ABI fixes the mutable self pointer type.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 int __fastcall CarrierDecrement(
     void* self,
     void*,

@@ -3,6 +3,7 @@
 #include "Input/Types/InputTypes.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 

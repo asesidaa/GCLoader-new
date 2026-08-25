@@ -11,7 +11,7 @@ bool IsCurrentProcessForeground(const ForegroundApi& api) noexcept
         return false;
     }
 
-    const HWND foreground = api.get_foreground_window();
+    auto* const foreground = api.get_foreground_window();
     if (foreground == nullptr)
     {
         return false;

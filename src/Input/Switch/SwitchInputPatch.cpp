@@ -4,9 +4,12 @@
 
 #include <Windows.h>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <iomanip>
 
 #include <safetyhook.hpp>
@@ -309,6 +312,8 @@ bool guarded_stack_write(
     }
 }
 
+// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 void hook_diagonal_match(safetyhook::Context& context) noexcept {
     if (g_active_state.load(std::memory_order_acquire) !=
         SwitchPatchState::Switch) {

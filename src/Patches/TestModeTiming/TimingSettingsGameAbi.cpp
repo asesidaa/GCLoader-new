@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <initializer_list>
 
@@ -15,8 +16,8 @@ TimingBytePattern Pattern(
     std::initializer_list<std::uint8_t> values) noexcept {
     TimingBytePattern pattern{};
     pattern.size = static_cast<std::uint8_t>(values.size());
-    std::transform(
-        values.begin(), values.end(), pattern.bytes.begin(),
+    std::ranges::transform(
+        values, pattern.bytes.begin(),
         [](std::uint8_t value) { return static_cast<std::byte>(value); });
     return pattern;
 }
@@ -24,7 +25,7 @@ TimingBytePattern Pattern(
 TimingByteContract Contract(
     std::uintptr_t base,
     std::uint32_t rva,
-    TimingBytePattern expected,
+    const TimingBytePattern& expected,
     const char* name) noexcept {
     return {
         .rva = rva,
@@ -238,9 +239,8 @@ BuildTimingCheckedWrites(std::uintptr_t image_base) noexcept {
 std::array<std::uintptr_t, kSoundVtableSlots>
 ExpectedSoundVtable(std::uintptr_t image_base) noexcept {
     std::array<std::uintptr_t, kSoundVtableSlots> result{};
-    std::transform(
-        kSoundVtableTargetRvas.begin(),
-        kSoundVtableTargetRvas.end(),
+    std::ranges::transform(
+        kSoundVtableTargetRvas,
         result.begin(),
         [image_base](std::uint32_t rva) {
             return image_base + rva;
@@ -423,13 +423,10 @@ std::expected<void, TimingInstallError> TimingPatchTransaction::Install(
         }
     }
 
-    std::copy(contracts.begin(), contracts.end(), contracts_.begin());
-    std::copy(
-        expected_sound_vtable.begin(),
-        expected_sound_vtable.end(),
-        expected_vtable_.begin());
-    std::copy(writes.begin(), writes.end(), writes_.begin());
-    std::copy(hooks.begin(), hooks.end(), hooks_.begin());
+    std::ranges::copy(contracts, contracts_.begin());
+    std::ranges::copy(expected_sound_vtable, expected_vtable_.begin());
+    std::ranges::copy(writes, writes_.begin());
+    std::ranges::copy(hooks, hooks_.begin());
     contract_count_ = contracts.size();
     vtable_count_ = expected_sound_vtable.size();
     write_count_ = writes.size();
@@ -464,7 +461,7 @@ std::expected<void, TimingInstallError> TimingPatchTransaction::Install(
 
 bool TimingPatchTransaction::PatternMatches(
     std::uintptr_t address,
-    const TimingBytePattern& pattern) noexcept {
+    const TimingBytePattern& pattern) const noexcept {
     if (pattern.size == 0 || pattern.size > kMaximumTimingPatternBytes) {
         return false;
     }
@@ -477,14 +474,14 @@ bool TimingPatchTransaction::PatternMatches(
 
 bool TimingPatchTransaction::PointerMatches(
     std::uintptr_t address,
-    std::uintptr_t expected) noexcept {
+    std::uintptr_t expected) const noexcept {
     std::uintptr_t actual{};
     auto destination = std::as_writable_bytes(
         std::span{&actual, std::size_t{1}});
     return memory_.read(address, destination) && actual == expected;
 }
 
-bool TimingPatchTransaction::VerifyOriginalState() noexcept {
+bool TimingPatchTransaction::VerifyOriginalState() const noexcept {
     for (std::size_t index = 0; index < contract_count_; ++index) {
         if (!PatternMatches(
                 contracts_[index].address,

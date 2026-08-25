@@ -131,7 +131,7 @@ ReadAsioModeMessage(HANDLE input) noexcept {
         }
         std::vector<std::byte> message(
             gc::audio::kAsioProbeEnvelopeBytes + payload_size);
-        std::copy(envelope.begin(), envelope.end(), message.begin());
+        std::ranges::copy(envelope, message.begin());
         if (payload_size != 0 &&
             !ReadExact(
                 input,

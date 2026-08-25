@@ -181,6 +181,7 @@ void Win32D3D11Host::BeginFrame() noexcept
     ImGui::NewFrame();
 }
 
+// ReSharper disable once CppMemberFunctionMayBeConst
 void Win32D3D11Host::Render(const ImVec4& clear_color) noexcept
 {
     if (!imgui_dx11_initialized_ || device_context_ == nullptr ||

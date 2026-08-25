@@ -35,7 +35,7 @@ struct FeatureHookLayerActions {
 };
 
 [[nodiscard]] std::expected<void, FeatureError>
-InstallFeatureHookLayers(FeatureHookLayerActions actions) noexcept;
+InstallFeatureHookLayers(const FeatureHookLayerActions& actions) noexcept;
 
 [[nodiscard]] std::expected<void, FeatureError>
 InitializeFeature(

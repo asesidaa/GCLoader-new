@@ -3,6 +3,7 @@
 #include <safetyhook.hpp>
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <mutex>
 #include <string>

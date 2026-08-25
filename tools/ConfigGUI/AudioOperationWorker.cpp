@@ -44,7 +44,7 @@ AudioOperationWorker::AudioOperationWorker() noexcept
 AudioOperationWorker::AudioOperationWorker(
     std::unique_ptr<gc::audio::IAsioProbeClient> probe_client,
     std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client,
-    gc::config::AtomicConfigWriteActions write_actions) noexcept
+    const gc::config::AtomicConfigWriteActions& write_actions) noexcept
     : probe_client_(std::move(probe_client)),
       panel_client_(std::move(panel_client)),
       write_actions_(write_actions) {

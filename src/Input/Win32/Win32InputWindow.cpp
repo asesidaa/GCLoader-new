@@ -1,6 +1,7 @@
 #include "Input/Win32/Win32InputWindow.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -249,6 +250,8 @@ Win32InputWindow::VerifyRegistrations() const
     return {};
 }
 
+// This method mutates process-wide raw-input registration state.
+// ReSharper disable once CppMemberFunctionMayBeConst
 void Win32InputWindow::RemoveRegistrations() noexcept
 {
     auto registrations = Registrations(nullptr, RIDEV_REMOVE);

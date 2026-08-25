@@ -4,7 +4,9 @@
 #include "Patches/TestModeTiming/TimingSettingsGameAbi.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdint>
 #include <span>
 
@@ -46,7 +48,7 @@ struct CarrierCallbacks {
 [[nodiscard]] std::array<std::uintptr_t, kSoundVtableSlots>
 BuildCarrierVtable(
     std::span<const std::uintptr_t, kSoundVtableSlots> native,
-    CarrierCallbacks callbacks,
+    const CarrierCallbacks& callbacks,
     std::uintptr_t image_base) noexcept;
 
 struct TimingRenderActions {

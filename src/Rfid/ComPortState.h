@@ -2,6 +2,7 @@
 
 #include "Rfid/Jvs/Decoder.h"
 #include "Rfid/Jvs/Device.h"
+// ReSharper disable once CppUnusedIncludeDirective
 #include "Rfid/Jvs/Encoder.h"
 #include "Rfid/State.h"
 
@@ -63,7 +64,7 @@ public:
     [[nodiscard]] State& device_state() noexcept;
 
 private:
-    void QueueResponse(jvs::DeviceResponse response) noexcept;
+    void QueueResponse(const jvs::DeviceResponse& response) noexcept;
     void RecordSequencingViolation() noexcept;
     void ResetSerialSession() noexcept;
 

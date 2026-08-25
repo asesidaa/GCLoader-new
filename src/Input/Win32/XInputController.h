@@ -3,6 +3,8 @@
 #include "Input/Win32/ControllerStateView.h"
 #include "Input/Win32/XInputApi.h"
 
+// XInput's Windows ABI types must be established before Xinput.h.
+// ReSharper disable once CppUnusedIncludeDirective
 #include <Windows.h>
 #include <Xinput.h>
 

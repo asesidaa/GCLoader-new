@@ -9,6 +9,7 @@
 #include "Input/Win32/PhysicalKeyWin32.h"
 #include "plog/Log.h"
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <iomanip>
 #include <memory>
 #include <new>
@@ -82,7 +83,7 @@ std::string WideToUtf8(std::wstring_view value)
 } // namespace
 
 std::expected<void, FeatureError> InstallFeatureHookLayers(
-    FeatureHookLayerActions actions) noexcept
+    const FeatureHookLayerActions& actions) noexcept
 {
     if (actions.install_kernel32 == nullptr ||
         actions.install_ttx == nullptr ||

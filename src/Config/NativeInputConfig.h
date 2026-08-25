@@ -1,5 +1,7 @@
 #pragma once
 
+// The reflector specialization must be visible wherever this config is serialized.
+// ReSharper disable once CppUnusedIncludeDirective
 #include "Config/InputRflParsers.h"
 #include "Input/Types/InputTypes.h"
 

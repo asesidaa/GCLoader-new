@@ -525,7 +525,7 @@ AtomicConfigWriteActions ProductionAtomicConfigWriteActions() noexcept {
 std::expected<void, std::string> WriteInputConfigAtomically(
     const std::filesystem::path& config_path,
     const InputConfig& config,
-    AtomicConfigWriteActions actions) noexcept {
+    const AtomicConfigWriteActions& actions) noexcept {
     bool temporary_may_exist = false;
     std::filesystem::path temporary;
     try {
@@ -598,7 +598,7 @@ PrepareAndPersistGameSystemPathConfiguration(
     bool document_migrated,
     const std::filesystem::path& config_path,
     bool native_testmode_storage_available,
-    GameSystemPathPreparationActions actions) noexcept {
+    const GameSystemPathPreparationActions& actions) noexcept {
     try {
         auto prepared = gc::system_path::PrepareGameSystemRoot(
             {

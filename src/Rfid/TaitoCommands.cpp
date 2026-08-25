@@ -1,6 +1,7 @@
 #include "Rfid/TaitoCommands.h"
 
 #include <algorithm>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 
 namespace gc::rfid {

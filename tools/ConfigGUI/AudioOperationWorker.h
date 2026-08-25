@@ -30,7 +30,7 @@ public:
     AudioOperationWorker(
         std::unique_ptr<gc::audio::IAsioProbeClient> probe_client,
         std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client,
-        gc::config::AtomicConfigWriteActions write_actions) noexcept;
+        const gc::config::AtomicConfigWriteActions& write_actions) noexcept;
     ~AudioOperationWorker();
 
     AudioOperationWorker(const AudioOperationWorker&) = delete;

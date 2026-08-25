@@ -58,7 +58,7 @@ void PublishStartupFatal(
     std::string_view log,
     std::wstring_view modal,
     DWORD exit_code,
-    StartupFatalActions actions) noexcept {
+    const StartupFatalActions& actions) noexcept {
     PublishStartupFatal(
         latch,
         log,
@@ -74,7 +74,7 @@ void PublishStartupFatal(
     std::wstring_view modal,
     std::wstring_view title,
     DWORD exit_code,
-    StartupFatalActions actions) noexcept {
+    const StartupFatalActions& actions) noexcept {
     if (latch.exchange(true, std::memory_order_acq_rel)) {
         return;
     }

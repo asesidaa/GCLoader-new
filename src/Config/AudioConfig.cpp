@@ -3,6 +3,7 @@
 #include "Config/AudioConfig.h"
 
 #include <climits>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 
 namespace gc::config {

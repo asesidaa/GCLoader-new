@@ -90,7 +90,7 @@ class SystemConfigTimingStore {
 public:
     explicit SystemConfigTimingStore(
         std::filesystem::path path,
-        Win32FileApi api = ProductionWin32FileApi());
+        const Win32FileApi& api = ProductionWin32FileApi());
 
     [[nodiscard]] std::expected<SaveOutcome, SystemConfigError>
     Save(TimingOffsets offsets) noexcept;

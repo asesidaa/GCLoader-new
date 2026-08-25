@@ -52,6 +52,9 @@ TimingCommand TimingSettingsModel::Confirm() const noexcept {
     return TimingCommand::None;
 }
 
+// Back is an instance-level menu action even though it does not inspect state.
+// ReSharper disable once CppMemberFunctionMayBeStatic
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 TimingCommand TimingSettingsModel::Back() const noexcept {
     return TimingCommand::Cancel;
 }

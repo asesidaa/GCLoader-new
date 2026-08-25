@@ -144,7 +144,7 @@ std::expected<RouteResult, DWORD> SystemPathRouter::RoutePathW(
 }
 
 std::expected<std::filesystem::path, DWORD>
-SystemPathRouter::ConvertAnsiPath(LPCSTR path) const noexcept {
+SystemPathRouter::ConvertAnsiPath(LPCSTR path) noexcept {
     if (path == nullptr) {
         return std::unexpected(ERROR_INVALID_PARAMETER);
     }

@@ -6,6 +6,8 @@
 
 #include <string>
 
+// Keep the specialization grouped in the namespace of its primary template.
+// ReSharper disable once CppRedundantNamespaceDefinition
 namespace rfl {
 
 template <>

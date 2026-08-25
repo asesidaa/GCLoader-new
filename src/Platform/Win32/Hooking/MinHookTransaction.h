@@ -4,6 +4,7 @@
 #include <MinHook.h>
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <expected>
 #include <span>
@@ -79,7 +80,7 @@ class MinHookTransaction {
 public:
     MinHookTransaction(
         ResolverApi resolver = ProductionResolverApi(),
-        MinHookApi minhook = ProductionMinHookApi()) noexcept;
+        const MinHookApi& minhook = ProductionMinHookApi()) noexcept;
 
     [[nodiscard]] std::expected<void, HookInstallError> Install(
         std::span<const HookRequest> requests) noexcept;

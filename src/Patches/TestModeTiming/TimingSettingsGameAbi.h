@@ -160,11 +160,11 @@ public:
 private:
     [[nodiscard]] bool PatternMatches(
         std::uintptr_t address,
-        const TimingBytePattern& pattern) noexcept;
+        const TimingBytePattern& pattern) const noexcept;
     [[nodiscard]] bool PointerMatches(
         std::uintptr_t address,
-        std::uintptr_t expected) noexcept;
-    [[nodiscard]] bool VerifyOriginalState() noexcept;
+        std::uintptr_t expected) const noexcept;
+    [[nodiscard]] bool VerifyOriginalState() const noexcept;
     [[nodiscard]] bool RollbackInternal() noexcept;
     [[nodiscard]] std::expected<void, TimingInstallError> Fail(
         TimingInstallStage stage,

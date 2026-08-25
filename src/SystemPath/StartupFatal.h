@@ -26,7 +26,7 @@ void PublishStartupFatal(
     std::string_view log,
     std::wstring_view modal,
     DWORD exit_code,
-    StartupFatalActions actions =
+    const StartupFatalActions& actions =
         ProductionStartupFatalActions()) noexcept;
 
 void PublishStartupFatal(
@@ -35,7 +35,7 @@ void PublishStartupFatal(
     std::wstring_view modal,
     std::wstring_view title,
     DWORD exit_code,
-    StartupFatalActions actions =
+    const StartupFatalActions& actions =
         ProductionStartupFatalActions()) noexcept;
 
 } // namespace gc::system_path

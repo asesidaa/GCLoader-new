@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <limits>
 #include <span>
@@ -232,7 +233,7 @@ GameBinaryMemoryResult ProductionWrite(
 std::expected<GameBinaryPatchResult, GameBinaryPatchError>
 InstallGameBinaryPatch(
     std::uintptr_t image_base,
-    GameBinaryPatchActions actions) noexcept {
+    const GameBinaryPatchActions& actions) noexcept {
     if (image_base == 0 || actions.read == nullptr || actions.write == nullptr) {
         return std::unexpected(GameBinaryPatchError{
             .stage = GameBinaryPatchStage::InvalidActions,

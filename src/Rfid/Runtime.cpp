@@ -55,7 +55,7 @@ HANDLE EmulatedComHandle() noexcept
 
 Runtime::Runtime(
     int card_virtual_key,
-    CardWorkerApi worker_api) noexcept
+    const CardWorkerApi& worker_api) noexcept
     : card_virtual_key_{card_virtual_key},
       worker_api_{worker_api}
 {

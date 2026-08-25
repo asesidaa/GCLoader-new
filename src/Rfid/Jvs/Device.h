@@ -46,7 +46,7 @@ public:
 
     [[nodiscard]] std::optional<DeviceResponse> HandlePacket(
         const DecodedPacket& packet) noexcept;
-    [[nodiscard]] std::optional<Acknowledgement> HandleChecksumFailure(
+    [[nodiscard]] static std::optional<Acknowledgement> HandleChecksumFailure(
         const ChecksumFailure& failure) noexcept;
 
 private:

@@ -72,7 +72,7 @@ struct TtxGuardRuntimeActions {
     unsigned int update_step,
     unsigned int update_options,
     const RuntimeRoot& root,
-    TtxGuardRuntimeActions actions) noexcept;
+    const TtxGuardRuntimeActions& actions) noexcept;
 
 struct TtxGuardInstallActions {
     void* context{};
@@ -87,7 +87,7 @@ struct TtxGuardInstallActions {
 };
 
 [[nodiscard]] std::expected<void, TtxGuardInstallError>
-InstallTtxInitGuard(TtxGuardInstallActions actions) noexcept;
+InstallTtxInitGuard(const TtxGuardInstallActions& actions) noexcept;
 
 class TtxInitGuard {
 public:

@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <limits>
 #include <string>
 #include <utility>
@@ -158,7 +157,7 @@ double HatActivation(
 
     if (count <= 4)
     {
-        const std::array directions{
+        constexpr std::array directions{
             ControlDirection::Up,
             ControlDirection::Right,
             ControlDirection::Down,
