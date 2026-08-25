@@ -1,6 +1,7 @@
 # Judgement Offset Advisor Design
 
-**Date:** 2026-08-23  
+**Date:** 2026-08-23
+
 **Status:** Approved design contract
 
 ## Purpose

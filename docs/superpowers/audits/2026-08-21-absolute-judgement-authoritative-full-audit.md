@@ -1,8 +1,11 @@
 # Absolute-judgement authoritative full audit
 
-Date: 2026-08-21  
-Status: **COMPLETE — authoritative audit input for the next specification discussion; not an implementation or runtime-acceptance claim**  
-Scope: current absolute-judgement input patch only  
+Date: 2026-08-21
+
+Status: **COMPLETE — authoritative audit input for the next specification discussion; not an implementation or runtime-acceptance claim**
+
+Scope: current absolute-judgement input patch only
+
 Method: main-agent audit; no delegated conclusions, no new IDA archaeology, no source/spec/plan/build/test/deployment changes
 
 ## Authority and stop rules

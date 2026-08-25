@@ -1,6 +1,7 @@
 # ASIO Absolute-Time Judgement Design
 
-**Date:** 2026-08-22  
+**Date:** 2026-08-22
+
 **Status:** Architecture approved in conversation; written review pending
 
 ## Purpose
