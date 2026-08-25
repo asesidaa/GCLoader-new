@@ -8,6 +8,7 @@ namespace gc::absolute_judgement {
 
 void InitializeAbsoluteJudgementOrFatal() noexcept;
 
+void HookGameplayInitialization(safetyhook::Context& context) noexcept;
 void HookSemanticStageEntry(safetyhook::Context& context) noexcept;
 void HookSemanticStageExit(safetyhook::Context& context) noexcept;
 void HookLoopGuard(safetyhook::Context& context) noexcept;

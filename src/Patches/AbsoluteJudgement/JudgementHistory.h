@@ -4,6 +4,7 @@
 #include "Timing/CheckedRational.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <expected>

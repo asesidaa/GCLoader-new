@@ -78,6 +78,8 @@ public:
         return initialized_;
     }
 
+    // Updating the owned Win32 attribute list is a logical mutation.
+    // ReSharper disable once CppMemberFunctionMayBeConst
     bool SetInheritedHandles(std::span<const HANDLE> handles) noexcept {
         return list_ != nullptr &&
             UpdateProcThreadAttribute(
@@ -255,9 +257,8 @@ AsioIsolatedProcessOutcome FinishTerminated(
 std::expected<std::filesystem::path, AsioFailure>
 ProductionAsioIsolatedProcessActions::CurrentExecutablePath() noexcept {
     try {
-        constexpr std::size_t maximum_path_characters = 32'768;
         std::vector<wchar_t> buffer(MAX_PATH);
-        for (;;) {
+        for (constexpr std::size_t maximum_path_characters = 32'768;;) {
             SetLastError(ERROR_SUCCESS);
             const auto copied = GetModuleFileNameW(
                 nullptr,

@@ -53,8 +53,8 @@ bool AddWrite(
     FramerateDirectPatchPlan& plan,
     std::uintptr_t base,
     std::uintptr_t rva,
-    BytePattern expected,
-    BytePattern replacement,
+    const BytePattern& expected,
+    const BytePattern& replacement,
     const char* name) noexcept {
     if (plan.count >= plan.writes.size()) {
         return false;

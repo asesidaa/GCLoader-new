@@ -128,7 +128,7 @@ void EndGameplayTransitionEpoch() noexcept
 }
 
 bool CaptureGameplayTransitionCutoff(
-    const gc::timing::AbsoluteHostTime stage_entry_time,
+    const gc::timing::AbsoluteHostTime& stage_entry_time,
     GameplayTransitionCutoff* output) noexcept
 {
     if (output == nullptr || stage_entry_time.qpc_ticks <= 0)
@@ -170,7 +170,7 @@ bool CaptureGameplayTransitionCutoff(
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,
     std::uint32_t next_fastio,
-    const gc::timing::AbsoluteHostTime observed_time,
+    const gc::timing::AbsoluteHostTime& observed_time,
     const std::optional<std::uint32_t> raw_message_queue_age_ms) noexcept
 {
     const GameplayHeldMask previous =

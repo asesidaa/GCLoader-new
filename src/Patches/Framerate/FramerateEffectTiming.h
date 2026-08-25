@@ -5,7 +5,9 @@
 
 #include <safetyhook.hpp>
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdint>
 #include <expected>
 #include <optional>

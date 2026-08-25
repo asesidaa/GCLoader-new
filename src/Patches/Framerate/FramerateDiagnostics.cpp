@@ -2,7 +2,9 @@
 
 #include <plog/Log.h>
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cmath>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -53,7 +55,7 @@ void PublishFatal(
     std::string_view modal,
     DWORD exit_code,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept {
+    const FrameratePlatformActions& actions) noexcept {
     bool expected = false;
     if (!publication_latch.compare_exchange_strong(expected, true)) {
         return;
@@ -98,7 +100,7 @@ FrameratePlatformActions ProductionFrameratePlatformActions() noexcept {
 void ReportFramerateStartup(
     const FramerateProfile& profile,
     const FramerateStartupPatchSummary& summary,
-    FrameratePlatformActions actions) noexcept {
+    const FrameratePlatformActions& actions) noexcept {
     InvokeNoexcept([&] {
         std::ostringstream stream;
         stream << "FrameratePatch: startup"
@@ -198,7 +200,7 @@ bool ShouldSuggestIntervalModeOne(
 void ReportFramerateMismatch(
     const FramerateObservation& observation,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept {
+    const FrameratePlatformActions& actions) noexcept {
     std::ostringstream log;
     log << "FrameratePatch: external cap validation failed"
         << " target_fps=" << observation.target_fps
@@ -232,7 +234,7 @@ void ReportFramerateMismatch(
 void ReportFramerateClockFailure(
     std::uint32_t target_fps,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept {
+    const FrameratePlatformActions& actions) noexcept {
     std::ostringstream clock_log;
     clock_log << "FrameratePatch: QPC cadence clock failed target_fps="
               << target_fps;
@@ -251,7 +253,7 @@ void ReportFramerateClockFailure(
 void ReportFramerateRuntimeFailure(
     std::string_view detail,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept {
+    const FrameratePlatformActions& actions) noexcept {
     std::ostringstream runtime_log;
     runtime_log << "FrameratePatch: runtime timing conversion failed detail="
                 << detail;
@@ -270,7 +272,7 @@ void ReportFramerateRuntimeFailure(
 void ReportFramerateInitializationFailure(
     std::string_view detail,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept {
+    const FrameratePlatformActions& actions) noexcept {
     std::ostringstream initialization_log;
     initialization_log << "FrameratePatch: initialization failed detail="
                        << detail;

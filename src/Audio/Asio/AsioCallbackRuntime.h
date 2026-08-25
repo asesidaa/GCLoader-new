@@ -104,7 +104,7 @@ public:
         IAsioBlockRenderer& renderer,
         AsioLegacyPositionActions legacy_actions,
         AsioCallbackTimingConfig timing_config,
-        AsioCallbackRuntimeActions runtime_actions =
+        const AsioCallbackRuntimeActions& runtime_actions =
             ProductionAsioCallbackRuntimeActions()) noexcept;
 
     ~AsioCallbackRuntime();
@@ -130,7 +130,7 @@ private:
     AsioCallbackRuntime(
         IAsioBlockRenderer& renderer,
         AsioLegacyPositionActions legacy_actions,
-        AsioCallbackRuntimeActions runtime_actions,
+        const AsioCallbackRuntimeActions& runtime_actions,
         std::uint64_t qpc_frequency,
         std::uint64_t expected_period_ns) noexcept;
 
@@ -155,7 +155,7 @@ private:
         ASIOBool direct_process) noexcept;
 
     void DispatchTimeInfo(
-        ASIOTime* time,
+        const ASIOTime* time,
         long buffer_index,
         ASIOBool direct_process) noexcept;
     void DispatchLegacy(

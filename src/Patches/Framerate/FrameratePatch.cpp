@@ -21,6 +21,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -35,7 +36,7 @@ namespace detail {
 
 GameplaySongClockInputSelection SelectGameplaySongClockInput(
     int group_cursor_ms,
-    std::optional<audio::GameplayAudioCursorObservation>
+    const std::optional<audio::GameplayAudioCursorObservation>&
         cursor_observation) noexcept {
     if (cursor_observation.has_value() &&
         cursor_observation->state ==
@@ -58,6 +59,8 @@ GameplaySongClockInputSelection SelectGameplaySongClockInput(
                         cursor_observation->source_frame_unwrapped,
                     .source_sample_rate =
                         cursor_observation->source_sample_rate,
+                    .buffer_instance_id =
+                        cursor_observation->buffer_instance_id,
                     .playback_generation =
                         cursor_observation->playback_generation,
                 },
@@ -85,7 +88,7 @@ GameplaySongClockStepSelection ResolveGameplaySongClockStep(
     std::uint32_t current_tick,
     std::int32_t game_time_offset_ms,
     int group_cursor_ms,
-    std::optional<audio::GameplayAudioCursorObservation>
+    const std::optional<audio::GameplayAudioCursorObservation>&
         cursor_observation) noexcept {
     GameplaySongClockStepSelection result{
         .input = SelectGameplaySongClockInput(
@@ -266,6 +269,8 @@ struct FramerateRuntimeCounters {
     std::atomic_uint64_t countdown_compare_hits{0};
     std::atomic_uint64_t audio_skip_margin_clamps{0};
     std::atomic_uint64_t audio_skip_interval_conversions{0};
+    std::atomic_uint64_t gameplay_song_clock_epoch_changes{0};
+    std::atomic_uint64_t gameplay_song_clock_observation_rejections{0};
     std::atomic_uint64_t gameplay_effect_advances{0};
     std::atomic_uint64_t gameplay_effect_skips{0};
     std::atomic_uint64_t effect_cadence_runs{0};
@@ -306,7 +311,7 @@ struct FramerateRuntimeState {
         FramerateProfile profile_value,
         FramerateMonitor monitor_value,
         std::int64_t frequency_value,
-        FrameratePlatformActions platform_value,
+        const FrameratePlatformActions& platform_value,
         GameplayAudioClockPlan audio_clock_plan_value,
         std::optional<GameplaySongClock>
             gameplay_song_clock_value) noexcept
@@ -1424,6 +1429,8 @@ void HookTuneCountdownCompare(safetyhook::Context& context) {
     context.eip += 7;
 }
 
+// SafetyHook fixes the mid-hook callback signature to a mutable Context&.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 void HookAudioSkipMargin(safetyhook::Context& context) {
     const auto margin_ms = ReadI32Stack(context, -0x24);
     if (margin_ms <= 0 || margin_ms >= kMinimumAudioSkipMarginMs) {
@@ -1552,8 +1559,30 @@ void HookGameplaySongClock(safetyhook::Context& context) {
         static_cast<std::int32_t>(game_time_offset_raw),
         group_cursor_ms,
         cursor_observation);
+    if (selection.observation_rejected) {
+        g_runtime->counters.gameplay_song_clock_observation_rejections
+            .fetch_add(1, std::memory_order_relaxed);
+    }
     if (!selection.decision.has_value()) {
         return;
+    }
+
+    if (selection.decision->new_playback_epoch) {
+        g_runtime->counters.gameplay_song_clock_epoch_changes.fetch_add(
+            1, std::memory_order_relaxed);
+        const auto& observation = selection.input.observation.value();
+        PLOG_INFO << std::format(
+            "FrameratePatch: gameplay_song_clock_epoch "
+            "buffer_instance_id={} playback_generation={} "
+            "source_frame={} output_frame={} current_tick={} "
+            "desired_tick={} step={}",
+            observation.buffer_instance_id,
+            observation.playback_generation,
+            observation.position,
+            selection.input.output_frame,
+            current_tick,
+            selection.decision->desired_tick,
+            selection.step);
     }
 
     if (!WriteU32Safe(tune + kTuneStepOffset, selection.step)) {
@@ -1895,6 +1924,12 @@ void MaybeLogRuntimeStats(std::int64_t now) {
                      std::memory_order_relaxed)
               << "/interval_conversions="
               << counters.audio_skip_interval_conversions.load(
+                     std::memory_order_relaxed)
+              << " gameplay_song_clock="
+              << counters.gameplay_song_clock_epoch_changes.load(
+                     std::memory_order_relaxed)
+              << "/reject="
+              << counters.gameplay_song_clock_observation_rejections.load(
                      std::memory_order_relaxed)
               << " gameplay_effect="
               << counters.gameplay_effect_advances.load(

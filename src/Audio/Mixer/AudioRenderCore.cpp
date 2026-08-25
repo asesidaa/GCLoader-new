@@ -5,6 +5,7 @@
 
 #include "Audio/Wasapi/WasapiAudioTypes.h"
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <memory>
 #include <new>
@@ -95,6 +96,9 @@ std::unique_ptr<AudioRenderCore> AudioRenderCore::Create(
     }
 }
 
+// These operations mutate logical mixer or presentation-clock state through
+// owned implementation objects.
+// ReSharper disable CppMemberFunctionMayBeConst
 std::unique_ptr<MixerVoice> AudioRenderCore::CreateVoice(
     const NormalizedSourceFormat& format,
     std::shared_ptr<AudioSnapshot> snapshot,
@@ -147,6 +151,7 @@ void AudioRenderCore::InvalidatePresentationClock() noexcept
         presented_clock_->Invalidate();
     }
 }
+// ReSharper restore CppMemberFunctionMayBeConst
 
 MixerDiagnosticsSnapshot AudioRenderCore::diagnostics() const noexcept
 {

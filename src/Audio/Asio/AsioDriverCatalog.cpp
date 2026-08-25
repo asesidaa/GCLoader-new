@@ -89,7 +89,7 @@ std::expected<std::wstring, AsioFailure> ReadClsidText(HKEY key) {
             "ASIO registration CLSID changed type while reading"));
     }
 
-    const auto end = std::find(buffer.begin(), buffer.end(), L'\0');
+    const auto end = std::ranges::find(buffer, L'\0');
     if (end == buffer.begin()) {
         return std::unexpected(RegistryFailure(
             "ASIO registration CLSID is empty"));
@@ -336,8 +336,8 @@ EnumerateAsioDrivers(IAsioRegistrySource& source) noexcept {
             });
         }
 
-        std::sort(entries.begin(), entries.end(), [](const auto& left,
-                                                     const auto& right) {
+        std::ranges::sort(entries, [](const auto& left,
+                                     const auto& right) {
             const int folded = CompareOrdinal(
                 left.wide_name,
                 right.wide_name,

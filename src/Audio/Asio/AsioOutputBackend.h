@@ -30,6 +30,12 @@ struct AsioRuntimeCountersSnapshot
     std::uint64_t sample_rate_change_requests{};
     std::uint64_t sample_position_discontinuities{};
     std::uint64_t render_gap_frames{};
+    std::uint64_t foreground_losses{};
+    std::uint64_t session_releases{};
+    std::uint64_t recovery_attempts{};
+    std::uint64_t recovery_failures{};
+    std::uint64_t session_recoveries{};
+    std::uint64_t silent_advance_frames{};
     std::uint64_t expected_period_ns{};
     std::uint64_t callback_interval_samples{};
     std::uint64_t total_callback_interval_ticks{};
@@ -71,6 +77,14 @@ struct AsioRuntimeCountersSnapshot
     MixerDiagnosticsSnapshot mixer{};
 };
 
+enum class AsioSessionLifecycleEvent : std::uint8_t {
+    foreground_lost,
+    session_released,
+    foreground_regained,
+    recovery_attempt_failed,
+    session_recovered,
+};
+
 class IAsioOutputObserver
 {
 public:
@@ -82,6 +96,12 @@ public:
     virtual void RuntimeFailed(
         const AsioFailure&,
         const AsioRuntimeCountersSnapshot&) noexcept = 0;
+    virtual void SessionLifecycleChanged(
+        AsioSessionLifecycleEvent,
+        std::uint64_t,
+        const AsioFailure*) noexcept
+    {
+    }
 };
 
 class AsioOutputBackend;
@@ -116,7 +136,7 @@ public:
         DWORD startup_clock_timeout_ms,
         bool enable_absolute_time_judgement,
         AsioFailure*) noexcept;
-    ~AsioOutputBackend();
+    ~AsioOutputBackend() override;
 
     AsioOutputBackend(const AsioOutputBackend&) = delete;
     AsioOutputBackend& operator=(const AsioOutputBackend&) = delete;

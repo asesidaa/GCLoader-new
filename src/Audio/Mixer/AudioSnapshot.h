@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Windows.h>
-#include <dsound.h>
 
 #include <atomic>
 #include <cstddef>
@@ -97,9 +96,9 @@ public:
         DWORD flags,
         AudioLockRegions* regions) noexcept;
     HRESULT Unlock(
-        void* first,
+        const void* first,
         DWORD first_bytes,
-        void* second,
+        const void* second,
         DWORD second_bytes) noexcept;
     RenderView AcquireForRender() const noexcept;
     void ReclaimRetired() noexcept;

@@ -205,12 +205,14 @@ GameplaySongClock::Observe(
     std::uint32_t current_tick,
     std::int32_t game_time_offset_ms,
     const SongClockObservation& observation) noexcept {
-    bool new_generation{};
+    bool new_playback_epoch{};
     if (observation.kind == SongClockObservationKind::ExactSourceFrame) {
-        new_generation =
-            !has_exact_generation_ ||
-            observation.playback_generation != exact_generation_;
-        if (!new_generation &&
+        new_playback_epoch =
+            !has_exact_epoch_ ||
+            observation.buffer_instance_id != exact_buffer_instance_id_ ||
+            observation.playback_generation !=
+                exact_playback_generation_;
+        if (!new_playback_epoch &&
             observation.position < last_exact_source_frame_) {
             return std::unexpected(
                 GameplaySongClockError::BackwardsObservation);
@@ -268,8 +270,9 @@ GameplaySongClock::Observe(
     }
 
     if (observation.kind == SongClockObservationKind::ExactSourceFrame) {
-        has_exact_generation_ = true;
-        exact_generation_ = observation.playback_generation;
+        has_exact_epoch_ = true;
+        exact_buffer_instance_id_ = observation.buffer_instance_id;
+        exact_playback_generation_ = observation.playback_generation;
         last_exact_source_frame_ = observation.position;
     }
 
@@ -278,7 +281,7 @@ GameplaySongClock::Observe(
         .delta_ticks = delta,
         .step = step,
         .remaining_backlog = remaining_backlog,
-        .new_generation = new_generation,
+        .new_playback_epoch = new_playback_epoch,
     };
 }
 

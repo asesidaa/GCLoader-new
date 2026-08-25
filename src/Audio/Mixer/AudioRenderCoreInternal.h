@@ -4,6 +4,7 @@
 #include "Audio/Mixer/AudioRenderCore.h"
 
 #include <algorithm>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -21,6 +22,8 @@ constexpr bool CanAddressAudioRenderSamples(
 inline AudioRenderBlock FinalizeAudioRenderBlock(
     std::span<float> stereo,
     std::uint32_t expected_frames,
+    // This small result aggregate is intentionally passed by value.
+    // ReSharper disable once CppPassValueParameterByConstReference
     MixerRenderResult rendered) noexcept
 {
     AudioRenderSilenceReason reason{};
@@ -52,7 +55,7 @@ inline AudioRenderBlock FinalizeAudioRenderBlock(
         : 0U;
     if (reason != AudioRenderSilenceReason::none)
     {
-        std::fill(stereo.begin(), stereo.end(), 0.0F);
+        std::ranges::fill(stereo, 0.0F);
     }
     return {
         .interleaved_stereo = std::span<const float>{stereo},

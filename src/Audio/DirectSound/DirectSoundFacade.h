@@ -34,37 +34,37 @@ HRESULT CreateDirectSoundDevice(
 
 class PrimarySoundBuffer final : public IDirectSoundBuffer8 {
 public:
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override;
-    ULONG STDMETHODCALLTYPE AddRef() override;
-    ULONG STDMETHODCALLTYPE Release() override;
-    HRESULT STDMETHODCALLTYPE GetCaps(LPDSBCAPS) override;
-    HRESULT STDMETHODCALLTYPE GetCurrentPosition(LPDWORD, LPDWORD) override;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) noexcept override;
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override;
+    ULONG STDMETHODCALLTYPE Release() noexcept override;
+    HRESULT STDMETHODCALLTYPE GetCaps(LPDSBCAPS) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetCurrentPosition(LPDWORD, LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE GetFormat(
-        LPWAVEFORMATEX, DWORD, LPDWORD) override;
-    HRESULT STDMETHODCALLTYPE GetVolume(LPLONG) override;
-    HRESULT STDMETHODCALLTYPE GetPan(LPLONG) override;
-    HRESULT STDMETHODCALLTYPE GetFrequency(LPDWORD) override;
-    HRESULT STDMETHODCALLTYPE GetStatus(LPDWORD) override;
+        LPWAVEFORMATEX, DWORD, LPDWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVolume(LPLONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPan(LPLONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetFrequency(LPDWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetStatus(LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE Initialize(
-        LPDIRECTSOUND, LPCDSBUFFERDESC) override;
+        LPDIRECTSOUND, LPCDSBUFFERDESC) noexcept override;
     HRESULT STDMETHODCALLTYPE Lock(
         DWORD, DWORD, LPVOID*, LPDWORD,
-        LPVOID*, LPDWORD, DWORD) override;
-    HRESULT STDMETHODCALLTYPE Play(DWORD, DWORD, DWORD) override;
-    HRESULT STDMETHODCALLTYPE SetCurrentPosition(DWORD) override;
-    HRESULT STDMETHODCALLTYPE SetFormat(LPCWAVEFORMATEX) override;
-    HRESULT STDMETHODCALLTYPE SetVolume(LONG) override;
-    HRESULT STDMETHODCALLTYPE SetPan(LONG) override;
-    HRESULT STDMETHODCALLTYPE SetFrequency(DWORD) override;
-    HRESULT STDMETHODCALLTYPE Stop() override;
-    HRESULT STDMETHODCALLTYPE Unlock(LPVOID, DWORD, LPVOID, DWORD) override;
-    HRESULT STDMETHODCALLTYPE Restore() override;
+        LPVOID*, LPDWORD, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Play(DWORD, DWORD, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetCurrentPosition(DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetFormat(LPCWAVEFORMATEX) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetVolume(LONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetPan(LONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetFrequency(DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Stop() noexcept override;
+    HRESULT STDMETHODCALLTYPE Unlock(LPVOID, DWORD, LPVOID, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Restore() noexcept override;
     HRESULT STDMETHODCALLTYPE SetFX(
-        DWORD, LPDSEFFECTDESC, LPDWORD) override;
+        DWORD, LPDSEFFECTDESC, LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE AcquireResources(
-        DWORD, DWORD, LPDWORD) override;
+        DWORD, DWORD, LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE GetObjectInPath(
-        REFGUID, DWORD, REFGUID, LPVOID*) override;
+        REFGUID, DWORD, REFGUID, LPVOID*) noexcept override;
 
 private:
     friend class DirectSoundDevice;
@@ -77,20 +77,20 @@ private:
 
 class DirectSoundDevice final : public IDirectSound8 {
 public:
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override;
-    ULONG STDMETHODCALLTYPE AddRef() override;
-    ULONG STDMETHODCALLTYPE Release() override;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) noexcept override;
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override;
+    ULONG STDMETHODCALLTYPE Release() noexcept override;
     HRESULT STDMETHODCALLTYPE CreateSoundBuffer(
-        LPCDSBUFFERDESC, LPDIRECTSOUNDBUFFER*, LPUNKNOWN) override;
-    HRESULT STDMETHODCALLTYPE GetCaps(LPDSCAPS) override;
+        LPCDSBUFFERDESC, LPDIRECTSOUNDBUFFER*, LPUNKNOWN) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetCaps(LPDSCAPS) noexcept override;
     HRESULT STDMETHODCALLTYPE DuplicateSoundBuffer(
-        LPDIRECTSOUNDBUFFER, LPDIRECTSOUNDBUFFER*) override;
-    HRESULT STDMETHODCALLTYPE SetCooperativeLevel(HWND, DWORD) override;
-    HRESULT STDMETHODCALLTYPE Compact() override;
-    HRESULT STDMETHODCALLTYPE GetSpeakerConfig(LPDWORD) override;
-    HRESULT STDMETHODCALLTYPE SetSpeakerConfig(DWORD) override;
-    HRESULT STDMETHODCALLTYPE Initialize(LPCGUID) override;
-    HRESULT STDMETHODCALLTYPE VerifyCertification(LPDWORD) override;
+        LPDIRECTSOUNDBUFFER, LPDIRECTSOUNDBUFFER*) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetCooperativeLevel(HWND, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Compact() noexcept override;
+    HRESULT STDMETHODCALLTYPE GetSpeakerConfig(LPDWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetSpeakerConfig(DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Initialize(LPCGUID) noexcept override;
+    HRESULT STDMETHODCALLTYPE VerifyCertification(LPDWORD) noexcept override;
 
 private:
     friend HRESULT CreateDirectSoundDevice(
@@ -111,37 +111,37 @@ public:
         const DSBUFFERDESC&,
         SecondarySoundBuffer**) noexcept;
 
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) override;
-    ULONG STDMETHODCALLTYPE AddRef() override;
-    ULONG STDMETHODCALLTYPE Release() override;
-    HRESULT STDMETHODCALLTYPE GetCaps(LPDSBCAPS) override;
-    HRESULT STDMETHODCALLTYPE GetCurrentPosition(LPDWORD, LPDWORD) override;
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void**) noexcept override;
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override;
+    ULONG STDMETHODCALLTYPE Release() noexcept override;
+    HRESULT STDMETHODCALLTYPE GetCaps(LPDSBCAPS) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetCurrentPosition(LPDWORD, LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE GetFormat(
-        LPWAVEFORMATEX, DWORD, LPDWORD) override;
-    HRESULT STDMETHODCALLTYPE GetVolume(LPLONG) override;
-    HRESULT STDMETHODCALLTYPE GetPan(LPLONG) override;
-    HRESULT STDMETHODCALLTYPE GetFrequency(LPDWORD) override;
-    HRESULT STDMETHODCALLTYPE GetStatus(LPDWORD) override;
+        LPWAVEFORMATEX, DWORD, LPDWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetVolume(LPLONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetPan(LPLONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetFrequency(LPDWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE GetStatus(LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE Initialize(
-        LPDIRECTSOUND, LPCDSBUFFERDESC) override;
+        LPDIRECTSOUND, LPCDSBUFFERDESC) noexcept override;
     HRESULT STDMETHODCALLTYPE Lock(
         DWORD, DWORD, LPVOID*, LPDWORD,
-        LPVOID*, LPDWORD, DWORD) override;
-    HRESULT STDMETHODCALLTYPE Play(DWORD, DWORD, DWORD) override;
-    HRESULT STDMETHODCALLTYPE SetCurrentPosition(DWORD) override;
-    HRESULT STDMETHODCALLTYPE SetFormat(LPCWAVEFORMATEX) override;
-    HRESULT STDMETHODCALLTYPE SetVolume(LONG) override;
-    HRESULT STDMETHODCALLTYPE SetPan(LONG) override;
-    HRESULT STDMETHODCALLTYPE SetFrequency(DWORD) override;
-    HRESULT STDMETHODCALLTYPE Stop() override;
-    HRESULT STDMETHODCALLTYPE Unlock(LPVOID, DWORD, LPVOID, DWORD) override;
-    HRESULT STDMETHODCALLTYPE Restore() override;
+        LPVOID*, LPDWORD, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Play(DWORD, DWORD, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetCurrentPosition(DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetFormat(LPCWAVEFORMATEX) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetVolume(LONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetPan(LONG) noexcept override;
+    HRESULT STDMETHODCALLTYPE SetFrequency(DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Stop() noexcept override;
+    HRESULT STDMETHODCALLTYPE Unlock(LPVOID, DWORD, LPVOID, DWORD) noexcept override;
+    HRESULT STDMETHODCALLTYPE Restore() noexcept override;
     HRESULT STDMETHODCALLTYPE SetFX(
-        DWORD, LPDSEFFECTDESC, LPDWORD) override;
+        DWORD, LPDSEFFECTDESC, LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE AcquireResources(
-        DWORD, DWORD, LPDWORD) override;
+        DWORD, DWORD, LPDWORD) noexcept override;
     HRESULT STDMETHODCALLTYPE GetObjectInPath(
-        REFGUID, DWORD, REFGUID, LPVOID*) override;
+        REFGUID, DWORD, REFGUID, LPVOID*) noexcept override;
 
 private:
     SecondarySoundBuffer(

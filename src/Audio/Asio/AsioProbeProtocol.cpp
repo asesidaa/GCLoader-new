@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <bit>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -341,7 +342,7 @@ bool IsKnownProbeMode(std::uint32_t value) noexcept {
 bool IsKnownFailureStage(std::uint32_t value) noexcept {
     return value <=
         static_cast<std::uint32_t>(
-            AsioFailureStage::multimedia_timer);
+            AsioFailureStage::foreground_monitor);
 }
 
 bool IsKnownResultDomain(std::uint32_t value) noexcept {

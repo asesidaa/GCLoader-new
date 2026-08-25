@@ -67,7 +67,7 @@ public:
 
 class ExclusiveAudioEngine final : public IAudioEngineServices {
 public:
-    ~ExclusiveAudioEngine();
+    ~ExclusiveAudioEngine() override;
 
     ExclusiveAudioEngine(const ExclusiveAudioEngine&) = delete;
     ExclusiveAudioEngine& operator=(const ExclusiveAudioEngine&) = delete;

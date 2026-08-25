@@ -9,7 +9,6 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -524,6 +523,8 @@ std::span<ASIOBufferInfo> AsioSession::buffers() noexcept {
     return buffers_;
 }
 
+// This accessor intentionally grants mutable driver control.
+// ReSharper disable once CppMemberFunctionMayBeConst
 IAsioDriver& AsioSession::driver() noexcept {
     return *driver_;
 }

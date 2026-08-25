@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateProfile.h"
 
 #include <safetyhook.hpp>

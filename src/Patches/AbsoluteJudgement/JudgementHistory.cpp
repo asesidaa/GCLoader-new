@@ -783,7 +783,7 @@ std::expected<bool, JudgementHistoryError> JudgementHistory::HasPriorEdge(
         return std::unexpected(
             JudgementHistoryError::CheckedArithmeticFailure);
     }
-    const gc::input::GameplayHeldMask bit =
+    const auto bit =
         static_cast<gc::input::GameplayHeldMask>(1u << ordinary_control);
 
     for (std::size_t offset = size_; offset != 0; --offset)

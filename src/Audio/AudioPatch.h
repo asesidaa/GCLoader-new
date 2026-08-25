@@ -47,7 +47,7 @@ struct AudioMinHookApi {
 // installation accepts nullptr and performs no hook work.
 bool InstallAudioHook(
     bool enabled,
-    AudioMinHookApi api,
+    const AudioMinHookApi& api,
     AudioHookFailure* failure) noexcept;
 
 bool AudioPatchInit() noexcept;

@@ -3,6 +3,7 @@
 #include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -144,7 +145,7 @@ private:
     HRESULT Initialize(EndpointInitialization*, AudioFailure*);
     HRESULT Fail(
         AudioFailureStage, HRESULT,
-        EndpointInitialization*, AudioFailure*);
+        EndpointInitialization*, AudioFailure*) const;
 
     std::unique_ptr<IWasapiApi> api_;
     EndpointInitialization initialization_{};

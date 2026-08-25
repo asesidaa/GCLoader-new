@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdlib>
 #include <format>
 #include <iterator>
@@ -1120,6 +1121,9 @@ std::uint32_t AbsoluteJudgementDiagnostics::startup_target_fps()
     return startup_target_fps_;
 }
 
+// Startup logging remains an instance-level diagnostic sink operation.
+// ReSharper disable once CppMemberFunctionMayBeStatic
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void AbsoluteJudgementDiagnostics::LogStartup(
     const AbsoluteJudgementStartupRecord& record) noexcept {
     PLOG_INFO << std::format(
@@ -1709,6 +1713,7 @@ bool AbsoluteJudgementDiagnostics::recognition_stopped() const noexcept {
         PLOG_FATAL << std::string_view(emergency.data(), size);
         gc::session_log::FlushActiveProcessLog();
         terminate_after_log();
+        std::abort();
     }
 
     const auto counters = diagnostics.SnapshotCounters();
@@ -1829,6 +1834,7 @@ bool AbsoluteJudgementDiagnostics::recognition_stopped() const noexcept {
         L"GCLoader absolute-time judgement fatal error",
         MB_OK | MB_ICONERROR | MB_SYSTEMMODAL | MB_SETFOREGROUND);
     terminate_after_log();
+    std::abort();
 }
 
 } // namespace gc::absolute_judgement

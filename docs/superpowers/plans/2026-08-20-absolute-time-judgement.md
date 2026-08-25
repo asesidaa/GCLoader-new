@@ -3,9 +3,10 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Status:** Tasks 1-10 implemented; first Task 11 240-FPS run diagnosed;
-runtime-correction Tasks 12-14 implemented and controller-reviewed in
-`7f01266`; Task 15 source/build/ABI/deployment gates completed on 2026-08-21.
-Native-game acceptance remains pending the operator's next 240-FPS run.
+runtime-correction Tasks 12-14 implemented in `7f01266`; the first deployed
+correction run exposed a controller-added retained-history lower-bound
+regression at song load. The one-line hotfix, rebuild, and redeployment are in
+progress; native-game acceptance remains pending.
 
 **Goal:** Build an opt-in WASAPI-exclusive judgement path that feeds every successfully observed physical transition to native recognition/score at its exact audio-derived song time, with render-independent results at 60, 144, 165, and 240 FPS.
 

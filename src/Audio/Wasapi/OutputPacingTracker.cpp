@@ -8,7 +8,7 @@ namespace {
 std::int64_t SaturatingSignedDifference(
     std::uint64_t left,
     std::uint64_t right) noexcept {
-    const auto signed_max = static_cast<std::uint64_t>(
+    constexpr auto signed_max = static_cast<std::uint64_t>(
         std::numeric_limits<std::int64_t>::max());
     if (left >= right) {
         const auto difference = left - right;

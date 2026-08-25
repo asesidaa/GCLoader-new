@@ -53,6 +53,9 @@ ScopedGameplayAudioCursorQuery::~ScopedGameplayAudioCursorQuery() {
 }
 
 std::optional<GameplayAudioCursorObservation>
+// Consume mutates the scoped thread-local publication.
+// ReSharper disable once CppMemberFunctionMayBeConst
+// NOLINTNEXTLINE(readability-make-member-function-const)
 ScopedGameplayAudioCursorQuery::Consume() noexcept {
     // Binary authority: native VA 0x6122B0 walks the ordered group channel
     // list, calls the cursor method with one output slot, and breaks after the

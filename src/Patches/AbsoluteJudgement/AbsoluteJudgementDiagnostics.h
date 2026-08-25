@@ -7,6 +7,7 @@
 
 #include <array>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>

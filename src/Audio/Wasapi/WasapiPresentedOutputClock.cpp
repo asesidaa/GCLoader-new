@@ -45,7 +45,7 @@ ProductionWasapiPresentedOutputClockActions() noexcept
 
 WasapiPresentedOutputClock::WasapiPresentedOutputClock(
     std::uint32_t output_sample_rate,
-    WasapiPresentedOutputClockActions actions) noexcept
+    const WasapiPresentedOutputClockActions& actions) noexcept
     : output_sample_rate_(output_sample_rate),
       actions_(actions)
 {

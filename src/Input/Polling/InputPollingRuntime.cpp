@@ -2,6 +2,7 @@
 
 #include "Config/config.h"
 #include "Input/Polling/ForegroundPolicy.h"
+#include "Input/Polling/GameplayTransitionJournal.h"
 #include "Input/Polling/InputMapper.h"
 #include "Input/Polling/InputWorkerWait.h"
 #include "Input/Types/PhysicalKey.h"
@@ -25,11 +26,14 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdlib>
 #include <expected>
 #include <format>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -656,6 +660,8 @@ private:
         return foreground;
     }
 
+    // Publishing mutates the process-wide snapshot and transition transport.
+    // ReSharper disable once CppMemberFunctionMayBeConst
     void Publish(
         const std::optional<std::uint32_t> raw_message_queue_age_ms =
             std::nullopt)

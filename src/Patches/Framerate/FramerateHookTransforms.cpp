@@ -1,4 +1,5 @@
 #include "Patches/Framerate/FramerateHookTransforms.h"
+#include "Patches/Framerate/FramerateAuthoredClock.h"
 
 #include <bit>
 #include <cstdint>

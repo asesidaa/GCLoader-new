@@ -12,7 +12,7 @@ std::atomic_uint64_t g_next_stage_generation{1};
 
 std::expected<void, JudgementStageError> JudgementStage::Begin(
     const std::uintptr_t tune_manager,
-    const gc::timing::AbsoluteHostTime stage_entry_time,
+    const gc::timing::AbsoluteHostTime& stage_entry_time,
     const std::int32_t game_time_offset_ms,
     const std::int32_t hold_safe_frame,
     const std::int32_t slide_hold_safe_frame) noexcept {

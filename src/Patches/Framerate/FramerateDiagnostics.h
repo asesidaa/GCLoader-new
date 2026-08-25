@@ -6,6 +6,7 @@
 
 #include <Windows.h>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -44,7 +45,7 @@ struct FramerateEffectRuntimeStats {
 void ReportFramerateStartup(
     const FramerateProfile& profile,
     const FramerateStartupPatchSummary& summary,
-    FrameratePlatformActions actions) noexcept;
+    const FrameratePlatformActions& actions) noexcept;
 
 [[nodiscard]] std::string FormatFramerateEffectRuntimeStats(
     const FramerateEffectRuntimeStats& stats);
@@ -56,21 +57,21 @@ void ReportFramerateStartup(
 void ReportFramerateMismatch(
     const FramerateObservation& observation,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept;
+    const FrameratePlatformActions& actions) noexcept;
 
 void ReportFramerateClockFailure(
     std::uint32_t target_fps,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept;
+    const FrameratePlatformActions& actions) noexcept;
 
 void ReportFramerateRuntimeFailure(
     std::string_view detail,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept;
+    const FrameratePlatformActions& actions) noexcept;
 
 void ReportFramerateInitializationFailure(
     std::string_view detail,
     std::atomic_bool& publication_latch,
-    FrameratePlatformActions actions) noexcept;
+    const FrameratePlatformActions& actions) noexcept;
 
 } // namespace gc::framerate

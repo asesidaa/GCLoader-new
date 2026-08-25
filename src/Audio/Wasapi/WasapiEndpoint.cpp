@@ -7,6 +7,7 @@
 #include <propvarutil.h>
 #include <wrl/client.h>
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <limits>
 #include <new>
@@ -384,7 +385,7 @@ HRESULT WasapiEndpoint::Fail(
     AudioFailureStage stage,
     HRESULT result,
     EndpointInitialization* attempted,
-    AudioFailure* failure) {
+    AudioFailure* failure) const {
     if (attempted != nullptr) {
         *attempted = initialization_;
     }
@@ -692,6 +693,8 @@ HRESULT WasapiEndpoint::Initialize(
     return S_OK;
 }
 
+// Starting the endpoint is logically stateful through the WASAPI interface.
+// ReSharper disable once CppMemberFunctionMayBeConst
 HRESULT WasapiEndpoint::Start(AudioFailure* failure) noexcept {
     const auto result = api_->Start();
     if (FAILED(result) && failure != nullptr) {
@@ -700,6 +703,8 @@ HRESULT WasapiEndpoint::Start(AudioFailure* failure) noexcept {
     return result;
 }
 
+// Waiting advances the endpoint's external render state.
+// ReSharper disable once CppMemberFunctionMayBeConst
 HRESULT WasapiEndpoint::WaitForRender(
     DWORD timeout_ms,
     AudioFailure* failure) noexcept {
@@ -710,6 +715,8 @@ HRESULT WasapiEndpoint::WaitForRender(
     return result;
 }
 
+// Submitting audio mutates the endpoint through the WASAPI interface.
+// ReSharper disable once CppMemberFunctionMayBeConst
 HRESULT WasapiEndpoint::SubmitPcm16(
     std::span<const std::int16_t> samples,
     AudioFailure* failure) noexcept {
@@ -743,6 +750,8 @@ HRESULT WasapiEndpoint::SubmitPcm16(
     return result;
 }
 
+// Submitting silence mutates the endpoint through the WASAPI interface.
+// ReSharper disable once CppMemberFunctionMayBeConst
 HRESULT WasapiEndpoint::TrySubmitSilence() noexcept {
     BYTE* destination{};
     auto result = api_->GetRenderBuffer(
@@ -756,6 +765,8 @@ HRESULT WasapiEndpoint::TrySubmitSilence() noexcept {
         AUDCLNT_BUFFERFLAGS_SILENT);
 }
 
+// The clock query advances external endpoint bookkeeping.
+// ReSharper disable once CppMemberFunctionMayBeConst
 HRESULT WasapiEndpoint::ReadClock(
     EndpointClockPosition* position,
     AudioFailure* failure) noexcept {
@@ -787,6 +798,8 @@ const EndpointInitialization& WasapiEndpoint::initialization() const noexcept {
 }
 
 std::unique_ptr<IWasapiApi> CreateProductionWasapiApi() noexcept {
+    // Preserve this factory's non-throwing allocation contract.
+    // ReSharper disable once CppSmartPointerVsMakeFunction
     return std::unique_ptr<IWasapiApi>(new (std::nothrow) Win32WasapiApi());
 }
 

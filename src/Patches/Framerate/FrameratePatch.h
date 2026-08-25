@@ -54,7 +54,7 @@ struct GameplaySongClockStepSelection {
 [[nodiscard]] GameplaySongClockInputSelection
 SelectGameplaySongClockInput(
     int group_cursor_ms,
-    std::optional<audio::GameplayAudioCursorObservation>
+    const std::optional<audio::GameplayAudioCursorObservation>&
         cursor_observation) noexcept;
 
 [[nodiscard]] GameplaySongClockStepSelection
@@ -63,7 +63,7 @@ ResolveGameplaySongClockStep(
     std::uint32_t current_tick,
     std::int32_t game_time_offset_ms,
     int group_cursor_ms,
-    std::optional<audio::GameplayAudioCursorObservation>
+    const std::optional<audio::GameplayAudioCursorObservation>&
         cursor_observation) noexcept;
 
 [[nodiscard]] std::expected<bool, FramerateProfileError>

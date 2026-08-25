@@ -56,6 +56,7 @@ enum class AsioFailureStage : std::uint8_t {
     control_panel,
     control_panel_crash,
     multimedia_timer,
+    foreground_monitor,
 };
 
 enum class AsioResultDomain : std::uint8_t {

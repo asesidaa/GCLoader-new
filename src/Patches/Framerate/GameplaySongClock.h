@@ -16,6 +16,7 @@ struct SongClockObservation {
     SongClockObservationKind kind{};
     std::uint64_t position{};
     std::uint32_t source_sample_rate{};
+    std::uint64_t buffer_instance_id{};
     std::uint64_t playback_generation{};
 };
 
@@ -32,7 +33,7 @@ struct GameplaySongClockDecision {
     std::int64_t delta_ticks{};
     std::uint32_t step{};
     std::uint32_t remaining_backlog{};
-    bool new_generation{};
+    bool new_playback_epoch{};
 };
 
 class GameplaySongClock final {
@@ -57,8 +58,9 @@ private:
     std::uint32_t rate_numerator_{};
     std::uint32_t rate_denominator_{};
     std::uint32_t maximum_step_{};
-    bool has_exact_generation_{};
-    std::uint64_t exact_generation_{};
+    bool has_exact_epoch_{};
+    std::uint64_t exact_buffer_instance_id_{};
+    std::uint64_t exact_playback_generation_{};
     std::uint64_t last_exact_source_frame_{};
 };
 

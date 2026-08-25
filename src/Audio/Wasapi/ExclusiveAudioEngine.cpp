@@ -358,7 +358,6 @@ void ExclusiveAudioEngine::AudioThreadMain() noexcept {
 }
 
 void ExclusiveAudioEngine::RenderLoop() noexcept {
-    const auto frames = endpoint_buffer_frames_.load(std::memory_order_acquire);
     while (!ShutdownRequested() &&
            failure_stage_.load(std::memory_order_acquire) ==
                static_cast<std::uint32_t>(AudioFailureStage::None)) {
@@ -468,6 +467,8 @@ void ExclusiveAudioEngine::RenderLoop() noexcept {
     }
 }
 
+// Monitoring performs a stateful wait/notification loop through external handles.
+// ReSharper disable once CppMemberFunctionMayBeConst
 void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
     if (WaitForSingleObject(initialization_event_, INFINITE) != WAIT_OBJECT_0 ||
         !initialization_succeeded_.load(std::memory_order_acquire)) {

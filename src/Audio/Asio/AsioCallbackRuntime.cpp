@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <cstddef>
 #include <limits>
 #include <new>
 #include <utility>
@@ -259,7 +258,7 @@ ProductionAsioCallbackRuntimeActions() noexcept {
 AsioCallbackRuntime::AsioCallbackRuntime(
     IAsioBlockRenderer& renderer,
     AsioLegacyPositionActions legacy_actions,
-    AsioCallbackRuntimeActions runtime_actions,
+    const AsioCallbackRuntimeActions& runtime_actions,
     std::uint64_t qpc_frequency,
     std::uint64_t expected_period_ns) noexcept
     : renderer_(&renderer),
@@ -285,7 +284,7 @@ AsioCallbackRuntime::Prepare(
     IAsioBlockRenderer& renderer,
     AsioLegacyPositionActions legacy_actions,
     AsioCallbackTimingConfig timing_config,
-    AsioCallbackRuntimeActions runtime_actions) noexcept {
+    const AsioCallbackRuntimeActions& runtime_actions) noexcept {
     if (legacy_actions.get_sample_position == nullptr ||
         runtime_actions.query_performance_counter == nullptr ||
         runtime_actions.query_performance_frequency == nullptr ||
@@ -614,7 +613,7 @@ ASIOTime* AsioCallbackRuntime::BufferSwitchTimeInfo(
 }
 
 void AsioCallbackRuntime::DispatchTimeInfo(
-    ASIOTime* time,
+    const ASIOTime* time,
     long buffer_index,
     ASIOBool direct_process) noexcept {
     std::uint64_t start{};
@@ -852,8 +851,6 @@ void AsioCallbackRuntime::RecordDriverCadence(
     const CallbackArrivalInterval& host_interval) noexcept {
     constexpr std::uint8_t empty = 0;
     constexpr std::uint8_t awaiting_positive_advance = 1;
-    constexpr std::uint8_t primed = 2;
-
     const auto state =
         driver_cadence_state_.load(std::memory_order_acquire);
     if (state == empty) {
@@ -895,6 +892,7 @@ void AsioCallbackRuntime::RecordDriverCadence(
         callback_ordinal,
         std::memory_order_relaxed);
     if (state == awaiting_positive_advance) {
+        constexpr std::uint8_t primed = 2;
         driver_cadence_state_.store(primed, std::memory_order_release);
         return;
     }

@@ -4,9 +4,7 @@
 #include "Audio/Asio/AsioOutputBackend.h"
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
 
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 
 namespace gc::audio::detail {
 
@@ -15,6 +13,8 @@ struct AudioResolverApi {
     decltype(&GetProcAddress) get_proc_address{};
 };
 
+// Long-lived observers, factories, and reporters must own a copy of this
+// callback table; their constructor arguments are often temporaries.
 struct AudioPatchPlatformActions {
     void (*log_info)(const char*){};
     void (*log_error)(const char*){};
@@ -35,47 +35,47 @@ using StartExclusiveAudioEngineFn =
 
 bool InstallAudioHookWithResolver(
     bool enabled,
-    AudioMinHookApi minhook,
+    const AudioMinHookApi& minhook,
     AudioResolverApi resolver,
     AudioHookFailure* failure) noexcept;
 
 bool AudioPatchInitWithDependencies(
     gc::config::AudioBackend requested_backend,
     std::uint32_t configured_buffer_ms,
-    AudioPatchInitDependencies dependencies);
+    const AudioPatchInitDependencies& dependencies);
 
 void ReportAudioStartupSucceeded(
     const EndpointInitialization&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 void ReportAudioRuntimeSummary(
     const AudioRuntimeCountersSnapshot&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 void ReportAudioRuntimeFailure(
     const EndpointInitialization&,
     const AudioFailure&,
     const AudioRuntimeCountersSnapshot&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 void ReportAudioStartupFailure(
     const AudioStartupFailure&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 void ReportAsioStartupSucceeded(
     const AsioCapabilityReport&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 void ReportAsioRuntimeSummary(
     const AsioRuntimeCountersSnapshot&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 void ReportAsioRuntimeFailure(
     const AsioCapabilityReport*,
     const AsioFailure&,
     const AsioRuntimeCountersSnapshot&,
-    AudioPatchPlatformActions) noexcept;
+    const AudioPatchPlatformActions&) noexcept;
 
 std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     CreateWasapiApiFn,
     StartExclusiveAudioEngineFn,
     REFERENCE_TIME configured_duration,
     bool enable_absolute_time_judgement,
-    AudioPatchPlatformActions,
+    const AudioPatchPlatformActions&,
     std::shared_ptr<IAudioEngineObserver>,
     AudioStartupFailure*) noexcept;
 

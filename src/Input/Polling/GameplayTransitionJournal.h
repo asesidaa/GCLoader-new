@@ -2,6 +2,7 @@
 
 #include "Timing/AbsoluteHostTime.h"
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -49,12 +50,12 @@ bool PrepareGameplayTransitionTransport(bool enabled) noexcept;
 void BeginGameplayTransitionEpoch(GameplayHeldMask baseline) noexcept;
 void EndGameplayTransitionEpoch() noexcept;
 bool CaptureGameplayTransitionCutoff(
-    gc::timing::AbsoluteHostTime stage_entry_time,
+    const gc::timing::AbsoluteHostTime& stage_entry_time,
     GameplayTransitionCutoff* output) noexcept;
 void PublishGameplayTransition(
     std::uint32_t previous_fastio,
     std::uint32_t next_fastio,
-    gc::timing::AbsoluteHostTime observed_time,
+    const gc::timing::AbsoluteHostTime& observed_time,
     std::optional<std::uint32_t> raw_message_queue_age_ms =
         std::nullopt) noexcept;
 std::size_t DrainGameplayTransitions(

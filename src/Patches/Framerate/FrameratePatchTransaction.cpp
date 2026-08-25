@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 
 namespace gc::framerate {
@@ -156,8 +157,8 @@ FrameratePatchTransaction::Install(
         }
     }
 
-    std::copy(writes.begin(), writes.end(), writes_.begin());
-    std::copy(hooks.begin(), hooks.end(), hooks_.begin());
+    std::ranges::copy(writes, writes_.begin());
+    std::ranges::copy(hooks, hooks_.begin());
     write_count_ = writes.size();
     hook_count_ = hooks.size();
 
@@ -214,7 +215,7 @@ bool FrameratePatchTransaction::Rollback() noexcept {
 
 bool FrameratePatchTransaction::PatternMatches(
     std::uintptr_t address,
-    const BytePattern& pattern) noexcept {
+    const BytePattern& pattern) const noexcept {
     if (pattern.size == 0 || pattern.size > kMaximumPatternBytes) {
         return false;
     }
@@ -228,7 +229,7 @@ bool FrameratePatchTransaction::PatternMatches(
             pattern.view().begin());
 }
 
-bool FrameratePatchTransaction::VerifyOriginalState() noexcept {
+bool FrameratePatchTransaction::VerifyOriginalState() const noexcept {
     for (std::size_t index = 0; index < write_count_; ++index) {
         if (!PatternMatches(writes_[index].address, writes_[index].expected)) {
             return false;

@@ -1076,3 +1076,36 @@ Deployment record, 2026-08-22:
 - Static scope: PE32/x86, 15 exports, hook return cleanup, WinMM imports,
   source-diff constraints, and Release builds passed. Runtime gameplay
   acceptance remains pending the user run.
+
+## 2026-08-23 Audio-Quality Diagnostic Follow-Up
+
+The first fixed-headroom runtime trial removed measured clipping but made the
+reported free-tap artifact worse. Clipping remains a proven defect; the trial
+gain is not the accepted final processing model.
+
+- [x] Map the raw snapshot, voice conversion, shared pre/post-gain mix, and
+  exact ASIO submission seams.
+- [x] Add a five-second, output-frame-aligned, preallocated runtime capture.
+- [x] Keep allocation, file I/O, logging, locks, and waits out of the repeating
+  audio callback.
+- [x] Flush a partial capture when the semantic stage ends.
+- [x] Build the complete x86 Release graph successfully.
+- [x] Deploy the diagnostic build; the user runtime capture remains pending.
+- [ ] Use the captured first-corrupt boundary, plus native DirectSound evidence
+  if required, to select and implement the replacement clipping processing.
+
+This follow-up deliberately adds no expected-value or emulated audio test. The
+ground truth remains the captured game signal and the user's live/captured
+auditory comparison.
+
+Diagnostic deployment record, 2026-08-23:
+
+- x86 Release build: complete graph exited `0`.
+- Candidate and deployed DLL SHA-256:
+  `ABC6C0018534FFB93C5331BB4D1DAE61E33AE61DA19D4242CAADCA4EA4E800C3`
+- Candidate and deployed ConfigGUI SHA-256:
+  `EEBD6E0F21E5A6139E641A97B1C90BCA39DB9E527476E770DD75F11CAEA96D52`
+- Backup path:
+  `H:\gc\deploy-backups\asio-absolute-judgement-20260823-032029570`
+- Runtime capture and any replacement clipping policy remain pending actual
+  game evidence.

@@ -7,6 +7,7 @@
 #include "Audio/Mixer/AudioRenderCore.h"
 
 #include <Windows.h>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <timeapi.h>
 
 #include <atomic>
@@ -84,6 +85,7 @@ struct AsioOutputBackendActions
     MMRESULT (*end_timer_period)(void* context, UINT period_ms) noexcept{};
     AsioCallbackRuntimeActions callback_runtime_actions{};
     DWORD summary_interval_ms{kAsioRuntimeSummaryIntervalMs};
+    bool (*reset_event)(void* context, HANDLE event) noexcept{};
 };
 
 [[nodiscard]] AsioOutputBackendActions

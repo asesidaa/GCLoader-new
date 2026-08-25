@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -184,7 +185,7 @@ public:
         std::uint64_t frequency,
         std::uint64_t output_frame,
         std::uint32_t output_sample_rate) noexcept;
-    std::optional<std::uint64_t> ToOutputFrame(
+    [[nodiscard]] std::optional<std::uint64_t> ToOutputFrame(
         std::uint64_t position) const noexcept;
     [[nodiscard]] EndpointClockMapping mapping() const noexcept;
 

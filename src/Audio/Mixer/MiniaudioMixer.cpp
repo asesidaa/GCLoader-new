@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -457,7 +458,7 @@ struct MixerVoiceState {
         std::uint64_t* sequence_out,
         std::uint64_t* frame_out,
         std::uint64_t* epoch_out,
-        ExactPlaybackOrigin* origin_out) noexcept {
+        ExactPlaybackOrigin* origin_out) const noexcept {
         const auto before = seek_mailbox.sequence.load(
             std::memory_order_seq_cst);
         if ((before & 1U) != 0) {
@@ -764,6 +765,8 @@ DiscontinuityAdvanceResult AdvanceVoiceAcrossDiscontinuity(
     return DiscontinuityAdvanceResult::Continue;
 }
 
+// miniaudio fixes this callback signature, including its mutable pointer types.
+// ReSharper disable CppParameterMayBeConstPtrOrRef
 void VoiceNodeProcess(
     ma_node* node,
     const float** frames_in,
@@ -773,7 +776,7 @@ void VoiceNodeProcess(
     (void)frames_in;
     (void)frame_count_in;
 
-    auto& voice = *reinterpret_cast<VoiceNode*>(node)->state;
+    auto& voice = *static_cast<VoiceNode*>(node)->state;
     const auto requested = *frame_count_out;
     auto* output = frames_out[0];
     const auto playback_run = voice.playback.CapturePlayingRun();
@@ -963,6 +966,7 @@ void VoiceNodeProcess(
         voice.EndPlayback(playback_run, final_output_end);
     }
 }
+// ReSharper restore CppParameterMayBeConstPtrOrRef
 
 } // namespace
 
@@ -974,6 +978,8 @@ MixerVoice::~MixerVoice() {
     Stop();
 }
 
+// These operations mutate the logical voice through its owned state.
+// ReSharper disable CppMemberFunctionMayBeConst
 HRESULT MixerVoice::Play(
     bool should_loop,
     std::uint64_t epoch) noexcept {
@@ -1051,6 +1057,7 @@ void MixerVoice::SetGain(float gain) noexcept {
         ma_node_set_output_bus_volume(&state_->node.base, 0, gain);
     }
 }
+// ReSharper restore CppMemberFunctionMayBeConst
 
 bool MixerVoice::playing() const noexcept {
     return state_ != nullptr &&
@@ -1160,6 +1167,8 @@ std::unique_ptr<MiniaudioMixer> MiniaudioMixer::CreateWithOwner(
     }
 }
 
+// Creating a voice mutates the miniaudio node graph owned by state_.
+// ReSharper disable once CppMemberFunctionMayBeConst
 std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
     const NormalizedSourceFormat& format,
     std::shared_ptr<AudioSnapshot> snapshot,
@@ -1236,7 +1245,7 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
         auto node_config = ma_node_config_init();
         node_config.vtable = &voice_node_vtable;
         node_config.initialState = ma_node_state_stopped;
-        const ma_uint32 output_channels = kOutputChannels;
+        constexpr ma_uint32 output_channels = kOutputChannels;
         node_config.pOutputChannels = &output_channels;
         init_result = ma_node_init(
             ma_engine_get_node_graph(&state_->engine),
@@ -1295,6 +1304,8 @@ std::unique_ptr<MixerVoice> MiniaudioMixer::CreateVoice(
     }
 }
 
+// Rendering advances the engine and publication state owned by state_.
+// ReSharper disable once CppMemberFunctionMayBeConst
 MixerRenderResult MiniaudioMixer::Render(
     std::span<float> stereo,
     const MixerRenderTimeline& timeline) noexcept {
@@ -1306,7 +1317,7 @@ MixerRenderResult MiniaudioMixer::Render(
         return {MA_INVALID_ARGS, 0, 0};
     }
     if (current_render_context != nullptr) {
-        std::fill(stereo.begin(), stereo.end(), 0.0F);
+        std::ranges::fill(stereo, 0.0F);
         return {MA_INVALID_OPERATION, 0, 0};
     }
 

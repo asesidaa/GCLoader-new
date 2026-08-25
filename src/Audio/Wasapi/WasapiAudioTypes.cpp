@@ -4,6 +4,7 @@
 #include <ksmedia.h>
 
 #include <algorithm>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 
 namespace gc::audio {

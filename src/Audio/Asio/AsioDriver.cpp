@@ -3,9 +3,9 @@
 #include "Audio/Asio/AsioDriver.h"
 
 #include <algorithm>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
@@ -15,16 +15,17 @@ namespace gc::audio {
 
 namespace {
 
+constexpr char kHexDigits[] = "0123456789ABCDEF";
+
 std::string EscapeBytes(std::span<const char> bytes) {
-    constexpr char hex[] = "0123456789ABCDEF";
     std::string escaped;
     escaped.reserve(bytes.size() * 4);
     for (const char value : bytes) {
         const auto byte = static_cast<unsigned char>(value);
         escaped.push_back('\\');
         escaped.push_back('x');
-        escaped.push_back(hex[byte >> 4U]);
-        escaped.push_back(hex[byte & 0x0FU]);
+        escaped.push_back(kHexDigits[byte >> 4U]);
+        escaped.push_back(kHexDigits[byte & 0x0FU]);
     }
     return escaped;
 }
@@ -42,7 +43,7 @@ public:
     }
 
     void GetDriverName(char (&name)[32]) noexcept override {
-        std::fill(std::begin(name), std::end(name), '\0');
+        std::ranges::fill(name, '\0');
         driver_->getDriverName(name);
     }
 
@@ -51,7 +52,7 @@ public:
     }
 
     void GetErrorMessage(char (&message)[124]) noexcept override {
-        std::fill(std::begin(message), std::end(message), '\0');
+        std::ranges::fill(message, '\0');
         driver_->getErrorMessage(message);
     }
 
@@ -103,10 +104,7 @@ public:
 
     ASIOError GetChannelInfo(ASIOChannelInfo* info) noexcept override {
         if (info != nullptr) {
-            std::fill(
-                std::begin(info->name),
-                std::end(info->name),
-                '\0');
+            std::ranges::fill(info->name, '\0');
         }
         return driver_->getChannelInfo(info);
     }
@@ -175,7 +173,7 @@ std::string AsioDisplayTextToUtf8(
         if (bytes.empty()) {
             return {};
         }
-        const auto terminator = std::find(bytes.begin(), bytes.end(), '\0');
+        const auto terminator = std::ranges::find(bytes, '\0');
         const std::span<const char> bounded{
             bytes.data(),
             static_cast<std::size_t>(terminator - bytes.begin())};

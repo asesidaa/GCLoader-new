@@ -30,8 +30,8 @@ struct EndpointPcmFormat {
     std::uint32_t size{};
     EndpointFormatKind kind{EndpointFormatKind::LegacyPcm};
 
-    bool valid() const noexcept { return size != 0; }
-    const WAVEFORMATEX& wave_format() const noexcept {
+    [[nodiscard]] bool valid() const noexcept { return size != 0; }
+    [[nodiscard]] const WAVEFORMATEX& wave_format() const noexcept {
         return storage.Format;
     }
 };

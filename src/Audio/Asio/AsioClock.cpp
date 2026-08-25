@@ -138,10 +138,26 @@ void AsioPresentedClockPublication::Publish(
         return;
     }
 
-    StoreAnchor({
+    PublishContinuityAnchor(
         decision.presented_output_frame,
         submitted_output_tail,
-        ToWrappingMilliseconds(decision.system_time_ns),
+        decision.system_time_ns);
+}
+
+void AsioPresentedClockPublication::PublishContinuityAnchor(
+    const std::uint64_t presented_output_frame,
+    const std::uint64_t submitted_output_tail,
+    const std::uint64_t system_time_ns) noexcept {
+    if (system_time_ns == 0 ||
+        submitted_output_tail < presented_output_frame) {
+        Invalidate();
+        return;
+    }
+
+    StoreAnchor({
+        presented_output_frame,
+        submitted_output_tail,
+        ToWrappingMilliseconds(system_time_ns),
         true,
     });
 }

@@ -49,7 +49,7 @@ class JudgementStage final {
 public:
     [[nodiscard]] std::expected<void, JudgementStageError> Begin(
         std::uintptr_t tune_manager,
-        gc::timing::AbsoluteHostTime stage_entry_time,
+        const gc::timing::AbsoluteHostTime& stage_entry_time,
         std::int32_t game_time_offset_ms,
         std::int32_t hold_safe_frame,
         std::int32_t slide_hold_safe_frame) noexcept;

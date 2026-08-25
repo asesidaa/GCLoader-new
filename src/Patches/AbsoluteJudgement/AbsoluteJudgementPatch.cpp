@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdlib>
 #include <format>
 #include <limits>
@@ -32,6 +33,7 @@ namespace {
 using namespace native_abi;
 
 enum class NativeSite : std::size_t {
+    GameplayInitialization,
     SemanticStageEntry,
     SemanticStageExit,
     LoopGuard,
@@ -60,6 +62,7 @@ struct InstallFailure final {
 };
 
 struct AbsoluteJudgementHooks final {
+    safetyhook::MidHook gameplay_initialization;
     safetyhook::MidHook semantic_stage_entry;
     safetyhook::MidHook semantic_stage_exit;
     safetyhook::MidHook loop_guard;
@@ -71,7 +74,10 @@ struct AbsoluteJudgementHooks final {
     safetyhook::InlineHook timing_grade;
 };
 
-inline constexpr std::array<NativeSiteContract, 8> kSiteContracts{{
+inline constexpr std::array<NativeSiteContract, 9> kSiteContracts{{
+    {NativeSite::GameplayInitialization,
+     kGameplayInitializationRva,
+     kGameplayInitializationPrefix},
     {NativeSite::SemanticStageEntry,
      kSemanticStageEntryRva,
      kSemanticStageEntryPrefix},
@@ -86,7 +92,8 @@ inline constexpr std::array<NativeSiteContract, 8> kSiteContracts{{
     {NativeSite::HeldAge, kHeldAgeRva, kHeldAgePrefix},
 }};
 
-inline constexpr std::array<std::string_view, 8> kSiteNames{{
+inline constexpr std::array<std::string_view, 9> kSiteNames{{
+    "gameplay_initialization",
     "semantic_stage_entry",
     "semantic_stage_exit",
     "loop_guard",
@@ -299,6 +306,18 @@ template <typename Hook>
     // Install directly into stable process-lifetime storage. Once any hook is
     // enabled its handler must never observe a moved-from trampoline owner.
     auto& pending = g_hooks;
+    auto created_gameplay_initialization = safetyhook::MidHook::create(
+        reinterpret_cast<void*>(
+            executable_base + kGameplayInitializationRva),
+        &HookGameplayInitialization,
+        safetyhook::MidHook::StartDisabled);
+    if (!created_gameplay_initialization) {
+        return InstallFailure{
+            InstallStage::Create, NativeSite::GameplayInitialization};
+    }
+    pending.gameplay_initialization =
+        std::move(*created_gameplay_initialization);
+
     auto created_semantic_stage_entry = safetyhook::MidHook::create(
         reinterpret_cast<void*>(
             executable_base + kSemanticStageEntryRva),
@@ -399,6 +418,10 @@ template <typename Hook>
         return InstallFailure{
             InstallStage::Enable, NativeSite::SemanticStageExit};
     }
+    if (!EnableHook(pending.gameplay_initialization)) {
+        return InstallFailure{
+            InstallStage::Enable, NativeSite::GameplayInitialization};
+    }
     // The semantic entry hook is the final operational commit point.
     if (!EnableHook(pending.semantic_stage_entry)) {
         return InstallFailure{
@@ -458,11 +481,21 @@ template <typename Value>
 
 } // namespace
 
+// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+void HookGameplayInitialization(safetyhook::Context& context) noexcept {
+    ObserveAbsoluteJudgementGameplayInitialization(context.ecx);
+}
+
+// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 void HookSemanticStageEntry(safetyhook::Context& context) noexcept {
     BeginAbsoluteJudgementSemanticStage(
         ReadSemanticTuneManagerOrFatal(context));
 }
 
+// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
 void HookSemanticStageExit(safetyhook::Context& context) noexcept {
     EndAbsoluteJudgementSemanticStage(
         ReadSemanticTuneManagerOrFatal(context));
@@ -667,8 +700,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
             "stage=executable_base module_handle=0");
     }
     InitializeAbsoluteJudgementRuntime(executable_base, expected_domain);
-    const auto installation = InstallHooks(executable_base);
-    if (installation) {
+    if (const auto installation = InstallHooks(executable_base); installation) {
         PublishInstallFailure(*installation);
     }
     const bool timing_grade_diagnostic_hook =
@@ -680,7 +712,7 @@ void InitializeAbsoluteJudgementOrFatal() noexcept {
         .input_rate_hz = input_rate_hz,
         .backend = gc::config::AudioBackendName(backend),
         .audio_hook_committed = audio_hook_committed,
-        .installed_site_count = 8,
+        .installed_site_count = kSiteContracts.size(),
         .timing_grade_diagnostic_hook =
             timing_grade_diagnostic_hook,
     });

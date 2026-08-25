@@ -3,7 +3,6 @@
 
 #include "Audio/Mixer/AudioCursorTimeline.h"
 #include "Audio/Mixer/PresentedOutputClock.h"
-#include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <cstdint>
 #include <optional>
@@ -27,7 +26,7 @@ class WasapiPresentedOutputClock final : public IPresentedOutputClock
 public:
     WasapiPresentedOutputClock(
         std::uint32_t output_sample_rate,
-        WasapiPresentedOutputClockActions actions) noexcept;
+        const WasapiPresentedOutputClockActions& actions) noexcept;
 
     void Publish(
         std::uint64_t presented_output_frame,

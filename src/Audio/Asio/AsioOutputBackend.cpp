@@ -5,6 +5,7 @@
 
 #include "Audio/Asio/AsioCallbackRuntime.h"
 #include "Audio/Asio/AsioClock.h"
+#include "Audio/Asio/AsioForegroundMonitor.h"
 #include "Audio/Asio/ExactAsioClock.h"
 #include "Audio/Asio/AsioSampleConverter.h"
 #include "Audio/Asio/AsioSession.h"
@@ -19,6 +20,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +45,35 @@ static_assert(std::atomic_uint32_t::is_always_lock_free);
 static_assert(std::atomic_int32_t::is_always_lock_free);
 static_assert(std::numeric_limits<float>::is_iec559);
 
+constexpr DWORD kRecoveryRetryMs = 250;
+constexpr std::uint64_t kOutputFramesPerMillisecond = 48;
+constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000;
+constexpr std::uint64_t kOutputSampleRate = 48'000;
+
+std::optional<std::uint64_t> OutputFramesToNanoseconds(
+    const std::uint64_t frames) noexcept
+{
+    const auto whole_seconds = frames / kOutputSampleRate;
+    const auto remaining_frames = frames % kOutputSampleRate;
+    if (whole_seconds >
+        (std::numeric_limits<std::uint64_t>::max)() /
+            kNanosecondsPerSecond)
+    {
+        return std::nullopt;
+    }
+    const auto whole_nanoseconds =
+        whole_seconds * kNanosecondsPerSecond;
+    const auto remaining_nanoseconds =
+        remaining_frames * kNanosecondsPerSecond / kOutputSampleRate;
+    if (whole_nanoseconds >
+        (std::numeric_limits<std::uint64_t>::max)() -
+            remaining_nanoseconds)
+    {
+        return std::nullopt;
+    }
+    return whole_nanoseconds + remaining_nanoseconds;
+}
+
 HRESULT ProductionInitializeCom(void*, DWORD coinit_flags) noexcept
 {
     return CoInitializeEx(nullptr, coinit_flags);
@@ -61,6 +92,11 @@ HANDLE ProductionCreateManualEvent(void*) noexcept
 bool ProductionSignalEvent(void*, HANDLE event) noexcept
 {
     return event != nullptr && SetEvent(event) != FALSE;
+}
+
+bool ProductionResetEvent(void*, HANDLE event) noexcept
+{
+    return event != nullptr && ResetEvent(event) != FALSE;
 }
 
 DWORD ProductionWaitForEvent(
@@ -260,6 +296,81 @@ std::uint64_t SaturatingSum(
     return sum;
 }
 
+void MergeCallbackSnapshot(
+    AsioCallbackRuntimeSnapshot& total,
+    const AsioCallbackRuntimeSnapshot& session) noexcept
+{
+    const auto add = [](std::uint64_t& destination,
+                        const std::uint64_t value) noexcept
+    {
+        const auto remaining =
+            (std::numeric_limits<std::uint64_t>::max)() - destination;
+        destination = value > remaining
+            ? (std::numeric_limits<std::uint64_t>::max)()
+            : destination + value;
+    };
+    const auto maximum = [](std::uint64_t& destination,
+                            const std::uint64_t value) noexcept
+    {
+        destination = (std::max)(destination, value);
+    };
+
+    add(total.callbacks, session.callbacks);
+    add(total.time_info_callbacks, session.time_info_callbacks);
+    add(total.legacy_callbacks, session.legacy_callbacks);
+    add(total.deferred_callbacks, session.deferred_callbacks);
+    add(total.deadline_misses, session.deadline_misses);
+    add(total.overload_messages, session.overload_messages);
+    add(total.reset_requests, session.reset_requests);
+    add(total.resync_requests, session.resync_requests);
+    add(total.latency_change_requests, session.latency_change_requests);
+    add(total.buffer_size_change_requests,
+        session.buffer_size_change_requests);
+    add(total.sample_rate_change_requests,
+        session.sample_rate_change_requests);
+    add(total.buffer_alternation_violations,
+        session.buffer_alternation_violations);
+    add(total.callback_interval_samples,
+        session.callback_interval_samples);
+    add(total.total_callback_interval_ticks,
+        session.total_callback_interval_ticks);
+    maximum(total.maximum_callback_interval_ticks,
+        session.maximum_callback_interval_ticks);
+    add(total.early_callback_intervals, session.early_callback_intervals);
+    add(total.late_callback_intervals, session.late_callback_intervals);
+    add(total.severe_callback_intervals, session.severe_callback_intervals);
+    add(total.timed_callback_work_samples,
+        session.timed_callback_work_samples);
+    add(total.total_callback_ticks, session.total_callback_ticks);
+    maximum(total.maximum_callback_ticks, session.maximum_callback_ticks);
+    add(total.timed_render_work_samples,
+        session.timed_render_work_samples);
+    add(total.total_render_ticks, session.total_render_ticks);
+    maximum(total.maximum_render_ticks, session.maximum_render_ticks);
+    add(total.driver_interval_samples, session.driver_interval_samples);
+    maximum(total.maximum_driver_period_error_ns,
+        session.maximum_driver_period_error_ns);
+    maximum(total.maximum_host_driver_interval_skew_ns,
+        session.maximum_host_driver_interval_skew_ns);
+    if (total.expected_period_ns == 0)
+    {
+        total.expected_period_ns = session.expected_period_ns;
+    }
+    if (total.qpc_frequency == 0)
+    {
+        total.qpc_frequency = session.qpc_frequency;
+    }
+    if (session.last_reported_sample_rate != 0.0)
+    {
+        total.last_reported_sample_rate =
+            session.last_reported_sample_rate;
+    }
+    if (total.first_fault == AsioFailureStage::none)
+    {
+        total.first_fault = session.first_fault;
+    }
+}
+
 void UpdateMaximumFloatBits(
     std::atomic_uint32_t& destination,
     float value) noexcept
@@ -406,6 +517,7 @@ AsioOutputBackendActions ProductionAsioOutputBackendActions() noexcept
         .callback_runtime_actions =
             ProductionAsioCallbackRuntimeActions(),
         .summary_interval_ms = kAsioRuntimeSummaryIntervalMs,
+        .reset_event = &ProductionResetEvent,
     };
 }
 
@@ -421,11 +533,11 @@ public:
         std::shared_ptr<const ma_allocation_callbacks> allocations,
         DWORD startup_clock_timeout_ms,
         bool enable_absolute_time_judgement,
-        AsioOutputBackendActions actions)
+        const AsioOutputBackendActions& actions)
         : game_window_(game_window),
           request_(std::move(request)),
-          pending_registry_(std::move(registry)),
-          pending_factory_(std::move(factory)),
+          registry_(std::move(registry)),
+          factory_(std::move(factory)),
           observer_(std::move(observer)),
           mixer_allocations_(std::move(allocations)),
           startup_clock_timeout_ms_(
@@ -549,6 +661,7 @@ public:
             result);
     }
 
+    // ReSharper disable once CppMemberFunctionMayBeConst
     std::optional<std::uint64_t> CurrentOutputFrame() noexcept
     {
         return render_core_ != nullptr
@@ -577,6 +690,12 @@ public:
     }
 
 private:
+    enum class StableRenderOutcome : std::uint8_t {
+        stable,
+        focus_lost,
+        shutdown,
+    };
+
     std::expected<void, AsioFailure> CreateEvents() noexcept
     {
         startup_event_ = actions_.create_manual_event(actions_.context);
@@ -646,9 +765,15 @@ private:
         }
 
         auto stable = WaitForStableRender();
-        if (!stable)
+        if (!stable || *stable != StableRenderOutcome::stable)
         {
-            auto failure = std::move(stable.error());
+            auto failure = !stable
+                ? std::move(stable.error())
+                : Failure(
+                      AsioFailureStage::startup_clock,
+                      *stable == StableRenderOutcome::focus_lost
+                          ? "The game lost foreground ownership during ASIO startup"
+                          : "ASIO startup was cancelled before clock stability");
             if (const auto teardown_failure = TeardownOnControlThread())
             {
                 AppendSecondaryFailure(failure, *teardown_failure);
@@ -700,12 +825,20 @@ private:
     {
         try
         {
-            if (game_window_ == nullptr || pending_registry_ == nullptr ||
-                pending_factory_ == nullptr || observer_ == nullptr)
+            if (game_window_ == nullptr || registry_ == nullptr ||
+                factory_ == nullptr || observer_ == nullptr)
             {
                 return std::unexpected(Failure(
                     AsioFailureStage::init,
                     "ASIO runtime dependencies and game HWND are required"));
+            }
+
+            AsioFailure monitor_failure{};
+            foreground_monitor_ = AsioForegroundMonitor::Start(
+                game_window_, &monitor_failure);
+            if (foreground_monitor_ == nullptr)
+            {
+                return std::unexpected(std::move(monitor_failure));
             }
 
             if (enable_absolute_time_judgement_)
@@ -723,15 +856,79 @@ private:
                 timer_period_active_ = true;
             }
 
+            auto clock = std::make_unique<AsioPresentedClockPublication>(
+                AsioClockNowActions{
+                    actions_.context,
+                    actions_.time_get_time_ms,
+                });
+            presented_clock_ = clock.get();
+            ma_result mixer_result = MA_ERROR;
+            render_core_ = AudioRenderCore::Create(
+                request_.buffer_frames,
+                48'000,
+                std::move(mixer_allocations_),
+                std::move(clock),
+                &mixer_result);
+            if (render_core_ == nullptr)
+            {
+                presented_clock_ = nullptr;
+                return std::unexpected(Failure(
+                    AsioFailureStage::render_core,
+                    "Could not create the preallocated ASIO render core",
+                    AsioResultDomain::none,
+                    mixer_result));
+            }
+
+            if (auto opened = OpenPhysicalSession(); !opened)
+            {
+                return opened;
+            }
+            endpoint_buffer_frames_.store(
+                request_.buffer_frames,
+                std::memory_order_release);
+            output_sample_rate_.store(48'000, std::memory_order_release);
+            return {};
+        }
+        catch (const std::bad_alloc&)
+        {
+            return std::unexpected(Failure(
+                AsioFailureStage::render_core,
+                "ASIO runtime allocation failed"));
+        }
+        catch (const std::exception& error)
+        {
+            return std::unexpected(Failure(
+                AsioFailureStage::protocol,
+                "ASIO runtime initialization failed: " +
+                    std::string{error.what()}));
+        }
+        catch (...)
+        {
+            return std::unexpected(Failure(
+                AsioFailureStage::protocol,
+                "ASIO runtime initialization failed unexpectedly"));
+        }
+    }
+
+    std::expected<void, AsioFailure> OpenPhysicalSession() noexcept
+    {
+        try
+        {
+            if (session_ != nullptr || callback_runtime_ != nullptr)
+            {
+                return std::unexpected(Failure(
+                    AsioFailureStage::protocol,
+                    "ASIO physical session must be closed before acquisition"));
+            }
+            ClearSessionFault();
+
             auto registration = ResolveAsioDriver(
-                *pending_registry_, request_.driver_name);
-            pending_registry_.reset();
+                *registry_, request_.driver_name);
             if (!registration)
             {
                 return std::unexpected(std::move(registration.error()));
             }
-            auto driver = pending_factory_->Create(registration->clsid);
-            pending_factory_.reset();
+            auto driver = factory_->Create(registration->clsid);
             if (!driver)
             {
                 return std::unexpected(std::move(driver.error()));
@@ -778,76 +975,31 @@ private:
             {
                 return views;
             }
-
-            auto clock = std::make_unique<AsioPresentedClockPublication>(
-                AsioClockNowActions{
-                    actions_.context,
-                    actions_.time_get_time_ms,
-                });
-            presented_clock_ = clock.get();
-            ma_result mixer_result = MA_ERROR;
-            render_core_ = AudioRenderCore::Create(
-                request_.buffer_frames,
-                48'000,
-                std::move(mixer_allocations_),
-                std::move(clock),
-                &mixer_result);
-            if (render_core_ == nullptr)
+            if (auto contract = EstablishOrValidatePhysicalContract();
+                !contract)
             {
-                presented_clock_ = nullptr;
+                return contract;
+            }
+            if (const auto advance_failure = AdvanceSilentRendering())
+            {
+                return std::unexpected(*advance_failure);
+            }
+            if (!foreground_monitor_->QueryCurrentForeground())
+            {
                 return std::unexpected(Failure(
-                    AsioFailureStage::render_core,
-                    "Could not create the preallocated ASIO render core",
-                    AsioResultDomain::none,
-                    mixer_result));
+                    AsioFailureStage::foreground_monitor,
+                    "The game lost foreground ownership before ASIO start"));
             }
 
             clock_tracker_.Reset(
                 request_.buffer_frames,
                 session_->report().output_latency_frames);
-            if (enable_absolute_time_judgement_)
-            {
-                const auto callback = callback_runtime_->Snapshot();
-                const auto endpoint_generation =
-                    detail::NextExactOutputClockGeneration();
-                if (endpoint_generation == 0 ||
-                    callback.qpc_frequency == 0 ||
-                    callback.qpc_frequency >
-                        static_cast<std::uint64_t>(
-                            (std::numeric_limits<std::int64_t>::max)()))
-                {
-                    return std::unexpected(Failure(
-                        AsioFailureStage::startup_clock,
-                        "ASIO exact clock generation or QPC frequency is invalid"));
-                }
-                exact_clock_ = ExactAsioClock::Create(
-                    endpoint_generation,
-                    48'000,
-                    static_cast<std::int64_t>(callback.qpc_frequency),
-                    request_.buffer_frames,
-                    session_->report().output_latency_frames);
-                if (exact_clock_ == nullptr)
-                {
-                    return std::unexpected(Failure(
-                        AsioFailureStage::startup_clock,
-                        "Could not allocate the ASIO exact clock history"));
-                }
-                exact_endpoint_generation_ = endpoint_generation;
-                if (!detail::RegisterExactOutputClock(exact_clock_))
-                {
-                    return std::unexpected(Failure(
-                        AsioFailureStage::startup_clock,
-                        "Could not register the ASIO exact clock provider"));
-                }
-                exact_clock_registered_ = true;
-            }
-            endpoint_buffer_frames_.store(
-                request_.buffer_frames,
-                std::memory_order_release);
-            output_sample_rate_.store(48'000, std::memory_order_release);
+            session_mapping_ready_ = false;
+            has_previous_sample_position_ = false;
             render_ready_.store(true, std::memory_order_release);
             if (auto started = session_->Start(); !started)
             {
+                render_ready_.store(false, std::memory_order_release);
                 return started;
             }
             return {};
@@ -856,21 +1008,79 @@ private:
         {
             return std::unexpected(Failure(
                 AsioFailureStage::render_core,
-                "ASIO runtime allocation failed"));
+                "ASIO physical-session allocation failed"));
         }
         catch (const std::exception& error)
         {
             return std::unexpected(Failure(
                 AsioFailureStage::protocol,
-                "ASIO runtime initialization failed: " +
+                "ASIO physical-session acquisition failed: " +
                     std::string{error.what()}));
         }
         catch (...)
         {
             return std::unexpected(Failure(
                 AsioFailureStage::protocol,
-                "ASIO runtime initialization failed unexpectedly"));
+                "ASIO physical-session acquisition failed unexpectedly"));
         }
+    }
+
+    std::expected<void, AsioFailure>
+    EstablishOrValidatePhysicalContract() noexcept
+    {
+        const auto& report = session_->report();
+        if (physical_contract_established_)
+        {
+            if (report.sample_rate != 48'000.0 ||
+                report.effective_buffer_frames != request_.buffer_frames ||
+                report.output_latency_frames != logical_output_latency_frames_ ||
+                channel_types_ != logical_channel_types_)
+            {
+                return std::unexpected(Failure(
+                    AsioFailureStage::protocol,
+                    "Reacquired ASIO session changed the logical endpoint contract"));
+            }
+            return {};
+        }
+
+        logical_output_latency_frames_ = report.output_latency_frames;
+        logical_channel_types_ = channel_types_;
+        if (enable_absolute_time_judgement_)
+        {
+            const auto callback = callback_runtime_->Snapshot();
+            const auto endpoint_generation =
+                detail::NextExactOutputClockGeneration();
+            if (endpoint_generation == 0 || callback.qpc_frequency == 0 ||
+                callback.qpc_frequency > static_cast<std::uint64_t>(
+                    (std::numeric_limits<std::int64_t>::max)()))
+            {
+                return std::unexpected(Failure(
+                    AsioFailureStage::startup_clock,
+                    "ASIO exact clock generation or QPC frequency is invalid"));
+            }
+            exact_clock_ = ExactAsioClock::Create(
+                endpoint_generation,
+                48'000,
+                static_cast<std::int64_t>(callback.qpc_frequency),
+                request_.buffer_frames,
+                logical_output_latency_frames_);
+            if (exact_clock_ == nullptr)
+            {
+                return std::unexpected(Failure(
+                    AsioFailureStage::startup_clock,
+                    "Could not allocate the ASIO exact clock history"));
+            }
+            exact_endpoint_generation_ = endpoint_generation;
+            if (!detail::RegisterExactOutputClock(exact_clock_))
+            {
+                return std::unexpected(Failure(
+                    AsioFailureStage::startup_clock,
+                    "Could not register the ASIO exact clock provider"));
+            }
+            exact_clock_registered_ = true;
+        }
+        physical_contract_established_ = true;
+        return {};
     }
 
     std::expected<void, AsioFailure> ConfigureDriverBuffers() noexcept
@@ -918,14 +1128,17 @@ private:
         return {};
     }
 
-    std::expected<void, AsioFailure> WaitForStableRender() noexcept
+    // ReSharper disable once CppMemberFunctionMayBeConst
+    std::expected<StableRenderOutcome, AsioFailure>
+    WaitForStableRender() noexcept
     {
         const std::uint64_t started_ms =
             actions_.tick_count_ms(actions_.context);
-        const std::array<HANDLE, 3> handles{
+        const std::array<HANDLE, 4> handles{
             stable_render_event_,
             fault_event_,
             shutdown_event_,
+            foreground_monitor_->change_event(),
         };
         for (;;)
         {
@@ -941,19 +1154,41 @@ private:
             {
                 if (first_fault_claimed_.load(std::memory_order_acquire))
                 {
+                    if (!foreground_monitor_->QueryCurrentForeground())
+                    {
+                        return StableRenderOutcome::focus_lost;
+                    }
                     return std::unexpected(BuildLatchedFailure());
                 }
-                return {};
+                return StableRenderOutcome::stable;
             }
             if (wait == WAIT_OBJECT_0 + 1)
             {
+                if (!foreground_monitor_->QueryCurrentForeground())
+                {
+                    return StableRenderOutcome::focus_lost;
+                }
                 return std::unexpected(BuildLatchedFailure());
             }
             if (wait == WAIT_OBJECT_0 + 2)
             {
-                return std::unexpected(Failure(
-                    AsioFailureStage::startup_clock,
-                    "ASIO startup was cancelled before clock stability"));
+                return StableRenderOutcome::shutdown;
+            }
+            if (wait == WAIT_OBJECT_0 + 3)
+            {
+                if (!foreground_monitor_->healthy())
+                {
+                    return std::unexpected(Failure(
+                        AsioFailureStage::foreground_monitor,
+                        "ASIO foreground monitor stopped unexpectedly",
+                        AsioResultDomain::win32,
+                        foreground_monitor_->failure_code()));
+                }
+                if (!foreground_monitor_->QueryCurrentForeground())
+                {
+                    return StableRenderOutcome::focus_lost;
+                }
+                continue;
             }
             if (wait == WAIT_OBJECT_0 + handles.size())
             {
@@ -962,6 +1197,10 @@ private:
             }
             if (wait == WAIT_TIMEOUT)
             {
+                if (!foreground_monitor_->QueryCurrentForeground())
+                {
+                    return StableRenderOutcome::focus_lost;
+                }
                 return std::unexpected(Failure(
                     AsioFailureStage::startup_clock,
                     "ASIO did not produce a stable third callback before "
@@ -979,23 +1218,34 @@ private:
 
     std::optional<AsioFailure> MonitorCommittedRuntime() noexcept
     {
-        const std::array<HANDLE, 2> handles{fault_event_, shutdown_event_};
+        const std::array<HANDLE, 3> handles{
+            fault_event_,
+            shutdown_event_,
+            foreground_monitor_->change_event(),
+        };
+        bool session_active = true;
+        bool foreground_reported = true;
+        std::uint64_t recovery_attempt{};
+        std::uint64_t next_recovery_ms{};
         std::uint64_t summary_started =
             actions_.tick_count_ms(actions_.context);
         for (;;)
         {
-            const DWORD remaining = RemainingTimeout(
+            // Elapsed time schedules summaries, silent advancement, and retry
+            // attempts. Foreground ownership is established only by the
+            // monitor's direct window/process query below.
+            const auto now_ms = actions_.tick_count_ms(actions_.context);
+            const DWORD summary_remaining = RemainingTimeout(
                 summary_started,
-                actions_.tick_count_ms(actions_.context),
+                now_ms,
                 actions_.summary_interval_ms);
+            const DWORD remaining = session_active
+                ? summary_remaining
+                : (std::min)(summary_remaining, SilentPollIntervalMs());
             const DWORD wait = actions_.message_wait(
                 actions_.context,
                 handles,
                 remaining);
-            if (wait == WAIT_OBJECT_0)
-            {
-                return BuildLatchedFailure();
-            }
             if (wait == WAIT_OBJECT_0 + 1)
             {
                 return std::nullopt;
@@ -1003,19 +1253,206 @@ private:
             if (wait == WAIT_OBJECT_0 + handles.size())
             {
                 actions_.drain_messages(actions_.context);
-                continue;
             }
-            if (wait == WAIT_TIMEOUT)
+            else if (wait != WAIT_OBJECT_0 &&
+                     wait != WAIT_OBJECT_0 + 2 &&
+                     wait != WAIT_TIMEOUT)
+            {
+                return Failure(
+                    AsioFailureStage::callback,
+                    "ASIO runtime message wait failed",
+                    AsioResultDomain::win32,
+                    wait == WAIT_FAILED ? GetLastError() : wait);
+            }
+
+            if (!foreground_monitor_->healthy())
+            {
+                return Failure(
+                    AsioFailureStage::foreground_monitor,
+                    "ASIO foreground monitor stopped unexpectedly",
+                    AsioResultDomain::win32,
+                    foreground_monitor_->failure_code());
+            }
+
+            const bool foreground =
+                foreground_monitor_->QueryCurrentForeground();
+            if (!foreground)
+            {
+                if (foreground_reported)
+                {
+                    foreground_reported = false;
+                    SaturatingIncrementCounter(foreground_losses_);
+                    observer_->SessionLifecycleChanged(
+                        AsioSessionLifecycleEvent::foreground_lost,
+                        recovery_attempt,
+                        nullptr);
+                }
+                if (session_active)
+                {
+                    const auto release_failure = ClosePhysicalSession();
+                    session_active = false;
+                    SaturatingIncrementCounter(session_releases_);
+                    observer_->SessionLifecycleChanged(
+                        AsioSessionLifecycleEvent::session_released,
+                        recovery_attempt,
+                        release_failure ? &*release_failure : nullptr);
+                    ClearSessionFault();
+                }
+                if (const auto advance_failure = AdvanceSilentRendering())
+                {
+                    return advance_failure;
+                }
+            }
+            else if (session_active)
+            {
+                if (first_fault_claimed_.load(std::memory_order_acquire))
+                {
+                    return BuildLatchedFailure();
+                }
+            }
+            else
+            {
+                if (!foreground_reported)
+                {
+                    foreground_reported = true;
+                    observer_->SessionLifecycleChanged(
+                        AsioSessionLifecycleEvent::foreground_regained,
+                        recovery_attempt,
+                        nullptr);
+                }
+                if (const auto advance_failure = AdvanceSilentRendering())
+                {
+                    return advance_failure;
+                }
+
+                const auto recovery_now =
+                    actions_.tick_count_ms(actions_.context);
+                if (next_recovery_ms == 0 ||
+                    recovery_now >= next_recovery_ms)
+                {
+                    ++recovery_attempt;
+                    SaturatingIncrementCounter(recovery_attempts_);
+                    auto opened = OpenPhysicalSession();
+                    if (!opened)
+                    {
+                        auto failure = std::move(opened.error());
+                        const bool acquired_resources =
+                            session_ != nullptr || callback_runtime_ != nullptr;
+                        if (const auto close_failure = ClosePhysicalSession())
+                        {
+                            AppendSecondaryFailure(failure, *close_failure);
+                        }
+                        ClearSessionFault();
+                        if (!foreground_monitor_->QueryCurrentForeground())
+                        {
+                            if (foreground_reported)
+                            {
+                                foreground_reported = false;
+                                SaturatingIncrementCounter(foreground_losses_);
+                                observer_->SessionLifecycleChanged(
+                                    AsioSessionLifecycleEvent::foreground_lost,
+                                    recovery_attempt,
+                                    nullptr);
+                            }
+                            if (acquired_resources)
+                            {
+                                SaturatingIncrementCounter(session_releases_);
+                                observer_->SessionLifecycleChanged(
+                                    AsioSessionLifecycleEvent::session_released,
+                                    recovery_attempt,
+                                    &failure);
+                            }
+                            next_recovery_ms = 0;
+                        }
+                        else
+                        {
+                            SaturatingIncrementCounter(recovery_failures_);
+                            observer_->SessionLifecycleChanged(
+                                AsioSessionLifecycleEvent::recovery_attempt_failed,
+                                recovery_attempt,
+                                &failure);
+                            next_recovery_ms =
+                                recovery_now + kRecoveryRetryMs;
+                        }
+                    }
+                    else
+                    {
+                        auto stable = WaitForStableRender();
+                        if (stable &&
+                            *stable == StableRenderOutcome::shutdown)
+                        {
+                            return std::nullopt;
+                        }
+                        if (stable &&
+                            *stable == StableRenderOutcome::stable)
+                        {
+                            session_active = true;
+                            next_recovery_ms = 0;
+                            SaturatingIncrementCounter(session_recoveries_);
+                            observer_->SessionLifecycleChanged(
+                                AsioSessionLifecycleEvent::session_recovered,
+                                recovery_attempt,
+                                nullptr);
+                        }
+                        else
+                        {
+                            const bool lost_focus = stable &&
+                                *stable == StableRenderOutcome::focus_lost;
+                            auto failure = stable
+                                ? Failure(
+                                      AsioFailureStage::startup_clock,
+                                      "ASIO recovery lost foreground ownership")
+                                : std::move(stable.error());
+                            if (const auto close_failure =
+                                    ClosePhysicalSession())
+                            {
+                                AppendSecondaryFailure(
+                                    failure, *close_failure);
+                            }
+                            ClearSessionFault();
+                            SaturatingIncrementCounter(session_releases_);
+                            observer_->SessionLifecycleChanged(
+                                AsioSessionLifecycleEvent::session_released,
+                                recovery_attempt,
+                                &failure);
+                            if (lost_focus ||
+                                !foreground_monitor_->QueryCurrentForeground())
+                            {
+                                if (foreground_reported)
+                                {
+                                    foreground_reported = false;
+                                    SaturatingIncrementCounter(
+                                        foreground_losses_);
+                                    observer_->SessionLifecycleChanged(
+                                        AsioSessionLifecycleEvent::foreground_lost,
+                                        recovery_attempt,
+                                        nullptr);
+                                }
+                                next_recovery_ms = 0;
+                            }
+                            else
+                            {
+                                SaturatingIncrementCounter(recovery_failures_);
+                                observer_->SessionLifecycleChanged(
+                                    AsioSessionLifecycleEvent::recovery_attempt_failed,
+                                    recovery_attempt,
+                                    &failure);
+                                next_recovery_ms =
+                                    recovery_now + kRecoveryRetryMs;
+                            }
+                        }
+                    }
+                }
+            }
+
+            const auto summary_now =
+                actions_.tick_count_ms(actions_.context);
+            if (summary_now - summary_started >=
+                actions_.summary_interval_ms)
             {
                 observer_->RuntimeSummary(SnapshotCounters());
-                summary_started = actions_.tick_count_ms(actions_.context);
-                continue;
+                summary_started = summary_now;
             }
-            LatchRuntimeFault(
-                AsioFailureStage::callback,
-                AsioResultDomain::win32,
-                wait == WAIT_FAILED ? GetLastError() : wait);
-            return BuildLatchedFailure();
         }
     }
 
@@ -1038,14 +1475,13 @@ private:
             result);
     }
 
-    std::optional<AsioFailure> TeardownOnControlThread() noexcept
+    std::optional<AsioFailure> ClosePhysicalSession() noexcept
     {
-        stopping_.store(true, std::memory_order_release);
+        // Focus release owns only IASIO, its buffers, and callback runtime.
+        // The mixer and both logical clocks must survive this operation so
+        // existing voices and judgement-clock bindings remain valid.
         render_ready_.store(false, std::memory_order_release);
-        if (render_core_ != nullptr)
-        {
-            render_core_->InvalidatePresentationClock();
-        }
+        std::optional<AsioFailure> failure;
         if (callback_runtime_ != nullptr)
         {
             callback_runtime_->BeginStopping();
@@ -1054,18 +1490,49 @@ private:
         {
             if (auto stopped = session_->Stop(); !stopped)
             {
-                LatchRuntimeFault(
-                    stopped.error().stage,
-                    stopped.error().domain,
-                    stopped.error().result);
+                failure = std::move(stopped.error());
             }
         }
         if (callback_runtime_ != nullptr)
         {
             callback_runtime_->JoinWorker();
             callback_runtime_->Uninstall();
-            final_callback_snapshot_ = callback_runtime_->Snapshot();
-            has_final_callback_snapshot_ = true;
+            MergeCallbackSnapshot(
+                completed_callback_snapshot_,
+                callback_runtime_->Snapshot());
+        }
+        if (session_ != nullptr)
+        {
+            if (auto closed = session_->Close(); !closed)
+            {
+                if (failure)
+                {
+                    AppendSecondaryFailure(*failure, closed.error());
+                }
+                else
+                {
+                    failure = std::move(closed.error());
+                }
+            }
+            session_.reset();
+        }
+        callback_runtime_.reset();
+        for (auto& channel : driver_buffers_)
+        {
+            channel = {};
+        }
+        session_mapping_ready_ = false;
+        has_previous_sample_position_ = false;
+        return failure;
+    }
+
+    std::optional<AsioFailure> TeardownOnControlThread() noexcept
+    {
+        final_stopping_.store(true, std::memory_order_release);
+        auto failure = ClosePhysicalSession();
+        if (render_core_ != nullptr)
+        {
+            render_core_->InvalidatePresentationClock();
         }
         if (exact_clock_ != nullptr)
         {
@@ -1081,32 +1548,20 @@ private:
             exact_endpoint_generation_ = 0;
             exact_clock_.reset();
         }
-        if (session_ != nullptr)
-        {
-            if (auto closed = session_->Close(); !closed)
-            {
-                LatchRuntimeFault(
-                    closed.error().stage,
-                    closed.error().domain,
-                    closed.error().result);
-            }
-            session_.reset();
-        }
-        callback_runtime_.reset();
         presented_clock_ = nullptr;
-        for (auto& channel : driver_buffers_)
+        foreground_monitor_.reset();
+        if (auto timer_failure = ReleaseTimerPeriod(); timer_failure)
         {
-            channel = {};
+            if (failure)
+            {
+                AppendSecondaryFailure(*failure, *timer_failure);
+            }
+            else
+            {
+                failure = std::move(timer_failure);
+            }
         }
-        auto timer_failure = ReleaseTimerPeriod();
-        if (timer_failure)
-        {
-            LatchRuntimeFault(
-                timer_failure->stage,
-                timer_failure->domain,
-                timer_failure->result);
-        }
-        return timer_failure;
+        return failure;
     }
 
     void CompleteStartupFailure(AsioFailure failure) noexcept
@@ -1127,10 +1582,239 @@ private:
             : ASE_NotPresent;
     }
 
+    struct LogicalRenderResult {
+        AudioRenderBlock block;
+        std::uint64_t submitted_output_tail{};
+    };
+
+    std::optional<AsioClockDecision> MapLogicalDecision(
+        const AsioClockDecision& physical) noexcept
+    {
+        if (physical.render_output_frame_begin <
+            physical.presented_output_frame)
+        {
+            return std::nullopt;
+        }
+        if (!session_mapping_ready_)
+        {
+            if (has_logical_render_anchor_.load(std::memory_order_acquire))
+            {
+                const auto previous_time_ms =
+                    static_cast<std::uint32_t>(
+                        last_logical_render_system_time_ns_.load(
+                            std::memory_order_acquire) /
+                        1'000'000);
+                const auto current_time_ms =
+                    static_cast<std::uint32_t>(
+                        physical.system_time_ns / 1'000'000);
+                const auto elapsed_ms = static_cast<std::uint32_t>(
+                    current_time_ms - previous_time_ms);
+                if (elapsed_ms > static_cast<std::uint32_t>(
+                        (std::numeric_limits<std::int32_t>::max)()))
+                {
+                    return std::nullopt;
+                }
+            }
+            physical_render_origin_ = physical.render_output_frame_begin;
+            logical_render_origin_ = next_logical_output_frame_.load(
+                std::memory_order_acquire);
+            session_mapping_ready_ = true;
+        }
+        if (physical.render_output_frame_begin < physical_render_origin_)
+        {
+            return std::nullopt;
+        }
+        const auto offset =
+            physical.render_output_frame_begin - physical_render_origin_;
+        if (logical_render_origin_ >
+            (std::numeric_limits<std::uint64_t>::max)() - offset)
+        {
+            return std::nullopt;
+        }
+        const auto logical_render = logical_render_origin_ + offset;
+        if (logical_render != next_logical_output_frame_.load(
+                std::memory_order_acquire))
+        {
+            return std::nullopt;
+        }
+        const auto presentation_lag =
+            physical.render_output_frame_begin -
+            physical.presented_output_frame;
+        return AsioClockDecision{
+            .kind = physical.kind,
+            .presented_output_frame = logical_render >= presentation_lag
+                ? logical_render - presentation_lag
+                : 0,
+            .render_output_frame_begin = logical_render,
+            .system_time_ns = physical.system_time_ns,
+        };
+    }
+
+    std::optional<LogicalRenderResult> RenderLogicalBlock(
+        const MixerRenderTimeline& timeline,
+        const std::uint64_t system_time_ns) noexcept
+    {
+        const auto next = next_logical_output_frame_.load(
+            std::memory_order_acquire);
+        if (render_core_ == nullptr || system_time_ns == 0 ||
+            timeline.output_frame_begin < timeline.discontinuity_frames ||
+            timeline.output_frame_begin - timeline.discontinuity_frames !=
+                next ||
+            timeline.output_frame_begin >
+                (std::numeric_limits<std::uint64_t>::max)() -
+                    request_.buffer_frames)
+        {
+            return std::nullopt;
+        }
+        const auto block = render_core_->Render(timeline);
+        render_diagnostics_.RecordRender(block);
+        const auto submitted_output_tail =
+            timeline.output_frame_begin + request_.buffer_frames;
+        next_logical_output_frame_.store(
+            submitted_output_tail, std::memory_order_release);
+        last_logical_render_begin_.store(
+            timeline.output_frame_begin, std::memory_order_release);
+        last_logical_render_system_time_ns_.store(
+            system_time_ns, std::memory_order_release);
+        has_logical_render_anchor_.store(true, std::memory_order_release);
+        return LogicalRenderResult{block, submitted_output_tail};
+    }
+
+    DWORD SilentPollIntervalMs() const noexcept
+    {
+        const auto milliseconds =
+            (static_cast<std::uint64_t>(request_.buffer_frames) +
+             kOutputFramesPerMillisecond - 1) /
+            kOutputFramesPerMillisecond;
+        return static_cast<DWORD>((std::max)(
+            std::uint64_t{1},
+            (std::min)(milliseconds,
+                static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)()))));
+    }
+
+    std::optional<AsioFailure> AdvanceSilentRendering() noexcept
+    {
+        // This clock advances an already-confirmed background interval; it is
+        // never used to infer whether the game owns the foreground.
+        if (!has_logical_render_anchor_.load(std::memory_order_acquire))
+        {
+            return std::nullopt;
+        }
+        const auto anchor_frame = last_logical_render_begin_.load(
+            std::memory_order_acquire);
+        const auto anchor_time_ns = last_logical_render_system_time_ns_.load(
+            std::memory_order_acquire);
+        const auto anchor_time_ms = static_cast<std::uint32_t>(
+            anchor_time_ns / 1'000'000);
+        const auto now_ms = actions_.time_get_time_ms(actions_.context);
+        const auto elapsed_ms = static_cast<std::uint32_t>(
+            now_ms - anchor_time_ms);
+        if (elapsed_ms > static_cast<std::uint32_t>(
+                (std::numeric_limits<std::int32_t>::max)()))
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity clock moved backwards");
+        }
+        const auto elapsed_frames =
+            static_cast<std::uint64_t>(elapsed_ms) *
+            kOutputFramesPerMillisecond;
+        if (anchor_frame >
+            (std::numeric_limits<std::uint64_t>::max)() - elapsed_frames)
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity frame target overflowed");
+        }
+        const auto target_render_begin = anchor_frame + elapsed_frames;
+        const auto next = next_logical_output_frame_.load(
+            std::memory_order_acquire);
+        if (next > target_render_begin)
+        {
+            return std::nullopt;
+        }
+        const auto due_offset = target_render_begin - next;
+        const auto skipped_frames =
+            due_offset / request_.buffer_frames * request_.buffer_frames;
+        if (next > (std::numeric_limits<std::uint64_t>::max)() -
+                skipped_frames)
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity discontinuity overflowed");
+        }
+        const auto render_begin = next + skipped_frames;
+        if (render_begin < anchor_frame)
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity frame order became invalid");
+        }
+        const auto elapsed_from_anchor = render_begin - anchor_frame;
+        const auto elapsed_ns =
+            OutputFramesToNanoseconds(elapsed_from_anchor);
+        if (!elapsed_ns)
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity time conversion overflowed");
+        }
+        if (anchor_time_ns >
+            (std::numeric_limits<std::uint64_t>::max)() - *elapsed_ns)
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity timestamp overflowed");
+        }
+        const auto scheduled_time_ns = anchor_time_ns + *elapsed_ns;
+        const auto rendered = RenderLogicalBlock(
+            {render_begin, skipped_frames}, scheduled_time_ns);
+        if (!rendered)
+        {
+            return Failure(
+                AsioFailureStage::runtime_clock,
+                "ASIO silent continuity render contract failed");
+        }
+        const auto presented = render_begin >= logical_output_latency_frames_
+            ? render_begin - logical_output_latency_frames_
+            : 0;
+        presented_clock_->PublishContinuityAnchor(
+            presented,
+            rendered->submitted_output_tail,
+            scheduled_time_ns);
+        SaturatingAddCounter(
+            silent_advance_frames_,
+            skipped_frames + request_.buffer_frames);
+        return std::nullopt;
+    }
+
+    void ClearSessionFault() noexcept
+    {
+        if (actions_.reset_event != nullptr)
+        {
+            actions_.reset_event(actions_.context, stable_render_event_);
+            actions_.reset_event(actions_.context, fault_event_);
+        }
+        else
+        {
+            ResetEvent(stable_render_event_);
+            ResetEvent(fault_event_);
+        }
+        first_fault_stage_.store(
+            static_cast<std::uint8_t>(AsioFailureStage::none),
+            std::memory_order_relaxed);
+        first_fault_domain_.store(
+            static_cast<std::uint8_t>(AsioResultDomain::none),
+            std::memory_order_relaxed);
+        first_fault_result_.store(0, std::memory_order_relaxed);
+        first_fault_claimed_.store(false, std::memory_order_release);
+    }
+
+    // ReSharper disable once CppOverrideWithDifferentVisibility
     void RenderAsioBlock(const AsioRenderRequest& request) noexcept override
     {
         if (!render_ready_.load(std::memory_order_acquire) ||
-            stopping_.load(std::memory_order_acquire) ||
+            final_stopping_.load(std::memory_order_acquire) ||
             first_fault_claimed_.load(std::memory_order_acquire))
         {
             ClearAsioBlock(request.buffer_index);
@@ -1152,43 +1836,50 @@ private:
             LatchRuntimeFault(AsioFailureStage::runtime_clock);
             return;
         }
-        if (decision.kind == AsioClockDecisionKind::priming)
+        const auto logical = MapLogicalDecision(decision);
+        if (!logical)
         {
             ClearAsioBlock(request.buffer_index);
+            LatchRuntimeFault(AsioFailureStage::runtime_clock);
+            return;
+        }
+        const auto rendered = RenderLogicalBlock(
+            {logical->render_output_frame_begin, 0},
+            logical->system_time_ns);
+        if (!rendered)
+        {
+            ClearAsioBlock(request.buffer_index);
+            LatchRuntimeFault(AsioFailureStage::runtime_clock);
+            return;
+        }
+        if (logical->kind == AsioClockDecisionKind::priming)
+        {
+            ClearAsioBlock(request.buffer_index);
+            presented_clock_->PublishContinuityAnchor(
+                logical->presented_output_frame,
+                rendered->submitted_output_tail,
+                logical->system_time_ns);
+            SaturatingAddCounter(
+                silent_advance_frames_, request_.buffer_frames);
             CallOutputReady();
             return;
         }
 
-        const auto block = render_core_->Render(MixerRenderTimeline{
-            decision.render_output_frame_begin,
-            0,
-        });
-        render_diagnostics_.RecordRender(block);
         const auto index = static_cast<std::size_t>(request.buffer_index);
         const auto conversion = ConvertFloatStereoToAsio(
-            block.interleaved_stereo,
+            rendered->block.interleaved_stereo,
             channel_types_,
             {
                 driver_buffers_[0][index],
                 driver_buffers_[1][index],
             });
-        render_diagnostics_.RecordConversion(block, conversion);
+        render_diagnostics_.RecordConversion(rendered->block, conversion);
         if (!conversion.converted)
         {
             ClearAsioBlock(request.buffer_index);
             LatchRuntimeFault(AsioFailureStage::conversion);
             return;
         }
-        if (decision.render_output_frame_begin >
-            (std::numeric_limits<std::uint64_t>::max)() -
-                request_.buffer_frames)
-        {
-            ClearAsioBlock(request.buffer_index);
-            LatchRuntimeFault(AsioFailureStage::runtime_clock);
-            return;
-        }
-        const auto submitted_output_tail =
-            decision.render_output_frame_begin + request_.buffer_frames;
         if (enable_absolute_time_judgement_)
         {
             if (exact_clock_ == nullptr ||
@@ -1205,9 +1896,10 @@ private:
                     .sequence = next_sequence,
                     .endpoint_generation = exact_endpoint_generation_,
                     .presented_output_frame =
-                        decision.presented_output_frame,
-                    .system_time_ns = decision.system_time_ns,
-                    .submitted_output_tail = submitted_output_tail,
+                        logical->presented_output_frame,
+                    .system_time_ns = logical->system_time_ns,
+                    .submitted_output_tail =
+                        rendered->submitted_output_tail,
                 }))
             {
                 ClearAsioBlock(request.buffer_index);
@@ -1217,8 +1909,8 @@ private:
             exact_anchor_sequence_ = next_sequence;
         }
         presented_clock_->Publish(
-            decision,
-            submitted_output_tail);
+            *logical,
+            rendered->submitted_output_tail);
         if (!CallOutputReady())
         {
             return;
@@ -1226,6 +1918,7 @@ private:
         actions_.signal_event(actions_.context, stable_render_event_);
     }
 
+    // ReSharper disable once CppOverrideWithDifferentVisibility
     void ClearAsioBlock(long buffer_index) noexcept override
     {
         if (buffer_index < 0 || buffer_index > 1)
@@ -1248,6 +1941,7 @@ private:
         }
     }
 
+    // ReSharper disable once CppOverrideWithDifferentVisibility
     void OnAsioRuntimeFault(AsioFailureStage stage) noexcept override
     {
         LatchRuntimeFault(stage);
@@ -1353,11 +2047,11 @@ private:
 
     AsioRuntimeCountersSnapshot SnapshotCounters() const noexcept
     {
-        const AsioCallbackRuntimeSnapshot callback = callback_runtime_ != nullptr
-            ? callback_runtime_->Snapshot()
-            : has_final_callback_snapshot_
-                ? final_callback_snapshot_
-                : AsioCallbackRuntimeSnapshot{};
+        auto callback = completed_callback_snapshot_;
+        if (callback_runtime_ != nullptr)
+        {
+            MergeCallbackSnapshot(callback, callback_runtime_->Snapshot());
+        }
         const auto exact = exact_clock_ != nullptr
             ? exact_clock_->counters()
             : has_final_exact_clock_counters_
@@ -1389,6 +2083,18 @@ private:
                     std::memory_order_relaxed),
             .render_gap_frames =
                 render_gap_frames_.load(std::memory_order_relaxed),
+            .foreground_losses =
+                foreground_losses_.load(std::memory_order_relaxed),
+            .session_releases =
+                session_releases_.load(std::memory_order_relaxed),
+            .recovery_attempts =
+                recovery_attempts_.load(std::memory_order_relaxed),
+            .recovery_failures =
+                recovery_failures_.load(std::memory_order_relaxed),
+            .session_recoveries =
+                session_recoveries_.load(std::memory_order_relaxed),
+            .silent_advance_frames =
+                silent_advance_frames_.load(std::memory_order_relaxed),
             .expected_period_ns = callback.expected_period_ns,
             .callback_interval_samples =
                 callback.callback_interval_samples,
@@ -1455,8 +2161,8 @@ private:
 
     HWND game_window_{};
     AsioStreamRequest request_;
-    std::unique_ptr<IAsioRegistrySource> pending_registry_;
-    std::unique_ptr<IAsioDriverFactory> pending_factory_;
+    std::unique_ptr<IAsioRegistrySource> registry_;
+    std::unique_ptr<IAsioDriverFactory> factory_;
     std::shared_ptr<IAsioOutputObserver> observer_;
     std::shared_ptr<const ma_allocation_callbacks> mixer_allocations_;
     DWORD startup_clock_timeout_ms_{};
@@ -1472,9 +2178,10 @@ private:
     AsioFailure startup_failure_{};
     std::atomic_bool startup_succeeded_{};
     std::atomic_bool committed_{};
-    std::atomic_bool stopping_{};
+    std::atomic_bool final_stopping_{};
     std::atomic_bool render_ready_{};
 
+    std::unique_ptr<AsioForegroundMonitor> foreground_monitor_;
     std::unique_ptr<AsioSession> session_;
     std::unique_ptr<AsioCallbackRuntime> callback_runtime_;
     std::unique_ptr<AudioRenderCore> render_core_;
@@ -1487,21 +2194,36 @@ private:
     AsioPresentedClockPublication* presented_clock_{};
     AsioClockTracker clock_tracker_;
     std::array<ASIOSampleType, 2> channel_types_{};
+    std::array<ASIOSampleType, 2> logical_channel_types_{};
     std::array<std::array<std::span<std::byte>, 2>, 2> driver_buffers_{};
-    AsioCallbackRuntimeSnapshot final_callback_snapshot_{};
-    bool has_final_callback_snapshot_{};
+    AsioCallbackRuntimeSnapshot completed_callback_snapshot_{};
 
     std::atomic_uint32_t endpoint_buffer_frames_{};
     std::atomic_uint32_t output_sample_rate_{};
     AsioRenderDiagnostics render_diagnostics_;
     std::atomic_uint64_t sample_position_discontinuities_{};
     std::atomic_uint64_t render_gap_frames_{};
+    std::atomic_uint64_t foreground_losses_{};
+    std::atomic_uint64_t session_releases_{};
+    std::atomic_uint64_t recovery_attempts_{};
+    std::atomic_uint64_t recovery_failures_{};
+    std::atomic_uint64_t session_recoveries_{};
+    std::atomic_uint64_t silent_advance_frames_{};
     std::atomic_uint64_t pending_cursor_queries_{};
     std::atomic_uint64_t unmapped_cursor_failures_{};
     std::atomic_bool first_fault_claimed_{};
     std::atomic<std::uint8_t> first_fault_stage_{};
     std::atomic<std::uint8_t> first_fault_domain_{};
     std::atomic<std::int64_t> first_fault_result_{};
+    std::atomic_uint64_t next_logical_output_frame_{};
+    std::atomic_uint64_t last_logical_render_begin_{};
+    std::atomic_uint64_t last_logical_render_system_time_ns_{};
+    std::atomic_bool has_logical_render_anchor_{};
+    std::uint64_t physical_render_origin_{};
+    std::uint64_t logical_render_origin_{};
+    std::uint32_t logical_output_latency_frames_{};
+    bool session_mapping_ready_{};
+    bool physical_contract_established_{};
     std::uint64_t previous_sample_position_{};
     bool has_previous_sample_position_{};
 };

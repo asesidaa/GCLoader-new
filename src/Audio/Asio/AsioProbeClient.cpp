@@ -5,7 +5,6 @@
 #include <Windows.h>
 
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <new>
 #include <string>

@@ -1,5 +1,7 @@
 #include "Audio/Mixer/AudioSnapshot.h"
 
+#include <dsound.h>
+
 #include <algorithm>
 #include <new>
 #include <utility>
@@ -109,9 +111,9 @@ HRESULT AudioSnapshot::Lock(
 }
 
 HRESULT AudioSnapshot::Unlock(
-    void* first,
+    const void* first,
     DWORD first_bytes,
-    void* second,
+    const void* second,
     DWORD second_bytes) noexcept {
     std::lock_guard lock(writer_mutex_);
     if (outstanding_ == nullptr) {

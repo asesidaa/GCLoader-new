@@ -13,9 +13,9 @@
 #include <dsound.h>
 
 #include <algorithm>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cmath>
 #include <cstdlib>
-#include <exception>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -111,6 +111,7 @@ const char* asio_failure_stage_name(AsioFailureStage stage) noexcept {
     case AsioFailureStage::channel_info: return "channel_info";
     case AsioFailureStage::output_ready_probe: return "output_ready_probe";
     case AsioFailureStage::callback_prepare: return "callback_prepare";
+    case AsioFailureStage::foreground_monitor: return "foreground_monitor";
     case AsioFailureStage::create_buffers: return "create_buffers";
     case AsioFailureStage::latency: return "latency";
     case AsioFailureStage::render_core: return "render_core";
@@ -525,6 +526,12 @@ std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters) {
         << " sample_position_discontinuities="
         << counters.sample_position_discontinuities
         << " render_gap_frames=" << counters.render_gap_frames
+        << " foreground_losses=" << counters.foreground_losses
+        << " session_releases=" << counters.session_releases
+        << " recovery_attempts=" << counters.recovery_attempts
+        << " recovery_failures=" << counters.recovery_failures
+        << " session_recoveries=" << counters.session_recoveries
+        << " silent_advance_frames=" << counters.silent_advance_frames
         << " asio_expected_callback_us="
         << static_cast<double>(counters.expected_period_ns) / 1'000.0
         << " callback_interval_samples="
@@ -620,7 +627,7 @@ std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters) {
 }
 
 void emit_info(
-    detail::AudioPatchPlatformActions actions,
+    const detail::AudioPatchPlatformActions& actions,
     const char* text) noexcept {
     if (actions.log_info != nullptr) {
         try { actions.log_info(text); } catch (...) {}
@@ -628,7 +635,7 @@ void emit_info(
 }
 
 void emit_error(
-    detail::AudioPatchPlatformActions actions,
+    const detail::AudioPatchPlatformActions& actions,
     const char* text) noexcept {
     if (actions.log_error != nullptr) {
         try { actions.log_error(text); } catch (...) {}
@@ -636,7 +643,7 @@ void emit_error(
 }
 
 void report_audio_buffer_handoff(
-    detail::AudioPatchPlatformActions actions,
+    const detail::AudioPatchPlatformActions& actions,
     std::string_view stage,
     REFERENCE_TIME configured_duration) noexcept {
     try {
@@ -654,14 +661,14 @@ void report_audio_buffer_handoff(
     }
 }
 
-void show_error(detail::AudioPatchPlatformActions actions) noexcept {
+void show_error(const detail::AudioPatchPlatformActions& actions) noexcept {
     if (actions.show_error != nullptr) {
         try { actions.show_error(kFailureMessage.data()); } catch (...) {}
     }
 }
 
 void show_generic_startup_error(
-    detail::AudioPatchPlatformActions actions) noexcept {
+    const detail::AudioPatchPlatformActions& actions) noexcept {
     if (actions.show_error != nullptr) {
         try {
             actions.show_error(kGenericStartupFailureMessage.data());
@@ -670,7 +677,7 @@ void show_generic_startup_error(
 }
 
 void show_runtime_error(
-    detail::AudioPatchPlatformActions actions,
+    const detail::AudioPatchPlatformActions& actions,
     AudioFailureStage stage) noexcept {
     if (actions.show_error == nullptr) {
         return;
@@ -726,7 +733,7 @@ struct ProductionDiagnosticContext {
 class ProductionAudioObserver final : public IAudioEngineObserver {
 public:
     explicit ProductionAudioObserver(
-        detail::AudioPatchPlatformActions actions,
+        const detail::AudioPatchPlatformActions& actions,
         ProductionDiagnosticContext& diagnostics) noexcept
         : actions_(actions), diagnostics_(diagnostics) {}
 
@@ -772,7 +779,7 @@ private:
 class ProductionAsioObserver final : public IAsioOutputObserver {
 public:
     explicit ProductionAsioObserver(
-        detail::AudioPatchPlatformActions actions) noexcept
+        const detail::AudioPatchPlatformActions& actions) noexcept
         : actions_(actions) {}
 
     void StartupSucceeded(
@@ -800,6 +807,47 @@ public:
             actions_);
     }
 
+    void SessionLifecycleChanged(
+        const AsioSessionLifecycleEvent event,
+        const std::uint64_t recovery_attempt,
+        const AsioFailure* failure) noexcept override {
+        try {
+            const auto event_name = [event]() noexcept {
+                switch (event) {
+                case AsioSessionLifecycleEvent::foreground_lost:
+                    return "foreground_lost";
+                case AsioSessionLifecycleEvent::session_released:
+                    return "session_released";
+                case AsioSessionLifecycleEvent::foreground_regained:
+                    return "foreground_regained";
+                case AsioSessionLifecycleEvent::recovery_attempt_failed:
+                    return "recovery_attempt_failed";
+                case AsioSessionLifecycleEvent::session_recovered:
+                    return "session_recovered";
+                }
+                return "unknown";
+            }();
+            std::ostringstream stream;
+            stream << "ASIO session lifecycle event=" << event_name
+                << " recovery_attempt=" << recovery_attempt;
+            if (failure != nullptr) {
+                stream << " asio_failure_stage="
+                    << asio_failure_stage_name(failure->stage)
+                    << " asio_failure_domain="
+                    << asio_result_domain_name(failure->domain)
+                    << " asio_failure_result=" << failure->result
+                    << " asio_driver_message=\""
+                    << failure->driver_message << '"'
+                    << " asio_failure_detail=\""
+                    << failure->detail << '"';
+            }
+            const auto text = stream.str();
+            emit_info(actions_, text.c_str());
+        } catch (...) {
+            emit_error(actions_, "ASIO lifecycle diagnostics formatting failed");
+        }
+    }
+
 private:
     detail::AudioPatchPlatformActions actions_{};
     std::optional<AsioCapabilityReport> report_;
@@ -809,7 +857,7 @@ class ProductionWasapiOutputBackendFactory final
     : public IWasapiOutputBackendFactory {
 public:
     ProductionWasapiOutputBackendFactory(
-        detail::AudioPatchPlatformActions actions,
+        const detail::AudioPatchPlatformActions& actions,
         ProductionDiagnosticContext& diagnostics,
         bool enable_absolute_time_judgement) noexcept
         : actions_(actions),
@@ -856,7 +904,7 @@ class ProductionAsioOutputBackendFactory final
     : public IAsioOutputBackendFactory {
 public:
     ProductionAsioOutputBackendFactory(
-        detail::AudioPatchPlatformActions actions,
+        const detail::AudioPatchPlatformActions& actions,
         const bool enable_absolute_time_judgement) noexcept
         : actions_(actions),
           enable_absolute_time_judgement_(
@@ -898,7 +946,7 @@ class ProductionAudioBackendControllerReporter final
     : public IAudioBackendControllerReporter {
 public:
     ProductionAudioBackendControllerReporter(
-        detail::AudioPatchPlatformActions actions,
+        const detail::AudioPatchPlatformActions& actions,
         ProductionDiagnosticContext* diagnostics = nullptr) noexcept
         : actions_(actions), diagnostics_(diagnostics) {}
 
@@ -1116,7 +1164,7 @@ void set_failure(
     }
 }
 
-RollbackResult rollback(AudioMinHookApi api, LPVOID target) noexcept {
+RollbackResult rollback(const AudioMinHookApi& api, LPVOID target) noexcept {
     RollbackResult result{};
     result.disable_status = api.disable(target);
     result.remove_status = api.remove(target);
@@ -1127,6 +1175,8 @@ RollbackResult rollback(AudioMinHookApi api, LPVOID target) noexcept {
 
 void record_rollback(
     AudioHookFailure* failure,
+    // This small status aggregate is intentionally passed by value.
+    // ReSharper disable once CppPassValueParameterByConstReference
     RollbackResult rollback_result) noexcept {
     if (failure != nullptr) {
         failure->rollback_attempted = true;
@@ -1137,7 +1187,7 @@ void record_rollback(
 }
 
 bool complete_api_tables(
-    AudioMinHookApi minhook,
+    const AudioMinHookApi& minhook,
     detail::AudioResolverApi resolver) noexcept {
     return resolver.get_module_handle != nullptr &&
         resolver.get_proc_address != nullptr &&
@@ -1152,7 +1202,7 @@ namespace detail {
 
 void ReportAudioStartupSucceeded(
     const EndpointInitialization& initialization,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         const auto text = startup_text(initialization);
         emit_info(actions, text.c_str());
@@ -1165,7 +1215,7 @@ void ReportAudioStartupSucceeded(
 
 void ReportAudioRuntimeSummary(
     const AudioRuntimeCountersSnapshot& counters,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         const auto text = std::string{"WASAPI audio runtime summary "} +
             counters_text(counters);
@@ -1181,7 +1231,7 @@ void ReportAudioRuntimeFailure(
     const EndpointInitialization& initialization,
     const AudioFailure& failure,
     const AudioRuntimeCountersSnapshot& counters,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         const auto text = failure_text(
             "WASAPI audio runtime fatal",
@@ -1204,7 +1254,7 @@ void ReportAudioRuntimeFailure(
 
 void ReportAudioStartupFailure(
     const AudioStartupFailure& failure,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         const auto text = failure_text(
             "WASAPI audio startup fatal",
@@ -1227,7 +1277,7 @@ void ReportAudioStartupFailure(
 
 void ReportAsioStartupSucceeded(
     const AsioCapabilityReport& report,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         const auto text = asio_startup_text(report);
         emit_info(actions, text.c_str());
@@ -1238,7 +1288,7 @@ void ReportAsioStartupSucceeded(
 
 void ReportAsioRuntimeSummary(
     const AsioRuntimeCountersSnapshot& counters,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         const auto text = std::string{"ASIO audio runtime summary "} +
             asio_counters_text(counters);
@@ -1252,7 +1302,7 @@ void ReportAsioRuntimeFailure(
     const AsioCapabilityReport* report,
     const AsioFailure& failure,
     const AsioRuntimeCountersSnapshot& counters,
-    AudioPatchPlatformActions actions) noexcept {
+    const AudioPatchPlatformActions& actions) noexcept {
     try {
         std::ostringstream stream;
         stream << asio_failure_text("ASIO audio runtime fatal", failure)
@@ -1288,7 +1338,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
     StartExclusiveAudioEngineFn start_engine,
     REFERENCE_TIME configured_duration,
     bool enable_absolute_time_judgement,
-    AudioPatchPlatformActions actions,
+    const AudioPatchPlatformActions& actions,
     std::shared_ptr<IAudioEngineObserver> observer,
     AudioStartupFailure* startup_failure) noexcept {
     report_audio_buffer_handoff(
@@ -1332,7 +1382,7 @@ std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
 bool AudioPatchInitWithDependencies(
     gc::config::AudioBackend requested_backend,
     std::uint32_t configured_buffer_ms,
-    AudioPatchInitDependencies dependencies) {
+    const AudioPatchInitDependencies& dependencies) {
     const bool enabled =
         requested_backend != gc::config::AudioBackend::directsound;
     AudioHookFailure failure{};
@@ -1405,7 +1455,7 @@ HRESULT InvokeDirectSoundCreate8Detour(
 
 bool InstallAudioHookWithResolver(
     bool enabled,
-    AudioMinHookApi minhook,
+    const AudioMinHookApi& minhook,
     AudioResolverApi resolver,
     AudioHookFailure* failure) noexcept {
     if (!enabled) {
@@ -1508,7 +1558,7 @@ bool InstallAudioHookWithResolver(
 
 bool InstallAudioHook(
     bool enabled,
-    AudioMinHookApi api,
+    const AudioMinHookApi& api,
     AudioHookFailure* failure) noexcept {
     return detail::InstallAudioHookWithResolver(
         enabled,

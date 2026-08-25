@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <iterator>
 
 #include "plog/Log.h"
 
@@ -104,7 +105,7 @@ bool apply_countdown_timer_freeze_patches(bool enable) {
 
     PLOG_INFO << "GC_TIMER_FREEZE: " << (enable ? "enabled" : "disabled")
               << " local countdown delta call patches " << patched << "/"
-              << (sizeof(kCountdownDeltaPatchSites) / sizeof(kCountdownDeltaPatchSites[0]));
+              << std::size(kCountdownDeltaPatchSites);
     return ok;
 }
 

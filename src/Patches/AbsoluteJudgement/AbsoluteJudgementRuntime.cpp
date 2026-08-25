@@ -102,6 +102,15 @@ struct NativeJudgementConfiguration final {
     return AddAddress(base, offset, &address) && ReadU8Safe(address, value);
 }
 
+void ExpirePreviousTransientSoundPublications(
+    const std::uintptr_t judgement_state) noexcept {
+    auto* const bytes =
+        reinterpret_cast<volatile std::uint8_t*>(judgement_state);
+    bytes[kJudgementArrangePublicationOffset] = 0;
+    bytes[kJudgementLeftFreeTapPublicationOffset] = 0;
+    bytes[kJudgementRightFreeTapPublicationOffset] = 0;
+}
+
 [[nodiscard]] bool ResolvePointerCollectionElementSafe(
     const std::uintptr_t owner,
     const std::size_t collection_offset,
@@ -211,6 +220,8 @@ public:
         expected_domain_ = expected_domain;
     }
 
+    // This small timestamp is forwarded and consumed by value.
+    // ReSharper disable once CppPassValueParameterByConstReference
     void BeginSemanticStage(
         const std::uintptr_t tune_manager,
         const gc::timing::AbsoluteHostTime stage_entry_time) noexcept {
@@ -227,6 +238,22 @@ public:
     void EndSemanticStage(const std::uintptr_t tune_manager) noexcept {
         scheduler_.EndSemanticStage(tune_manager);
         native_manager_ = 0;
+    }
+
+    void ObserveGameplayInitialization(
+        const std::uintptr_t tune_manager) noexcept {
+        const auto stage_generation = scheduler_.stage_generation();
+        if (!scheduler_.TerminateSemanticStageForGameplayInitialization(
+                tune_manager)) {
+            return;
+        }
+        native_manager_ = 0;
+        PLOG_INFO << std::format(
+            "AbsoluteJudgement: semantic-stage-termination"
+            " source=gameplay_initialization stage_generation={}"
+            " native_manager={}",
+            stage_generation,
+            tune_manager);
     }
 
     void EndSemanticStageForTestMode() noexcept {
@@ -320,6 +347,11 @@ public:
         }
 
         const auto native = ResolveNativeIdentityOrFatal(context);
+        // The native tail consumes these one-shot publications once after this
+        // owned call. Expire that completed call's values before recognition
+        // can publish the next call's values; neighboring judgement state is
+        // deliberately untouched.
+        ExpirePreviousTransientSoundPublications(native.judgement_state);
 
         std::optional<gc::audio::GameplayAudioCursorObservation> observation;
         bool group2_cursor_selected{};
@@ -541,8 +573,9 @@ private:
         };
     }
 
-    [[nodiscard]] std::optional<AbsoluteJudgementNativeScoreCounters>
-    ReadScoreCounters(const std::uintptr_t score_state) const noexcept {
+    [[nodiscard]] static
+    std::optional<AbsoluteJudgementNativeScoreCounters>
+    ReadScoreCounters(const std::uintptr_t score_state) noexcept {
         AbsoluteJudgementNativeScoreCounters counters{};
         if (!ReadFieldU32Safe(
                 score_state, kScoreMissOffset, &counters.miss) ||
@@ -558,7 +591,7 @@ private:
         return counters;
     }
 
-    void IncrementDiagnostic(std::uint64_t& value) const noexcept {
+    static void IncrementDiagnostic(std::uint64_t& value) noexcept {
         if (value != (std::numeric_limits<std::uint64_t>::max)()) {
             ++value;
         }
@@ -796,6 +829,11 @@ void BeginAbsoluteJudgementSemanticStage(
     const auto stage_entry_time =
         Runtime().CaptureAbsoluteHostTimeOrFatal();
     Runtime().BeginSemanticStage(tune_manager, stage_entry_time);
+}
+
+void ObserveAbsoluteJudgementGameplayInitialization(
+    const std::uintptr_t tune_manager) noexcept {
+    Runtime().ObserveGameplayInitialization(tune_manager);
 }
 
 void EndAbsoluteJudgementSemanticStage(

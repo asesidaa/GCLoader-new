@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 
@@ -8,6 +9,7 @@ namespace gc::absolute_judgement::native_abi {
 
 static_assert(sizeof(void*) == sizeof(std::uint32_t));
 
+inline constexpr std::uintptr_t kGameplayInitializationRva = 0x26251C;
 inline constexpr std::uintptr_t kSemanticStageEntryRva = 0x2641CC;
 inline constexpr std::uintptr_t kSemanticStageExitRva = 0x264D9A;
 inline constexpr std::uintptr_t kLoopGuardRva = 0x240239;
@@ -18,6 +20,10 @@ inline constexpr std::uintptr_t kDirectionRva = 0x22E480;
 inline constexpr std::uintptr_t kHeldAgeRva = 0x22DAA0;
 inline constexpr std::uintptr_t kTimingGradeRva = 0x1D0E00;
 
+inline constexpr std::array<std::uint8_t, 8>
+    kGameplayInitializationPrefix{
+        0x89, 0x4D, 0x80, 0xE8, 0x2C, 0x60, 0xF0, 0xFF,
+    };
 inline constexpr std::array<std::uint8_t, 13> kSemanticStageEntryPrefix{
     0x8B, 0x8D, 0x4C, 0xFD, 0xFF, 0xFF, 0xC7,
     0x41, 0x10, 0x00, 0x00, 0x00, 0x00,

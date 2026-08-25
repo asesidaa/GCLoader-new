@@ -57,6 +57,10 @@ public:
     void Publish(
         const AsioClockDecision& decision,
         std::uint64_t submitted_output_tail) noexcept;
+    void PublishContinuityAnchor(
+        std::uint64_t presented_output_frame,
+        std::uint64_t submitted_output_tail,
+        std::uint64_t system_time_ns) noexcept;
     [[nodiscard]] std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept override;
     void Invalidate() noexcept override;

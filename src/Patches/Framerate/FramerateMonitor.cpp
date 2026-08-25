@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <span>
 
 namespace gc::framerate {
 
@@ -80,7 +81,8 @@ std::optional<FramerateObservation> FramerateMonitor::Observe(
 FramerateObservation FramerateMonitor::FinishWindow() noexcept {
     double measured_fps = 0.0;
     if (interval_count_ != 0) {
-        std::sort(intervals_.begin(), intervals_.begin() + interval_count_);
+        std::ranges::sort(
+            std::span{intervals_.data(), interval_count_});
         double median_ticks = 0.0;
         const auto middle = interval_count_ / 2;
         if ((interval_count_ & 1U) != 0) {

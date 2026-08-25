@@ -18,6 +18,8 @@ void InitializeAbsoluteJudgementRuntime(
 
 void BeginAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
+void ObserveAbsoluteJudgementGameplayInitialization(
+    std::uintptr_t tune_manager) noexcept;
 void EndAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;
 void EndAbsoluteJudgementSemanticStageForTestMode() noexcept;

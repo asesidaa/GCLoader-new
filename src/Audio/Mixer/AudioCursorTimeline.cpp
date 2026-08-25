@@ -364,6 +364,8 @@ void AudioCursorTimeline::EndExactPublication(
         detail::kRenderSpanAtomicOrder);
 }
 
+// This helper mutates the logical timeline through its allocated slot table.
+// ReSharper disable once CppMemberFunctionMayBeConst
 bool AudioCursorTimeline::StoreExactSlot(
     std::size_t index,
     const ExactPlaybackEpoch& epoch) noexcept {
@@ -509,6 +511,8 @@ bool AudioCursorTimeline::ConfigureExactPlaybackHistory(
             buffer_instance_id) {
         return false;
     }
+    // The nothrow allocation is required by this noexcept API.
+    // ReSharper disable once CppSmartPointerVsMakeFunction
     auto slots = std::unique_ptr<
         std::array<ExactSlot, kExactPlaybackEpochCapacity>>(
             new (std::nothrow)

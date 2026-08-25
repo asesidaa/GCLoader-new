@@ -6,6 +6,7 @@
 #include "Patches/AbsoluteJudgement/JudgementStage.h"
 
 #include <array>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -36,10 +37,12 @@ class JudgementScheduler final {
 public:
     void BeginSemanticStage(
         std::uintptr_t tune_manager,
-        gc::timing::AbsoluteHostTime stage_entry_time,
+        const gc::timing::AbsoluteHostTime& stage_entry_time,
         std::int32_t game_time_offset_ms,
         std::int32_t hold_safe_frame,
         std::int32_t slide_hold_safe_frame) noexcept;
+    [[nodiscard]] bool TerminateSemanticStageForGameplayInitialization(
+        std::uintptr_t tune_manager) noexcept;
     void EndSemanticStage(std::uintptr_t tune_manager) noexcept;
     [[nodiscard]] bool SemanticStageOpen() const noexcept;
     [[nodiscard]] std::uint64_t stage_generation() const noexcept;
@@ -94,16 +97,17 @@ private:
     [[nodiscard]] std::uint64_t CurrentHistoryPrefixEnd() const noexcept;
     [[nodiscard]] std::optional<ScheduledJudgementScope>
     MakeEventScope(const ResolvedGameplayTransition& event,
-                   const gc::timing::CheckedRational& boundary) noexcept;
+                   const gc::timing::CheckedRational& boundary) const noexcept;
     [[nodiscard]] std::optional<ScheduledJudgementScope>
-    MakeHeartbeatScope(const gc::timing::CheckedRational& boundary) noexcept;
+    MakeHeartbeatScope(
+        const gc::timing::CheckedRational& boundary) const noexcept;
     [[nodiscard]] bool IsBehindCommittedFrontier(
         const JudgementScopeCoordinate& coordinate) const noexcept;
-    [[nodiscard]] std::optional<gc::timing::CheckedRational>
-    BoundaryAt(std::int64_t index) const noexcept;
-    [[nodiscard]] std::optional<std::pair<std::int32_t, std::int32_t>>
+    [[nodiscard]] static std::optional<gc::timing::CheckedRational>
+    BoundaryAt(std::int64_t index) noexcept;
+    [[nodiscard]] static std::optional<std::pair<std::int32_t, std::int32_t>>
     NativeArguments(
-        const gc::timing::CheckedRational& judgement_seconds) const noexcept;
+        const gc::timing::CheckedRational& judgement_seconds) noexcept;
 
     void AppendUnresolvedOrFatal(
         const gc::input::GameplayTransitionRecord& record) noexcept;
@@ -111,9 +115,9 @@ private:
     UnresolvedFront() noexcept;
     void PopUnresolved() noexcept;
     void ApplyHistoryResultOrFatal(
-        const std::expected<void, JudgementHistoryError>& result) noexcept;
-    void IncrementDiagnostic(std::uint64_t& value) noexcept;
-    void FailForClockResult(const JudgementClockResult& result) noexcept;
+        const std::expected<void, JudgementHistoryError>& result) const noexcept;
+    static void IncrementDiagnostic(std::uint64_t& value) noexcept;
+    void FailForClockResult(const JudgementClockResult& result) const noexcept;
     [[noreturn]] void Fatal(
         AbsoluteJudgementFatalPredicate predicate,
         AbsoluteJudgementFatalReason category,

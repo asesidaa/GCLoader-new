@@ -7,6 +7,7 @@ add_library(gc_asio STATIC
         AsioControlPanelClient.cpp
         AsioDriver.cpp
         AsioDriverCatalog.cpp
+        AsioForegroundMonitor.cpp
         AsioIsolatedProcess.cpp
         AsioProbeClient.cpp
         AsioProbeProtocol.cpp
@@ -22,4 +23,5 @@ target_link_libraries(gc_asio PUBLIC
         advapi32
         avrt
         winmm
+        user32
 )

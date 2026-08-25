@@ -76,8 +76,8 @@ public:
 private:
     [[nodiscard]] bool PatternMatches(
         std::uintptr_t address,
-        const BytePattern& pattern) noexcept;
-    [[nodiscard]] bool VerifyOriginalState() noexcept;
+        const BytePattern& pattern) const noexcept;
+    [[nodiscard]] bool VerifyOriginalState() const noexcept;
     [[nodiscard]] std::expected<void, FramerateInstallError> Fail(
         FramerateInstallStage stage,
         std::size_t index,

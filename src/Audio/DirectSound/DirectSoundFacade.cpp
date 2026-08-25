@@ -2,7 +2,9 @@
 #include "Audio/AudioBackendController.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
+// ReSharper disable once CppUnusedIncludeDirective
 #include <cstdlib>
 #include <limits>
 #include <new>
@@ -88,7 +90,7 @@ HRESULT CreateDirectSoundDevice(
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::QueryInterface(
     REFIID interface_id,
-    void** result) {
+    void** result) noexcept {
     if (result == nullptr) {
         return E_POINTER;
     }
@@ -103,11 +105,11 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::QueryInterface(
     return S_OK;
 }
 
-ULONG STDMETHODCALLTYPE PrimarySoundBuffer::AddRef() {
+ULONG STDMETHODCALLTYPE PrimarySoundBuffer::AddRef() noexcept {
     return references_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-ULONG STDMETHODCALLTYPE PrimarySoundBuffer::Release() {
+ULONG STDMETHODCALLTYPE PrimarySoundBuffer::Release() noexcept {
     const auto remaining =
         references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
     if (remaining == 0) {
@@ -116,7 +118,7 @@ ULONG STDMETHODCALLTYPE PrimarySoundBuffer::Release() {
     return remaining;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCaps(LPDSBCAPS caps) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCaps(LPDSBCAPS caps) noexcept {
     if (caps == nullptr || caps->dwSize != sizeof(DSBCAPS)) {
         return DSERR_INVALIDPARAM;
     }
@@ -132,7 +134,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCaps(LPDSBCAPS caps) {
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCurrentPosition(
     LPDWORD play_cursor,
-    LPDWORD write_cursor) {
+    LPDWORD write_cursor) noexcept {
     if (play_cursor == nullptr && write_cursor == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -148,7 +150,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCurrentPosition(
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFormat(
     LPWAVEFORMATEX destination,
     DWORD allocated,
-    LPDWORD written) {
+    LPDWORD written) noexcept {
     constexpr DWORD required = sizeof(WAVEFORMATEX);
     if (written != nullptr) {
         *written = required;
@@ -165,19 +167,19 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFormat(
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetVolume(LPLONG) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetVolume(LPLONG) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetPan(LPLONG) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetPan(LPLONG) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFrequency(LPDWORD) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFrequency(LPDWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetStatus(LPDWORD status) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetStatus(LPDWORD status) noexcept {
     if (status == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -187,7 +189,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetStatus(LPDWORD status) {
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Initialize(
     LPDIRECTSOUND,
-    LPCDSBUFFERDESC) {
+    LPCDSBUFFERDESC) noexcept {
     return DSERR_ALREADYINITIALIZED;
 }
 
@@ -198,39 +200,39 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Lock(
     LPDWORD,
     LPVOID*,
     LPDWORD,
-    DWORD) {
+    DWORD) noexcept {
     return DSERR_INVALIDCALL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Play(DWORD, DWORD, DWORD) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Play(DWORD, DWORD, DWORD) noexcept {
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetCurrentPosition(DWORD) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetCurrentPosition(DWORD) noexcept {
     return DSERR_INVALIDCALL;
 }
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFormat(
-    LPCWAVEFORMATEX format) {
+    LPCWAVEFORMATEX format) noexcept {
     if (format == nullptr) {
         return DSERR_INVALIDPARAM;
     }
     return IsExactGamePrimaryFormat(*format) ? DS_OK : DSERR_BADFORMAT;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetVolume(LONG) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetVolume(LONG) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetPan(LONG) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetPan(LONG) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFrequency(DWORD) {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFrequency(DWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Stop() {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Stop() noexcept {
     return DS_OK;
 }
 
@@ -238,25 +240,25 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Unlock(
     LPVOID,
     DWORD,
     LPVOID,
-    DWORD) {
+    DWORD) noexcept {
     return DSERR_INVALIDCALL;
 }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Restore() {
+HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Restore() noexcept {
     return DS_OK;
 }
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFX(
     DWORD,
     LPDSEFFECTDESC,
-    LPDWORD) {
+    LPDWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
 HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::AcquireResources(
     DWORD,
     DWORD,
-    LPDWORD) {
+    LPDWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
@@ -264,7 +266,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetObjectInPath(
     REFGUID,
     DWORD,
     REFGUID,
-    LPVOID*) {
+    LPVOID*) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
@@ -274,7 +276,7 @@ DirectSoundDevice::DirectSoundDevice(
 
 HRESULT STDMETHODCALLTYPE DirectSoundDevice::QueryInterface(
     REFIID interface_id,
-    void** result) {
+    void** result) noexcept {
     if (result == nullptr) {
         return E_POINTER;
     }
@@ -289,11 +291,11 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::QueryInterface(
     return S_OK;
 }
 
-ULONG STDMETHODCALLTYPE DirectSoundDevice::AddRef() {
+ULONG STDMETHODCALLTYPE DirectSoundDevice::AddRef() noexcept {
     return references_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-ULONG STDMETHODCALLTYPE DirectSoundDevice::Release() {
+ULONG STDMETHODCALLTYPE DirectSoundDevice::Release() noexcept {
     const auto remaining =
         references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
     if (remaining == 0) {
@@ -305,7 +307,7 @@ ULONG STDMETHODCALLTYPE DirectSoundDevice::Release() {
 HRESULT STDMETHODCALLTYPE DirectSoundDevice::CreateSoundBuffer(
     LPCDSBUFFERDESC descriptor,
     LPDIRECTSOUNDBUFFER* result,
-    LPUNKNOWN outer) {
+    LPUNKNOWN outer) noexcept {
     if (result == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -348,19 +350,19 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::CreateSoundBuffer(
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetCaps(LPDSCAPS) {
+HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetCaps(LPDSCAPS) noexcept {
     return DSERR_UNSUPPORTED;
 }
 
 HRESULT STDMETHODCALLTYPE DirectSoundDevice::DuplicateSoundBuffer(
     LPDIRECTSOUNDBUFFER,
-    LPDIRECTSOUNDBUFFER*) {
+    LPDIRECTSOUNDBUFFER*) noexcept {
     return DSERR_UNSUPPORTED;
 }
 
 HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetCooperativeLevel(
     HWND window,
-    DWORD level) {
+    DWORD level) noexcept {
     if (window == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -377,23 +379,23 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetCooperativeLevel(
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::Compact() {
+HRESULT STDMETHODCALLTYPE DirectSoundDevice::Compact() noexcept {
     return DSERR_UNSUPPORTED;
 }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetSpeakerConfig(LPDWORD) {
+HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetSpeakerConfig(LPDWORD) noexcept {
     return DSERR_UNSUPPORTED;
 }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetSpeakerConfig(DWORD) {
+HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetSpeakerConfig(DWORD) noexcept {
     return DSERR_UNSUPPORTED;
 }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::Initialize(LPCGUID) {
+HRESULT STDMETHODCALLTYPE DirectSoundDevice::Initialize(LPCGUID) noexcept {
     return DSERR_ALREADYINITIALIZED;
 }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) {
+HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexcept {
     return DSERR_UNSUPPORTED;
 }
 
@@ -513,7 +515,7 @@ HRESULT SecondarySoundBuffer::Create(
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::QueryInterface(
     REFIID interface_id,
-    void** result) {
+    void** result) noexcept {
     if (result == nullptr) {
         return E_POINTER;
     }
@@ -528,11 +530,11 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::QueryInterface(
     return S_OK;
 }
 
-ULONG STDMETHODCALLTYPE SecondarySoundBuffer::AddRef() {
+ULONG STDMETHODCALLTYPE SecondarySoundBuffer::AddRef() noexcept {
     return references_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-ULONG STDMETHODCALLTYPE SecondarySoundBuffer::Release() {
+ULONG STDMETHODCALLTYPE SecondarySoundBuffer::Release() noexcept {
     const auto remaining =
         references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
     if (remaining == 0) {
@@ -542,7 +544,7 @@ ULONG STDMETHODCALLTYPE SecondarySoundBuffer::Release() {
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
-    LPDSBCAPS caps) {
+    LPDSBCAPS caps) noexcept {
     if (caps == nullptr || caps->dwSize != sizeof(DSBCAPS)) {
         return DSERR_INVALIDPARAM;
     }
@@ -639,7 +641,7 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
     LPDWORD play_cursor,
-    LPDWORD write_cursor) {
+    LPDWORD write_cursor) noexcept {
     if (play_cursor == nullptr && write_cursor == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -665,7 +667,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFormat(
     LPWAVEFORMATEX destination,
     DWORD allocated,
-    LPDWORD written) {
+    LPDWORD written) noexcept {
     const auto required = format_.wave_format_size;
     if (written != nullptr) {
         *written = required;
@@ -682,7 +684,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFormat(
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetVolume(LPLONG volume) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetVolume(LPLONG volume) noexcept {
     if (volume == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -690,15 +692,15 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetVolume(LPLONG volume) {
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetPan(LPLONG) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetPan(LPLONG) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFrequency(LPDWORD) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFrequency(LPDWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) noexcept {
     if (status == nullptr) {
         return DSERR_INVALIDPARAM;
     }
@@ -727,7 +729,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) {
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Initialize(
     LPDIRECTSOUND,
-    LPCDSBUFFERDESC) {
+    LPCDSBUFFERDESC) noexcept {
     return DSERR_ALREADYINITIALIZED;
 }
 
@@ -738,7 +740,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Lock(
     LPDWORD first_bytes,
     LPVOID* second,
     LPDWORD second_bytes,
-    DWORD flags) {
+    DWORD flags) noexcept {
     if (first == nullptr || first_bytes == nullptr ||
         (second == nullptr) != (second_bytes == nullptr)) {
         return DSERR_INVALIDPARAM;
@@ -787,7 +789,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Lock(
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
     DWORD reserved,
     DWORD priority,
-    DWORD flags) {
+    DWORD flags) noexcept {
     if (reserved != 0 || priority != 0 ||
         (flags & ~DSBPLAY_LOOPING) != 0) {
         return DSERR_INVALIDPARAM;
@@ -814,7 +816,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
-    DWORD position) {
+    DWORD position) noexcept {
     if (format_.block_align == 0 || position >= buffer_bytes_ ||
         position % format_.block_align != 0) {
         return DSERR_INVALIDPARAM;
@@ -837,11 +839,11 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFormat(
-    LPCWAVEFORMATEX) {
+    LPCWAVEFORMATEX) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetVolume(LONG volume) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetVolume(LONG volume) noexcept {
     if (volume < DSBVOLUME_MIN || volume > DSBVOLUME_MAX) {
         return DSERR_INVALIDPARAM;
     }
@@ -850,15 +852,15 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetVolume(LONG volume) {
     return DS_OK;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetPan(LONG) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetPan(LONG) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFrequency(DWORD) {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFrequency(DWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Stop() {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Stop() noexcept {
     std::lock_guard control_lock(control_mutex_);
     ResolveCurrentSourceFrameLocked();
     voice_->Stop();
@@ -869,7 +871,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Unlock(
     LPVOID first,
     DWORD first_bytes,
     LPVOID second,
-    DWORD second_bytes) {
+    DWORD second_bytes) noexcept {
     return snapshot_->Unlock(
         first,
         first_bytes,
@@ -877,7 +879,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Unlock(
         second_bytes);
 }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() {
+HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() noexcept {
     snapshot_->ReclaimRetired();
     return DS_OK;
 }
@@ -885,14 +887,14 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() {
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFX(
     DWORD,
     LPDSEFFECTDESC,
-    LPDWORD) {
+    LPDWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
 HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::AcquireResources(
     DWORD,
     DWORD,
-    LPDWORD) {
+    LPDWORD) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
@@ -900,7 +902,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetObjectInPath(
     REFGUID,
     DWORD,
     REFGUID,
-    LPVOID*) {
+    LPVOID*) noexcept {
     return DSERR_CONTROLUNAVAIL;
 }
 
