@@ -218,3 +218,7 @@ Avoid: WASAPI patch when referring to the complete pipeline.
   Service Control Manager behavior.
 - **FastIO labels vs. booster directions:** preserve exact config/register
   labels at transport seams, but use booster language inside input behavior.
+
+## User Input
+
+-  When calling the `request_user_input` tool, never set `autoResolutionMs`. Wait for the user to answer explicitly.
