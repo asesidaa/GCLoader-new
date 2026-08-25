@@ -520,6 +520,75 @@ namespace
             "typed binding reaches the production raw state seam once");
     }
 
+    void CompiledNesysAndRfidSettingsOwnDerivedValues()
+    {
+        std::optional<gc::nesys_service::NesysSettings> owned_nesys;
+        std::optional<gc::rfid::FeatureSettings> owned_rfid;
+        {
+            auto parsed =
+                gc::config::ParseConfigDocument(ReadDistributedConfig());
+            Expect(parsed.has_value(), "NESYS ownership document parses");
+            if (!parsed)
+            {
+                return;
+            }
+
+            parsed->document.nesys().server_ip = "010.020.030.040";
+            parsed->document.registry().enabled = true;
+            parsed->document.registry().system_path = ".\\owned-system";
+            parsed->document.keyboard().card_read = gc::input::PhysicalKey{
+                .make_code = 0x2E,
+                .prefix = gc::input::ScanCodePrefix::E0,
+            };
+            parsed->document.experimental()
+                  .enable_testmode_storage_redirect = true;
+
+            auto compiled =
+                gc::config::ConfigCompiler::Compile(parsed->document);
+            Expect(compiled.has_value(), "NESYS ownership document compiles");
+            if (!compiled)
+            {
+                return;
+            }
+            owned_nesys.emplace(compiled->nesys());
+            owned_rfid.emplace(compiled->rfid());
+        }
+
+        const auto& server = owned_nesys->server_address();
+        Expect(
+            server.octets() == gc::nesys_service::Ipv4Octets{10, 20, 30, 40},
+            "owned NESYS IPv4 octets survive");
+        Expect(server.ansi() == "10.20.30.40", "owned NESYS ANSI address survives");
+        Expect(
+            server.wide() == L"10.20.30.40",
+            "owned NESYS wide address survives");
+
+        const auto& registry = owned_nesys->registry_override();
+        Expect(registry.has_value(), "owned NESYS registry values survive");
+        if (registry)
+        {
+            Expect(
+                registry->news_path() == ".\\owned-system\\DUA\\news",
+                "owned NESYS news path survives");
+            Expect(
+                registry->event_path() == ".\\owned-system\\DUA\\event",
+                "owned NESYS event path survives");
+            Expect(
+                registry->log_path() == ".\\owned-system\\CmdFile\\log",
+                "owned NESYS log path survives");
+        }
+
+        Expect(
+            owned_rfid->card_read_key() == gc::input::PhysicalKey{
+                .make_code = 0x2E,
+                .prefix = gc::input::ScanCodePrefix::E0,
+            },
+            "owned RFID key survives");
+        Expect(
+            owned_rfid->testmode_storage_redirect_enabled(),
+            "owned RFID storage policy survives");
+    }
+
     void BackendMismatchReportsOnePrimaryBindingError()
     {
         auto parsed =
@@ -575,6 +644,7 @@ int main()
     FormatterIncludesCompleteCompilerErrorsInOrder();
     CompiledAudioSettingsOwnAsioFallback();
     CompiledInputSettingsOwnControllerBindings();
+    CompiledNesysAndRfidSettingsOwnDerivedValues();
     BackendMismatchReportsOnePrimaryBindingError();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

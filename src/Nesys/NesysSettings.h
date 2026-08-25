@@ -52,32 +52,32 @@ namespace gc::nesys_service
     class RegistryOverrideValues final
     {
     public:
-        [[nodiscard]] std::uint32_t country() const noexcept
+        [[nodiscard]] const std::uint32_t& country() const noexcept
         {
             return country_;
         }
 
-        [[nodiscard]] std::uint32_t game_kind() const noexcept
+        [[nodiscard]] const std::uint32_t& game_kind() const noexcept
         {
             return game_kind_;
         }
 
-        [[nodiscard]] std::uint32_t event_next_time() const noexcept
+        [[nodiscard]] const std::uint32_t& event_next_time() const noexcept
         {
             return event_next_time_;
         }
 
-        [[nodiscard]] std::uint32_t condition_time() const noexcept
+        [[nodiscard]] const std::uint32_t& condition_time() const noexcept
         {
             return condition_time_;
         }
 
-        [[nodiscard]] std::uint32_t traffic_count() const noexcept
+        [[nodiscard]] const std::uint32_t& traffic_count() const noexcept
         {
             return traffic_count_;
         }
 
-        [[nodiscard]] std::uint32_t log_level() const noexcept
+        [[nodiscard]] const std::uint32_t& log_level() const noexcept
         {
             return log_level_;
         }
@@ -140,15 +140,26 @@ namespace gc::nesys_service
             return adapter_patch_enabled_;
         }
 
-        [[nodiscard]] const ServerAddressState& server_address() const noexcept
+        [[nodiscard]] const ServerAddressState& server_address() const & noexcept
         {
             return server_address_;
         }
 
+        [[nodiscard]] ServerAddressState server_address() && noexcept
+        {
+            return std::move(server_address_);
+        }
+
         [[nodiscard]] const std::optional<RegistryOverrideValues>&
-        registry_override() const noexcept
+        registry_override() const & noexcept
         {
             return registry_override_;
+        }
+
+        [[nodiscard]] std::optional<RegistryOverrideValues>
+        registry_override() && noexcept
+        {
+            return std::move(registry_override_);
         }
 
     private:

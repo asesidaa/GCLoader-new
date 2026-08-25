@@ -763,9 +763,11 @@ namespace gc::config
                         std::move(derived_paths->log),
                     };
             }
+            auto server_ansi = nesys_service::FormatDottedDecimalIpv4(
+                *server_octets);
             std::wstring server_wide;
-            server_wide.reserve(document.nesys().server_ip().size());
-            for (const char character : document.nesys().server_ip())
+            server_wide.reserve(server_ansi.size());
+            for (const char character : server_ansi)
             {
                 server_wide.push_back(
                     static_cast<unsigned char>(character));
@@ -809,7 +811,7 @@ namespace gc::config
                             .enable_nesys_service_adapter_patch(),
                     nesys_service::ServerAddressState{
                         *server_octets,
-                        document.nesys().server_ip(),
+                        std::move(server_ansi),
                         std::move(server_wide),
                     },
                     std::move(registry_override),

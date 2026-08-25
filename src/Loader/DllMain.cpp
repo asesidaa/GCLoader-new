@@ -514,12 +514,30 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     << system_root->redirect_enabled;
             }
 
-            if (!gc::nesys_service::NesysServicePatchInit(
-                hModule,
-                role))
+            try
+            {
+                auto nesys_settings = config.validated().nesys();
+                if (!gc::nesys_service::NesysServicePatchInit(
+                    hModule,
+                    role,
+                    std::move(nesys_settings)))
+                {
+                    PLOG_ERROR
+                        << "NesysServicePatch: fail-closed DLL attach";
+                    return FALSE;
+                }
+            }
+            catch (const std::exception& error)
             {
                 PLOG_ERROR
-                    << "NesysServicePatch: fail-closed DLL attach";
+                    << "NesysServicePatch configuration copy failed: "
+                    << error.what();
+                return FALSE;
+            }
+            catch (...)
+            {
+                PLOG_ERROR
+                    << "NesysServicePatch configuration copy failed";
                 return FALSE;
             }
 
@@ -577,12 +595,29 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                         << "System path: prepared game root unavailable";
                     return FALSE;
                 }
-                const auto rfid_result =
-                    gc::rfid::InitializeFeature(*system_root);
-                if (!rfid_result)
+                try
                 {
-                    PublishFeatureInitializationFatal(
-                        rfid_result.error());
+                    auto rfid_settings = config.validated().rfid();
+                    const auto rfid_result = gc::rfid::InitializeFeature(
+                        *system_root,
+                        std::move(rfid_settings));
+                    if (!rfid_result)
+                    {
+                        PublishFeatureInitializationFatal(
+                            rfid_result.error());
+                        return FALSE;
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    PLOG_ERROR
+                        << "RFID configuration copy failed: "
+                        << error.what();
+                    return FALSE;
+                }
+                catch (...)
+                {
+                    PLOG_ERROR << "RFID configuration copy failed";
                     return FALSE;
                 }
                 PLOG_DEBUG << "RFID/JVS feature init complete!";

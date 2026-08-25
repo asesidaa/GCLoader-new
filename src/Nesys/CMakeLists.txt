@@ -22,14 +22,12 @@ add_library(gc_nesys STATIC
 target_include_directories(gc_nesys PUBLIC
         ${PROJECT_SOURCE_DIR}/src
         ${minhook_SOURCE_DIR}/include
-        ${reflectcpp_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_nesys PUBLIC
         gc_nesys_process
         gc_nesys_diagnostics
         gc_nesys_network_config
-        gc_config
         minhook
         safetyhook::safetyhook
 )
