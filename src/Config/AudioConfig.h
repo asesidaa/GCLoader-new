@@ -1,26 +1,23 @@
 #pragma once
 // SPDX-License-Identifier: CC0-1.0
 
+#include "Audio/AudioSettings.h"
+
 #include <cstdint>
 #include <expected>
 #include <string>
 #include <string_view>
 
-namespace gc::config {
+namespace gc::config
+{
+    using AudioBackend = audio::AudioBackend;
 
-enum class AudioBackend : std::uint8_t {
-    directsound,
-    wasapi_exclusive,
-    asio,
-};
+    [[nodiscard]] const char* AudioBackendName(AudioBackend backend) noexcept;
 
-[[nodiscard]] const char* AudioBackendName(AudioBackend backend) noexcept;
-
-[[nodiscard]] std::expected<void, std::string>
-ValidateAudioBackendSettings(
-    AudioBackend backend,
-    std::string_view asio_driver_name,
-    std::uint32_t asio_buffer_frames,
-    std::uint32_t asio_output_base_channel) noexcept;
-
+    [[nodiscard]] std::expected<void, std::string>
+    ValidateAudioBackendSettings(
+        AudioBackend backend,
+        std::string_view asio_driver_name,
+        std::uint32_t asio_buffer_frames,
+        std::uint32_t asio_output_base_channel) noexcept;
 } // namespace gc::config

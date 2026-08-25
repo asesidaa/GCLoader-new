@@ -38,6 +38,8 @@ inline constexpr char kWasapiExclusiveBufferTooltip[] =
 
 namespace gc::config
 {
+    using LoaderLogLevel = logging::LoaderLogLevel;
+
     inline constexpr bool IsSupportedLoaderLogLevel(
         LoaderLogLevel level) noexcept
     {

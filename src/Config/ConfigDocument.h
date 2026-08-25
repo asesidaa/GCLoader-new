@@ -4,6 +4,7 @@
 #include "Config/NativeInputConfig.h"
 #include "Config/RegistryConfig.h"
 #include "Config/TargetFps.h"
+#include "Logging/LoggingSettings.h"
 #include "SystemPath/SystemRoot.h"
 
 #include <cstdint>
@@ -14,13 +15,6 @@
 
 namespace gc::config
 {
-    enum class LoaderLogLevel : std::uint8_t
-    {
-        Info,
-        Debug,
-        Verbose,
-    };
-
     struct NesysConfig
     {
         rfl::Rename<"server_ip", std::string> server_ip{"127.0.0.1"};
@@ -28,7 +22,8 @@ namespace gc::config
 
     struct LoggingConfig
     {
-        rfl::Rename<"level", LoaderLogLevel> level{LoaderLogLevel::Info};
+        rfl::Rename<"level", logging::LoaderLogLevel>
+        level{logging::LoaderLogLevel::Info};
     };
 
     using WasapiBufferMillisecondsConfigValue = unsigned long;
@@ -49,8 +44,8 @@ namespace gc::config
         unlock_all_songs_and_difficulties{false};
         rfl::Rename<"enable_nesys_service_adapter_patch", bool>
         enable_nesys_service_adapter_patch{true};
-        rfl::Rename<"audio_backend", AudioBackend>
-        audio_backend{AudioBackend::directsound};
+        rfl::Rename<"audio_backend", audio::AudioBackend>
+        audio_backend{audio::AudioBackend::directsound};
         rfl::Rename<
             "wasapi_exclusive_buffer_ms",
             WasapiBufferMillisecondsConfigValue>

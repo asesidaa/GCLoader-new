@@ -1,4 +1,13 @@
+#include "Audio/AudioSettings.h"
 #include "Config/ConfigDocument.h"
+#include "Input/Switch/SwitchInputSettings.h"
+#include "Input/Types/InputSettings.h"
+#include "Logging/LoggingSettings.h"
+#include "Nesys/NesysSettings.h"
+#include "Patches/AbsoluteJudgement/JudgementSettings.h"
+#include "Patches/Framerate/FramerateSettings.h"
+#include "Rfid/FeatureSettings.h"
+#include "SystemPath/SystemPathSettings.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -6,6 +15,19 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <type_traits>
+
+static_assert(std::is_copy_constructible_v<gc::audio::AudioSettings>);
+static_assert(std::is_move_constructible_v<gc::input::InputSettings>);
+static_assert(
+    std::is_move_constructible_v<gc::switch_input::SwitchInputSettings>);
+static_assert(std::is_copy_constructible_v<gc::logging::LoggingSettings>);
+static_assert(std::is_move_constructible_v<gc::nesys_service::NesysSettings>);
+static_assert(
+    std::is_copy_constructible_v<gc::absolute_judgement::JudgementSettings>);
+static_assert(std::is_copy_constructible_v<gc::framerate::FramerateSettings>);
+static_assert(std::is_copy_constructible_v<gc::rfid::FeatureSettings>);
+static_assert(std::is_move_constructible_v<gc::system_path::SystemPathSettings>);
 
 namespace
 {
