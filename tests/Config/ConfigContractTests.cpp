@@ -241,6 +241,38 @@ namespace
         }
     }
 
+    void CompilerChecksAsioFallbackWasapiBuffer()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "ASIO fallback source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+        auto& experimental = parsed->document.experimental();
+        experimental.audio_backend = gc::audio::AudioBackend::asio;
+        experimental.wasapi_exclusive_buffer_ms = 0;
+        experimental.asio_driver_name = "Fallback ASIO";
+        experimental.asio_buffer_frames = 192;
+        experimental.asio_output_base_channel = 0;
+
+        const auto result =
+            gc::config::ConfigCompiler::Compile(parsed->document);
+        Expect(!result.has_value(), "zero ASIO fallback buffer is rejected");
+        if (!result)
+        {
+            Expect(
+                ErrorKeys(result.error()) == std::vector<ErrorKey>{
+                    {
+                        "experimental.wasapi_exclusive_buffer_ms",
+                        gc::config::ConfigErrorCode::out_of_range,
+                    },
+                },
+                "ASIO fallback buffer error has the stable path and code");
+        }
+    }
+
     void DependentRulesRunOnlyAfterTheirLeavesPass()
     {
         auto parsed =
@@ -381,6 +413,52 @@ namespace
             "formatter preserves compiler error order");
     }
 
+    void CompiledAudioSettingsOwnAsioFallback()
+    {
+        std::optional<gc::audio::AudioSettings> owned_settings;
+        {
+            auto parsed =
+                gc::config::ParseConfigDocument(ReadDistributedConfig());
+            Expect(parsed.has_value(), "audio ownership document parses");
+            if (!parsed)
+            {
+                return;
+            }
+
+            auto& experimental = parsed->document.experimental();
+            experimental.audio_backend = gc::audio::AudioBackend::asio;
+            experimental.wasapi_exclusive_buffer_ms = 7;
+            experimental.asio_driver_name = "Owned ASIO";
+            experimental.asio_buffer_frames = 192;
+            experimental.asio_output_base_channel = 6;
+            auto compiled =
+                gc::config::ConfigCompiler::Compile(parsed->document);
+            Expect(compiled.has_value(), "audio ownership document compiles");
+            if (!compiled)
+            {
+                return;
+            }
+            owned_settings.emplace(compiled->audio());
+        }
+
+        const auto* asio = std::get_if<gc::audio::AsioSettings>(
+            &owned_settings->selection());
+        Expect(asio != nullptr, "owned settings retain ASIO alternative");
+        if (asio == nullptr)
+        {
+            return;
+        }
+
+        Expect(asio->driver_name() == "Owned ASIO", "owned ASIO driver survives");
+        Expect(asio->buffer_frames() == 192, "owned ASIO buffer survives");
+        Expect(
+            asio->output_base_channel() == 6,
+            "owned ASIO output channel survives");
+        Expect(
+            asio->wasapi_fallback_buffer_ms() == 7,
+            "owned ASIO WASAPI fallback buffer survives");
+    }
+
     void CompiledInputSettingsOwnControllerBindings()
     {
         std::optional<gc::input::InputSettings> owned_settings;
@@ -491,9 +569,11 @@ int main()
     SemanticInvalidityDoesNotDestroyDocumentShape();
     CompilerReturnsEveryIndependentErrorInDocumentOrder();
     CompilerChecksSelectedWasapiBuffer();
+    CompilerChecksAsioFallbackWasapiBuffer();
     DependentRulesRunOnlyAfterTheirLeavesPass();
     CompilerProducesConcreteAudioAndControllerAlternatives();
     FormatterIncludesCompleteCompilerErrorsInOrder();
+    CompiledAudioSettingsOwnAsioFallback();
     CompiledInputSettingsOwnControllerBindings();
     BackendMismatchReportsOnePrimaryBindingError();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

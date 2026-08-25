@@ -543,10 +543,28 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 PLOG_DEBUG
                     << "Renderer device-loss retry initialization complete!";
 
-                if (!gc::audio::AudioPatchInit())
+                try
+                {
+                    auto audio_settings = config.validated().audio();
+                    if (!gc::audio::AudioPatchInit(
+                        std::move(audio_settings)))
+                    {
+                        PLOG_ERROR
+                            << "AudioPatch: fail-closed DLL attach";
+                        return FALSE;
+                    }
+                }
+                catch (const std::exception& error)
                 {
                     PLOG_ERROR
-                        << "AudioPatch: fail-closed DLL attach";
+                        << "AudioPatch configuration copy failed: "
+                        << error.what();
+                    return FALSE;
+                }
+                catch (...)
+                {
+                    PLOG_ERROR
+                        << "AudioPatch configuration copy failed";
                     return FALSE;
                 }
 

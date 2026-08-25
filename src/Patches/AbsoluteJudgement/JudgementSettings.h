@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Audio/ExactOutputClock.h"
 #include "Audio/AudioSettings.h"
 
 #include <cstdint>

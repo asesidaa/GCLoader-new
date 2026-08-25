@@ -26,7 +26,6 @@ target_include_directories(gc_audio PUBLIC
 )
 target_link_libraries(gc_audio PUBLIC
         gc_asio
-        gc_config
         gc_timing
         minhook
         miniaudio

@@ -523,7 +523,8 @@ namespace gc::config
                     .message = "unsupported audio backend",
                 });
             }
-            if (audio_backend == audio::AudioBackend::wasapi_exclusive)
+            if (audio_backend == audio::AudioBackend::wasapi_exclusive ||
+                audio_backend == audio::AudioBackend::asio)
             {
                 ValidateLeaf<NonZeroWasapiBufferValidator>(
                     static_cast<std::uint32_t>(
@@ -731,6 +732,9 @@ namespace gc::config
                     static_cast<std::uint32_t>(
                         document.experimental()
                                 .asio_output_base_channel()),
+                    static_cast<std::uint32_t>(
+                        document.experimental()
+                                .wasapi_exclusive_buffer_ms()),
                 };
                 clock_domain =
                     audio::ExactOutputClockDomain::
