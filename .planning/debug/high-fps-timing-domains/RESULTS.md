@@ -220,3 +220,80 @@ The production DLL was built through the checked-in `msvc32-release` preset,
 passed all three focused framerate tests, and is deployed with SHA256
 `3001A110B4A69AF0E675EC03ACCCBE3F7B918E72ABB3AAAC818EEFA14C78B3F8`.
 Runtime acceptance at high FPS remains pending.
+
+## Class-aware gameplay audit status
+
+The static input/judgement pipeline begins in E-042 and is finalized by E-046.
+The audit confirms the one-lane Switch input model, identifies manager
+ownership of the gameplay state machine, corrects the stale 8.333 ms comment
+at `0x6401EF` to the live 16.666666 ms constant, and replaces the former raw
+type table with the raw/canonical/effective matrix. No production source,
+runtime DLL, or high-FPS patch was changed for this audit. Any implementation
+plan must follow the corrected matrix and preserve the original forgiving
+rules; static IDA proof is not gameplay acceptance.
+
+## Native catch-up and loader-scope audit status
+
+E-043 records the temporal boundary. Native catch-up fills input history,
+processes judgement, and commits the song frame in that order, with a 50 ms
+backlog cap and integer frame-to-millisecond projection. Skipped history
+entries carry held state rather than new physical edges.
+
+E-045 resolves the native ownership question. `CBooster` pressed queries are
+non-consuming frame facts. One recognition step runs two booster-component
+passes over the one-lane current note, allows at most one successful candidate
+per component, and only then runs lifecycle/aggregation and guarded
+post-descriptor free input. Native conflict and fixed timing gates, not a
+loader edge-claim table, own selection.
+
+The E-043 source snapshot suggested that descriptor routing could recompute and
+replace the effective note/free-input view derived from one immutable sample.
+That is a design-phase source-audit hypothesis, not a conclusion about current
+loader code. No production patch, build, deployment, or runtime acceptance
+follows from the native audit.
+
+## Native result-publication closure status
+
+E-044 closes the former native score/result caveat. The per-player judgement
+state at `CTuneGameManager+0x254` computes and aggregates timing/duration grades;
+the separate non-polymorphic score state at `+0x26C` consumes resolved grades
+and owns the MISS/GOOD/COOL/GREAT counters. Note/effect metadata publication at
+`0x5D0820` remains separate from score accounting.
+
+E-044 also corrects the terminology boundary: chart types `7/8` are
+`HIDDEN/HIDDEN2` hidden notes with normal chart grade/score behavior, while
+`0x5D2040` is post-descriptor free input. E-045 additionally proves that the
+descriptor `IsMute` field is independent from the note type. E-046 closes the
+remaining type-normalization, same-row progression, catch-up edge, and row-gate
+questions. The next work item is a fresh loader source audit against the native
+contract; no production implementation is selected by this record.
+
+## Native phase closure and loader-design inputs
+
+Chart preparation first performs raw/canonical/effective descriptor
+normalization. The authoritative recognition-time pipeline is:
+
+`physical switch state` → `GWInput/CBooster history` → `integer-ms catch-up
+step` → `first incomplete effective descriptor per internal row` →
+`effective-family judgement` → `long-note continuation/end` →
+`grade/result/score/effects` → `guarded free input` → `next-step row-gate
+refresh`.
+
+The loader design must preserve these native invariants:
+
+- one immutable full input snapshot is visible throughout one recognition
+  step, including both booster components and free input;
+- pressed history queries are non-consuming, but the same edge is neither
+  synthesized for a later catch-up step nor exposed to a same-row follower;
+- raw `B/C/D/E` must reach their canonical/effective `A/9/4/9` families, while
+  effective `0` remains suppressed;
+- native candidate order, handler success/failure, component conflicts,
+  long-note interval policy, grade thresholds, and free-input gates retain
+  ownership;
+- Switch composite/paired forgiveness remains unchanged; and
+- only `GameTimeOffset` and `JudgTimeOffset` are variable judgement settings,
+  while `target_fps <= 60` remains a passive bridge policy.
+
+The saved IDB, E-046 evidence, and annotation readback close the native phase.
+The next phase begins by auditing current loader source against this contract,
+not by carrying forward E-043's stale `11–14 lifecycle/default` assumption.

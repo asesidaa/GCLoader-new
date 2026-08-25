@@ -139,3 +139,87 @@ E-039 records implementation of that exact design through the normal
 build, and focused-test verification are complete. High-FPS operator
 acceptance of navigator timing across mode selection, song selection, and the
 other mapped scenes is the remaining step.
+
+## Class-aware gameplay audit boundary (2026-08-17)
+
+The persisted class-aware audit is E-042. It reuses the completed RTTI dump,
+class/method index, physical-input trace, and batched note-handler traces; it
+does not rerun those scans. The proven path is:
+
+`GWInputDeviceXioFio_BOOST` → `GWInputXio` → gameplay capture `0x659920` →
+`CBooster` history/query → `CGameMainTask`/`CDemoPlayTask` →
+`CTuneGameManager_RunGameplayFrameStateMachine` (`0x6630B0`) →
+`CTuneGameManager_ProcessJudgementFrame` (`0x6401E0`) → judgement core
+(`0x5D68E0`).
+
+The current binary operand at `0x6401EF` is the 60-FPS `16.666666 ms/frame`
+constant, not an 8.333 ms/120-Hz clock. `GameTimeOffset` and
+`JudgTimeOffset` remain the only variable timing settings for the proposed
+design; other judgement settings are treated as static. E-046 corrects E-042's
+initial raw-type matrix with the complete raw/canonical/effective mapping and
+progression order. E-044 closes the former score-publication caveat. Static IDA
+evidence remains separate from gameplay acceptance.
+
+## Native catch-up and loader-scope audit (2026-08-17)
+
+E-043 extends E-042 through the native catch-up boundary. At `0x6630B0`, input
+history is filled at `0x664DDC`, judgement runs at `0x664E06`, and the
+authoritative frame is committed at `0x664E23`. The manager processor at
+`0x6401E0` loops from `m = 1` through `Tune+0x14`, projects each frame to an
+integer recognition millisecond value, and calls `0x5D68E0`; skipped history
+entries inherit held state and are not fresh physical polls. The current
+catch-up limit is `floor(50 ms * target_fps)`, yielding maxima of 3/7/8/12
+native judgement calls at 60/144/165/240 FPS.
+
+The QPC transition journal is drained once into a sample for each native core
+call. `JudgementInputScope` spans the entire `0x5D68E0` call, including both
+booster-component passes, lifecycle/aggregation, and post-descriptor free
+input. E-045 proves that native pressed queries intentionally do not consume
+edges; both components must observe one stable frame fact. E-043 records a
+historical loader source risk around note-dependent recomputation, but current
+source compliance remains deliberately unaudited until the design phase. This
+is not a runtime claim and does not authorize production changes.
+
+## Native result-publication closure (2026-08-17)
+
+E-044 proves the per-player state split at `CTuneGameManager+0x254`
+(`GameplayJudgementState`, 444 bytes) and `+0x26C` (`GameplayScoreState`, 368
+bytes, non-polymorphic). The judgement state computes timing/duration grades
+and aggregates component results. The score state consumes the resolved grade
+using the same integer `recognition_ms` and owns the MISS/GOOD/COOL/GREAT
+counters at offsets `+120/+124/+128/+132`. `0x5D0820` publishes separate
+note/effect metadata.
+
+Chart types `7/8` are native `HIDDEN/HIDDEN2` hidden notes routed through the
+normal chart-note grade/score path. `0x5D2040` is separate post-descriptor free
+input and emits a free-input effect without becoming a chart descriptor
+result. Descriptor `IsMute` is an independent field. E-046 completes the
+remaining normalization and progression proof; no loader defect is declared
+solely from this native evidence.
+
+## Native normalization and progression closure (2026-08-17)
+
+Chart preparation first bakes raw chart types into canonical and effective
+descriptor types. The recognition-time pipeline is then:
+
+`physical switch state` → `GWInput/CBooster frame history` → `native catch-up
+recognition step` → `first incomplete effective descriptor per eligible
+internal chart row` → `effective-family pressed/held judgement` → `long-note
+continuation/finalization` → `grade/result/score/effect publication` →
+`guarded post-descriptor free input` → `next-step row eligibility refresh`.
+
+E-046 proves raw aliases `B→A`, `C/E→9`, and `D→4`; effective `0` is skipped.
+Candidate lists are fixed before each component pass and exclude same-row
+followers. A later catch-up step can expose the next descriptor but cannot
+replay the earlier pressed edge because skipped native history carries held
+state only. Free input runs before `0x5D58D0` refreshes the row gate at `+0xCC`;
+that helper is not a cursor advance.
+
+The design-phase invariants are therefore native facts rather than proposed
+policy: one immutable full input view per recognition step; no per-descriptor
+edge consumption; no same-row or catch-up edge synthesis; effective-family
+routing with canonical identity retained where requested; original candidate,
+conflict, long-note, grade, and free-input rules left in native ownership; and
+only `GameTimeOffset`/`JudgTimeOffset` treated as variable settings. The final
+saved IDB SHA-256 is
+`3F911E373D18F4C3F11DACF5759AB7FF08847A4F365E8C0ED17B2896E7C47163`.
