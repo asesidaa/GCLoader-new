@@ -27,6 +27,7 @@ add_executable(gc_config_contract_tests
 )
 target_link_libraries(gc_config_contract_tests PRIVATE
         gc_config
+        gc_input_win32
 )
 target_compile_definitions(gc_config_contract_tests PRIVATE
         GC_TEST_CONFIG_PATH="${PROJECT_SOURCE_DIR}/config.toml"

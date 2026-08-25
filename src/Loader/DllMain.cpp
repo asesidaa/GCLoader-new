@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include "Config/config.h"
+#include "Config/ConfigCompiler.h"
 #include "Locale/JapaneseLocaleCompatibility.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
@@ -23,6 +24,7 @@
 #include "Nesys/NesysServiceProcess.h"
 #include "Logging/SessionLog.h"
 #include "Input/Win32/ImeSuppression.h"
+#include "Input/Polling/InputPollingRuntime.h"
 #include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/AudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
@@ -424,6 +426,37 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             auto& config = ConfigManager::instance();
             ApplyConfiguredLogLevel(config);
 
+            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role))
+            {
+                try
+                {
+                    auto input_settings = config.validated().input();
+                    auto configured =
+                        gc::input::ConfigureInputPollingRuntime(
+                            std::move(input_settings));
+                    if (!configured)
+                    {
+                        PLOG_ERROR
+                            << "Input polling configuration failed: "
+                            << configured.error();
+                        return FALSE;
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    PLOG_ERROR
+                        << "Input polling configuration copy failed: "
+                        << error.what();
+                    return FALSE;
+                }
+                catch (...)
+                {
+                    PLOG_ERROR
+                        << "Input polling configuration copy failed";
+                    return FALSE;
+                }
+            }
+
             if (gc::nesys_service::ShouldRunGameOnlyInitialization(role) &&
                 !gc::song_unlock::SongUnlockPatchInit(
                     config.GetUnlockAllSongsAndDifficulties()))
@@ -546,7 +579,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 PLOG_DEBUG
                     << "Framerate runtime initialization complete!";
 
-                gc::switch_input::SwitchInputPatchInit();
+                gc::switch_input::SwitchInputPatchInit(
+                    config.validated().switch_input());
                 PLOG_DEBUG
                     << "Switch gameplay input patch init complete!"
                     << std::endl;

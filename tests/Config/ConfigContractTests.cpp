@@ -4,6 +4,7 @@
 #include "Config/ConfigError.h"
 #include "Input/Switch/SwitchInputSettings.h"
 #include "Input/Types/InputSettings.h"
+#include "Input/Win32/ControllerBindingEvaluator.h"
 #include "Logging/LoggingSettings.h"
 #include "Nesys/NesysSettings.h"
 #include "Patches/AbsoluteJudgement/JudgementSettings.h"
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -108,6 +110,55 @@ namespace
         }
         return keys;
     }
+
+    class ActiveXInputAView final : public gc::input::ControllerStateView
+    {
+    public:
+        [[nodiscard]] const gc::input::ControllerIdentity&
+        identity() const noexcept override
+        {
+            return identity_;
+        }
+
+        [[nodiscard]] std::span<
+            const gc::input::ControllerControlDescriptor>
+        controls() const noexcept override
+        {
+            return {};
+        }
+
+        [[nodiscard]] std::optional<double> Activation(
+            const gc::input::DigitalControlBinding& binding)
+        const noexcept override
+        {
+            ++activation_calls_;
+            if (binding.type ==
+                gc::input::DigitalControlType::XInputButton &&
+                binding.control == gc::input::XInputControl::A)
+            {
+                return 1.0;
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<std::int32_t> RawValue(
+            const gc::input::DigitalControlBinding&) const noexcept override
+        {
+            return std::nullopt;
+        }
+
+        [[nodiscard]] int activation_calls() const noexcept
+        {
+            return activation_calls_;
+        }
+
+    private:
+        gc::input::ControllerIdentity identity_{
+            .backend = gc::input::ControllerBackend::XInput,
+            .device_id = "2",
+        };
+        mutable int activation_calls_{};
+    };
 
     void CompilerReturnsEveryIndependentErrorInDocumentOrder()
     {
@@ -330,6 +381,67 @@ namespace
             "formatter preserves compiler error order");
     }
 
+    void CompiledInputSettingsOwnControllerBindings()
+    {
+        std::optional<gc::input::InputSettings> owned_settings;
+        {
+            auto parsed =
+                gc::config::ParseConfigDocument(ReadDistributedConfig());
+            Expect(parsed.has_value(), "input ownership document parses");
+            if (!parsed)
+            {
+                return;
+            }
+
+            auto& controller = parsed->document.controller();
+            controller.backend = gc::input::ControllerBackend::XInput;
+            controller.device_id = "2";
+            controller.bindings = {
+                {
+                    .action = gc::input::LogicalAction::LeftBoosterButton,
+                    .type = gc::input::DigitalControlType::XInputButton,
+                    .control = gc::input::XInputControl::A,
+                },
+            };
+            auto compiled =
+                gc::config::ConfigCompiler::Compile(parsed->document);
+            Expect(compiled.has_value(), "input ownership document compiles");
+            if (!compiled)
+            {
+                return;
+            }
+            owned_settings.emplace(compiled->input());
+        }
+
+        const auto* xinput =
+            std::get_if<gc::input::XInputControllerSettings>(
+                &owned_settings->controller());
+        Expect(xinput != nullptr, "owned settings retain XInput alternative");
+        if (xinput == nullptr)
+        {
+            return;
+        }
+
+        auto evaluator = gc::input::ControllerBindingEvaluator::Create(
+            xinput->bindings(),
+            owned_settings->press_percent(),
+            owned_settings->release_percent());
+        Expect(evaluator.has_value(), "owned bindings create the evaluator");
+        if (!evaluator)
+        {
+            return;
+        }
+
+        ActiveXInputAView view;
+        const auto states = evaluator->Update(view);
+        Expect(
+            states.size() == 1 && states.front() == 1,
+            "owned binding evaluates after document and grouping destruction");
+        Expect(
+            view.activation_calls() == 1,
+            "typed binding reaches the production raw state seam once");
+    }
+
     void BackendMismatchReportsOnePrimaryBindingError()
     {
         auto parsed =
@@ -382,6 +494,7 @@ int main()
     DependentRulesRunOnlyAfterTheirLeavesPass();
     CompilerProducesConcreteAudioAndControllerAlternatives();
     FormatterIncludesCompleteCompilerErrorsInOrder();
+    CompiledInputSettingsOwnControllerBindings();
     BackendMismatchReportsOnePrimaryBindingError();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
