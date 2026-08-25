@@ -11,7 +11,8 @@
 #include <string>
 #include <vector>
 
-class InputEditorModel {
+class InputEditorModel
+{
 public:
     explicit InputEditorModel(gc::config::ControllerConfig config);
 
@@ -38,9 +39,6 @@ public:
     [[nodiscard]] const gc::config::ControllerConfig& config() const noexcept;
 
 private:
-    [[nodiscard]] static std::expected<void, std::string> Validate(
-        const gc::config::ControllerConfig& config);
-
     gc::config::ControllerConfig config_;
     std::vector<gc::input::ControllerIdentity> available_identities_;
 };

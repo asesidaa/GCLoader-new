@@ -286,6 +286,50 @@ namespace
         }
     }
 
+    void FormatterIncludesCompleteCompilerErrorsInOrder()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "formatter source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+
+        parsed->document.input_poll_hz = 333;
+        parsed->document.experimental().target_fps = 59;
+        const auto result =
+            gc::config::ConfigCompiler::Compile(parsed->document);
+        Expect(!result.has_value(), "formatter source has compiler errors");
+        if (!result)
+        {
+            Expect(
+                result.error().size() == 2,
+                "formatter source has exactly two independent errors");
+        }
+        if (result || result.error().size() != 2)
+        {
+            return;
+        }
+
+        const auto formatted = gc::config::FormatConfigErrors(result.error());
+        const auto first = result.error()[0].path.Render() + ": " +
+            result.error()[0].message;
+        const auto second = result.error()[1].path.Render() + ": " +
+            result.error()[1].message;
+        const auto first_position = formatted.find(first);
+        const auto second_position = formatted.find(second);
+        Expect(
+            first_position != std::string::npos,
+            "formatter includes the first compiler path and message");
+        Expect(
+            second_position != std::string::npos,
+            "formatter includes the second compiler path and message");
+        Expect(
+            first_position < second_position,
+            "formatter preserves compiler error order");
+    }
+
     void BackendMismatchReportsOnePrimaryBindingError()
     {
         auto parsed =
@@ -337,6 +381,7 @@ int main()
     CompilerChecksSelectedWasapiBuffer();
     DependentRulesRunOnlyAfterTheirLeavesPass();
     CompilerProducesConcreteAudioAndControllerAlternatives();
+    FormatterIncludesCompleteCompilerErrorsInOrder();
     BackendMismatchReportsOnePrimaryBindingError();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

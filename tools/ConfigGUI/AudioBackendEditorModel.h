@@ -5,8 +5,6 @@
 #include "Audio/Asio/AsioControlPanel.h"
 #include "Audio/Asio/AsioProbeClient.h"
 #include "Config/ConfigDocument.h"
-#include "Config/AudioConfig.h"
-#include "Config/config.h"
 
 #include <array>
 #include <cstdint>
@@ -27,27 +25,32 @@ kCommonAsioDriverNames{
     "Generic Low Latency ASIO Driver",
 };
 
-enum class AsioCatalogState : std::uint8_t {
+enum class AsioCatalogState : std::uint8_t
+{
     available,
     empty,
     failed,
 };
 
-enum class AsioInspectionState : std::uint8_t {
+enum class AsioInspectionState : std::uint8_t
+{
     idle,
     probing,
     valid,
     failed,
 };
 
-struct AsioChannelPairChoice {
+struct AsioChannelPairChoice
+{
     std::uint32_t base_channel{};
     std::string label;
 };
 
-class AudioBackendEditorModel final {
+class AudioBackendEditorModel final
+{
 public:
-    explicit AudioBackendEditorModel(InputConfig& config) noexcept;
+    explicit AudioBackendEditorModel(
+        gc::config::ConfigDocument& config) noexcept;
 
     void ApplyCatalog(std::expected<
         std::vector<gc::audio::AsioDriverRegistration>,
@@ -56,37 +59,37 @@ public:
     [[nodiscard]] bool asio_selection_enabled() const noexcept;
     [[nodiscard]] AsioCatalogState catalog_state() const noexcept;
     [[nodiscard]] const std::optional<std::string>&
-        catalog_error() const noexcept;
+    catalog_error() const noexcept;
     [[nodiscard]] const std::vector<std::string>&
-        driver_suggestions() const noexcept;
+    driver_suggestions() const noexcept;
 
-    void SetBackend(gc::config::AudioBackend backend) noexcept;
+    void SetBackend(gc::audio::AudioBackend backend) noexcept;
     void SetDriverName(std::string name);
     void SetBufferFrames(std::uint32_t frames) noexcept;
     void SetOutputBaseChannel(std::uint32_t channel) noexcept;
     void NotifyConfigReloaded() noexcept;
 
     [[nodiscard]] std::expected<gc::audio::AsioProbeRequest, std::string>
-        BeginInspection();
+    BeginInspection();
     [[nodiscard]] std::expected<
         gc::audio::AsioControlPanelRequest,
         std::string>
-        BeginControlPanel();
+    BeginControlPanel();
     void CompleteInspection(gc::audio::AsioProbeResult result);
 
     [[nodiscard]] AsioInspectionState
-        inspection_state() const noexcept;
+    inspection_state() const noexcept;
     [[nodiscard]] const std::string& inspection_error() const noexcept;
     [[nodiscard]] const std::optional<gc::audio::AsioCapabilityReport>&
-        capability_report() const noexcept;
+    capability_report() const noexcept;
     [[nodiscard]] const std::vector<AsioChannelPairChoice>&
-        channel_pairs() const noexcept;
+    channel_pairs() const noexcept;
 
 private:
     void InvalidateInspection() noexcept;
     void RebuildSuggestions();
 
-    InputConfig* config_{};
+    gc::config::ConfigDocument* config_{};
     AsioCatalogState catalog_state_{AsioCatalogState::empty};
     std::vector<gc::audio::AsioDriverRegistration> installed_;
     std::vector<std::string> suggestions_;
@@ -102,6 +105,6 @@ private:
 
 [[nodiscard]] std::expected<void, std::string> ValidateAndWriteConfig(
     const std::filesystem::path& path,
-    const InputConfig& config,
+    const gc::config::ConfigDocument& config,
     gc::audio::IAsioProbeClient& asio_probe,
     const gc::config::AtomicConfigWriteActions& write_actions) noexcept;

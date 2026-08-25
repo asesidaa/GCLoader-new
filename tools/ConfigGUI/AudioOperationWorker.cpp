@@ -11,26 +11,30 @@
 #include <string>
 #include <utility>
 
-namespace {
-
-gc::audio::AsioFailure WorkerFailure(std::string detail) {
-    return {
-        .stage = gc::audio::AsioFailureStage::process_launch,
-        .domain = gc::audio::AsioResultDomain::none,
-        .detail = std::move(detail),
-    };
-}
-
+namespace
+{
+    gc::audio::AsioFailure WorkerFailure(std::string detail)
+    {
+        return {
+            .stage = gc::audio::AsioFailureStage::process_launch,
+            .domain = gc::audio::AsioResultDomain::none,
+            .detail = std::move(detail),
+        };
+    }
 } // namespace
 
 AudioOperationWorker::AudioOperationWorker() noexcept
     : write_actions_(
-          gc::config::ProductionAtomicConfigWriteActions()) {
-    try {
+        gc::config::ProductionAtomicConfigWriteActions())
+{
+    try
+    {
         probe_client_ = std::make_unique<gc::audio::AsioProbeClient>();
         panel_client_ =
             std::make_unique<gc::audio::AsioControlPanelClient>();
-    } catch (...) {
+    }
+    catch (...)
+    {
         probe_client_.reset();
         panel_client_.reset();
     }
@@ -47,7 +51,8 @@ AudioOperationWorker::AudioOperationWorker(
     const gc::config::AtomicConfigWriteActions& write_actions) noexcept
     : probe_client_(std::move(probe_client)),
       panel_client_(std::move(panel_client)),
-      write_actions_(write_actions) {
+      write_actions_(write_actions)
+{
     panel_cancellation_event_ = CreateEventW(
         nullptr,
         TRUE,
@@ -55,52 +60,69 @@ AudioOperationWorker::AudioOperationWorker(
         nullptr);
 }
 
-AudioOperationWorker::~AudioOperationWorker() {
+AudioOperationWorker::~AudioOperationWorker()
+{
     Shutdown();
-    if (panel_cancellation_event_ != nullptr) {
+    if (panel_cancellation_event_ != nullptr)
+    {
         CloseHandle(panel_cancellation_event_);
     }
 }
 
-bool AudioOperationWorker::ReadyToStart() const noexcept {
+bool AudioOperationWorker::ReadyToStart() const noexcept
+{
     return operation_ == Operation::idle && !worker_.joinable();
 }
 
 std::expected<void, std::string>
 AudioOperationWorker::StartInspection(
-    const gc::audio::AsioProbeRequest& request) noexcept {
-    if (!ReadyToStart()) {
+    const gc::audio::AsioProbeRequest& request) noexcept
+{
+    if (!ReadyToStart())
+    {
         return std::unexpected("An audio operation is already running");
     }
-    if (probe_client_ == nullptr) {
+    if (probe_client_ == nullptr)
+    {
         return std::unexpected("ASIO probe client is unavailable");
     }
-    try {
+    try
+    {
         inspection_result_.reset();
         completed_.store(false, std::memory_order_relaxed);
         operation_ = Operation::inspection;
-        worker_ = std::thread([this, request] {
-            try {
+        worker_ = std::thread([this, request]
+        {
+            try
+            {
                 inspection_result_.emplace(probe_client_->Run(
                     request,
                     gc::audio::kDefaultAsioProbeTimeout));
-            } catch (const std::exception& error) {
+            }
+            catch (const std::exception& error)
+            {
                 inspection_result_.emplace(std::unexpected(WorkerFailure(
                     "Could not run ASIO inspection worker: " +
                     std::string{error.what()})));
-            } catch (...) {
+            }
+            catch (...)
+            {
                 inspection_result_.emplace(std::unexpected(WorkerFailure(
                     "Could not run ASIO inspection worker")));
             }
             completed_.store(true, std::memory_order_release);
         });
         return {};
-    } catch (const std::exception& error) {
+    }
+    catch (const std::exception& error)
+    {
         operation_ = Operation::idle;
         return std::unexpected(
             "Could not start ASIO inspection worker: " +
             std::string{error.what()});
-    } catch (...) {
+    }
+    catch (...)
+    {
         operation_ = Operation::idle;
         return std::unexpected(
             "Could not start ASIO inspection worker");
@@ -109,48 +131,64 @@ AudioOperationWorker::StartInspection(
 
 std::expected<void, std::string>
 AudioOperationWorker::StartControlPanel(
-    const gc::audio::AsioControlPanelRequest& request) noexcept {
-    if (!ReadyToStart()) {
+    const gc::audio::AsioControlPanelRequest& request) noexcept
+{
+    if (!ReadyToStart())
+    {
         return std::unexpected("An audio operation is already running");
     }
-    if (panel_client_ == nullptr) {
+    if (panel_client_ == nullptr)
+    {
         return std::unexpected("ASIO control-panel client is unavailable");
     }
-    if (panel_cancellation_event_ == nullptr) {
+    if (panel_cancellation_event_ == nullptr)
+    {
         return std::unexpected(
             "ASIO control-panel cancellation event is unavailable");
     }
-    if (!ResetEvent(panel_cancellation_event_)) {
+    if (!ResetEvent(panel_cancellation_event_))
+    {
         return std::unexpected(
             "Could not reset ASIO control-panel cancellation event: " +
             std::to_string(GetLastError()));
     }
-    try {
+    try
+    {
         panel_result_.reset();
         completed_.store(false, std::memory_order_relaxed);
         operation_ = Operation::control_panel;
-        worker_ = std::thread([this, request] {
-            try {
+        worker_ = std::thread([this, request]
+        {
+            try
+            {
                 panel_result_.emplace(panel_client_->Run(
                     request,
                     panel_cancellation_event_));
-            } catch (const std::exception& error) {
+            }
+            catch (const std::exception& error)
+            {
                 panel_result_.emplace(std::unexpected(WorkerFailure(
                     "Could not run ASIO control-panel worker: " +
                     std::string{error.what()})));
-            } catch (...) {
+            }
+            catch (...)
+            {
                 panel_result_.emplace(std::unexpected(WorkerFailure(
                     "Could not run ASIO control-panel worker")));
             }
             completed_.store(true, std::memory_order_release);
         });
         return {};
-    } catch (const std::exception& error) {
+    }
+    catch (const std::exception& error)
+    {
         operation_ = Operation::idle;
         return std::unexpected(
             "Could not start ASIO control-panel worker: " +
             std::string{error.what()});
-    } catch (...) {
+    }
+    catch (...)
+    {
         operation_ = Operation::idle;
         return std::unexpected(
             "Could not start ASIO control-panel worker");
@@ -159,14 +197,18 @@ AudioOperationWorker::StartControlPanel(
 
 std::expected<void, std::string> AudioOperationWorker::StartSave(
     const std::filesystem::path& path,
-    const InputConfig& config) noexcept {
-    if (!ReadyToStart()) {
+    const gc::config::ConfigDocument& config) noexcept
+{
+    if (!ReadyToStart())
+    {
         return std::unexpected("An audio operation is already running");
     }
-    if (probe_client_ == nullptr) {
+    if (probe_client_ == nullptr)
+    {
         return std::unexpected("ASIO probe client is unavailable");
     }
-    try {
+    try
+    {
         auto owned_path = path;
         auto owned_config = config;
         save_result_.reset();
@@ -174,46 +216,59 @@ std::expected<void, std::string> AudioOperationWorker::StartSave(
         operation_ = Operation::save;
         worker_ = std::thread(
             [this,
-             path = std::move(owned_path),
-             config = std::move(owned_config)] {
-                try {
+                path = std::move(owned_path),
+                config = std::move(owned_config)]
+            {
+                try
+                {
                     save_result_.emplace(ValidateAndWriteConfig(
                         path,
                         config,
                         *probe_client_,
                         write_actions_));
-                } catch (const std::exception& error) {
+                }
+                catch (const std::exception& error)
+                {
                     save_result_.emplace(std::unexpected(
                         "Config save worker failed: " +
                         std::string{error.what()}));
-                } catch (...) {
+                }
+                catch (...)
+                {
                     save_result_.emplace(std::unexpected(
                         "Config save worker failed unexpectedly"));
                 }
                 completed_.store(true, std::memory_order_release);
             });
         return {};
-    } catch (const std::exception& error) {
+    }
+    catch (const std::exception& error)
+    {
         operation_ = Operation::idle;
         return std::unexpected(
             "Could not start config save worker: " +
             std::string{error.what()});
-    } catch (...) {
+    }
+    catch (...)
+    {
         operation_ = Operation::idle;
         return std::unexpected("Could not start config save worker");
     }
 }
 
-void AudioOperationWorker::FinishTake() noexcept {
+void AudioOperationWorker::FinishTake() noexcept
+{
     worker_.join();
     operation_ = Operation::idle;
     completed_.store(false, std::memory_order_relaxed);
 }
 
 std::optional<gc::audio::AsioProbeResult>
-AudioOperationWorker::TakeInspection() {
+AudioOperationWorker::TakeInspection()
+{
     if (operation_ != Operation::inspection ||
-        !completed_.load(std::memory_order_acquire)) {
+        !completed_.load(std::memory_order_acquire))
+    {
         return std::nullopt;
     }
     FinishTake();
@@ -225,9 +280,11 @@ AudioOperationWorker::TakeInspection() {
 std::optional<std::expected<
     gc::audio::AsioControlPanelCompletion,
     gc::audio::AsioFailure>>
-AudioOperationWorker::TakeControlPanel() {
+AudioOperationWorker::TakeControlPanel()
+{
     if (operation_ != Operation::control_panel ||
-        !completed_.load(std::memory_order_acquire)) {
+        !completed_.load(std::memory_order_acquire))
+    {
         return std::nullopt;
     }
     FinishTake();
@@ -237,9 +294,11 @@ AudioOperationWorker::TakeControlPanel() {
 }
 
 std::optional<std::expected<void, std::string>>
-AudioOperationWorker::TakeSave() {
+AudioOperationWorker::TakeSave()
+{
     if (operation_ != Operation::save ||
-        !completed_.load(std::memory_order_acquire)) {
+        !completed_.load(std::memory_order_acquire))
+    {
         return std::nullopt;
     }
     FinishTake();
@@ -249,20 +308,25 @@ AudioOperationWorker::TakeSave() {
 }
 
 AudioOperationWorker::Operation
-AudioOperationWorker::operation() const noexcept {
+AudioOperationWorker::operation() const noexcept
+{
     return operation_;
 }
 
-bool AudioOperationWorker::busy() const noexcept {
+bool AudioOperationWorker::busy() const noexcept
+{
     return operation_ != Operation::idle;
 }
 
-void AudioOperationWorker::Shutdown() noexcept {
+void AudioOperationWorker::Shutdown() noexcept
+{
     if (operation_ == Operation::control_panel &&
-        panel_cancellation_event_ != nullptr) {
+        panel_cancellation_event_ != nullptr)
+    {
         SetEvent(panel_cancellation_event_);
     }
-    if (worker_.joinable()) {
+    if (worker_.joinable())
+    {
         worker_.join();
     }
     operation_ = Operation::idle;

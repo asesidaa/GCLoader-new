@@ -4,7 +4,6 @@
 #include "Audio/Asio/AsioControlPanelClient.h"
 #include "Audio/Asio/AsioProbeClient.h"
 #include "Config/ConfigDocument.h"
-#include "Config/config.h"
 
 #include <Windows.h>
 
@@ -17,9 +16,11 @@
 #include <string>
 #include <thread>
 
-class AudioOperationWorker final {
+class AudioOperationWorker final
+{
 public:
-    enum class Operation : std::uint8_t {
+    enum class Operation : std::uint8_t
+    {
         idle,
         inspection,
         control_panel,
@@ -42,16 +43,16 @@ public:
         const gc::audio::AsioControlPanelRequest& request) noexcept;
     [[nodiscard]] std::expected<void, std::string> StartSave(
         const std::filesystem::path& path,
-        const InputConfig& config) noexcept;
+        const gc::config::ConfigDocument& config) noexcept;
 
     [[nodiscard]] std::optional<gc::audio::AsioProbeResult>
-        TakeInspection();
+    TakeInspection();
     [[nodiscard]] std::optional<std::expected<
         gc::audio::AsioControlPanelCompletion,
         gc::audio::AsioFailure>>
-        TakeControlPanel();
+    TakeControlPanel();
     [[nodiscard]] std::optional<std::expected<void, std::string>>
-        TakeSave();
+    TakeSave();
 
     [[nodiscard]] Operation operation() const noexcept;
     [[nodiscard]] bool busy() const noexcept;

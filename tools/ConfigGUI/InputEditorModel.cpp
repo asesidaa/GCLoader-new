@@ -45,13 +45,7 @@ bool InputEditorModel::selected_identity_available() const noexcept
 std::expected<void, std::string> InputEditorModel::AddBinding(
     gc::input::DigitalControlBinding binding)
 {
-    auto candidate = config_;
-    candidate.bindings().push_back(std::move(binding));
-    if (const auto validation = Validate(candidate); !validation)
-    {
-        return std::unexpected(validation.error());
-    }
-    config_ = std::move(candidate);
+    config_.bindings().push_back(std::move(binding));
     return {};
 }
 
@@ -64,13 +58,7 @@ std::expected<void, std::string> InputEditorModel::ReplaceBinding(
         return std::unexpected("Controller binding index is out of range");
     }
 
-    auto candidate = config_;
-    candidate.bindings()[index] = std::move(binding);
-    if (const auto validation = Validate(candidate); !validation)
-    {
-        return std::unexpected(validation.error());
-    }
-    config_ = std::move(candidate);
+    config_.bindings()[index] = std::move(binding);
     return {};
 }
 
@@ -118,16 +106,4 @@ gc::config::ControllerConfig& InputEditorModel::config() noexcept
 const gc::config::ControllerConfig& InputEditorModel::config() const noexcept
 {
     return config_;
-}
-
-std::expected<void, std::string> InputEditorModel::Validate(
-    const gc::config::ControllerConfig& config)
-{
-    return gc::config::ValidateNativeInputFields(
-        gc::config::kInputSchemaVersion,
-        1000,
-        50,
-        40,
-        gc::config::NativeKeyboardConfig{},
-        config);
 }
