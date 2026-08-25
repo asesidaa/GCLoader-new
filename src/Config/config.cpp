@@ -1,5 +1,6 @@
 #include "Config/config.h"
 
+#include "Config/ConfigCompiler.h"
 #include "Config/ConfigDocument.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
 
@@ -161,20 +162,38 @@ ConfigManager::ConfigManager()
         std::istreambuf_iterator<char>{configFile},
         std::istreambuf_iterator<char>{}
     };
-    auto result = gc::config::ParseAndValidateInputConfigDocument(text);
+    auto result = gc::config::ParseConfigDocument(text);
     if (!result)
     {
-        PLOG_ERROR << result.error() << std::endl;
-        throw std::runtime_error(result.error());
+        PLOG_ERROR << result.error().message << std::endl;
+        throw std::runtime_error(result.error().message);
+    }
+    auto compiled = gc::config::ConfigCompiler::Compile(result->document);
+    if (!compiled)
+    {
+        const auto message =
+            gc::config::FormatConfigErrors(compiled.error());
+        PLOG_ERROR << message << std::endl;
+        throw std::runtime_error(message);
     }
 
     document_migrated_ = result->migrations.any();
-    config = std::move(result->config);
+    config = std::move(result->document);
+    validated_ = std::make_unique<gc::config::ValidatedConfig>(
+        std::move(*compiled));
     PLOG_DEBUG << "Config file parsed successfully" << std::endl;
     PLOG_DEBUG
         << "Config document migrated="
         << document_migrated_;
     PLOG_DEBUG << "Loaded: " << rfl::json::write(config) << std::endl;
+}
+
+ConfigManager::~ConfigManager() = default;
+
+const gc::config::ValidatedConfig&
+ConfigManager::validated() const noexcept
+{
+    return *validated_;
 }
 
 std::expected<gc::system_path::RuntimeRoot, std::string>
@@ -194,7 +213,17 @@ ConfigManager::PrepareGameSystemPath(
             return std::unexpected(prepared.error());
         }
 
+        auto compiled =
+            gc::config::ConfigCompiler::Compile(prepared->config);
+        if (!compiled)
+        {
+            return std::unexpected(
+                "Prepared configuration failed semantic compilation: " +
+                gc::config::FormatConfigErrors(compiled.error()));
+        }
         config = std::move(prepared->config);
+        validated_ = std::make_unique<gc::config::ValidatedConfig>(
+            std::move(*compiled));
         document_migrated_ = false;
         return std::move(prepared->runtime);
     }

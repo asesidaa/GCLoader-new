@@ -1,6 +1,8 @@
 add_library(gc_config STATIC
         AudioConfig.cpp
+        ConfigCompiler.cpp
         ConfigDocument.cpp
+        ConfigError.cpp
         config.cpp
         NativeInputConfig.cpp
         RegistryConfig.cpp

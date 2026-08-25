@@ -1,5 +1,7 @@
 #include "Audio/AudioSettings.h"
+#include "Config/ConfigCompiler.h"
 #include "Config/ConfigDocument.h"
+#include "Config/ConfigError.h"
 #include "Input/Switch/SwitchInputSettings.h"
 #include "Input/Types/InputSettings.h"
 #include "Logging/LoggingSettings.h"
@@ -16,6 +18,8 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 static_assert(std::is_copy_constructible_v<gc::audio::AudioSettings>);
 static_assert(std::is_move_constructible_v<gc::input::InputSettings>);
@@ -89,11 +93,250 @@ namespace
             reparsed.has_value(),
             "semantic invalidity does not destroy document shape");
     }
+
+    using ErrorKey =
+    std::pair<std::string, gc::config::ConfigErrorCode>;
+
+    std::vector<ErrorKey> ErrorKeys(
+        const gc::config::ConfigErrors& errors)
+    {
+        std::vector<ErrorKey> keys;
+        keys.reserve(errors.size());
+        for (const auto& error : errors)
+        {
+            keys.emplace_back(error.path.Render(), error.code);
+        }
+        return keys;
+    }
+
+    void CompilerReturnsEveryIndependentErrorInDocumentOrder()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "multi-error source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+
+        auto& document = parsed->document;
+        document.input_poll_hz = 333;
+        document.axis_press_threshold_percent = 101;
+        document.keyboard().test = {
+            .make_code = 0,
+            .prefix = gc::input::ScanCodePrefix::None,
+        };
+        document.nesys().server_ip = "999.1.1.1";
+        document.experimental().target_fps = 59;
+
+        const auto result =
+            gc::config::ConfigCompiler::Compile(document);
+        Expect(!result.has_value(), "multi-error document is rejected");
+        if (!result)
+        {
+            Expect(
+                ErrorKeys(result.error()) == std::vector<ErrorKey>{
+                    {
+                        "input_poll_hz",
+                        gc::config::ConfigErrorCode::unsupported_value,
+                    },
+                    {
+                        "axis_press_threshold_percent",
+                        gc::config::ConfigErrorCode::out_of_range,
+                    },
+                    {
+                        "keyboard.test",
+                        gc::config::ConfigErrorCode::invalid_value,
+                    },
+                    {
+                        "nesys.server_ip",
+                        gc::config::ConfigErrorCode::invalid_value,
+                    },
+                    {
+                        "experimental.target_fps",
+                        gc::config::ConfigErrorCode::out_of_range,
+                    },
+                },
+                "compiler returns every independent error in declaration order");
+        }
+    }
+
+    void CompilerChecksSelectedWasapiBuffer()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "WASAPI source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+        parsed->document.experimental().audio_backend =
+            gc::audio::AudioBackend::wasapi_exclusive;
+        parsed->document.experimental().wasapi_exclusive_buffer_ms = 0;
+
+        const auto result =
+            gc::config::ConfigCompiler::Compile(parsed->document);
+        Expect(!result.has_value(), "zero WASAPI buffer is rejected");
+        if (!result)
+        {
+            Expect(
+                ErrorKeys(result.error()) == std::vector<ErrorKey>{
+                    {
+                        "experimental.wasapi_exclusive_buffer_ms",
+                        gc::config::ConfigErrorCode::out_of_range,
+                    },
+                },
+                "WASAPI buffer error has the stable path and code");
+        }
+    }
+
+    void DependentRulesRunOnlyAfterTheirLeavesPass()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "dependency source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+        parsed->document.input_poll_hz = 333;
+        parsed->document.experimental().enable_absolute_time_judgement = true;
+        parsed->document.experimental().audio_backend =
+            gc::audio::AudioBackend::directsound;
+
+        const auto result =
+            gc::config::ConfigCompiler::Compile(parsed->document);
+        Expect(!result.has_value(), "invalid dependencies are rejected");
+        if (!result)
+        {
+            Expect(
+                ErrorKeys(result.error()) == std::vector<ErrorKey>{
+                    {
+                        "input_poll_hz",
+                        gc::config::ConfigErrorCode::unsupported_value,
+                    },
+                    {
+                        "experimental.audio_backend",
+                        gc::config::ConfigErrorCode::unmet_dependency,
+                    },
+                },
+                "invalid poll leaf suppresses only its dependent error");
+        }
+    }
+
+    void CompilerProducesConcreteAudioAndControllerAlternatives()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "variant source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+        auto& document = parsed->document;
+        document.experimental().audio_backend =
+            gc::audio::AudioBackend::asio;
+        document.experimental().asio_driver_name = "Test ASIO";
+        document.experimental().asio_buffer_frames = 256;
+        document.experimental().asio_output_base_channel = 4;
+        document.controller().backend =
+            gc::input::ControllerBackend::XInput;
+        document.controller().device_id = "2";
+        document.controller().bindings = {
+            {
+                .action = gc::input::LogicalAction::LeftBoosterLeft,
+                .type = gc::input::DigitalControlType::XInputAxis,
+                .control = gc::input::XInputControl::LeftX,
+                .direction = gc::input::ControlDirection::Negative,
+            },
+        };
+
+        const auto result =
+            gc::config::ConfigCompiler::Compile(document);
+        Expect(result.has_value(), "valid concrete alternatives compile");
+        if (!result)
+        {
+            return;
+        }
+
+        const auto* asio = std::get_if<gc::audio::AsioSettings>(
+            &result->audio().selection());
+        Expect(asio != nullptr, "ASIO selection has concrete settings");
+        if (asio != nullptr)
+        {
+            Expect(asio->driver_name() == "Test ASIO", "ASIO driver is owned");
+            Expect(asio->buffer_frames() == 256, "ASIO buffer is preserved");
+            Expect(
+                asio->output_base_channel() == 4,
+                "ASIO output channel is preserved");
+        }
+
+        const auto* xinput =
+            std::get_if<gc::input::XInputControllerSettings>(
+                &result->input().controller());
+        Expect(xinput != nullptr, "XInput selection has concrete settings");
+        if (xinput != nullptr)
+        {
+            Expect(xinput->slot() == 2, "XInput slot is parsed");
+            Expect(
+                xinput->bindings().size() == 1 &&
+                std::holds_alternative<gc::input::XInputAxisBinding>(
+                    xinput->bindings().front()),
+                "axis binding has its concrete alternative");
+        }
+    }
+
+    void BackendMismatchReportsOnePrimaryBindingError()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "mismatch source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+        auto& controller = parsed->document.controller();
+        controller.backend = gc::input::ControllerBackend::RawHid;
+        controller.device_id = "raw-device";
+        controller.bindings = {
+            {
+                .action = gc::input::LogicalAction::LeftBoosterLeft,
+                .type = gc::input::DigitalControlType::XInputAxis,
+                .control = gc::input::XInputControl::LeftX,
+                .direction = gc::input::ControlDirection::Negative,
+            },
+        };
+
+        const auto result =
+            gc::config::ConfigCompiler::Compile(parsed->document);
+        Expect(!result.has_value(), "backend/type mismatch is rejected");
+        if (!result)
+        {
+            Expect(result.error().size() == 1, "mismatch has one primary error");
+            if (result.error().size() == 1)
+            {
+                const auto& error = result.error().front();
+                Expect(
+                    error.path.Render() == "controller.bindings[0].type",
+                    "mismatch points at binding type");
+                Expect(
+                    error.related_paths.size() == 1 &&
+                    error.related_paths.front().Render() ==
+                    "controller.backend",
+                    "mismatch relates the selected backend");
+            }
+        }
+    }
 } // namespace
 
 int main()
 {
     DistributedConfigStrictlyParses();
     SemanticInvalidityDoesNotDestroyDocumentShape();
+    CompilerReturnsEveryIndependentErrorInDocumentOrder();
+    CompilerChecksSelectedWasapiBuffer();
+    DependentRulesRunOnlyAfterTheirLeavesPass();
+    CompilerProducesConcreteAudioAndControllerAlternatives();
+    BackendMismatchReportsOnePrimaryBindingError();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

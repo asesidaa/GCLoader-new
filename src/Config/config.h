@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,6 +39,8 @@ inline constexpr char kWasapiExclusiveBufferTooltip[] =
 
 namespace gc::config
 {
+    class ValidatedConfig;
+
     using LoaderLogLevel = logging::LoaderLogLevel;
 
     inline constexpr bool IsSupportedLoaderLogLevel(
@@ -210,6 +213,9 @@ public:
         return config.logging().level();
     }
 
+    [[nodiscard]] const gc::config::ValidatedConfig&
+    validated() const noexcept;
+
     [[nodiscard]] std::expected<gc::system_path::RuntimeRoot, std::string>
     PrepareGameSystemPath(
         bool native_testmode_storage_available) noexcept;
@@ -219,9 +225,10 @@ public:
 
 private:
     ConfigManager();
-    ~ConfigManager() = default;
+    ~ConfigManager();
 
     std::filesystem::path config_path_;
     bool document_migrated_{};
     InputConfig config;
+    std::unique_ptr<gc::config::ValidatedConfig> validated_;
 };
