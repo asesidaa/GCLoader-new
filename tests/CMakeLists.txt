@@ -36,3 +36,18 @@ add_test(
         NAME ConfigContract
         COMMAND gc_config_contract_tests
 )
+
+add_executable(gc_config_startup_tests
+        Config/ConfigStartupTests.cpp
+)
+target_link_libraries(gc_config_startup_tests PRIVATE
+        gc_loader_startup
+)
+target_compile_definitions(gc_config_startup_tests PRIVATE
+        GC_TEST_CONFIG_PATH="${PROJECT_SOURCE_DIR}/config.toml"
+)
+
+add_test(
+        NAME ConfigStartup
+        COMMAND gc_config_startup_tests
+)

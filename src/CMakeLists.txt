@@ -32,6 +32,18 @@ target_link_libraries(gc_rfid_feature PUBLIC
 
 add_subdirectory(Patches)
 
+add_library(gc_loader_startup STATIC
+        Loader/StartupConfiguration.cpp
+)
+target_include_directories(gc_loader_startup PUBLIC
+        ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(gc_loader_startup PUBLIC
+        gc_config
+        gc_system_path
+        gc_test_mode_storage
+)
+
 add_library(iDmacDrv32 SHARED
         Loader/DllMain.cpp
         Driver/iDmac/iDmacDrv32.cpp
@@ -74,9 +86,9 @@ target_link_libraries(iDmacDrv32 PRIVATE
 
 set(DEF_FILE
         "${CMAKE_CURRENT_SOURCE_DIR}/Driver/iDmac/iDmacDrv32.def")
-if(MSVC)
+if (MSVC)
     target_link_options(iDmacDrv32 PRIVATE
             "/ILK:${CMAKE_CURRENT_BINARY_DIR}/iDmacDrv32.ilk")
     set_target_properties(iDmacDrv32 PROPERTIES
             LINK_FLAGS "/DEF:${DEF_FILE}")
-endif()
+endif ()
