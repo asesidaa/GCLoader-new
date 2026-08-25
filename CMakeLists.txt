@@ -3,6 +3,7 @@ project(GCLoader VERSION 1.0.0 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ProjectOptions)
+include(CTest)
 include(AsioSdk)
 gc_require_asio_sdk()
 find_package(Git REQUIRED)
@@ -57,21 +58,21 @@ function(gc_hash_corresponding_source_tree tree_root output_variable)
             LIST_DIRECTORIES FALSE
             RELATIVE "${tree_root}"
             "${tree_root}/*")
-    if(ARG_EXCLUDE_GIT)
+    if (ARG_EXCLUDE_GIT)
         list(FILTER tree_files EXCLUDE REGEX "(^|/)\\.git($|/)")
-    endif()
+    endif ()
     list(SORT tree_files)
-    if(NOT tree_files)
+    if (NOT tree_files)
         message(FATAL_ERROR
                 "Cannot snapshot empty source tree: ${tree_root}")
-    endif()
+    endif ()
     set(tree_inventory "")
-    foreach(relative_path IN LISTS tree_files)
+    foreach (relative_path IN LISTS tree_files)
         file(SHA256 "${tree_root}/${relative_path}" file_hash)
         string(REPLACE "\\" "/" portable_path "${relative_path}")
         string(APPEND tree_inventory
                 "${file_hash}  ${portable_path}\n")
-    endforeach()
+    endforeach ()
     string(SHA256 tree_hash "${tree_inventory}")
     set(${output_variable} "${tree_hash}" PARENT_SCOPE)
 endfunction()
@@ -86,19 +87,19 @@ file(WRITE "${GC_PACKAGE_INPUTS_FILE}"
         "# Generated from the exact configured dependency graph.\n"
         "set(GC_PACKAGE_ASIO_SDK_SHA256 [==[${GC_PACKAGE_ASIO_SDK_SHA256}]==])\n"
         "set(GC_PACKAGE_DEPENDENCY_NAMES")
-foreach(dependency IN LISTS GC_CORRESPONDING_SOURCE_DEPENDENCIES)
+foreach (dependency IN LISTS GC_CORRESPONDING_SOURCE_DEPENDENCIES)
     string(TOLOWER "${dependency}" dependency_lower)
     FetchContent_GetProperties(${dependency})
-    if(NOT ${dependency_lower}_POPULATED OR
+    if (NOT ${dependency_lower}_POPULATED OR
             NOT IS_DIRECTORY "${${dependency_lower}_SOURCE_DIR}")
         message(FATAL_ERROR
                 "Corresponding-source input ${dependency} was not populated")
-    endif()
+    endif ()
     file(APPEND "${GC_PACKAGE_INPUTS_FILE}" " ${dependency_lower}")
-endforeach()
+endforeach ()
 file(APPEND "${GC_PACKAGE_INPUTS_FILE}" ")\n")
 
-foreach(dependency IN LISTS GC_CORRESPONDING_SOURCE_DEPENDENCIES)
+foreach (dependency IN LISTS GC_CORRESPONDING_SOURCE_DEPENDENCIES)
     string(TOLOWER "${dependency}" dependency_lower)
     gc_hash_corresponding_source_tree(
             "${${dependency_lower}_SOURCE_DIR}"
@@ -109,27 +110,27 @@ foreach(dependency IN LISTS GC_CORRESPONDING_SOURCE_DEPENDENCIES)
             "set(GC_PACKAGE_DEPENDENCY_${dependency_lower}_ORIGIN [==[${GC_PACKAGE_ORIGIN_${dependency_lower}}]==])\n"
             "set(GC_PACKAGE_DEPENDENCY_${dependency_lower}_REVISION [==[${GC_PACKAGE_REVISION_${dependency_lower}}]==])\n"
             "set(GC_PACKAGE_DEPENDENCY_${dependency_lower}_SHA256 [==[${dependency_source_sha256}]==])\n")
-endforeach()
+endforeach ()
 file(APPEND "${GC_PACKAGE_INPUTS_FILE}"
         "set(GC_PACKAGE_GENERATOR [==[${CMAKE_GENERATOR}]==])\n"
         "set(GC_PACKAGE_BUILD_TYPE [==[${CMAKE_BUILD_TYPE}]==])\n"
         "set(GC_PACKAGE_C_COMPILER [==[${CMAKE_C_COMPILER}]==])\n"
         "set(GC_PACKAGE_CXX_COMPILER [==[${CMAKE_CXX_COMPILER}]==])\n")
 
-if(DEFINED FETCHCONTENT_BASE_DIR)
+if (DEFINED FETCHCONTENT_BASE_DIR)
     file(GLOB populated_fetchcontent_sources
             LIST_DIRECTORIES TRUE
             "${FETCHCONTENT_BASE_DIR}/*-src")
-    foreach(populated_source IN LISTS populated_fetchcontent_sources)
+    foreach (populated_source IN LISTS populated_fetchcontent_sources)
         get_filename_component(populated_name "${populated_source}" NAME)
         string(REGEX REPLACE "-src$" "" populated_name "${populated_name}")
-        if(NOT populated_name IN_LIST GC_CORRESPONDING_SOURCE_DEPENDENCIES)
+        if (NOT populated_name IN_LIST GC_CORRESPONDING_SOURCE_DEPENDENCIES)
             message(FATAL_ERROR
                     "FetchContent source ${populated_name} is missing from "
                     "GC_CORRESPONDING_SOURCE_DEPENDENCIES")
-        endif()
-    endforeach()
-endif()
+        endif ()
+    endforeach ()
+endif ()
 
 set(GC_DIST_DIR "${CMAKE_BINARY_DIR}/dist")
 file(MAKE_DIRECTORY "${GC_DIST_DIR}")
@@ -144,12 +145,12 @@ file(REMOVE_RECURSE "${GC_DIST_DIR}/licenses")
 file(GLOB stale_corresponding_source_archives
         LIST_DIRECTORIES FALSE
         "${GC_DIST_DIR}/GCLoader-*-corresponding-source.zip")
-if(stale_corresponding_source_archives)
+if (stale_corresponding_source_archives)
     file(REMOVE ${stale_corresponding_source_archives})
-endif()
+endif ()
 
 add_custom_target(gc-package-corresponding-source
-    COMMAND "${CMAKE_COMMAND}"
+        COMMAND "${CMAKE_COMMAND}"
         "-DGC_PACKAGE_BUILD_DIR=${CMAKE_BINARY_DIR}"
         "-DGC_PACKAGE_PROJECT_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
         "-DGC_PACKAGE_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
@@ -157,9 +158,9 @@ add_custom_target(gc-package-corresponding-source
         "-DGC_PACKAGE_ASIO_SDK_DIR=${GC_ASIO_SDK_DIR}"
         "-DGC_PACKAGE_INPUTS_FILE=${GC_PACKAGE_INPUTS_FILE}"
         -P "${CMAKE_SOURCE_DIR}/cmake/PackageCorrespondingSource.cmake"
-    COMMENT "Packaging exact GPL corresponding source from a clean revision"
-    USES_TERMINAL
-    VERBATIM
+        COMMENT "Packaging exact GPL corresponding source from a clean revision"
+        USES_TERMINAL
+        VERBATIM
 )
 configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/config.toml"
@@ -173,4 +174,7 @@ configure_file(
 )
 
 add_subdirectory(src)
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif ()
 add_subdirectory(tools)

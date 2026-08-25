@@ -80,6 +80,8 @@ struct ExperimentalConfig
         enable_testmode_storage_redirect = false;
     rfl::Rename<"enable_timer_freeze_patches", bool>
         enable_timer_freeze_patches = false;
+    rfl::Rename<"unlock_all_songs_and_difficulties", bool>
+        unlock_all_songs_and_difficulties = false;
     rfl::Rename<"enable_nesys_service_adapter_patch", bool>
         enable_nesys_service_adapter_patch = true;
     rfl::Rename<"audio_backend", gc::config::AudioBackend>
@@ -200,6 +202,10 @@ public:
     [[nodiscard]] bool GetEnableTimerFreezePatches() const
     {
         return config.experimental().enable_timer_freeze_patches();
+    }
+    [[nodiscard]] bool GetUnlockAllSongsAndDifficulties() const
+    {
+        return config.experimental().unlock_all_songs_and_difficulties();
     }
     [[nodiscard]] bool GetEnableNesysServiceAdapterPatch() const
     {

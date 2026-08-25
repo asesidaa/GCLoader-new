@@ -9,6 +9,7 @@ add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/JudgementStage.cpp
         GameCompatibility/GameBinaryPatch.cpp
         GameCompatibility/GameBinaryPatchDiagnostics.cpp
+        SongUnlock/SongUnlockPatch.cpp
         Framerate/FramerateAuthoredClock.cpp
         Framerate/GameplaySongClock.cpp
         Framerate/FramerateDiagnostics.cpp

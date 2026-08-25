@@ -69,6 +69,7 @@ target_fps = 60
 enable_absolute_time_judgement = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
+unlock_all_songs_and_difficulties = false
 enable_nesys_service_adapter_patch = true
 audio_backend = 'directsound'
 wasapi_exclusive_buffer_ms = 10

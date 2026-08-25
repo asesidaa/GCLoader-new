@@ -2,6 +2,7 @@ add_library(gc_input_win32 STATIC
         Win32/ControllerBindingEvaluator.cpp
         Win32/ControllerCatalog.cpp
         Win32/HidApi.cpp
+        Win32/ImeSuppression.cpp
         Win32/InputCapture.cpp
         Win32/PhysicalKeyWin32.cpp
         Win32/RawInputPacket.cpp
@@ -16,6 +17,7 @@ target_include_directories(gc_input_win32 PUBLIC
 target_link_libraries(gc_input_win32 PUBLIC
         gc_input_types
         hid
+        imm32
         user32
 )
 
