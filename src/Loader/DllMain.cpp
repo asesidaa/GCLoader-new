@@ -1,15 +1,18 @@
 #include <WinSock2.h>
 #include <windows.h>
 #include <atomic>
+#include <exception>
 #include <filesystem>
 #include <limits>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include "Config/config.h"
-#include "Config/ConfigCompiler.h"
+#include <system_error>
+#include <utility>
+#include <variant>
 #include "Locale/JapaneseLocaleCompatibility.h"
+#include "Loader/StartupConfiguration.h"
+#include "Logging/LoggingSettings.h"
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
@@ -30,7 +33,6 @@
 #include "Diagnostics/CrashDumpHandler.h"
 #include "SystemPath/StartupFatal.h"
 #include "SystemPath/TtxInitGuard.h"
-#include "TestModeStorage/NativeStorageProbe.h"
 
 #ifndef _M_IX86
 #error "Only Win32 version is supported!"
@@ -47,21 +49,9 @@ namespace
             &loader_log_appender);
     }
 
-    const char* LoaderLogLevelName(gc::config::LoaderLogLevel level)
+    plog::Severity ToPlogSeverity(gc::logging::LoaderLogLevel level)
     {
-        using enum gc::config::LoaderLogLevel;
-        switch (level)
-        {
-        case Info: return "Info";
-        case Debug: return "Debug";
-        case Verbose: return "Verbose";
-        }
-        return "Info";
-    }
-
-    plog::Severity ToPlogSeverity(gc::config::LoaderLogLevel level)
-    {
-        using enum gc::config::LoaderLogLevel;
+        using enum gc::logging::LoaderLogLevel;
         switch (level)
         {
         case Debug: return plog::debug;
@@ -71,11 +61,14 @@ namespace
         return plog::info;
     }
 
-    void ApplyConfiguredLogLevel(const ConfigManager& config)
+    void ApplyConfiguredLogLevel(
+        const gc::logging::LoggingSettings& settings)
     {
-        const auto level = config.GetLoaderLogLevel();
+        const auto level = settings.level();
         plog::get()->setMaxSeverity(ToPlogSeverity(level));
-        PLOG_INFO << "Loader log level=" << LoaderLogLevelName(level);
+        PLOG_INFO
+            << "Loader log level="
+            << gc::logging::LoaderLogLevelName(level);
     }
 
     void PublishGameBinaryPatchFatal(
@@ -113,7 +106,7 @@ namespace
     std::wstring Utf8ToWideOrFallback(std::string_view value)
     {
         constexpr std::wstring_view fallback =
-            L"System path preparation failed. Check the loader log for details.";
+            L"GCLoader startup failed. Check loader-log.txt for details.";
         try
         {
             if (value.empty() ||
@@ -153,26 +146,105 @@ namespace
         }
     }
 
-    void PublishSystemPathPreparationFatal(std::string_view error) noexcept
+    void PublishConfigurationStartupFatal(
+        const gc::loader::StartupConfigurationError& error) noexcept
     {
         static std::atomic_bool published{false};
+        constexpr DWORD exit_code = 1;
+        constexpr std::wstring_view title =
+            L"GCLoader configuration error";
         try
         {
-            const auto modal = Utf8ToWideOrFallback(error);
+            std::ostringstream log;
+            log
+                << "Configuration startup failed"
+                << " stage="
+                << gc::loader::StartupConfigurationStageName(error.stage)
+                << " error=" << error.message;
+            const auto modal = Utf8ToWideOrFallback(error.message);
             gc::system_path::PublishStartupFatal(
                 published,
-                error,
+                log.str(),
                 modal,
-                21);
+                title,
+                exit_code);
+            return;
         }
         catch (...)
         {
+        }
+
+        gc::system_path::PublishStartupFatal(
+            published,
+            "Configuration startup failed while formatting diagnostics",
+            L"GCLoader could not load or validate config.toml. Check the "
+            L"loader log for details.",
+            title,
+            exit_code);
+    }
+
+    void PublishConfigurationRoleMismatchFatal(
+        gc::nesys_service::ProcessRole role) noexcept
+    {
+        static std::atomic_bool published{false};
+        constexpr DWORD exit_code = 1;
+        try
+        {
+            std::ostringstream log;
+            log
+                << "Configuration startup role mismatch"
+                << " requested="
+                << gc::nesys_service::ProcessRoleName(role);
             gc::system_path::PublishStartupFatal(
                 published,
-                error,
-                L"System path preparation failed. Check the loader log for details.",
-                21);
+                log.str(),
+                L"GCLoader prepared configuration for the wrong process role. "
+                L"The process was stopped before publishing feature state.",
+                L"GCLoader configuration error",
+                exit_code);
+            return;
         }
+        catch (...)
+        {
+        }
+
+        gc::system_path::PublishStartupFatal(
+            published,
+            "Configuration startup role mismatch",
+            L"GCLoader prepared configuration for the wrong process role.",
+            L"GCLoader configuration error",
+            exit_code);
+    }
+
+    void PublishInputConfigurationFatal(std::string_view error) noexcept
+    {
+        static std::atomic_bool published{false};
+        constexpr DWORD exit_code = 22;
+        constexpr std::wstring_view title =
+            L"GCLoader input setup error";
+        try
+        {
+            std::ostringstream log;
+            log << "Input polling configuration failed error=" << error;
+            gc::system_path::PublishStartupFatal(
+                published,
+                log.str(),
+                Utf8ToWideOrFallback(error),
+                title,
+                exit_code);
+            return;
+        }
+        catch (...)
+        {
+        }
+
+        gc::system_path::PublishStartupFatal(
+            published,
+            "Input polling configuration failed",
+            L"GCLoader could not publish the validated input settings. Check "
+            L"loader-log.txt for details.",
+            title,
+            exit_code);
     }
 
     void PublishFeatureInitializationFatal(
@@ -423,100 +495,127 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                         crash_dump_status);
             }
 
-            auto& config = ConfigManager::instance();
-            ApplyConfiguredLogLevel(config);
-
-            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role))
+            std::error_code current_path_error;
+            const auto config_directory =
+                std::filesystem::current_path(current_path_error);
+            if (current_path_error)
             {
-                try
+                gc::loader::StartupConfigurationError error{
+                    .stage =
+                    gc::loader::StartupConfigurationStage::read,
+                    .message =
+                    "Could not determine the current process directory: " +
+                    current_path_error.message(),
+                };
+                PublishConfigurationStartupFatal(error);
+                return FALSE;
+            }
+
+            auto prepared = gc::loader::PrepareProcessConfiguration(
+                config_directory / "config.toml",
+                role);
+            if (!prepared)
+            {
+                PublishConfigurationStartupFatal(prepared.error());
+                return FALSE;
+            }
+
+            if (!gc::nesys_service::ShouldRunGameOnlyInitialization(role))
+            {
+                auto* service =
+                    std::get_if<gc::loader::NesysProcessConfiguration>(
+                        &*prepared);
+                if (service == nullptr)
                 {
-                    auto input_settings = config.validated().input();
-                    auto configured =
-                        gc::input::ConfigureInputPollingRuntime(
-                            std::move(input_settings));
-                    if (!configured)
-                    {
-                        PLOG_ERROR
-                            << "Input polling configuration failed: "
-                            << configured.error();
-                        return FALSE;
-                    }
-                }
-                catch (const std::exception& error)
-                {
-                    PLOG_ERROR
-                        << "Input polling configuration copy failed: "
-                        << error.what();
+                    PublishConfigurationRoleMismatchFatal(role);
                     return FALSE;
                 }
-                catch (...)
+
+                ApplyConfiguredLogLevel(service->logging);
+                PLOG_DEBUG << "DLL attach!" << std::endl;
+                PLOG_INFO
+                    << "NesysServicePatch: process role="
+                    << gc::nesys_service::ProcessRoleName(role);
+                if (!gc::nesys_service::NesysServicePatchInit(
+                    hModule,
+                    role,
+                    std::move(service->nesys)))
                 {
                     PLOG_ERROR
-                        << "Input polling configuration copy failed";
+                        << "NesysServicePatch: fail-closed DLL attach";
+                    return FALSE;
+                }
+
+                PLOG_INFO
+                    << "NesysServicePatch: service role skipping"
+                    << " game-only RFID/input/framerate initialization";
+                break;
+            }
+
+            auto* game_result =
+                std::get_if<gc::loader::GameProcessConfiguration>(
+                    &*prepared);
+            if (game_result == nullptr)
+            {
+                PublishConfigurationRoleMismatchFatal(role);
+                return FALSE;
+            }
+
+            auto game = std::move(*game_result);
+            auto settings = std::move(game.settings);
+            ApplyConfiguredLogLevel(settings.logging());
+            PLOG_DEBUG << "DLL attach!" << std::endl;
+            PLOG_INFO
+                << "NesysServicePatch: process role="
+                << gc::nesys_service::ProcessRoleName(role);
+            PLOG_INFO
+                << "Configuration startup transaction persisted="
+                << game.persisted;
+            for (const auto change : game.changes)
+            {
+                PLOG_INFO
+                    << "Configuration startup repair="
+                    << gc::loader::StartupConfigChangeName(change);
+            }
+            PLOG_INFO
+                << "System path prepared configured="
+                << game.system_root.configured_path
+                << " redirect=" << game.system_root.redirect_enabled;
+
+            try
+            {
+                auto input_settings = settings.input();
+                auto configured =
+                    gc::input::ConfigureInputPollingRuntime(
+                        std::move(input_settings));
+                if (!configured)
+                {
+                    PublishInputConfigurationFatal(configured.error());
                     return FALSE;
                 }
             }
+            catch (const std::exception& error)
+            {
+                PublishInputConfigurationFatal(error.what());
+                return FALSE;
+            }
+            catch (...)
+            {
+                PublishInputConfigurationFatal(
+                    "Input settings copy failed unexpectedly");
+                return FALSE;
+            }
 
-            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role) &&
-                !gc::song_unlock::SongUnlockPatchInit(
-                    config.GetUnlockAllSongsAndDifficulties()))
+            if (!gc::song_unlock::SongUnlockPatchInit(
+                settings.unlock_all_songs_and_difficulties()))
             {
                 PLOG_ERROR << "SongUnlockPatch: fail-closed DLL attach";
                 return FALSE;
             }
 
-            PLOG_DEBUG << "DLL attach!" << std::endl;
-            PLOG_INFO
-                << "NesysServicePatch: process role="
-                << gc::nesys_service::ProcessRoleName(role);
-
-            std::optional<gc::system_path::RuntimeRoot> system_root;
-            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role))
-            {
-                const auto native_testmode_storage =
-                    gc::testmode_storage::ProbeNativeStorage();
-                if (native_testmode_storage.available)
-                {
-                    PLOG_INFO
-                        << "Native test-mode storage: available";
-                }
-                else
-                {
-                    PLOG_WARNING
-                        << "Native test-mode storage: unavailable stage="
-                        << gc::testmode_storage::NativeStorageProbeStageName(
-                            native_testmode_storage.failed_stage)
-                        << " win32_error="
-                        << native_testmode_storage.win32_error
-                        << "; enabling persisted redirect";
-                }
-                if (native_testmode_storage.cleanup_error !=
-                    ERROR_SUCCESS)
-                {
-                    PLOG_WARNING
-                        << "Native test-mode storage: probe cleanup failed "
-                        "win32_error="
-                        << native_testmode_storage.cleanup_error;
-                }
-
-                auto prepared = config.PrepareGameSystemPath(
-                    native_testmode_storage.available);
-                if (!prepared)
-                {
-                    PublishSystemPathPreparationFatal(prepared.error());
-                    return FALSE;
-                }
-                system_root = std::move(*prepared);
-                PLOG_INFO
-                    << "System path prepared configured="
-                    << system_root->configured_path
-                    << " redirect="
-                    << system_root->redirect_enabled;
-            }
-
             try
             {
-                auto nesys_settings = config.validated().nesys();
+                auto nesys_settings = settings.nesys();
                 if (!gc::nesys_service::NesysServicePatchInit(
                     hModule,
                     role,
@@ -541,111 +640,91 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 return FALSE;
             }
 
-            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role))
+            if (!gc::test_mode_timing::TimingSettingsPatchInit())
             {
-                if (!gc::test_mode_timing::TimingSettingsPatchInit())
-                {
-                    PLOG_ERROR
-                        << "TestModeTiming: fail-closed DLL attach";
-                    return FALSE;
-                }
-                PLOG_DEBUG
-                    << "Test-mode timing settings initialization complete!";
-
-                if (!gc::renderer_device_loss::RendererDeviceLossPatchInit())
-                {
-                    PLOG_ERROR
-                        << "RendererDeviceLossPatch: fail-closed DLL attach";
-                    return FALSE;
-                }
-                PLOG_DEBUG
-                    << "Renderer device-loss retry initialization complete!";
-
-                try
-                {
-                    auto audio_settings = config.validated().audio();
-                    if (!gc::audio::AudioPatchInit(
-                        std::move(audio_settings)))
-                    {
-                        PLOG_ERROR
-                            << "AudioPatch: fail-closed DLL attach";
-                        return FALSE;
-                    }
-                }
-                catch (const std::exception& error)
-                {
-                    PLOG_ERROR
-                        << "AudioPatch configuration copy failed: "
-                        << error.what();
-                    return FALSE;
-                }
-                catch (...)
-                {
-                    PLOG_ERROR
-                        << "AudioPatch configuration copy failed";
-                    return FALSE;
-                }
-
-                gc::absolute_judgement::
-                    InitializeAbsoluteJudgementOrFatal(
-                        config.validated().judgement());
-
-                if (!system_root)
-                {
-                    PLOG_ERROR
-                        << "System path: prepared game root unavailable";
-                    return FALSE;
-                }
-                try
-                {
-                    auto rfid_settings = config.validated().rfid();
-                    const auto rfid_result = gc::rfid::InitializeFeature(
-                        *system_root,
-                        std::move(rfid_settings));
-                    if (!rfid_result)
-                    {
-                        PublishFeatureInitializationFatal(
-                            rfid_result.error());
-                        return FALSE;
-                    }
-                }
-                catch (const std::exception& error)
-                {
-                    PLOG_ERROR
-                        << "RFID configuration copy failed: "
-                        << error.what();
-                    return FALSE;
-                }
-                catch (...)
-                {
-                    PLOG_ERROR << "RFID configuration copy failed";
-                    return FALSE;
-                }
-                PLOG_DEBUG << "RFID/JVS feature init complete!";
-
-                if (!gc::framerate::FrameratePatchInit(
-                    config.validated().framerate(),
-                    gc::audio::IsAudioHookCommitted()))
-                {
-                    PLOG_ERROR
-                        << "FrameratePatch: fail-closed DLL attach";
-                    return FALSE;
-                }
-                PLOG_DEBUG
-                    << "Framerate runtime initialization complete!";
-
-                gc::switch_input::SwitchInputPatchInit(
-                    config.validated().switch_input());
-                PLOG_DEBUG
-                    << "Switch gameplay input patch init complete!"
-                    << std::endl;
+                PLOG_ERROR
+                    << "TestModeTiming: fail-closed DLL attach";
+                return FALSE;
             }
-            else
+            PLOG_DEBUG
+                << "Test-mode timing settings initialization complete!";
+
+            if (!gc::renderer_device_loss::RendererDeviceLossPatchInit())
             {
-                PLOG_INFO
-                    << "NesysServicePatch: service role skipping"
-                    << " game-only RFID/input/framerate initialization";
+                PLOG_ERROR
+                    << "RendererDeviceLossPatch: fail-closed DLL attach";
+                return FALSE;
             }
+            PLOG_DEBUG
+                << "Renderer device-loss retry initialization complete!";
+
+            try
+            {
+                auto audio_settings = settings.audio();
+                if (!gc::audio::AudioPatchInit(std::move(audio_settings)))
+                {
+                    PLOG_ERROR
+                        << "AudioPatch: fail-closed DLL attach";
+                    return FALSE;
+                }
+            }
+            catch (const std::exception& error)
+            {
+                PLOG_ERROR
+                    << "AudioPatch configuration copy failed: "
+                    << error.what();
+                return FALSE;
+            }
+            catch (...)
+            {
+                PLOG_ERROR << "AudioPatch configuration copy failed";
+                return FALSE;
+            }
+
+            gc::absolute_judgement::InitializeAbsoluteJudgementOrFatal(
+                settings.judgement());
+
+            try
+            {
+                auto rfid_settings = settings.rfid();
+                const auto rfid_result = gc::rfid::InitializeFeature(
+                    game.system_root,
+                    std::move(rfid_settings));
+                if (!rfid_result)
+                {
+                    PublishFeatureInitializationFatal(rfid_result.error());
+                    return FALSE;
+                }
+            }
+            catch (const std::exception& error)
+            {
+                PLOG_ERROR
+                    << "RFID configuration copy failed: " << error.what();
+                return FALSE;
+            }
+            catch (...)
+            {
+                PLOG_ERROR << "RFID configuration copy failed";
+                return FALSE;
+            }
+            PLOG_DEBUG << "RFID/JVS feature init complete!";
+
+            if (!gc::framerate::FrameratePatchInit(
+                settings.framerate(),
+                gc::audio::IsAudioHookCommitted()))
+            {
+                PLOG_ERROR
+                    << "FrameratePatch: fail-closed DLL attach";
+                return FALSE;
+            }
+            PLOG_DEBUG
+                << "Framerate runtime initialization complete!";
+
+            gc::switch_input::SwitchInputPatchInit(
+                settings.switch_input());
+            PLOG_DEBUG
+                << "Switch gameplay input patch init complete!"
+                << std::endl;
             break;
         }
     case DLL_PROCESS_DETACH:

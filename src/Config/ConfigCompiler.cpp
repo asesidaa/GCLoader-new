@@ -1,14 +1,15 @@
 #include "Config/ConfigCompiler.h"
 
-#include "Config/AudioConfig.h"
 #include "Config/RegistryConfig.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
+#include "Patches/Framerate/FrameratePolicy.h"
 
 #include <array>
 #include <climits>
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,10 +21,8 @@ namespace gc::config
     {
         using TargetFpsValidator = rfl::Validator<
             std::uint32_t,
-            rfl::Minimum < 60>
-        ,
-        rfl::Maximum<500>
-        >;
+            rfl::Minimum<framerate::kMinimumTargetFps>,
+            rfl::Maximum<framerate::kMaximumTargetFps>>;
         using InputPollValidator = rfl::Validator<
             std::uint32_t,
             rfl::OneOf <
@@ -40,6 +39,101 @@ namespace gc::config
         rfl::Validator<std::uint32_t, rfl::Maximum<100>>;
         using NonZeroWasapiBufferValidator =
         rfl::Validator<std::uint32_t, rfl::Minimum<1>>;
+        using RegistryDwordValidator = rfl::Validator<
+            std::int64_t,
+            rfl::Minimum < 0>
+        ,
+        rfl::Maximum<4294967295LL>
+        >;
+        using RegistryLogLevelValidator = rfl::Validator<
+            std::int64_t,
+            rfl::Minimum < 0>
+        ,
+        rfl::Maximum<3>
+        >;
+
+        bool IsUtf8ContinuationByte(unsigned char value) noexcept
+        {
+            return value >= 0x80U && value <= 0xBFU;
+        }
+
+        bool IsValidUtf8(std::string_view value) noexcept
+        {
+            std::size_t index = 0;
+            while (index < value.size())
+            {
+                const auto first =
+                    static_cast<unsigned char>(value[index]);
+                if (first <= 0x7FU)
+                {
+                    ++index;
+                    continue;
+                }
+                if (first >= 0xC2U && first <= 0xDFU)
+                {
+                    if (index + 1 >= value.size() ||
+                        !IsUtf8ContinuationByte(
+                            static_cast<unsigned char>(value[index + 1])))
+                    {
+                        return false;
+                    }
+                    index += 2;
+                    continue;
+                }
+                if (first >= 0xE0U && first <= 0xEFU)
+                {
+                    if (index + 2 >= value.size())
+                    {
+                        return false;
+                    }
+                    const auto second =
+                        static_cast<unsigned char>(value[index + 1]);
+                    const auto third =
+                        static_cast<unsigned char>(value[index + 2]);
+                    const bool valid_second =
+                        first == 0xE0U
+                            ? second >= 0xA0U && second <= 0xBFU
+                            : first == 0xEDU
+                            ? second >= 0x80U && second <= 0x9FU
+                            : IsUtf8ContinuationByte(second);
+                    if (!valid_second || !IsUtf8ContinuationByte(third))
+                    {
+                        return false;
+                    }
+                    index += 3;
+                    continue;
+                }
+                if (first >= 0xF0U && first <= 0xF4U)
+                {
+                    if (index + 3 >= value.size())
+                    {
+                        return false;
+                    }
+                    const auto second =
+                        static_cast<unsigned char>(value[index + 1]);
+                    const auto third =
+                        static_cast<unsigned char>(value[index + 2]);
+                    const auto fourth =
+                        static_cast<unsigned char>(value[index + 3]);
+                    const bool valid_second =
+                        first == 0xF0U
+                            ? second >= 0x90U && second <= 0xBFU
+                            : first == 0xF4U
+                            ? second >= 0x80U && second <= 0x8FU
+                            : IsUtf8ContinuationByte(second);
+                    if (!valid_second ||
+                        !IsUtf8ContinuationByte(third) ||
+                        !IsUtf8ContinuationByte(fourth))
+                    {
+                        return false;
+                    }
+                    index += 4;
+                    continue;
+                }
+                return false;
+            }
+            return true;
+        }
 
         struct ValidPhysicalKeyRule
         {
@@ -59,16 +153,12 @@ namespace gc::config
             [[maybe_unused]] static rfl::Result<std::string> validate(
                 const std::string& value) noexcept
             {
-                const auto valid = ValidateAudioBackendSettings(
-                    AudioBackend::asio,
-                    value,
-                    1,
-                    0);
-                if (valid)
+                if (value.size() <= 1024 && IsValidUtf8(value))
                 {
                     return value;
                 }
-                return rfl::error(valid.error());
+                return rfl::error(
+                    "ASIO driver name must be at most 1024 valid UTF-8 bytes");
             }
         };
 
@@ -438,52 +528,38 @@ namespace gc::config
                 });
             }
 
-            const auto registry_validation =
-                registry_config::ValidateRegistryConfig(document.registry());
-            if (!registry_validation.game_kind)
-            {
-                errors.push_back({
-                    .path = ConfigPath{"registry", "nesys", "game_kind"},
-                    .code = ConfigErrorCode::out_of_range,
-                    .message = "expected a registry DWORD value",
-                });
-            }
-            if (!registry_validation.event_next_time)
-            {
-                errors.push_back({
-                    .path =
-                    ConfigPath{"registry", "nesys", "event_next_time"},
-                    .code = ConfigErrorCode::out_of_range,
-                    .message = "expected a registry DWORD value",
-                });
-            }
-            if (!registry_validation.condition_time)
-            {
-                errors.push_back({
-                    .path =
-                    ConfigPath{"registry", "nesys", "condition_time"},
-                    .code = ConfigErrorCode::out_of_range,
-                    .message = "expected a registry DWORD value",
-                });
-            }
-            if (!registry_validation.log_level)
-            {
-                errors.push_back({
-                    .path = ConfigPath{"registry", "nesys", "log_level"},
-                    .code = ConfigErrorCode::out_of_range,
-                    .message = "unsupported registry log level",
-                });
-            }
+            ValidateLeaf<RegistryDwordValidator>(
+                document.registry().nesys().game_kind(),
+                ConfigPath{"registry", "nesys", "game_kind"},
+                ConfigErrorCode::out_of_range,
+                "expected a registry DWORD value",
+                errors);
+            ValidateLeaf<RegistryDwordValidator>(
+                document.registry().nesys().event_next_time(),
+                ConfigPath{"registry", "nesys", "event_next_time"},
+                ConfigErrorCode::out_of_range,
+                "expected a registry DWORD value",
+                errors);
+            ValidateLeaf<RegistryDwordValidator>(
+                document.registry().nesys().condition_time(),
+                ConfigPath{"registry", "nesys", "condition_time"},
+                ConfigErrorCode::out_of_range,
+                "expected a registry DWORD value",
+                errors);
+            ValidateLeaf<RegistryLogLevelValidator>(
+                document.registry().nesys().log_level(),
+                ConfigPath{"registry", "nesys", "log_level"},
+                ConfigErrorCode::out_of_range,
+                "unsupported registry log level",
+                errors);
             auto derived_paths = registry_config::DeriveNesysPaths(
                 document.registry().system_path());
-            if (!registry_validation.system_path || !derived_paths)
+            if (!derived_paths)
             {
                 errors.push_back({
                     .path = ConfigPath{"registry", "system_path"},
                     .code = ConfigErrorCode::invalid_path,
-                    .message = derived_paths
-                                   ? "invalid system path"
-                                   : derived_paths.error(),
+                    .message = derived_paths.error(),
                 });
             }
 
@@ -747,7 +823,7 @@ namespace gc::config
             {
                 registry_override =
                     nesys_service::RegistryOverrideValues{
-                        registry_config::GameCountryRegistryDword(
+                        static_cast<std::uint32_t>(
                             document.registry().game().country()),
                         static_cast<std::uint32_t>(
                             document.registry().nesys().game_kind()),

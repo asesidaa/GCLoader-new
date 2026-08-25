@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 namespace gc::config
 {
@@ -15,6 +16,21 @@ namespace gc::logging
         Debug,
         Verbose,
     };
+
+    [[nodiscard]] constexpr std::string_view LoaderLogLevelName(
+        LoaderLogLevel level) noexcept
+    {
+        switch (level)
+        {
+        case LoaderLogLevel::Info:
+            return "Info";
+        case LoaderLogLevel::Debug:
+            return "Debug";
+        case LoaderLogLevel::Verbose:
+            return "Verbose";
+        }
+        return "Unknown";
+    }
 
     class LoggingSettings final
     {

@@ -156,6 +156,42 @@ namespace gc::loader
         }
     } // namespace
 
+    std::string_view StartupConfigurationStageName(
+        StartupConfigurationStage stage) noexcept
+    {
+        using enum StartupConfigurationStage;
+        switch (stage)
+        {
+        case read:
+            return "read";
+        case document:
+            return "document";
+        case semantic:
+            return "semantic";
+        case system_path:
+            return "system_path";
+        case persistence:
+            return "persistence";
+        }
+        return "unknown";
+    }
+
+    std::string_view StartupConfigChangeName(
+        StartupConfigChange change) noexcept
+    {
+        using enum StartupConfigChange;
+        switch (change)
+        {
+        case recognized_migration:
+            return "recognized_migration";
+        case system_path_fallback:
+            return "system_path_fallback";
+        case native_storage_redirect:
+            return "native_storage_redirect";
+        }
+        return "unknown";
+    }
+
     StartupConfigurationActions
     ProductionStartupConfigurationActions() noexcept
     {

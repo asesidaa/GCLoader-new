@@ -59,10 +59,10 @@ target_include_directories(iDmacDrv32 PRIVATE
 )
 target_link_libraries(iDmacDrv32 PRIVATE
         gc_audio
-        gc_config
         gc_crash_dump
         gc_input
         gc_japanese_locale_compatibility
+        gc_loader_startup
         gc_logging
         gc_nesys
         gc_rfid_feature

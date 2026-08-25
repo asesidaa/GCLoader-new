@@ -9,6 +9,7 @@
 #include <expected>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -54,6 +55,11 @@ namespace gc::loader
         system_path_fallback,
         native_storage_redirect,
     };
+
+    [[nodiscard]] std::string_view StartupConfigurationStageName(
+        StartupConfigurationStage stage) noexcept;
+    [[nodiscard]] std::string_view StartupConfigChangeName(
+        StartupConfigChange change) noexcept;
 
     struct GameProcessConfiguration
     {

@@ -1,11 +1,10 @@
 #pragma once
 
-#include "Config/AudioConfig.h"
+#include "Audio/AudioSettings.h"
 #include "Config/NativeInputConfig.h"
 #include "Config/RegistryConfig.h"
-#include "Config/TargetFps.h"
 #include "Logging/LoggingSettings.h"
-#include "SystemPath/SystemRoot.h"
+#include "Patches/Framerate/FrameratePolicy.h"
 
 #include <cstdint>
 #include <expected>
@@ -15,6 +14,9 @@
 
 namespace gc::config
 {
+    using TargetFpsConfigValue = unsigned long;
+    static_assert(sizeof(TargetFpsConfigValue) == sizeof(std::uint32_t));
+
     struct NesysConfig
     {
         rfl::Rename<"server_ip", std::string> server_ip{"127.0.0.1"};
@@ -33,7 +35,7 @@ namespace gc::config
     struct ExperimentalConfig
     {
         rfl::Rename<"target_fps", TargetFpsConfigValue>
-        target_fps{kMinimumTargetFps};
+        target_fps{framerate::kMinimumTargetFps};
         rfl::Rename<"enable_absolute_time_judgement", bool>
         enable_absolute_time_judgement{false};
         rfl::Rename<"enable_testmode_storage_redirect", bool>
@@ -152,37 +154,4 @@ namespace gc::config
         const ConfigDocument& document,
         const AtomicConfigWriteActions& actions =
             ProductionAtomicConfigWriteActions()) noexcept;
-
-    // Temporary compatibility for consumers migrated in later tasks.
-    [[nodiscard]] std::expected<void, std::string>
-    WriteInputConfigAtomically(
-        const std::filesystem::path& config_path,
-        const ConfigDocument& config,
-        const AtomicConfigWriteActions& actions =
-            ProductionAtomicConfigWriteActions()) noexcept;
-
-    struct GameSystemPathPreparationActions
-    {
-        gc::system_path::DirectoryActions directories;
-        AtomicConfigWriteActions config_write;
-    };
-
-    [[nodiscard]] GameSystemPathPreparationActions
-    ProductionGameSystemPathPreparationActions() noexcept;
-
-    struct PreparedGameSystemPathConfig
-    {
-        ConfigDocument config;
-        gc::system_path::RuntimeRoot runtime;
-        bool persisted{};
-    };
-
-    [[nodiscard]] std::expected<PreparedGameSystemPathConfig, std::string>
-    PrepareAndPersistGameSystemPathConfiguration(
-        ConfigDocument config,
-        bool document_migrated,
-        const std::filesystem::path& config_path,
-        bool native_testmode_storage_available,
-        const GameSystemPathPreparationActions& actions =
-            ProductionGameSystemPathPreparationActions()) noexcept;
 } // namespace gc::config

@@ -6,12 +6,11 @@
 #include "JudgementOffsetAdvisor.h"
 #include "Win32D3D11Host.h"
 
+#include "Audio/AudioSettings.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
 #include "Config/ConfigCompiler.h"
 #include "Config/ConfigDocument.h"
 #include "Config/RegistryConfig.h"
-#include "Config/TargetFps.h"
-#include "Config/config.h"
 #include "Input/Types/PhysicalKey.h"
 #include "Input/Win32/ControllerCatalog.h"
 #include "Input/Win32/InputCapture.h"
@@ -21,6 +20,7 @@
 #include "Input/Win32/XInputApi.h"
 #include "Input/Win32/XInputController.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
+#include "Patches/Framerate/FrameratePolicy.h"
 
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
@@ -51,6 +51,11 @@
 namespace
 {
     constexpr std::array<USHORT, 4> kRawInputUsages{0x06, 0x05, 0x04, 0x08};
+    constexpr char kWasapiExclusiveBufferTooltip[] =
+        "Fixed exclusive buffer duration for this game launch.\n"
+        "Default is 10 ms. Value must be greater than zero.\n"
+        "Values below the endpoint minimum fail initialization.\n"
+        "Restart the game after changing it.";
 
     struct JudgementOffsetAdvisorUiState
     {
@@ -1064,36 +1069,24 @@ namespace
         {
             dirty = true;
         }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryDword(game_kind),
-            "Enter an integer from 0 through 4294967295.");
 
         auto& event_next_time = nesys.event_next_time();
         if (ImGui::InputScalar("Registry EventNextTime", ImGuiDataType_S64, &event_next_time))
         {
             dirty = true;
         }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryDword(event_next_time),
-            "Enter an integer from 0 through 4294967295.");
 
         auto& condition_time = nesys.condition_time();
         if (ImGui::InputScalar("Registry ConditionTime", ImGuiDataType_S64, &condition_time))
         {
             dirty = true;
         }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryDword(condition_time),
-            "Enter an integer from 0 through 4294967295.");
 
         auto& log_level = nesys.log_level();
         if (ImGui::InputScalar("Registry LogLevel", ImGuiDataType_S64, &log_level))
         {
             dirty = true;
         }
-        DrawInlineValidationError(
-            gc::registry_config::IsRegistryLogLevel(log_level),
-            "Enter an integer from 0 through 3.");
 
         auto& system_path = registry.system_path();
         if (ImGui::InputText("Registry system path", &system_path))
@@ -1246,7 +1239,7 @@ namespace
         }
 
         const bool can_inspect =
-            experimental.audio_backend() == gc::config::AudioBackend::asio &&
+            experimental.audio_backend() == gc::audio::AudioBackend::asio &&
             audio_editor.asio_selection_enabled() && !audio_worker.busy();
         ImGui::BeginDisabled(!can_inspect);
         if (ImGui::Button("Inspect ASIO driver"))
@@ -1269,7 +1262,7 @@ namespace
         ImGui::EndDisabled();
         ImGui::SameLine();
         const bool can_open_panel =
-            experimental.audio_backend() == gc::config::AudioBackend::asio &&
+            experimental.audio_backend() == gc::audio::AudioBackend::asio &&
             !experimental.asio_driver_name().empty() && !audio_worker.busy();
         ImGui::BeginDisabled(!can_open_panel);
         if (ImGui::Button("Open ASIO Control Panel"))
@@ -1641,11 +1634,11 @@ namespace
                 "Configure the same cap in the driver or RTSS.\n"
                 "Restart the game after changing it.");
         }
-        const bool target_valid = gc::config::IsTargetFpsInRange(
+        const bool target_valid = gc::framerate::IsTargetFpsInRange(
             static_cast<std::uint32_t>(target_fps));
         DrawInlineValidationError(
             target_valid, "Enter an integer from 60 through 500.");
-        if (target_valid && !gc::config::IsGameplayValidatedTargetFps(
+        if (target_valid && !gc::framerate::IsGameplayValidatedTargetFps(
             static_cast<std::uint32_t>(target_fps)))
         {
             ImGui::TextColored(
@@ -1673,8 +1666,8 @@ namespace
         }
         if (absolute_time_judgement &&
             experimental.audio_backend() !=
-            gc::config::AudioBackend::wasapi_exclusive &&
-            experimental.audio_backend() != gc::config::AudioBackend::asio)
+            gc::audio::AudioBackend::wasapi_exclusive &&
+            experimental.audio_backend() != gc::audio::AudioBackend::asio)
         {
             ImGui::TextColored(
                 ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
@@ -1724,7 +1717,7 @@ namespace
         }
         ImGui::SeparatorText("Audio output");
         ImGui::BeginDisabled(audio_worker.busy());
-        auto select_backend = [&](const char* label, gc::config::AudioBackend backend)
+        auto select_backend = [&](const char* label, gc::audio::AudioBackend backend)
         {
             const bool selected = experimental.audio_backend() == backend;
             if (ImGui::RadioButton(label, selected))
@@ -1733,17 +1726,17 @@ namespace
                 dirty = true;
             }
         };
-        select_backend("DirectSound", gc::config::AudioBackend::directsound);
+        select_backend("DirectSound", gc::audio::AudioBackend::directsound);
         ImGui::SameLine();
         select_backend(
-            "WASAPI exclusive", gc::config::AudioBackend::wasapi_exclusive);
+            "WASAPI exclusive", gc::audio::AudioBackend::wasapi_exclusive);
         ImGui::SameLine();
         ImGui::BeginDisabled(!audio_editor.asio_selection_enabled());
-        select_backend("ASIO\xC2\xAE", gc::config::AudioBackend::asio);
+        select_backend("ASIO\xC2\xAE", gc::audio::AudioBackend::asio);
         ImGui::EndDisabled();
 
         if (experimental.audio_backend() ==
-            gc::config::AudioBackend::wasapi_exclusive)
+            gc::audio::AudioBackend::wasapi_exclusive)
         {
             auto& buffer_ms = experimental.wasapi_exclusive_buffer_ms();
             if (ImGui::InputScalar(
@@ -1761,7 +1754,7 @@ namespace
             }
         }
 
-        if (experimental.audio_backend() == gc::config::AudioBackend::asio ||
+        if (experimental.audio_backend() == gc::audio::AudioBackend::asio ||
             !audio_editor.asio_selection_enabled())
         {
             DrawAsioSettings(
@@ -1784,7 +1777,7 @@ namespace
             "Loader log level", &level, levels, IM_ARRAYSIZE(levels)))
         {
             config.logging().level =
-                static_cast<gc::config::LoaderLogLevel>(level);
+                static_cast<gc::logging::LoaderLogLevel>(level);
             dirty = true;
         }
         ImGui::TextDisabled("Takes effect after restarting the game.");
