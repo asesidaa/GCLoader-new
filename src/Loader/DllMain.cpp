@@ -587,7 +587,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 }
 
                 gc::absolute_judgement::
-                    InitializeAbsoluteJudgementOrFatal();
+                    InitializeAbsoluteJudgementOrFatal(
+                        config.validated().judgement());
 
                 if (!system_root)
                 {
@@ -623,6 +624,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 PLOG_DEBUG << "RFID/JVS feature init complete!";
 
                 if (!gc::framerate::FrameratePatchInit(
+                    config.validated().framerate(),
                     gc::audio::IsAudioHookCommitted()))
                 {
                     PLOG_ERROR

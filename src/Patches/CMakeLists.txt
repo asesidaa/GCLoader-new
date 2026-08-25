@@ -30,7 +30,6 @@ target_include_directories(gc_runtime_patches PUBLIC
 )
 target_link_libraries(gc_runtime_patches PUBLIC
         gc_audio
-        gc_config
         gc_input
         gc_logging
         gc_system_path
