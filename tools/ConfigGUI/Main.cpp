@@ -36,12 +36,9 @@
 #include <filesystem>
 #include <fstream>
 #include <format>
-// ReSharper disable once CppUnusedIncludeDirective
-#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -95,8 +92,8 @@ namespace
 
     std::string Win32Failure(const char* operation)
     {
-        return std::string(operation) + " failed with Win32 error " +
-            std::to_string(GetLastError());
+        return std::format(
+            "{} failed with Win32 error {}", operation, GetLastError());
     }
 
     std::string WideToUtf8(std::wstring_view value)
@@ -251,40 +248,44 @@ namespace
         if (binding.type == XInputButton || binding.type == XInputAxis ||
             binding.type == XInputTrigger)
         {
-            std::string label = "XInput ";
-            label += binding.control
-                         ? XInputControlName(*binding.control)
-                         : "Unknown";
+            std::string label = std::format(
+                "XInput {}",
+                binding.control
+                    ? XInputControlName(*binding.control)
+                    : "Unknown");
             if (binding.direction)
             {
-                label += " ";
-                label += DirectionName(*binding.direction);
+                std::format_to(
+                    std::back_inserter(label),
+                    " {}",
+                    DirectionName(*binding.direction));
             }
             return label;
         }
 
-        std::ostringstream label;
-        if (binding.type == RawHidButton)
-        {
-            label << "Button ";
-        }
-        else if (binding.type == RawHidHat)
-        {
-            label << "Hat ";
-        }
-        else
-        {
-            label << "Value ";
-        }
-        label << "page 0x" << std::hex << binding.usage_page.value_or(0)
-            << " usage 0x" << binding.usage.value_or(0) << std::dec;
+        const auto kind = binding.type == RawHidButton
+                              ? "Button"
+                              : binding.type == RawHidHat
+                              ? "Hat"
+                              : "Value";
+        std::string label = std::format(
+            "{} page 0x{:x} usage 0x{:x}",
+            kind,
+            binding.usage_page.value_or(0),
+            binding.usage.value_or(0));
         if (binding.direction)
         {
-            label << " " << DirectionName(*binding.direction);
+            std::format_to(
+                std::back_inserter(label),
+                " {}",
+                DirectionName(*binding.direction));
         }
-        label << " (report " << binding.report_id.value_or(0)
-            << ", link " << binding.link_collection.value_or(0) << ")";
-        return label.str();
+        std::format_to(
+            std::back_inserter(label),
+            " (report {}, link {})",
+            binding.report_id.value_or(0),
+            binding.link_collection.value_or(0));
+        return label;
     }
 
     void DrawInlineValidationError(bool valid, const char* message)
@@ -1133,7 +1134,7 @@ namespace
         {
             return "every integer frame count in range";
         }
-        return "multiples of " + std::to_string(granularity) + " frames";
+        return std::format("multiples of {} frames", granularity);
     }
 
     void DrawAsioSettings(
@@ -1819,14 +1820,13 @@ int main(int argc, char** argv)
     GuiComApartment com_apartment;
     if (FAILED(com_apartment.result()))
     {
-        std::ostringstream message;
-        message << "Could not initialize the ConfigGUI STA; HRESULT 0x"
-            << std::hex << std::uppercase
-            << static_cast<std::uint32_t>(com_apartment.result());
-        std::cerr << message.str() << '\n';
+        const auto message = std::format(
+            "Could not initialize the ConfigGUI STA; HRESULT 0x{:X}",
+            static_cast<std::uint32_t>(com_apartment.result()));
+        std::cerr << message << '\n';
         MessageBoxA(
             nullptr,
-            message.str().c_str(),
+            message.c_str(),
             "ConfigGUI",
             MB_OK | MB_ICONERROR);
         return 1;

@@ -7,6 +7,7 @@
 #include <Windows.h>
 
 #include <exception>
+#include <format>
 #include <memory>
 #include <string>
 #include <utility>
@@ -148,9 +149,9 @@ AudioOperationWorker::StartControlPanel(
     }
     if (!ResetEvent(panel_cancellation_event_))
     {
-        return std::unexpected(
-            "Could not reset ASIO control-panel cancellation event: " +
-            std::to_string(GetLastError()));
+        return std::unexpected(std::format(
+            "Could not reset ASIO control-panel cancellation event: {}",
+            GetLastError()));
     }
     try
     {

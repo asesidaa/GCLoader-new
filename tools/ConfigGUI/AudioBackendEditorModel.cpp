@@ -9,7 +9,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
-#include <sstream>
+#include <format>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -165,12 +166,17 @@ namespace
             {
                 continue;
             }
-            std::ostringstream label;
-            label << '[' << left.index << '/' << right.index << "] "
-                << left.name << " (" << SampleTypeName(left.sample_type)
-                << ") + " << right.name << " ("
-                << SampleTypeName(right.sample_type) << ')';
-            pairs.push_back({left.index, label.str()});
+            pairs.push_back({
+                left.index,
+                std::format(
+                    "[{}/{}] {} ({}) + {} ({})",
+                    left.index,
+                    right.index,
+                    left.name,
+                    SampleTypeName(left.sample_type),
+                    right.name,
+                    SampleTypeName(right.sample_type)),
+            });
         }
         return pairs;
     }
@@ -508,19 +514,26 @@ void AudioBackendEditorModel::RebuildSuggestions()
 std::string DescribeAsioFailure(
     const gc::audio::AsioFailure& failure)
 {
-    std::ostringstream text;
-    text << "ASIO failure stage=" << FailureStageName(failure.stage)
-        << " domain=" << ResultDomainName(failure.domain)
-        << " result=" << failure.result;
+    std::string text = std::format(
+        "ASIO failure stage={} domain={} result={}",
+        FailureStageName(failure.stage),
+        ResultDomainName(failure.domain),
+        failure.result);
     if (!failure.driver_message.empty())
     {
-        text << " driver_message=" << failure.driver_message;
+        std::format_to(
+            std::back_inserter(text),
+            " driver_message={}",
+            failure.driver_message);
     }
     if (!failure.detail.empty())
     {
-        text << " detail=" << failure.detail;
+        std::format_to(
+            std::back_inserter(text),
+            " detail={}",
+            failure.detail);
     }
-    return text.str();
+    return text;
 }
 
 std::expected<void, std::string> ValidateAndWriteConfig(

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -155,16 +156,14 @@ namespace
             L"GCLoader configuration error";
         try
         {
-            std::ostringstream log;
-            log
-                << "Configuration startup failed"
-                << " stage="
-                << gc::loader::StartupConfigurationStageName(error.stage)
-                << " error=" << error.message;
+            const auto log = std::format(
+                "Configuration startup failed stage={} error={}",
+                gc::loader::StartupConfigurationStageName(error.stage),
+                error.message);
             const auto modal = Utf8ToWideOrFallback(error.message);
             gc::system_path::PublishStartupFatal(
                 published,
-                log.str(),
+                log,
                 modal,
                 title,
                 exit_code);
@@ -190,14 +189,12 @@ namespace
         constexpr DWORD exit_code = 1;
         try
         {
-            std::ostringstream log;
-            log
-                << "Configuration startup role mismatch"
-                << " requested="
-                << gc::nesys_service::ProcessRoleName(role);
+            const auto log = std::format(
+                "Configuration startup role mismatch requested={}",
+                gc::nesys_service::ProcessRoleName(role));
             gc::system_path::PublishStartupFatal(
                 published,
-                log.str(),
+                log,
                 L"GCLoader prepared configuration for the wrong process role. "
                 L"The process was stopped before publishing feature state.",
                 L"GCLoader configuration error",
@@ -224,11 +221,11 @@ namespace
             L"GCLoader input setup error";
         try
         {
-            std::ostringstream log;
-            log << "Input polling configuration failed error=" << error;
+            const auto log = std::format(
+                "Input polling configuration failed error={}", error);
             gc::system_path::PublishStartupFatal(
                 published,
-                log.str(),
+                log,
                 Utf8ToWideOrFallback(error),
                 title,
                 exit_code);

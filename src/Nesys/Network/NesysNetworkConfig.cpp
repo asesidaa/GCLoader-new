@@ -1,6 +1,7 @@
 #include "Nesys/Network/NesysNetworkConfig.h"
 
 #include <charconv>
+#include <format>
 #include <system_error>
 
 namespace gc::nesys_service
@@ -58,10 +59,8 @@ namespace gc::nesys_service
 
     std::string FormatDottedDecimalIpv4(const Ipv4Octets& octets)
     {
-        return std::to_string(octets[0]) + "." +
-            std::to_string(octets[1]) + "." +
-            std::to_string(octets[2]) + "." +
-            std::to_string(octets[3]);
+        return std::format(
+            "{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]);
     }
 
     bool IsDottedDecimalIpv4(std::string_view text) noexcept

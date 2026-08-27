@@ -2,10 +2,10 @@
 
 #include <cassert>
 #include <exception>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <optional>
-#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -101,15 +101,14 @@ namespace gc::loader
             const system_path::RootPrepareError& error,
             std::string_view configured_path)
         {
-            std::ostringstream message;
-            message
-                << "System path preparation failed"
-                << " stage=" << RootPrepareStageName(error.stage)
-                << " configured_path='" << configured_path << "'"
-                << " failed_path='" << PathForDiagnostic(error.path) << "'"
-                << " error=" << error.error.value()
-                << " system_message='" << error.error.message() << "'";
-            return message.str();
+            return std::format(
+                "System path preparation failed stage={} configured_path='{}' "
+                "failed_path='{}' error={} system_message='{}'",
+                RootPrepareStageName(error.stage),
+                configured_path,
+                PathForDiagnostic(error.path),
+                error.error.value(),
+                error.error.message());
         }
 
         bool IsKnownRole(nesys_service::ProcessRole role) noexcept

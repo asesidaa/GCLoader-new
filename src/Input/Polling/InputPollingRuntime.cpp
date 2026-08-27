@@ -130,8 +130,8 @@ namespace gc::input
 
         std::string Win32Failure(const char* operation)
         {
-            return std::string(operation) + " failed with Win32 error " +
-                std::to_string(GetLastError());
+            return std::format(
+                "{} failed with Win32 error {}", operation, GetLastError());
         }
 
         std::string WideToUtf8(std::wstring_view value)

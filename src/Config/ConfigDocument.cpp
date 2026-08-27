@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -428,15 +429,12 @@ namespace gc::config
             ticks.LowPart = now.dwLowDateTime;
             ticks.HighPart = now.dwHighDateTime;
 
-            std::wstring name = config_path.filename().native();
-            name += L".gcloader.";
-            name += std::to_wstring(GetCurrentProcessId());
-            name += L".";
-            name += std::to_wstring(ticks.QuadPart);
-            name += L".";
-            name += std::to_wstring(
+            const auto name = std::format(
+                L"{}.gcloader.{}.{}.{}.tmp",
+                config_path.filename().native(),
+                GetCurrentProcessId(),
+                ticks.QuadPart,
                 sequence.fetch_add(1, std::memory_order_relaxed));
-            name += L".tmp";
             return config_path.parent_path() / name;
         }
 
@@ -501,9 +499,10 @@ namespace gc::config
                 {
                     return {};
                 }
-                return std::unexpected(
-                    "ReplaceFileW failed with Win32 error " +
-                    std::to_string(GetLastError()));
+                const auto win32_error = GetLastError();
+                return std::unexpected(std::format(
+                    "ReplaceFileW failed with Win32 error {}",
+                    win32_error));
             }
             catch (const std::exception& error)
             {

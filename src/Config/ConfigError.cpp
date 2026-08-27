@@ -1,6 +1,7 @@
 #include "Config/ConfigError.h"
 
-#include <sstream>
+#include <format>
+#include <iterator>
 #include <utility>
 
 namespace gc::config
@@ -32,7 +33,7 @@ namespace gc::config
 
     std::string ConfigPath::Render() const
     {
-        std::ostringstream rendered;
+        std::string rendered;
         bool first_field = true;
         for (const auto& segment : segments_)
         {
@@ -40,31 +41,37 @@ namespace gc::config
             {
                 if (!first_field)
                 {
-                    rendered << '.';
+                    rendered.push_back('.');
                 }
-                rendered << *field;
+                rendered.append(*field);
                 first_field = false;
             }
             else
             {
-                rendered << '[' << std::get<std::size_t>(segment) << ']';
+                std::format_to(
+                    std::back_inserter(rendered),
+                    "[{}]",
+                    std::get<std::size_t>(segment));
             }
         }
-        return rendered.str();
+        return rendered;
     }
 
     std::string FormatConfigErrors(std::span<const ConfigError> errors)
     {
-        std::ostringstream rendered;
+        std::string rendered;
         for (std::size_t index = 0; index < errors.size(); ++index)
         {
             if (index != 0)
             {
-                rendered << '\n';
+                rendered.push_back('\n');
             }
-            rendered << errors[index].path.Render()
-                << ": " << errors[index].message;
+            std::format_to(
+                std::back_inserter(rendered),
+                "{}: {}",
+                errors[index].path.Render(),
+                errors[index].message);
         }
-        return rendered.str();
+        return rendered;
     }
 } // namespace gc::config

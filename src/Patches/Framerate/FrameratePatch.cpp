@@ -23,7 +23,6 @@
 #include <format>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -1086,9 +1085,9 @@ namespace gc::framerate
                 return std::nullopt;
             }
 
-            std::array <
-        char,
-                kMaximumMovieClipInstanceNameBytes > instance_name{};
+            std::array<
+                char,
+                kMaximumMovieClipInstanceNameBytes> instance_name{};
             std::size_t instance_name_length{};
             if (!ReadCStringSafe(
                 instance_name_address,
@@ -1113,9 +1112,9 @@ namespace gc::framerate
                 return std::nullopt;
             }
 
-            std::array <
-        char,
-                kMaximumMovieClipInstanceNameBytes > owner_name{};
+            std::array<
+                char,
+                kMaximumMovieClipInstanceNameBytes> owner_name{};
             std::size_t owner_name_length{};
             if (!ReadCStringSafe(
                 owner_name_address,
@@ -1979,16 +1978,17 @@ namespace gc::framerate
         {
             try
             {
-                std::ostringstream stream;
-                stream << "FrameratePatch: external cap validated"
-                    << " target_fps=" << observation.target_fps
-                    << " measured_fps=" << observation.measured_fps
-                    << " relative_error=" << observation.relative_error
-                    << " interval_count=" << observation.interval_count
-                    << " matching_windows=3";
+                const auto message = std::format(
+                    "FrameratePatch: external cap validated target_fps={} "
+                    "measured_fps={:.6g} relative_error={:.6g} "
+                    "interval_count={} matching_windows=3",
+                    observation.target_fps,
+                    observation.measured_fps,
+                    observation.relative_error,
+                    observation.interval_count);
                 if (g_runtime->platform.log_info != nullptr)
                 {
-                    g_runtime->platform.log_info(stream.str().c_str());
+                    g_runtime->platform.log_info(message.c_str());
                 }
             }
             catch (...)
@@ -2244,11 +2244,11 @@ namespace gc::framerate
 
         void FatalInstallPlanFailure(FrameratePatchPlanError error) noexcept
         {
-            std::ostringstream detail;
-            detail << "direct patch plan error=" << PatchPlanErrorName(error)
-                << "; executable memory was not changed";
+            const auto detail = std::format(
+                "direct patch plan error={}; executable memory was not changed",
+                PatchPlanErrorName(error));
             ReportFramerateInitializationFailure(
-                detail.str(),
+                detail,
                 g_runtime->fatal_published,
                 g_runtime->platform);
         }
@@ -2256,20 +2256,19 @@ namespace gc::framerate
         void FatalTransactionFailure(
             const FramerateInstallError& error) noexcept
         {
-            std::ostringstream detail;
-            detail << "transaction stage=" << InstallStageName(error.stage)
-                << " name="
-                << (error.operation_name != nullptr
-                        ? error.operation_name
-                        : "<unnamed>")
-                << " index=" << error.operation_index
-                << " rollback_attempted="
-                << (error.rollback_attempted ? "true" : "false")
-                << " rollback_complete="
-                << (error.rollback_complete ? "true" : "false");
-            PLOG_ERROR << "FrameratePatch: " << detail.str();
+            const auto detail = std::format(
+                "transaction stage={} name={} index={} rollback_attempted={} "
+                "rollback_complete={}",
+                InstallStageName(error.stage),
+                error.operation_name != nullptr
+                    ? error.operation_name
+                    : "<unnamed>",
+                error.operation_index,
+                error.rollback_attempted,
+                error.rollback_complete);
+            PLOG_ERROR << "FrameratePatch: " << detail;
             ReportFramerateInitializationFailure(
-                detail.str(),
+                detail,
                 g_runtime->fatal_published,
                 g_runtime->platform);
         }

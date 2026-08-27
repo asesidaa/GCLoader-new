@@ -8,8 +8,7 @@
 #include <dxgi.h>
 
 #include <cstdint>
-#include <iomanip>
-#include <sstream>
+#include <format>
 #include <utility>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
@@ -18,33 +17,31 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
     WPARAM wparam,
     LPARAM lparam);
 
-namespace {
-
-std::string Win32Failure(const char* operation)
+namespace
 {
-    return std::string(operation) + " failed with Win32 error " +
-        std::to_string(GetLastError());
-}
-
-std::string HresultFailure(const char* operation, HRESULT result)
-{
-    std::ostringstream message;
-    message << operation << " failed with HRESULT 0x"
-            << std::hex << std::uppercase
-            << static_cast<std::uint32_t>(result);
-    return message.str();
-}
-
-template <typename Interface>
-void Release(Interface*& value) noexcept
-{
-    if (value != nullptr)
+    std::string Win32Failure(const char* operation)
     {
-        value->Release();
-        value = nullptr;
+        return std::format(
+            "{} failed with Win32 error {}", operation, GetLastError());
     }
-}
 
+    std::string HresultFailure(const char* operation, HRESULT result)
+    {
+        return std::format(
+            "{} failed with HRESULT 0x{:X}",
+            operation,
+            static_cast<std::uint32_t>(result));
+    }
+
+    template <typename Interface>
+    void Release(Interface*& value) noexcept
+    {
+        if (value != nullptr)
+        {
+            value->Release();
+            value = nullptr;
+        }
+    }
 } // namespace
 
 Win32D3D11Host::~Win32D3D11Host()
@@ -71,7 +68,8 @@ std::expected<void, std::string> Win32D3D11Host::Open(
     message_context_ = context;
     quit_requested_ = false;
     closing_ = false;
-    class_name_ = L"GCLoader.ConfigGUI." + std::to_wstring(
+    class_name_ = std::format(
+        L"GCLoader.ConfigGUI.{}",
         reinterpret_cast<std::uintptr_t>(this));
 
     WNDCLASSEXW window_class{
@@ -451,6 +449,6 @@ void Win32D3D11Host::ApplyDeferredResize() noexcept
     resize_height_ = 0;
     if (SUCCEEDED(result))
     {
-        (void) CreateRenderTarget();
+        (void)CreateRenderTarget();
     }
 }
