@@ -1,4 +1,6 @@
 add_library(gc_asio STATIC
+        AsioLogicalTimeline.cpp
+        AsioSubmittedOutputTail.cpp
         AsioBufferRules.cpp
         AsioCallbackRuntime.cpp
         AsioCapabilityProbe.cpp
@@ -19,6 +21,7 @@ target_include_directories(gc_asio PUBLIC
 )
 target_link_libraries(gc_asio PUBLIC
         gc_asio_sdk
+        gc_timing
         ole32
         advapi32
         avrt

@@ -1,3 +1,15 @@
+add_executable(gc_asio_logical_timeline_tests
+        Audio/Asio/AsioLogicalTimelineTests.cpp
+)
+target_link_libraries(gc_asio_logical_timeline_tests PRIVATE
+        gc_asio
+)
+
+add_test(
+        NAME AsioLogicalTimeline
+        COMMAND gc_asio_logical_timeline_tests
+)
+
 add_executable(gc_exact_asio_clock_tests
         Audio/Asio/ExactAsioClockTests.cpp
 )
