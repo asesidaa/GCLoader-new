@@ -291,11 +291,13 @@ namespace gc::audio
         IAsioBlockRenderer& renderer,
         AsioLegacyPositionActions legacy_actions,
         const AsioCallbackRuntimeActions& runtime_actions,
+        const std::uint32_t expected_sample_rate,
         std::uint64_t qpc_frequency,
         std::uint64_t expected_period_ns) noexcept
         : renderer_(&renderer),
           legacy_actions_(legacy_actions),
           runtime_actions_(runtime_actions),
+          expected_sample_rate_(expected_sample_rate),
           qpc_frequency_(qpc_frequency),
           expected_period_ns_(expected_period_ns),
           early_interval_threshold_ns_(expected_period_ns / 2),
@@ -360,6 +362,7 @@ namespace gc::audio
                 renderer,
                 legacy_actions,
                 runtime_actions,
+                timing_config.sample_rate,
                 qpc_frequency,
                 expected_period_ns));
         if (!runtime)
@@ -748,7 +751,8 @@ namespace gc::audio
         }
         else if ((time->timeInfo.flags & kSampleRateValid) != 0 &&
             (!std::isfinite(time->timeInfo.sampleRate) ||
-                time->timeInfo.sampleRate != 48'000.0))
+                time->timeInfo.sampleRate !=
+                static_cast<double>(expected_sample_rate_)))
         {
             RecordSampleRateChange(time->timeInfo.sampleRate);
             validation_failure = AsioFailureStage::runtime_clock;

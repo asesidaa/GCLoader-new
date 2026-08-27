@@ -11,57 +11,88 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <variant>
 
-namespace gc::audio {
+namespace gc::audio
+{
+    struct AsioAdoptCurrentRate final
+    {
+    };
 
-class AsioSession final {
-public:
-    static std::expected<std::unique_ptr<AsioSession>, AsioFailure>
-    Prepare(
-        AsioDriverRegistration registration,
-        std::unique_ptr<IAsioDriver> driver,
-        const AsioStreamRequest& request,
-        HWND system_reference,
-        AsioProbeMode mode,
-        bool restore_sample_rate) noexcept;
+    struct AsioRequireFrozenRate final
+    {
+        std::uint32_t sample_rate{};
+    };
 
-    ~AsioSession();
-    AsioSession(const AsioSession&) = delete;
-    AsioSession& operator=(const AsioSession&) = delete;
+    using AsioSampleRatePolicy =
+    std::variant<AsioAdoptCurrentRate, AsioRequireFrozenRate>;
 
-    [[nodiscard]] std::expected<void, AsioFailure>
-    CreateOutputBuffers(ASIOCallbacks* callbacks) noexcept;
-    [[nodiscard]] std::expected<void, AsioFailure> Start() noexcept;
-    [[nodiscard]] std::expected<void, AsioFailure> Stop() noexcept;
-    [[nodiscard]] std::expected<void, AsioFailure> Close() noexcept;
+    struct AsioSessionPreparationFailure final
+    {
+        AsioFailure failure;
+        bool cleanup_complete{};
+    };
 
-    [[nodiscard]] const AsioCapabilityReport& report() const noexcept;
-    [[nodiscard]] std::span<ASIOBufferInfo> buffers() noexcept;
-    [[nodiscard]] IAsioDriver& driver() noexcept;
+    struct AsioSessionCleanupReport final
+    {
+        bool stop_complete{};
+        bool buffers_disposed{};
+        bool sample_rate_restoration_attempted{};
+        bool sample_rate_restored{};
+    };
 
-private:
-    AsioSession(
-        AsioDriverRegistration registration,
-        std::unique_ptr<IAsioDriver> driver,
-        bool restore_sample_rate) noexcept;
+    class AsioSession final
+    {
+    public:
+        static std::expected<std::unique_ptr<AsioSession>,
+                             AsioSessionPreparationFailure>
+        Prepare(
+            AsioDriverRegistration registration,
+            std::unique_ptr<IAsioDriver> driver,
+            const AsioStreamRequest& request,
+            HWND system_reference,
+            AsioProbeMode mode,
+            AsioSampleRatePolicy sample_rate_policy) noexcept;
 
-    [[nodiscard]] std::expected<void, AsioFailure> PrepareDriver(
-        const AsioStreamRequest& request,
-        HWND system_reference,
-        AsioProbeMode mode);
-    [[nodiscard]] std::expected<void, AsioFailure>
-    RequireCreatingThread() const;
+        ~AsioSession();
+        AsioSession(const AsioSession&) = delete;
+        AsioSession& operator=(const AsioSession&) = delete;
 
-    AsioCapabilityReport report_;
-    std::unique_ptr<IAsioDriver> driver_;
-    std::array<ASIOBufferInfo, 2> buffers_{};
-    DWORD creating_thread_id_{};
-    bool restore_sample_rate_{};
-    bool sample_rate_changed_{};
-    bool buffers_created_{};
-    bool started_{};
-    bool closed_{};
-    std::optional<AsioFailure> cleanup_failure_;
-};
+        [[nodiscard]] std::expected<void, AsioFailure>
+        CreateOutputBuffers(ASIOCallbacks* callbacks) noexcept;
+        [[nodiscard]] std::expected<void, AsioFailure> Start() noexcept;
+        [[nodiscard]] std::expected<void, AsioFailure> Stop() noexcept;
+        [[nodiscard]] std::expected<void, AsioFailure> Close() noexcept;
 
+        [[nodiscard]] const AsioCapabilityReport& report() const noexcept;
+        [[nodiscard]] const AsioSessionCleanupReport&
+        cleanup_report() const noexcept;
+        [[nodiscard]] std::span<ASIOBufferInfo> buffers() noexcept;
+        [[nodiscard]] IAsioDriver& driver() noexcept;
+
+    private:
+        AsioSession(
+            AsioDriverRegistration registration,
+            std::unique_ptr<IAsioDriver> driver,
+            AsioSampleRatePolicy sample_rate_policy) noexcept;
+
+        [[nodiscard]] std::expected<void, AsioFailure> PrepareDriver(
+            const AsioStreamRequest& request,
+            HWND system_reference,
+            AsioProbeMode mode);
+        [[nodiscard]] std::expected<void, AsioFailure>
+        RequireCreatingThread() const;
+
+        AsioCapabilityReport report_;
+        std::unique_ptr<IAsioDriver> driver_;
+        std::array<ASIOBufferInfo, 2> buffers_{};
+        DWORD creating_thread_id_{};
+        AsioSampleRatePolicy sample_rate_policy_;
+        std::optional<ASIOSampleRate> sample_rate_to_restore_;
+        AsioSessionCleanupReport cleanup_report_{};
+        bool buffers_created_{};
+        bool started_{};
+        bool closed_{};
+        std::optional<AsioFailure> cleanup_failure_;
+    };
 } // namespace gc::audio

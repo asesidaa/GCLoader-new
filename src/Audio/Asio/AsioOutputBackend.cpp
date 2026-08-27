@@ -52,7 +52,31 @@ namespace gc::audio
 
             constexpr std::array<DWORD, 2> kRecoveryRetryDelaysMs{1'000, 2'000};
             constexpr std::uint64_t kMaximumRecoveryAttempts = 3;
-            constexpr std::uint64_t kOutputFramesPerMillisecond = 48;
+
+            enum class PhysicalSessionPurpose : std::uint8_t
+            {
+                InitialStartup,
+                FocusRecovery,
+            };
+
+            struct AsioLogicalOutputContract final
+            {
+                AsioDriverRegistration registration;
+                std::uint32_t sample_rate{};
+                std::uint32_t period_frames{};
+                std::uint32_t output_base_channel{};
+                std::array<ASIOSampleType, 2> channel_types{};
+                std::uint32_t output_latency_frames{};
+                bool output_ready_supported{};
+            };
+
+            bool SameDriverRegistration(
+                const AsioDriverRegistration& left,
+                const AsioDriverRegistration& right) noexcept
+            {
+                return left.registry_name == right.registry_name &&
+                    InlineIsEqualGUID(left.clsid, right.clsid) != FALSE;
+            }
 
             HRESULT ProductionInitializeCom(void*, DWORD coinit_flags) noexcept
             {
@@ -531,8 +555,7 @@ namespace gc::audio
                       BoundedDeadline(startup_clock_timeout_ms)),
                   enable_absolute_time_judgement_(
                       enable_absolute_time_judgement),
-                  actions_(actions),
-                  logical_render_sequencer_(request_.buffer_frames, 48'000)
+                  actions_(actions)
             {
             }
 
@@ -718,11 +741,17 @@ namespace gc::audio
                 AsioFailure failure;
             };
 
-            static PhysicalPreparationFailure RetryablePreparationFailure(
-                AsioFailure failure) noexcept
+            static PhysicalPreparationFailure PreStartPreparationFailure(
+                const PhysicalSessionPurpose purpose,
+                AsioFailure failure,
+                const bool cleanup_complete = true) noexcept
             {
                 return {
-                    .kind = PhysicalPreparationFailureKind::retryable_before_start,
+                    .kind = purpose == PhysicalSessionPurpose::FocusRecovery &&
+                            cleanup_complete
+                                ? PhysicalPreparationFailureKind::
+                                retryable_before_start
+                                : PhysicalPreparationFailureKind::fatal,
                     .failure = std::move(failure),
                 };
             }
@@ -894,30 +923,8 @@ namespace gc::audio
                         timer_period_active_ = true;
                     }
 
-                    auto clock = std::make_unique<AsioPresentedClockPublication>(
-                        AsioClockNowActions{
-                            actions_.context,
-                            actions_.time_get_time_ms,
-                        });
-                    presented_clock_ = clock.get();
-                    ma_result mixer_result = MA_ERROR;
-                    render_core_ = AudioRenderCore::Create(
-                        request_.buffer_frames,
-                        48'000,
-                        std::move(mixer_allocations_),
-                        std::move(clock),
-                        &mixer_result);
-                    if (render_core_ == nullptr)
-                    {
-                        presented_clock_ = nullptr;
-                        return std::unexpected(Failure(
-                            AsioFailureStage::render_core,
-                            "Could not create the preallocated ASIO render core",
-                            AsioResultDomain::none,
-                            mixer_result));
-                    }
-
-                    auto prepared = PreparePhysicalSession();
+                    auto prepared = PreparePhysicalSession(
+                        PhysicalSessionPurpose::InitialStartup);
                     if (!prepared)
                     {
                         return std::unexpected(
@@ -930,7 +937,9 @@ namespace gc::audio
                     endpoint_buffer_frames_.store(
                         request_.buffer_frames,
                         std::memory_order_release);
-                    output_sample_rate_.store(48'000, std::memory_order_release);
+                    output_sample_rate_.store(
+                        logical_output_sample_rate_,
+                        std::memory_order_release);
                     return {};
                 }
                 catch (const std::bad_alloc&)
@@ -955,7 +964,8 @@ namespace gc::audio
             }
 
             std::expected<void, PhysicalPreparationFailure>
-            PreparePhysicalSession() noexcept
+            PreparePhysicalSession(
+                const PhysicalSessionPurpose purpose) noexcept
             {
                 try
                 {
@@ -971,14 +981,33 @@ namespace gc::audio
                         *registry_, request_.driver_name);
                     if (!registration)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(registration.error())));
                     }
                     auto driver = factory_->Create(registration->clsid);
                     if (!driver)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(driver.error())));
+                    }
+
+                    AsioSampleRatePolicy sample_rate_policy{
+                        AsioAdoptCurrentRate{}
+                    };
+                    if (purpose == PhysicalSessionPurpose::FocusRecovery)
+                    {
+                        if (logical_output_sample_rate_ == 0)
+                        {
+                            return std::unexpected(FatalPreparationFailure(
+                                Failure(
+                                    AsioFailureStage::protocol,
+                                    "ASIO recovery requires a frozen logical sample rate")));
+                        }
+                        sample_rate_policy = AsioRequireFrozenRate{
+                            logical_output_sample_rate_
+                        };
                     }
 
                     auto prepared = AsioSession::Prepare(
@@ -987,13 +1016,88 @@ namespace gc::audio
                         request_,
                         game_window_,
                         AsioProbeMode::validate,
-                        true);
+                        std::move(sample_rate_policy));
                     if (!prepared)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
-                            std::move(prepared.error())));
+                        auto preparation_failure =
+                            std::move(prepared.error());
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
+                            std::move(preparation_failure.failure),
+                            preparation_failure.cleanup_complete));
                     }
                     session_ = std::move(*prepared);
+
+                    const double reported_sample_rate =
+                        session_->report().sample_rate;
+                    if (!std::isfinite(reported_sample_rate) ||
+                        reported_sample_rate <= 0.0 ||
+                        std::trunc(reported_sample_rate) !=
+                        reported_sample_rate ||
+                        reported_sample_rate > static_cast<double>(
+                            (std::numeric_limits<
+                                std::uint32_t>::max)()))
+                    {
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
+                            Failure(
+                                AsioFailureStage::sample_rate,
+                                "Prepared ASIO session has an invalid whole-Hz sample rate")));
+                    }
+                    const auto session_sample_rate =
+                        static_cast<std::uint32_t>(reported_sample_rate);
+
+                    if (purpose == PhysicalSessionPurpose::InitialStartup)
+                    {
+                        if (logical_output_sample_rate_ != 0 ||
+                            render_core_ != nullptr ||
+                            logical_render_sequencer_ != nullptr)
+                        {
+                            return std::unexpected(FatalPreparationFailure(
+                                Failure(
+                                    AsioFailureStage::protocol,
+                                    "ASIO logical rendering may be initialized only once")));
+                        }
+                        logical_output_sample_rate_ = session_sample_rate;
+                        logical_render_sequencer_ =
+                            std::make_unique<AsioLogicalRenderSequencer>(
+                                request_.buffer_frames,
+                                logical_output_sample_rate_);
+
+                        auto clock =
+                            std::make_unique<AsioPresentedClockPublication>(
+                                AsioClockNowActions{
+                                    actions_.context,
+                                    actions_.time_get_time_ms,
+                                });
+                        presented_clock_ = clock.get();
+                        ma_result mixer_result = MA_ERROR;
+                        render_core_ = AudioRenderCore::Create(
+                            request_.buffer_frames,
+                            logical_output_sample_rate_,
+                            std::move(mixer_allocations_),
+                            std::move(clock),
+                            &mixer_result);
+                        if (render_core_ == nullptr)
+                        {
+                            presented_clock_ = nullptr;
+                            return std::unexpected(FatalPreparationFailure(
+                                Failure(
+                                    AsioFailureStage::render_core,
+                                    "Could not create the preallocated ASIO render core",
+                                    AsioResultDomain::none,
+                                    mixer_result)));
+                        }
+                    }
+                    else if (session_sample_rate !=
+                        logical_output_sample_rate_ ||
+                        render_core_ == nullptr ||
+                        logical_render_sequencer_ == nullptr)
+                    {
+                        return std::unexpected(FatalPreparationFailure(Failure(
+                            AsioFailureStage::protocol,
+                            "ASIO recovery did not preserve initialized logical rendering")));
+                    }
 
                     AsioLegacyPositionActions legacy{
                         this,
@@ -1002,35 +1106,43 @@ namespace gc::audio
                     auto callbacks = AsioCallbackRuntime::Prepare(
                         *this,
                         legacy,
-                        {request_.buffer_frames, 48'000},
+                        {
+                            request_.buffer_frames,
+                            logical_output_sample_rate_
+                        },
                         actions_.callback_runtime_actions);
                     if (!callbacks)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(callbacks.error())));
                     }
                     callback_runtime_ = std::move(*callbacks);
                     if (auto installed = callback_runtime_->Install(); !installed)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(installed.error())));
                     }
                     if (auto buffers = session_->CreateOutputBuffers(
                             AsioCallbackRuntime::Callbacks());
                         !buffers)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(buffers.error())));
                     }
                     if (auto views = ConfigureDriverBuffers(); !views)
                     {
-                        return std::unexpected(RetryablePreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(views.error())));
                     }
                     if (auto contract = EstablishOrValidatePhysicalContract();
                         !contract)
                     {
-                        return std::unexpected(FatalPreparationFailure(
+                        return std::unexpected(PreStartPreparationFailure(
+                            purpose,
                             std::move(contract.error())));
                     }
                     return {};
@@ -1061,7 +1173,8 @@ namespace gc::audio
             {
                 try
                 {
-                    if (session_ == nullptr || callback_runtime_ == nullptr)
+                    if (session_ == nullptr || callback_runtime_ == nullptr ||
+                        logical_render_sequencer_ == nullptr)
                     {
                         return std::unexpected(Failure(
                             AsioFailureStage::protocol,
@@ -1075,7 +1188,7 @@ namespace gc::audio
                     handoff_physical_session_generation_.store(
                         0, std::memory_order_release);
                     const auto physical_generation =
-                        logical_render_sequencer_.BeginPhysicalSession();
+                        logical_render_sequencer_->BeginPhysicalSession();
                     if (!physical_generation)
                     {
                         return std::unexpected(Failure(
@@ -1119,10 +1232,20 @@ namespace gc::audio
                 const auto& report = session_->report();
                 if (physical_contract_established_)
                 {
-                    if (report.sample_rate != 48'000.0 ||
-                        report.effective_buffer_frames != request_.buffer_frames ||
-                        report.output_latency_frames != logical_output_latency_frames_ ||
-                        channel_types_ != logical_channel_types_)
+                    if (!SameDriverRegistration(
+                            report.registration,
+                            logical_contract_.registration) ||
+                        report.sample_rate != static_cast<double>(
+                            logical_contract_.sample_rate) ||
+                        report.effective_buffer_frames !=
+                        logical_contract_.period_frames ||
+                        report.selected_base_channel !=
+                        logical_contract_.output_base_channel ||
+                        report.output_latency_frames !=
+                        logical_contract_.output_latency_frames ||
+                        report.output_ready_supported !=
+                        logical_contract_.output_ready_supported ||
+                        channel_types_ != logical_contract_.channel_types)
                     {
                         return std::unexpected(Failure(
                             AsioFailureStage::protocol,
@@ -1132,7 +1255,15 @@ namespace gc::audio
                 }
 
                 logical_output_latency_frames_ = report.output_latency_frames;
-                logical_channel_types_ = channel_types_;
+                logical_contract_ = {
+                    .registration = report.registration,
+                    .sample_rate = logical_output_sample_rate_,
+                    .period_frames = report.effective_buffer_frames,
+                    .output_base_channel = report.selected_base_channel,
+                    .channel_types = channel_types_,
+                    .output_latency_frames = report.output_latency_frames,
+                    .output_ready_supported = report.output_ready_supported,
+                };
                 if (enable_absolute_time_judgement_)
                 {
                     const auto callback = callback_runtime_->Snapshot();
@@ -1148,7 +1279,7 @@ namespace gc::audio
                     }
                     exact_clock_ = ExactAsioClock::Create(
                         endpoint_generation,
-                        48'000,
+                        logical_output_sample_rate_,
                         static_cast<std::int64_t>(callback.qpc_frequency),
                         request_.buffer_frames,
                         logical_output_latency_frames_);
@@ -1836,7 +1967,8 @@ namespace gc::audio
                                 0,
                                 nullptr);
 
-                            auto prepared = PreparePhysicalSession();
+                            auto prepared = PreparePhysicalSession(
+                                PhysicalSessionPurpose::FocusRecovery);
                             if (!prepared)
                             {
                                 auto preparation_failure =
@@ -2232,7 +2364,7 @@ namespace gc::audio
                     active_physical_session_generation_.exchange(
                         0, std::memory_order_acq_rel);
                 if (physical_generation != 0 &&
-                    !logical_render_sequencer_.EndPhysicalSession(
+                    !logical_render_sequencer_->EndPhysicalSession(
                         physical_generation))
                 {
                     record_failure(Failure(
@@ -2326,9 +2458,13 @@ namespace gc::audio
             std::optional<LogicalRenderResult> RenderLogicalBlock(
                 const AsioLogicalRenderPlan& plan) noexcept
             {
-                if (render_core_ == nullptr)
+                if (render_core_ == nullptr ||
+                    logical_render_sequencer_ == nullptr)
                 {
-                    logical_render_sequencer_.Abandon(plan);
+                    if (logical_render_sequencer_ != nullptr)
+                    {
+                        logical_render_sequencer_->Abandon(plan);
+                    }
                     return std::nullopt;
                 }
                 const auto block = render_core_->Render(plan.timeline);
@@ -2375,10 +2511,17 @@ namespace gc::audio
 
             DWORD SilentPollIntervalMs() const noexcept
             {
+                if (logical_output_sample_rate_ == 0)
+                {
+                    return 1;
+                }
+                constexpr std::uint64_t milliseconds_per_second = 1'000;
+                const auto scaled_frames =
+                    static_cast<std::uint64_t>(request_.buffer_frames) *
+                    milliseconds_per_second;
                 const auto milliseconds =
-                    (static_cast<std::uint64_t>(request_.buffer_frames) +
-                        kOutputFramesPerMillisecond - 1) /
-                    kOutputFramesPerMillisecond;
+                    (scaled_frames + logical_output_sample_rate_ - 1) /
+                    logical_output_sample_rate_;
                 return static_cast<DWORD>((std::max)(
                     std::uint64_t{1},
                     (std::min)(milliseconds,
@@ -2389,7 +2532,7 @@ namespace gc::audio
             {
                 // This clock advances an already-confirmed background interval; it is
                 // never used to infer whether the game owns the foreground.
-                const auto plan = logical_render_sequencer_.TryPlanDetached(
+                const auto plan = logical_render_sequencer_->TryPlanDetached(
                     actions_.time_get_time_ms(actions_.context));
                 if (!plan)
                 {
@@ -2419,7 +2562,7 @@ namespace gc::audio
                         : 0;
                 if (!PublishExactAnchor(*plan, presented, true))
                 {
-                    logical_render_sequencer_.Abandon(*plan);
+                    logical_render_sequencer_->Abandon(*plan);
                     return Failure(
                         AsioFailureStage::runtime_clock,
                         "ASIO exact clock rejected a detached continuity anchor");
@@ -2428,9 +2571,9 @@ namespace gc::audio
                     presented,
                     rendered->submitted_output_tail,
                     plan->system_time_ns);
-                if (!logical_render_sequencer_.Commit(*plan))
+                if (!logical_render_sequencer_->Commit(*plan))
                 {
-                    logical_render_sequencer_.Abandon(*plan);
+                    logical_render_sequencer_->Abandon(*plan);
                     return Failure(
                         AsioFailureStage::runtime_clock,
                         "ASIO detached logical render commit failed");
@@ -2501,7 +2644,7 @@ namespace gc::audio
                     active_physical_session_generation_.load(
                         std::memory_order_acquire);
                 const auto logical_plan =
-                    logical_render_sequencer_.TryPlanPhysical(
+                    logical_render_sequencer_->TryPlanPhysical(
                         physical_session_generation,
                         decision);
                 if (!logical_plan)
@@ -2551,9 +2694,9 @@ namespace gc::audio
                         logical.presented_output_frame,
                         rendered->submitted_output_tail,
                         logical.system_time_ns);
-                    if (!logical_render_sequencer_.Commit(*logical_plan))
+                    if (!logical_render_sequencer_->Commit(*logical_plan))
                     {
-                        logical_render_sequencer_.Abandon(*logical_plan);
+                        logical_render_sequencer_->Abandon(*logical_plan);
                         LatchRuntimeFault(AsioFailureStage::runtime_clock);
                         return;
                     }
@@ -2577,7 +2720,7 @@ namespace gc::audio
                 render_diagnostics_.RecordConversion(rendered->block, conversion);
                 if (!conversion.converted)
                 {
-                    logical_render_sequencer_.Abandon(*logical_plan);
+                    logical_render_sequencer_->Abandon(*logical_plan);
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(AsioFailureStage::conversion);
                     return;
@@ -2587,7 +2730,7 @@ namespace gc::audio
                     logical.presented_output_frame,
                     false))
                 {
-                    logical_render_sequencer_.Abandon(*logical_plan);
+                    logical_render_sequencer_->Abandon(*logical_plan);
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
@@ -2595,9 +2738,9 @@ namespace gc::audio
                 presented_clock_->Publish(
                     logical,
                     rendered->submitted_output_tail);
-                if (!logical_render_sequencer_.Commit(*logical_plan))
+                if (!logical_render_sequencer_->Commit(*logical_plan))
                 {
-                    logical_render_sequencer_.Abandon(*logical_plan);
+                    logical_render_sequencer_->Abandon(*logical_plan);
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
@@ -2774,7 +2917,9 @@ namespace gc::audio
                     consumed_focus_loss_generation_.load(
                         std::memory_order_relaxed),
                     .physical_session_generation =
-                    logical_render_sequencer_.physical_session_generation(),
+                    logical_render_sequencer_ != nullptr
+                        ? logical_render_sequencer_->physical_session_generation()
+                        : 0,
                     .session_releases =
                     session_releases_.load(std::memory_order_relaxed),
                     .recovery_attempts =
@@ -2886,9 +3031,10 @@ namespace gc::audio
             std::uint64_t exact_anchor_sequence_{};
             AsioPresentedClockPublication* presented_clock_{};
             AsioClockTracker clock_tracker_;
-            AsioLogicalRenderSequencer logical_render_sequencer_;
+            std::unique_ptr<AsioLogicalRenderSequencer>
+            logical_render_sequencer_;
+            AsioLogicalOutputContract logical_contract_{};
             std::array<ASIOSampleType, 2> channel_types_{};
-            std::array<ASIOSampleType, 2> logical_channel_types_{};
             std::array<std::array<std::span<std::byte>, 2>, 2> driver_buffers_{};
             AsioCallbackRuntimeSnapshot completed_callback_snapshot_{};
 
@@ -2915,6 +3061,7 @@ namespace gc::audio
             std::atomic_uint64_t handoff_physical_session_generation_{};
             std::atomic_uint64_t handoff_logical_render_origin_{};
             std::atomic_uint64_t handoff_physical_render_origin_{};
+            std::uint32_t logical_output_sample_rate_{};
             std::uint32_t logical_output_latency_frames_{};
             bool physical_contract_established_{};
             std::uint64_t previous_sample_position_{};
