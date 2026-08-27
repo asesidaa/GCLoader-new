@@ -126,6 +126,21 @@ runtime confirmation.
   `loader-service-log.txt` as process-specific evidence and state clearly which
   artifact was actually tested.
 
+## Process Lifecycle Safety
+
+- Never stop, terminate, kill, restart, close, or otherwise alter the lifetime
+  of any process, service, IDE, or application window unless the user
+  explicitly authorizes that exact process-lifecycle action.
+- Authorization to inspect a process or close an editor file/tab is not
+  authorization to close its hosting application.
+- If the requested MCP or IDE operation is unavailable, report the missing
+  capability and ask the user. Never invent a substitute using keystrokes, UI
+  automation, `Stop-Process`, `taskkill`, `TerminateProcess`, or equivalent
+  process/window controls.
+- More generally, if an operation is unclear or the required capability is not
+  documented and available, stop and ask the user explicitly before attempting
+  any workaround or alternative mechanism.
+
 ## Domain Terminology
 
 ### Processes and driver surface
