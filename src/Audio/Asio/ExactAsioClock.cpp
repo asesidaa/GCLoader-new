@@ -194,7 +194,7 @@ namespace gc::audio
     }
 
     ExactOutputClockResult ExactAsioClock::CountResult(
-        ExactOutputClockResult result) const noexcept
+        ExactOutputClockResult&& result) const noexcept
     {
         switch (result.status)
         {

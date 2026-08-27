@@ -67,7 +67,7 @@ namespace gc::audio
             return {};
         }
 
-        std::unique_ptr < AsioLogicalTimeline > timeline{
+        std::unique_ptr<AsioLogicalTimeline> timeline{
             new(std::nothrow)
             AsioLogicalTimeline(origin_raw_ms, output_sample_rate)
         };
@@ -78,7 +78,7 @@ namespace gc::audio
 
         try
         {
-            return std::shared_ptr < AsioLogicalTimeline >
+            return std::shared_ptr<AsioLogicalTimeline>
             {
                 std::move(timeline)
             };
@@ -172,7 +172,7 @@ namespace gc::audio
             return std::unexpected(
                 AsioLogicalTimelineFailure::TimestampAmbiguous);
         }
-        const std::int32_t signed_delta =
+        const auto signed_delta =
             std::bit_cast<std::int32_t>(wrapped_delta);
         return AddSignedDelta(snapshot->observed_unwrapped_ms, signed_delta);
     }

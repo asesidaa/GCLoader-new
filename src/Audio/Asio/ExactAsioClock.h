@@ -40,7 +40,7 @@ namespace gc::audio
             std::uint32_t output_latency_frames) noexcept;
 
         [[nodiscard]] ExactOutputClockResult CountResult(
-            ExactOutputClockResult result) const noexcept;
+            ExactOutputClockResult&& result) const noexcept;
 
         std::uint64_t endpoint_generation_{};
         std::shared_ptr<const AsioLogicalTimeline> timeline_;

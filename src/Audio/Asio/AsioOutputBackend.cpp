@@ -1080,7 +1080,7 @@ namespace gc::audio
                         request_,
                         game_window_,
                         AsioProbeMode::validate,
-                        std::move(sample_rate_policy));
+                        sample_rate_policy);
                     if (!prepared)
                     {
                         auto preparation_failure =
