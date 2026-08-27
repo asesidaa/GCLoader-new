@@ -1700,12 +1700,44 @@ namespace gc::audio
                 }
                 const auto block = render_core_->Render(plan.timeline);
                 render_diagnostics_.RecordRender(block);
-                if (!logical_render_sequencer_.Commit(plan))
-                {
-                    logical_render_sequencer_.Abandon(plan);
-                    return std::nullopt;
-                }
                 return LogicalRenderResult{block, plan.submitted_output_tail};
+            }
+
+            bool PublishExactAnchor(
+                const AsioLogicalRenderPlan& plan,
+                const std::uint64_t presented_output_frame,
+                const bool detached) noexcept
+            {
+                if (!enable_absolute_time_judgement_)
+                {
+                    return true;
+                }
+                if (exact_clock_ == nullptr ||
+                    exact_endpoint_generation_ == 0 ||
+                    exact_anchor_sequence_ ==
+                    (std::numeric_limits<std::uint64_t>::max)())
+                {
+                    return false;
+                }
+
+                const auto next_sequence = exact_anchor_sequence_ + 1;
+                if (!exact_clock_->Publish({
+                    .sequence = next_sequence,
+                    .endpoint_generation = exact_endpoint_generation_,
+                    .presented_output_frame = presented_output_frame,
+                    .system_time_ns = plan.system_time_ns,
+                    .submitted_output_tail = plan.submitted_output_tail,
+                }))
+                {
+                    return false;
+                }
+                exact_anchor_sequence_ = next_sequence;
+                if (detached)
+                {
+                    SaturatingIncrementCounter(
+                        detached_exact_anchor_publications_);
+                }
+                return true;
             }
 
             DWORD SilentPollIntervalMs() const noexcept
@@ -1752,10 +1784,24 @@ namespace gc::audio
                         ? plan->timeline.output_frame_begin -
                         logical_output_latency_frames_
                         : 0;
+                if (!PublishExactAnchor(*plan, presented, true))
+                {
+                    logical_render_sequencer_.Abandon(*plan);
+                    return Failure(
+                        AsioFailureStage::runtime_clock,
+                        "ASIO exact clock rejected a detached continuity anchor");
+                }
                 presented_clock_->PublishContinuityAnchor(
                     presented,
                     rendered->submitted_output_tail,
                     plan->system_time_ns);
+                if (!logical_render_sequencer_.Commit(*plan))
+                {
+                    logical_render_sequencer_.Abandon(*plan);
+                    return Failure(
+                        AsioFailureStage::runtime_clock,
+                        "ASIO detached logical render commit failed");
+                }
                 SaturatingAddCounter(
                     silent_advance_frames_,
                     plan->timeline.discontinuity_frames +
@@ -1841,9 +1887,6 @@ namespace gc::audio
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
-                SaturatingAddCounter(
-                    render_gap_frames_,
-                    logical_plan->timeline.discontinuity_frames);
                 const AsioClockDecision logical{
                     .kind = decision.kind,
                     .presented_output_frame =
@@ -1859,6 +1902,15 @@ namespace gc::audio
                         logical.presented_output_frame,
                         rendered->submitted_output_tail,
                         logical.system_time_ns);
+                    if (!logical_render_sequencer_.Commit(*logical_plan))
+                    {
+                        logical_render_sequencer_.Abandon(*logical_plan);
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                        return;
+                    }
+                    SaturatingAddCounter(
+                        render_gap_frames_,
+                        logical_plan->timeline.discontinuity_frames);
                     SaturatingAddCounter(
                         silent_advance_frames_, request_.buffer_frames);
                     CallOutputReady();
@@ -1876,41 +1928,34 @@ namespace gc::audio
                 render_diagnostics_.RecordConversion(rendered->block, conversion);
                 if (!conversion.converted)
                 {
+                    logical_render_sequencer_.Abandon(*logical_plan);
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(AsioFailureStage::conversion);
                     return;
                 }
-                if (enable_absolute_time_judgement_)
+                if (!PublishExactAnchor(
+                    *logical_plan,
+                    logical.presented_output_frame,
+                    false))
                 {
-                    if (exact_clock_ == nullptr ||
-                        exact_endpoint_generation_ == 0 ||
-                        exact_anchor_sequence_ ==
-                        (std::numeric_limits<std::uint64_t>::max)())
-                    {
-                        ClearAsioBlock(request.buffer_index);
-                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
-                        return;
-                    }
-                    const auto next_sequence = exact_anchor_sequence_ + 1;
-                    if (!exact_clock_->Publish({
-                        .sequence = next_sequence,
-                        .endpoint_generation = exact_endpoint_generation_,
-                        .presented_output_frame =
-                        logical.presented_output_frame,
-                        .system_time_ns = logical.system_time_ns,
-                        .submitted_output_tail =
-                        rendered->submitted_output_tail,
-                    }))
-                    {
-                        ClearAsioBlock(request.buffer_index);
-                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
-                        return;
-                    }
-                    exact_anchor_sequence_ = next_sequence;
+                    logical_render_sequencer_.Abandon(*logical_plan);
+                    ClearAsioBlock(request.buffer_index);
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                    return;
                 }
                 presented_clock_->Publish(
                     logical,
                     rendered->submitted_output_tail);
+                if (!logical_render_sequencer_.Commit(*logical_plan))
+                {
+                    logical_render_sequencer_.Abandon(*logical_plan);
+                    ClearAsioBlock(request.buffer_index);
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                    return;
+                }
+                SaturatingAddCounter(
+                    render_gap_frames_,
+                    logical_plan->timeline.discontinuity_frames);
                 if (!CallOutputReady())
                 {
                     return;
@@ -2139,6 +2184,9 @@ namespace gc::audio
                     render.maximum_absolute_output_sample,
                     .qpc_frequency = callback.qpc_frequency,
                     .exact_anchor_publications = exact.publication_count,
+                    .detached_exact_anchor_publications =
+                    detached_exact_anchor_publications_.load(
+                        std::memory_order_relaxed),
                     .exact_resolved_queries = exact.resolved_queries,
                     .exact_pending_queries = exact.pending_queries,
                     .exact_temporarily_unavailable_queries =
@@ -2207,6 +2255,7 @@ namespace gc::audio
             std::atomic_uint64_t recovery_failures_{};
             std::atomic_uint64_t session_recoveries_{};
             std::atomic_uint64_t silent_advance_frames_{};
+            std::atomic_uint64_t detached_exact_anchor_publications_{};
             std::atomic_uint64_t pending_cursor_queries_{};
             std::atomic_uint64_t unmapped_cursor_failures_{};
             std::atomic_bool first_fault_claimed_{};

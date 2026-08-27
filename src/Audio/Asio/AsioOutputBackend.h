@@ -69,6 +69,7 @@ namespace gc::audio
         float maximum_absolute_output_sample{};
         std::uint64_t qpc_frequency{};
         std::uint64_t exact_anchor_publications{};
+        std::uint64_t detached_exact_anchor_publications{};
         std::uint64_t exact_resolved_queries{};
         std::uint64_t exact_pending_queries{};
         std::uint64_t exact_temporarily_unavailable_queries{};

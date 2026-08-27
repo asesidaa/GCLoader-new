@@ -757,6 +757,8 @@ namespace gc::audio
             stream
                 << " exact_anchor_publications="
                 << counters.exact_anchor_publications
+                << " detached_exact_anchor_publications="
+                << counters.detached_exact_anchor_publications
                 << " exact_resolved_queries=" << counters.exact_resolved_queries
                 << " exact_pending_queries=" << counters.exact_pending_queries
                 << " exact_temporarily_unavailable_queries="
