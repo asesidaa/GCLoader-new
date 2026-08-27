@@ -214,27 +214,18 @@ namespace gc::audio
             }
 
             const char* RuntimeFailureDetail(
-                AsioFailureStage stage,
-                const bool physical_session) noexcept
+                const AsioFailureStage stage) noexcept
             {
                 switch (stage)
                 {
                 case AsioFailureStage::runtime_clock:
-                    return physical_session
-                               ? "ASIO physical-session clock became invalid"
-                               : "ASIO logical presentation clock became invalid; restart required";
+                    return "ASIO runtime clock became invalid; restart required";
                 case AsioFailureStage::conversion:
-                    return physical_session
-                               ? "ASIO physical-session sample conversion failed"
-                               : "ASIO logical sample conversion failed; restart required";
+                    return "ASIO sample conversion failed; restart required";
                 case AsioFailureStage::output_ready:
-                    return physical_session
-                               ? "ASIO physical-session outputReady failed"
-                               : "ASIO outputReady failed; restart required";
+                    return "ASIO outputReady failed; restart required";
                 case AsioFailureStage::callback:
-                    return physical_session
-                               ? "ASIO physical-session callback contract failed"
-                               : "ASIO callback contract failed; restart required";
+                    return "ASIO callback contract failed; restart required";
                 case AsioFailureStage::stop:
                     return "ASIO stop failed during teardown";
                 case AsioFailureStage::dispose:
@@ -645,9 +636,7 @@ namespace gc::audio
                         {
                             *result = MA_INVALID_OPERATION;
                         }
-                        LatchRuntimeFault(
-                            RuntimeFaultScope::logical_engine,
-                            AsioFailureStage::runtime_clock);
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
                         return nullptr;
                     }
                 }
@@ -691,58 +680,39 @@ namespace gc::audio
             enum class StableRenderOutcome : std::uint8_t
             {
                 stable,
-                focus_lost,
                 shutdown,
             };
 
-            enum class PhysicalSessionStartupOutcome : std::uint8_t
+            enum class PhysicalPreparationFailureKind : std::uint8_t
             {
-                active,
-                focus_lost,
+                retryable_before_start,
+                fatal,
             };
 
-            enum class RuntimeFaultScope : std::uint8_t
+            struct PhysicalPreparationFailure final
             {
-                logical_engine,
-                physical_session,
-            };
-
-            struct ScopedRuntimeFailure final
-            {
-                RuntimeFaultScope scope{RuntimeFaultScope::logical_engine};
+                PhysicalPreparationFailureKind kind{
+                    PhysicalPreparationFailureKind::fatal
+                };
                 AsioFailure failure;
             };
 
-            static ScopedRuntimeFailure LogicalFailure(
+            static PhysicalPreparationFailure RetryablePreparationFailure(
                 AsioFailure failure) noexcept
             {
                 return {
-                    .scope = RuntimeFaultScope::logical_engine,
+                    .kind = PhysicalPreparationFailureKind::retryable_before_start,
                     .failure = std::move(failure),
                 };
             }
 
-            static ScopedRuntimeFailure PhysicalFailure(
+            static PhysicalPreparationFailure FatalPreparationFailure(
                 AsioFailure failure) noexcept
             {
                 return {
-                    .scope = RuntimeFaultScope::physical_session,
+                    .kind = PhysicalPreparationFailureKind::fatal,
                     .failure = std::move(failure),
                 };
-            }
-
-            static RuntimeFaultScope PlanFailureScope(
-                const AsioLogicalRenderPlanFailure failure) noexcept
-            {
-                switch (failure)
-                {
-                case AsioLogicalRenderPlanFailure::InvalidPhysicalSession:
-                case AsioLogicalRenderPlanFailure::InvalidClock:
-                case AsioLogicalRenderPlanFailure::CoordinateRegressed:
-                    return RuntimeFaultScope::physical_session;
-                default:
-                    return RuntimeFaultScope::logical_engine;
-                }
             }
 
             std::expected<void, AsioFailure> CreateEvents() noexcept
@@ -813,54 +783,29 @@ namespace gc::audio
                     return;
                 }
 
-                bool session_active =
-                    *initialized == PhysicalSessionStartupOutcome::active;
-                if (session_active)
+                auto stable = WaitForStableRender();
+                if (!stable || *stable == StableRenderOutcome::shutdown)
                 {
-                    auto stable = WaitForStableRender();
-                    if (!stable || *stable == StableRenderOutcome::shutdown)
+                    auto failure = !stable
+                                       ? std::move(stable.error())
+                                       : Failure(
+                                           AsioFailureStage::startup_clock,
+                                           "ASIO startup was cancelled before clock stability");
+                    if (const auto teardown_failure = TeardownOnControlThread())
                     {
-                        auto failure = !stable
-                                           ? std::move(stable.error().failure)
-                                           : Failure(
-                                               AsioFailureStage::startup_clock,
-                                               "ASIO startup was cancelled before clock stability");
-                        if (const auto teardown_failure = TeardownOnControlThread())
-                        {
-                            AppendSecondaryFailure(failure, *teardown_failure);
-                        }
-                        actions_.uninitialize_com(actions_.context);
-                        CompleteStartupFailure(std::move(failure));
-                        return;
+                        AppendSecondaryFailure(failure, *teardown_failure);
                     }
-                    session_active = *stable == StableRenderOutcome::stable;
+                    actions_.uninitialize_com(actions_.context);
+                    CompleteStartupFailure(std::move(failure));
+                    return;
                 }
 
                 committed_.store(true, std::memory_order_release);
                 observer_->StartupSucceeded(session_->report());
-                bool foreground_reported = true;
-                if (!session_active)
-                {
-                    foreground_reported = false;
-                    SaturatingIncrementCounter(foreground_losses_);
-                    observer_->SessionLifecycleChanged(
-                        AsioSessionLifecycleEvent::foreground_lost,
-                        0,
-                        nullptr);
-                    const auto release_failure = ClosePhysicalSession();
-                    SaturatingIncrementCounter(session_releases_);
-                    observer_->SessionLifecycleChanged(
-                        AsioSessionLifecycleEvent::session_released,
-                        0,
-                        release_failure ? &release_failure->failure : nullptr);
-                    ClearSessionFault();
-                }
                 startup_succeeded_.store(true, std::memory_order_release);
                 actions_.signal_event(actions_.context, startup_event_);
 
-                auto runtime_failure = MonitorCommittedRuntime(
-                    session_active,
-                    foreground_reported);
+                auto runtime_failure = MonitorCommittedRuntime(true, true);
                 const auto teardown_failure = TeardownOnControlThread();
                 if (!runtime_failure && HasPublishedFault())
                 {
@@ -892,7 +837,7 @@ namespace gc::audio
                 actions_.uninitialize_com(actions_.context);
             }
 
-            std::expected<PhysicalSessionStartupOutcome, AsioFailure>
+            std::expected<void, AsioFailure>
             InitializeBackend() noexcept
             {
                 try
@@ -951,17 +896,21 @@ namespace gc::audio
                             mixer_result));
                     }
 
-                    auto opened = OpenPhysicalSession();
-                    if (!opened)
+                    auto prepared = PreparePhysicalSession();
+                    if (!prepared)
                     {
                         return std::unexpected(
-                            std::move(opened.error().failure));
+                            std::move(prepared.error().failure));
+                    }
+                    if (auto started = StartPreparedPhysicalSession(); !started)
+                    {
+                        return started;
                     }
                     endpoint_buffer_frames_.store(
                         request_.buffer_frames,
                         std::memory_order_release);
                     output_sample_rate_.store(48'000, std::memory_order_release);
-                    return *opened;
+                    return {};
                 }
                 catch (const std::bad_alloc&)
                 {
@@ -984,14 +933,14 @@ namespace gc::audio
                 }
             }
 
-            std::expected<PhysicalSessionStartupOutcome, ScopedRuntimeFailure>
-            OpenPhysicalSession() noexcept
+            std::expected<void, PhysicalPreparationFailure>
+            PreparePhysicalSession() noexcept
             {
                 try
                 {
                     if (session_ != nullptr || callback_runtime_ != nullptr)
                     {
-                        return std::unexpected(LogicalFailure(Failure(
+                        return std::unexpected(FatalPreparationFailure(Failure(
                             AsioFailureStage::protocol,
                             "ASIO physical session must be closed before acquisition")));
                     }
@@ -1001,13 +950,13 @@ namespace gc::audio
                         *registry_, request_.driver_name);
                     if (!registration)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(registration.error())));
                     }
                     auto driver = factory_->Create(registration->clsid);
                     if (!driver)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(driver.error())));
                     }
 
@@ -1020,7 +969,7 @@ namespace gc::audio
                         true);
                     if (!prepared)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(prepared.error())));
                     }
                     session_ = std::move(*prepared);
@@ -1036,51 +985,77 @@ namespace gc::audio
                         actions_.callback_runtime_actions);
                     if (!callbacks)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(callbacks.error())));
                     }
                     callback_runtime_ = std::move(*callbacks);
                     if (auto installed = callback_runtime_->Install(); !installed)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(installed.error())));
                     }
                     if (auto buffers = session_->CreateOutputBuffers(
                             AsioCallbackRuntime::Callbacks());
                         !buffers)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(buffers.error())));
                     }
                     if (auto views = ConfigureDriverBuffers(); !views)
                     {
-                        return std::unexpected(PhysicalFailure(
+                        return std::unexpected(RetryablePreparationFailure(
                             std::move(views.error())));
                     }
                     if (auto contract = EstablishOrValidatePhysicalContract();
                         !contract)
                     {
-                        return std::unexpected(LogicalFailure(
+                        return std::unexpected(FatalPreparationFailure(
                             std::move(contract.error())));
                     }
-                    if (const auto advance_failure = AdvanceSilentRendering())
+                    return {};
+                }
+                catch (const std::bad_alloc&)
+                {
+                    return std::unexpected(FatalPreparationFailure(Failure(
+                        AsioFailureStage::render_core,
+                        "ASIO physical-session allocation failed")));
+                }
+                catch (const std::exception& error)
+                {
+                    return std::unexpected(FatalPreparationFailure(Failure(
+                        AsioFailureStage::protocol,
+                        "ASIO physical-session acquisition failed: " +
+                        std::string{error.what()})));
+                }
+                catch (...)
+                {
+                    return std::unexpected(FatalPreparationFailure(Failure(
+                        AsioFailureStage::protocol,
+                        "ASIO physical-session acquisition failed unexpectedly")));
+                }
+            }
+
+            std::expected<void, AsioFailure>
+            StartPreparedPhysicalSession() noexcept
+            {
+                try
+                {
+                    if (session_ == nullptr || callback_runtime_ == nullptr)
                     {
-                        return std::unexpected(LogicalFailure(*advance_failure));
-                    }
-                    if (!foreground_monitor_->snapshot().is_foreground)
-                    {
-                        return PhysicalSessionStartupOutcome::focus_lost;
+                        return std::unexpected(Failure(
+                            AsioFailureStage::protocol,
+                            "ASIO Start requires a prepared physical session"));
                     }
 
                     const auto physical_generation =
                         logical_render_sequencer_.BeginPhysicalSession();
                     if (!physical_generation)
                     {
-                        return std::unexpected(LogicalFailure(Failure(
+                        return std::unexpected(Failure(
                             AsioFailureStage::runtime_clock,
                             std::format(
                                 "Could not begin ASIO physical-session generation: {}",
-                                static_cast<unsigned>(physical_generation.error())))));
+                                static_cast<unsigned>(physical_generation.error()))));
                     }
                     active_physical_session_generation_.store(
                         *physical_generation, std::memory_order_release);
@@ -1092,29 +1067,22 @@ namespace gc::audio
                     if (auto started = session_->Start(); !started)
                     {
                         render_ready_.store(false, std::memory_order_release);
-                        return std::unexpected(PhysicalFailure(
-                            std::move(started.error())));
+                        return std::unexpected(std::move(started.error()));
                     }
-                    return PhysicalSessionStartupOutcome::active;
+                    return {};
                 }
                 catch (const std::bad_alloc&)
                 {
-                    return std::unexpected(LogicalFailure(Failure(
-                        AsioFailureStage::render_core,
-                        "ASIO physical-session allocation failed")));
-                }
-                catch (const std::exception& error)
-                {
-                    return std::unexpected(LogicalFailure(Failure(
-                        AsioFailureStage::protocol,
-                        "ASIO physical-session acquisition failed: " +
-                        std::string{error.what()})));
+                    return std::unexpected(Failure(
+                        AsioFailureStage::start,
+                        "ASIO Start diagnostics allocation failed"));
                 }
                 catch (...)
                 {
-                    return std::unexpected(LogicalFailure(Failure(
-                        AsioFailureStage::protocol,
-                        "ASIO physical-session acquisition failed unexpectedly")));
+                    render_ready_.store(false, std::memory_order_release);
+                    return std::unexpected(Failure(
+                        AsioFailureStage::start,
+                        "ASIO Start boundary failed unexpectedly"));
                 }
             }
 
@@ -1222,7 +1190,7 @@ namespace gc::audio
             }
 
             // ReSharper disable once CppMemberFunctionMayBeConst
-            std::expected<StableRenderOutcome, ScopedRuntimeFailure>
+            std::expected<StableRenderOutcome, AsioFailure>
             WaitForStableRender() noexcept
             {
                 const std::uint64_t started_ms =
@@ -1247,21 +1215,13 @@ namespace gc::audio
                     {
                         if (HasPublishedFault())
                         {
-                            if (!foreground_monitor_->snapshot().is_foreground)
-                            {
-                                return StableRenderOutcome::focus_lost;
-                            }
-                            return std::unexpected(BuildLatchedScopedFailure());
+                            return std::unexpected(BuildLatchedFailure());
                         }
                         return StableRenderOutcome::stable;
                     }
                     if (wait == WAIT_OBJECT_0 + 1)
                     {
-                        if (!foreground_monitor_->snapshot().is_foreground)
-                        {
-                            return StableRenderOutcome::focus_lost;
-                        }
-                        return std::unexpected(BuildLatchedScopedFailure());
+                        return std::unexpected(BuildLatchedFailure());
                     }
                     if (wait == WAIT_OBJECT_0 + 2)
                     {
@@ -1271,15 +1231,11 @@ namespace gc::audio
                     {
                         if (!foreground_monitor_->healthy())
                         {
-                            return std::unexpected(LogicalFailure(Failure(
+                            return std::unexpected(Failure(
                                 AsioFailureStage::foreground_monitor,
                                 "ASIO foreground monitor stopped unexpectedly",
                                 AsioResultDomain::win32,
-                                foreground_monitor_->failure_code())));
-                        }
-                        if (!foreground_monitor_->snapshot().is_foreground)
-                        {
-                            return StableRenderOutcome::focus_lost;
+                                foreground_monitor_->failure_code()));
                         }
                         continue;
                     }
@@ -1290,22 +1246,18 @@ namespace gc::audio
                     }
                     if (wait == WAIT_TIMEOUT)
                     {
-                        if (!foreground_monitor_->snapshot().is_foreground)
-                        {
-                            return StableRenderOutcome::focus_lost;
-                        }
-                        return std::unexpected(PhysicalFailure(Failure(
+                        return std::unexpected(Failure(
                             AsioFailureStage::startup_clock,
                             "ASIO did not produce a stable third callback before "
                             "the startup deadline",
                             AsioResultDomain::win32,
-                            WAIT_TIMEOUT)));
+                            WAIT_TIMEOUT));
                     }
-                    return std::unexpected(LogicalFailure(Failure(
+                    return std::unexpected(Failure(
                         AsioFailureStage::startup_clock,
                         "ASIO startup message wait failed",
                         AsioResultDomain::win32,
-                        wait == WAIT_FAILED ? GetLastError() : wait)));
+                        wait == WAIT_FAILED ? GetLastError() : wait));
                 }
             }
 
@@ -1367,8 +1319,7 @@ namespace gc::audio
                             foreground_monitor_->failure_code());
                     }
 
-                    if (HasPublishedFault() &&
-                        LatchedFaultScope() == RuntimeFaultScope::logical_engine)
+                    if (HasPublishedFault())
                     {
                         return BuildLatchedFailure();
                     }
@@ -1390,109 +1341,33 @@ namespace gc::audio
                         {
                             auto release_failure = ClosePhysicalSession();
                             session_active = false;
-                            SaturatingIncrementCounter(session_releases_);
-                            std::optional<AsioFailure> logical_failure;
-                            if (HasPublishedFault() &&
-                                LatchedFaultScope() ==
-                                RuntimeFaultScope::logical_engine)
+                            if (HasPublishedFault())
                             {
-                                logical_failure = BuildLatchedFailure();
-                            }
-                            if (release_failure &&
-                                release_failure->scope ==
-                                RuntimeFaultScope::logical_engine)
-                            {
-                                if (logical_failure)
+                                auto runtime_failure = BuildLatchedFailure();
+                                if (release_failure)
                                 {
                                     AppendSecondaryFailure(
-                                        *logical_failure,
-                                        release_failure->failure);
+                                        runtime_failure, *release_failure);
                                 }
-                                else
-                                {
-                                    logical_failure = std::move(
-                                        release_failure->failure);
-                                }
+                                release_failure = std::move(runtime_failure);
                             }
-                            else if (logical_failure && release_failure)
-                            {
-                                AppendSecondaryFailure(
-                                    *logical_failure,
-                                    release_failure->failure);
-                            }
+                            SaturatingIncrementCounter(session_releases_);
                             observer_->SessionLifecycleChanged(
                                 AsioSessionLifecycleEvent::session_released,
                                 recovery_attempt,
-                                logical_failure
-                                    ? &*logical_failure
-                                    : release_failure
-                                    ? &release_failure->failure
-                                    : nullptr);
-                            ClearSessionFault();
-                            if (logical_failure)
+                                release_failure ? &*release_failure : nullptr);
+                            if (release_failure)
                             {
-                                return logical_failure;
+                                return release_failure;
                             }
+                            ClearSessionFault();
                         }
                         if (const auto advance_failure = AdvanceSilentRendering())
                         {
                             return advance_failure;
                         }
                     }
-                    else if (session_active)
-                    {
-                        if (HasPublishedFault())
-                        {
-                            auto failure = BuildLatchedFailure();
-                            const auto physical_generation =
-                                active_physical_session_generation_.load(
-                                    std::memory_order_acquire);
-                            try
-                            {
-                                failure.detail += std::format(
-                                    " physical_session_generation={}",
-                                    physical_generation);
-                            }
-                            catch (...)
-                            {
-                            }
-                            SaturatingIncrementCounter(
-                                physical_session_losses_);
-                            observer_->SessionLifecycleChanged(
-                                AsioSessionLifecycleEvent::physical_session_lost,
-                                recovery_attempt,
-                                &failure);
-                            auto close_failure = ClosePhysicalSession();
-                            if (close_failure &&
-                                close_failure->scope ==
-                                RuntimeFaultScope::logical_engine)
-                            {
-                                AppendSecondaryFailure(
-                                    close_failure->failure, failure);
-                                failure = std::move(close_failure->failure);
-                            }
-                            else if (close_failure)
-                            {
-                                AppendSecondaryFailure(
-                                    failure, close_failure->failure);
-                            }
-                            session_active = false;
-                            SaturatingIncrementCounter(session_releases_);
-                            observer_->SessionLifecycleChanged(
-                                AsioSessionLifecycleEvent::session_released,
-                                recovery_attempt,
-                                &failure);
-                            ClearSessionFault();
-                            if (close_failure &&
-                                close_failure->scope ==
-                                RuntimeFaultScope::logical_engine)
-                            {
-                                return failure;
-                            }
-                            next_recovery_ms = 0;
-                        }
-                    }
-                    else
+                    else if (!session_active)
                     {
                         if (!foreground_reported)
                         {
@@ -1514,61 +1389,37 @@ namespace gc::audio
                         {
                             ++recovery_attempt;
                             SaturatingIncrementCounter(recovery_attempts_);
-                            auto opened = OpenPhysicalSession();
-                            if (!opened)
+                            auto prepared = PreparePhysicalSession();
+                            if (!prepared)
                             {
-                                auto scoped_failure = std::move(opened.error());
+                                auto preparation_failure =
+                                    std::move(prepared.error());
                                 const bool acquired_resources =
                                     session_ != nullptr || callback_runtime_ != nullptr;
-                                auto close_failure = ClosePhysicalSession();
-                                if (HasPublishedFault())
-                                {
-                                    auto latched = BuildLatchedScopedFailure();
-                                    if (latched.scope ==
-                                        RuntimeFaultScope::logical_engine)
-                                    {
-                                        AppendSecondaryFailure(
-                                            latched.failure,
-                                            scoped_failure.failure);
-                                        scoped_failure = std::move(latched);
-                                    }
-                                    else
-                                    {
-                                        AppendSecondaryFailure(
-                                            scoped_failure.failure,
-                                            latched.failure);
-                                    }
-                                }
-                                if (close_failure &&
-                                    close_failure->scope ==
-                                    RuntimeFaultScope::logical_engine &&
-                                    scoped_failure.scope !=
-                                    RuntimeFaultScope::logical_engine)
+                                const auto close_failure = ClosePhysicalSession();
+                                if (close_failure)
                                 {
                                     AppendSecondaryFailure(
-                                        close_failure->failure,
-                                        scoped_failure.failure);
-                                    scoped_failure = std::move(*close_failure);
+                                        preparation_failure.failure,
+                                        *close_failure);
                                 }
-                                else if (close_failure)
-                                {
-                                    AppendSecondaryFailure(
-                                        scoped_failure.failure,
-                                        close_failure->failure);
-                                }
-                                ClearSessionFault();
                                 if (acquired_resources)
                                 {
                                     SaturatingIncrementCounter(session_releases_);
                                     observer_->SessionLifecycleChanged(
                                         AsioSessionLifecycleEvent::session_released,
                                         recovery_attempt,
-                                        &scoped_failure.failure);
+                                        &preparation_failure.failure);
                                 }
-                                if (scoped_failure.scope ==
-                                    RuntimeFaultScope::logical_engine)
+                                if (close_failure)
                                 {
-                                    return std::move(scoped_failure.failure);
+                                    return std::move(preparation_failure.failure);
+                                }
+                                ClearSessionFault();
+                                if (preparation_failure.kind ==
+                                    PhysicalPreparationFailureKind::fatal)
+                                {
+                                    return std::move(preparation_failure.failure);
                                 }
                                 if (!foreground_monitor_->snapshot().is_foreground)
                                 {
@@ -1589,115 +1440,89 @@ namespace gc::audio
                                     observer_->SessionLifecycleChanged(
                                         AsioSessionLifecycleEvent::recovery_attempt_failed,
                                         recovery_attempt,
-                                        &scoped_failure.failure);
+                                        &preparation_failure.failure);
                                     next_recovery_ms =
                                         recovery_now + kRecoveryRetryMs;
                                 }
                             }
                             else
                             {
-                                auto stable =
-                                    *opened == PhysicalSessionStartupOutcome::active
-                                        ? WaitForStableRender()
-                                        : std::expected<
-                                            StableRenderOutcome,
-                                            ScopedRuntimeFailure>{
-                                            StableRenderOutcome::focus_lost,
-                                        };
+                                if (!foreground_monitor_->snapshot().is_foreground)
+                                {
+                                    const auto close_failure =
+                                        ClosePhysicalSession();
+                                    SaturatingIncrementCounter(session_releases_);
+                                    observer_->SessionLifecycleChanged(
+                                        AsioSessionLifecycleEvent::session_released,
+                                        recovery_attempt,
+                                        close_failure ? &*close_failure : nullptr);
+                                    if (close_failure)
+                                    {
+                                        return close_failure;
+                                    }
+                                    ClearSessionFault();
+                                    if (foreground_reported)
+                                    {
+                                        foreground_reported = false;
+                                        SaturatingIncrementCounter(
+                                            foreground_losses_);
+                                        observer_->SessionLifecycleChanged(
+                                            AsioSessionLifecycleEvent::foreground_lost,
+                                            recovery_attempt,
+                                            nullptr);
+                                    }
+                                    next_recovery_ms = 0;
+                                    continue;
+                                }
+
+                                auto started = StartPreparedPhysicalSession();
+                                if (!started)
+                                {
+                                    auto failure = std::move(started.error());
+                                    if (const auto close_failure =
+                                        ClosePhysicalSession())
+                                    {
+                                        AppendSecondaryFailure(
+                                            failure, *close_failure);
+                                    }
+                                    SaturatingIncrementCounter(session_releases_);
+                                    observer_->SessionLifecycleChanged(
+                                        AsioSessionLifecycleEvent::session_released,
+                                        recovery_attempt,
+                                        &failure);
+                                    return failure;
+                                }
+
+                                auto stable = WaitForStableRender();
                                 if (stable &&
                                     *stable == StableRenderOutcome::shutdown)
                                 {
                                     return std::nullopt;
                                 }
-                                if (stable &&
-                                    *stable == StableRenderOutcome::stable)
+                                if (!stable)
                                 {
-                                    session_active = true;
-                                    next_recovery_ms = 0;
-                                    SaturatingIncrementCounter(session_recoveries_);
-                                    observer_->SessionLifecycleChanged(
-                                        AsioSessionLifecycleEvent::session_recovered,
-                                        recovery_attempt,
-                                        nullptr);
-                                }
-                                else
-                                {
-                                    const bool lost_focus = stable &&
-                                        *stable == StableRenderOutcome::focus_lost;
-                                    auto scoped_failure = stable
-                                                              ? PhysicalFailure(Failure(
-                                                                  AsioFailureStage::startup_clock,
-                                                                  "ASIO recovery lost foreground ownership"))
-                                                              : std::move(stable.error());
-                                    auto close_failure = ClosePhysicalSession();
-                                    if (HasPublishedFault() &&
-                                        scoped_failure.scope !=
-                                        RuntimeFaultScope::logical_engine)
-                                    {
-                                        auto latched = BuildLatchedScopedFailure();
-                                        if (latched.scope ==
-                                            RuntimeFaultScope::logical_engine)
-                                        {
-                                            AppendSecondaryFailure(
-                                                latched.failure,
-                                                scoped_failure.failure);
-                                            scoped_failure = std::move(latched);
-                                        }
-                                    }
-                                    if (close_failure &&
-                                        close_failure->scope ==
-                                        RuntimeFaultScope::logical_engine &&
-                                        scoped_failure.scope !=
-                                        RuntimeFaultScope::logical_engine)
+                                    auto failure = std::move(stable.error());
+                                    if (const auto close_failure =
+                                        ClosePhysicalSession())
                                     {
                                         AppendSecondaryFailure(
-                                            close_failure->failure,
-                                            scoped_failure.failure);
-                                        scoped_failure = std::move(*close_failure);
+                                            failure, *close_failure);
                                     }
-                                    else if (close_failure)
-                                    {
-                                        AppendSecondaryFailure(
-                                            scoped_failure.failure,
-                                            close_failure->failure);
-                                    }
-                                    ClearSessionFault();
                                     SaturatingIncrementCounter(session_releases_);
                                     observer_->SessionLifecycleChanged(
                                         AsioSessionLifecycleEvent::session_released,
                                         recovery_attempt,
-                                        &scoped_failure.failure);
-                                    if (scoped_failure.scope ==
-                                        RuntimeFaultScope::logical_engine)
-                                    {
-                                        return std::move(scoped_failure.failure);
-                                    }
-                                    if (lost_focus ||
-                                        !foreground_monitor_->snapshot().is_foreground)
-                                    {
-                                        if (foreground_reported)
-                                        {
-                                            foreground_reported = false;
-                                            SaturatingIncrementCounter(
-                                                foreground_losses_);
-                                            observer_->SessionLifecycleChanged(
-                                                AsioSessionLifecycleEvent::foreground_lost,
-                                                recovery_attempt,
-                                                nullptr);
-                                        }
-                                        next_recovery_ms = 0;
-                                    }
-                                    else
-                                    {
-                                        SaturatingIncrementCounter(recovery_failures_);
-                                        observer_->SessionLifecycleChanged(
-                                            AsioSessionLifecycleEvent::recovery_attempt_failed,
-                                            recovery_attempt,
-                                            &scoped_failure.failure);
-                                        next_recovery_ms =
-                                            recovery_now + kRecoveryRetryMs;
-                                    }
+                                        &failure);
+                                    return failure;
                                 }
+
+                                session_active = true;
+                                next_recovery_ms = 0;
+                                SaturatingIncrementCounter(session_recoveries_);
+                                observer_->SessionLifecycleChanged(
+                                    AsioSessionLifecycleEvent::session_recovered,
+                                    recovery_attempt,
+                                    nullptr);
                             }
                         }
                     }
@@ -1732,24 +1557,23 @@ namespace gc::audio
                     result);
             }
 
-            std::optional<ScopedRuntimeFailure> ClosePhysicalSession() noexcept
+            std::optional<AsioFailure> ClosePhysicalSession() noexcept
             {
                 // Focus release owns only IASIO, its buffers, and callback runtime.
                 // The mixer and both logical clocks must survive this operation so
                 // existing voices and judgement-clock bindings remain valid.
                 render_ready_.store(false, std::memory_order_release);
-                std::optional<AsioFailure> physical_failure;
-                std::optional<AsioFailure> logical_failure;
-                const auto record_physical_failure = [&physical_failure](
-                    AsioFailure failure) noexcept
+                std::optional<AsioFailure> failure;
+                const auto record_failure = [&failure](
+                    AsioFailure candidate) noexcept
                 {
-                    if (physical_failure)
+                    if (failure)
                     {
-                        AppendSecondaryFailure(*physical_failure, failure);
+                        AppendSecondaryFailure(*failure, candidate);
                     }
                     else
                     {
-                        physical_failure = std::move(failure);
+                        failure = std::move(candidate);
                     }
                 };
                 if (callback_runtime_ != nullptr)
@@ -1760,7 +1584,7 @@ namespace gc::audio
                 {
                     if (auto stopped = session_->Stop(); !stopped)
                     {
-                        record_physical_failure(std::move(stopped.error()));
+                        record_failure(std::move(stopped.error()));
                     }
                 }
                 if (callback_runtime_ != nullptr)
@@ -1778,16 +1602,15 @@ namespace gc::audio
                     !logical_render_sequencer_.EndPhysicalSession(
                         physical_generation))
                 {
-                    const auto sequencing_failure = Failure(
+                    record_failure(Failure(
                         AsioFailureStage::runtime_clock,
-                        "Could not end the ASIO physical-session generation after callback quiescence");
-                    logical_failure = sequencing_failure;
+                        "Could not end the ASIO physical-session generation after callback quiescence"));
                 }
                 if (session_ != nullptr)
                 {
                     if (auto closed = session_->Close(); !closed)
                     {
-                        record_physical_failure(std::move(closed.error()));
+                        record_failure(std::move(closed.error()));
                     }
                     session_.reset();
                 }
@@ -1797,20 +1620,7 @@ namespace gc::audio
                     channel = {};
                 }
                 has_previous_sample_position_ = false;
-                if (logical_failure)
-                {
-                    if (physical_failure)
-                    {
-                        AppendSecondaryFailure(
-                            *logical_failure, *physical_failure);
-                    }
-                    return LogicalFailure(std::move(*logical_failure));
-                }
-                if (physical_failure)
-                {
-                    return PhysicalFailure(std::move(*physical_failure));
-                }
-                return std::nullopt;
+                return failure;
             }
 
             std::optional<AsioFailure> TeardownOnControlThread() noexcept
@@ -1820,7 +1630,7 @@ namespace gc::audio
                 std::optional<AsioFailure> failure;
                 if (close_failure)
                 {
-                    failure = std::move(close_failure->failure);
+                    failure = std::move(*close_failure);
                 }
                 if (render_core_ != nullptr)
                 {
@@ -1972,10 +1782,6 @@ namespace gc::audio
                     static_cast<std::uint8_t>(AsioResultDomain::none),
                     std::memory_order_relaxed);
                 first_fault_result_.store(0, std::memory_order_relaxed);
-                first_fault_scope_.store(
-                    static_cast<std::uint8_t>(
-                        RuntimeFaultScope::logical_engine),
-                    std::memory_order_relaxed);
                 first_fault_claimed_.store(false, std::memory_order_release);
             }
 
@@ -1998,9 +1804,7 @@ namespace gc::audio
                 }
                 if (request.buffer_index < 0 || request.buffer_index > 1)
                 {
-                    LatchRuntimeFault(
-                        RuntimeFaultScope::physical_session,
-                        AsioFailureStage::callback);
+                    LatchRuntimeFault(AsioFailureStage::callback);
                     return;
                 }
 
@@ -2011,9 +1815,7 @@ namespace gc::audio
                 if (decision.kind == AsioClockDecisionKind::invalid)
                 {
                     ClearAsioBlock(request.buffer_index);
-                    LatchRuntimeFault(
-                        RuntimeFaultScope::physical_session,
-                        AsioFailureStage::runtime_clock);
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
                 const auto logical_plan =
@@ -2029,18 +1831,14 @@ namespace gc::audio
                     {
                         return;
                     }
-                    LatchRuntimeFault(
-                        PlanFailureScope(logical_plan.error()),
-                        AsioFailureStage::runtime_clock);
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
                 const auto rendered = RenderLogicalBlock(*logical_plan);
                 if (!rendered)
                 {
                     ClearAsioBlock(request.buffer_index);
-                    LatchRuntimeFault(
-                        RuntimeFaultScope::logical_engine,
-                        AsioFailureStage::runtime_clock);
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
                 SaturatingAddCounter(
@@ -2079,9 +1877,7 @@ namespace gc::audio
                 if (!conversion.converted)
                 {
                     ClearAsioBlock(request.buffer_index);
-                    LatchRuntimeFault(
-                        RuntimeFaultScope::physical_session,
-                        AsioFailureStage::conversion);
+                    LatchRuntimeFault(AsioFailureStage::conversion);
                     return;
                 }
                 if (enable_absolute_time_judgement_)
@@ -2092,9 +1888,7 @@ namespace gc::audio
                         (std::numeric_limits<std::uint64_t>::max)())
                     {
                         ClearAsioBlock(request.buffer_index);
-                        LatchRuntimeFault(
-                            RuntimeFaultScope::logical_engine,
-                            AsioFailureStage::runtime_clock);
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
                         return;
                     }
                     const auto next_sequence = exact_anchor_sequence_ + 1;
@@ -2109,9 +1903,7 @@ namespace gc::audio
                     }))
                     {
                         ClearAsioBlock(request.buffer_index);
-                        LatchRuntimeFault(
-                            RuntimeFaultScope::logical_engine,
-                            AsioFailureStage::runtime_clock);
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
                         return;
                     }
                     exact_anchor_sequence_ = next_sequence;
@@ -2145,18 +1937,14 @@ namespace gc::audio
                 if (render_ready_.load(std::memory_order_acquire) &&
                     (!left || !right))
                 {
-                    LatchRuntimeFault(
-                        RuntimeFaultScope::physical_session,
-                        AsioFailureStage::conversion);
+                    LatchRuntimeFault(AsioFailureStage::conversion);
                 }
             }
 
             // ReSharper disable once CppOverrideWithDifferentVisibility
             void OnAsioRuntimeFault(AsioFailureStage stage) noexcept override
             {
-                LatchRuntimeFault(
-                    RuntimeFaultScope::physical_session,
-                    stage);
+                LatchRuntimeFault(stage);
             }
 
             bool CallOutputReady() noexcept
@@ -2172,7 +1960,6 @@ namespace gc::audio
                     return true;
                 }
                 LatchRuntimeFault(
-                    RuntimeFaultScope::physical_session,
                     AsioFailureStage::output_ready,
                     AsioResultDomain::asio,
                     result);
@@ -2208,7 +1995,6 @@ namespace gc::audio
             }
 
             void LatchRuntimeFault(
-                RuntimeFaultScope scope,
                 AsioFailureStage stage,
                 AsioResultDomain domain = AsioResultDomain::none,
                 std::int64_t result = 0) noexcept
@@ -2230,45 +2016,24 @@ namespace gc::audio
                     static_cast<std::uint8_t>(domain),
                     std::memory_order_relaxed);
                 first_fault_result_.store(result, std::memory_order_relaxed);
-                first_fault_scope_.store(
-                    static_cast<std::uint8_t>(scope),
-                    std::memory_order_relaxed);
                 first_fault_stage_.store(
                     static_cast<std::uint8_t>(stage),
                     std::memory_order_release);
                 actions_.signal_event(actions_.context, fault_event_);
             }
 
-            RuntimeFaultScope LatchedFaultScope() const noexcept
-            {
-                return static_cast<RuntimeFaultScope>(
-                    first_fault_scope_.load(std::memory_order_acquire));
-            }
-
             AsioFailure BuildLatchedFailure() const
             {
                 const auto stage = static_cast<AsioFailureStage>(
                     first_fault_stage_.load(std::memory_order_acquire));
-                const auto scope = LatchedFaultScope();
                 return Failure(
                     stage == AsioFailureStage::none
                         ? AsioFailureStage::callback
                         : stage,
-                    RuntimeFailureDetail(
-                        stage,
-                        scope == RuntimeFaultScope::physical_session),
+                    RuntimeFailureDetail(stage),
                     static_cast<AsioResultDomain>(
                         first_fault_domain_.load(std::memory_order_relaxed)),
                     first_fault_result_.load(std::memory_order_relaxed));
-            }
-
-            ScopedRuntimeFailure BuildLatchedScopedFailure() const
-            {
-                auto failure = BuildLatchedFailure();
-                return {
-                    .scope = LatchedFaultScope(),
-                    .failure = std::move(failure),
-                };
             }
 
             AsioRuntimeCountersSnapshot SnapshotCounters() const noexcept
@@ -2446,7 +2211,6 @@ namespace gc::audio
             std::atomic_uint64_t unmapped_cursor_failures_{};
             std::atomic_bool first_fault_claimed_{};
             std::atomic<std::uint8_t> first_fault_stage_{};
-            std::atomic<std::uint8_t> first_fault_scope_{};
             std::atomic<std::uint8_t> first_fault_domain_{};
             std::atomic<std::int64_t> first_fault_result_{};
             std::atomic_uint64_t active_physical_session_generation_{};
