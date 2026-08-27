@@ -314,8 +314,12 @@ namespace gc::absolute_judgement
                           expected_provider, actual_provider
                       });
             }
-            entry_clock = clock_resolver_.Resolve(stage_.cutoff().stage_entry_time,
-                                                  gc::audio::ExactClockResolveIntent::FinalizedTimestamp);
+            if (!stage_.active())
+            {
+                entry_clock = clock_resolver_.Resolve(
+                    stage_.cutoff().stage_entry_time,
+                    gc::audio::ExactClockResolveIntent::FinalizedTimestamp);
+            }
         }
 
         TryActivateOrWait(entry_clock);
