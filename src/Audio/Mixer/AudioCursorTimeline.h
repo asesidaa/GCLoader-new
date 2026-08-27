@@ -84,15 +84,49 @@ struct ExactSourceFrameResult {
     std::optional<ExactSourceCoordinate> closed_frontier;
 };
 
-struct ExactPlaybackHistoryStatus {
+struct ExactPlaybackHistoryStatus
+{
     ExactClockStatus status{};
     std::uint64_t publication_sequence{};
     bool prefix_evicted{};
 };
 
+enum class ExactMappedSpanPublicationFailure : std::uint8_t
+{
+    None,
+    InvalidArguments,
+    NaturalEndTailUnrepresentable,
+    EpochCounterOverflow,
+    PlaybackGenerationNotIncreasing,
+    PreviousEpochUnavailable,
+    PreviousEpochAlreadyClosed,
+    PreviousEpochTailUnrepresentable,
+    CurrentEpochUnavailable,
+    CurrentEpochClosed,
+    BufferInstanceChanged,
+    EndpointGenerationChanged,
+    PlaybackGenerationChanged,
+    OriginChanged,
+    OutputOriginChanged,
+    SourceOriginChanged,
+    OutputRateChanged,
+    SourceRateChanged,
+    MappedOutputTailNotIncreasing,
+    PublicationSequenceUnavailable,
+    SlotStoreFailed,
+};
+
+struct ExactMappedSpanPublicationFailureSnapshot
+{
+    ExactMappedSpanPublicationFailure reason{};
+    std::uint64_t expected{};
+    std::uint64_t actual{};
+};
+
 inline constexpr std::size_t kExactPlaybackEpochCapacity = 256;
 
-class AudioCursorTimeline {
+class AudioCursorTimeline
+{
 public:
     void Publish(const AudioRenderSpan&) noexcept;
     AudioCursorResolution ResolveSourceFrame(
@@ -119,6 +153,8 @@ public:
         std::uint64_t mapped_output_tail,
         bool natural_end,
         std::uint64_t natural_source_tail) noexcept;
+    [[nodiscard]] ExactMappedSpanPublicationFailureSnapshot
+    exact_mapped_span_publication_failure() const noexcept;
     bool CloseExactWriterAfterQuiescence() noexcept;
     ExactSourceFrameResult ResolveExactSourceFrame(
         const gc::timing::CheckedRational& output) const noexcept;
@@ -127,6 +163,10 @@ public:
         ExactPlaybackHistoryStatus* status) const noexcept;
 
 private:
+    bool FailExactMappedSpanPublication(
+        ExactMappedSpanPublicationFailure reason,
+        std::uint64_t expected = 0,
+        std::uint64_t actual = 0) noexcept;
     bool BeginExactPublication(std::uint64_t* writing) noexcept;
     void EndExactPublication(std::uint64_t writing) noexcept;
     bool StoreExactSlot(
@@ -135,7 +175,8 @@ private:
     std::optional<ExactPlaybackEpoch> LoadExactSlot(
         std::size_t index) const noexcept;
 
-    struct Slot {
+    struct Slot
+    {
         std::atomic<std::uint64_t> sequence{};
         mutable AudioRenderSpan span{};
     };
@@ -144,7 +185,8 @@ private:
     std::atomic<std::uint64_t> published_generation_{};
     std::uint64_t writer_generation_{};
 
-    struct ExactSlot {
+    struct ExactSlot
+    {
         std::atomic_uint64_t version{};
         std::atomic_uint64_t buffer_instance_id{};
         std::atomic_uint64_t endpoint_generation{};
@@ -163,7 +205,7 @@ private:
     };
 
     std::unique_ptr<std::array<ExactSlot, kExactPlaybackEpochCapacity>>
-        exact_slots_;
+    exact_slots_;
     std::atomic_bool exact_configured_{};
     std::atomic_uint64_t exact_buffer_instance_id_{};
     std::atomic_uint64_t exact_endpoint_generation_{};
@@ -172,6 +214,10 @@ private:
     std::atomic_uint64_t exact_requested_generation_{};
     std::atomic_bool exact_prefix_evicted_{};
     std::atomic_bool exact_discontinuous_{};
+    std::atomic_bool exact_mapped_span_failure_claimed_{};
+    std::atomic_uint8_t exact_mapped_span_failure_reason_{};
+    std::atomic_uint64_t exact_mapped_span_failure_expected_{};
+    std::atomic_uint64_t exact_mapped_span_failure_actual_{};
     std::uint64_t exact_writer_epoch_count_{};
     std::uint64_t exact_writer_current_generation_{};
     std::size_t exact_writer_current_slot_{};

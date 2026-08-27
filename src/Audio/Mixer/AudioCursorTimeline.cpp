@@ -576,6 +576,49 @@ bool AudioCursorTimeline::ExpectExactPlaybackGeneration(
     return observed <= playback_generation;
 }
 
+bool AudioCursorTimeline::FailExactMappedSpanPublication(
+    ExactMappedSpanPublicationFailure reason,
+    std::uint64_t expected,
+    std::uint64_t actual) noexcept
+{
+    exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
+
+    bool unclaimed = false;
+    if (exact_mapped_span_failure_claimed_.compare_exchange_strong(
+        unclaimed,
+        true,
+        detail::kRenderSpanAtomicOrder,
+        detail::kRenderSpanAtomicOrder))
+    {
+        exact_mapped_span_failure_expected_.store(
+            expected, detail::kRenderSpanAtomicOrder);
+        exact_mapped_span_failure_actual_.store(
+            actual, detail::kRenderSpanAtomicOrder);
+        exact_mapped_span_failure_reason_.store(
+            static_cast<std::uint8_t>(reason),
+            detail::kRenderSpanAtomicOrder);
+    }
+    return false;
+}
+
+ExactMappedSpanPublicationFailureSnapshot
+AudioCursorTimeline::exact_mapped_span_publication_failure() const noexcept
+{
+    const auto reason = static_cast<ExactMappedSpanPublicationFailure>(
+        exact_mapped_span_failure_reason_.load(detail::kRenderSpanAtomicOrder));
+    if (reason == ExactMappedSpanPublicationFailure::None)
+    {
+        return {};
+    }
+    return {
+        reason,
+        exact_mapped_span_failure_expected_.load(
+            detail::kRenderSpanAtomicOrder),
+        exact_mapped_span_failure_actual_.load(
+            detail::kRenderSpanAtomicOrder),
+    };
+}
+
 bool AudioCursorTimeline::PublishExactMappedSpan(
     std::uint64_t playback_generation,
     ExactPlaybackOrigin origin,
@@ -585,12 +628,16 @@ bool AudioCursorTimeline::PublishExactMappedSpan(
     std::uint32_t source_rate,
     std::uint64_t mapped_output_tail,
     bool natural_end,
-    std::uint64_t natural_source_tail) noexcept {
+    std::uint64_t natural_source_tail) noexcept
+{
     if (!HasExactPlaybackHistory() || playback_generation == 0 ||
         output_rate == 0 || source_rate == 0 ||
-        mapped_output_tail <= output_origin) {
-        exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-        return false;
+        mapped_output_tail <= output_origin)
+    {
+        return FailExactMappedSpanPublication(
+            ExactMappedSpanPublicationFailure::InvalidArguments,
+            output_origin,
+            mapped_output_tail);
     }
 
     ExactPlaybackEpoch epoch{
@@ -604,12 +651,18 @@ bool AudioCursorTimeline::PublishExactMappedSpan(
         .source_rate = source_rate,
         .mapped_output_tail = mapped_output_tail,
     };
-    if (natural_end) {
+    if (natural_end)
+    {
         epoch.closure = ExactPlaybackClosure::NaturalEnd;
         epoch.closed_source_tail = WholeUnsigned(natural_source_tail);
-        if (!epoch.closed_source_tail.has_value()) {
-            exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-            return false;
+        if (!epoch.closed_source_tail.has_value())
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::
+                NaturalEndTailUnrepresentable,
+                static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max()),
+                natural_source_tail);
         }
     }
 
@@ -618,98 +671,210 @@ bool AudioCursorTimeline::PublishExactMappedSpan(
         exact_writer_current_generation_ != playback_generation;
     if (new_epoch &&
         exact_writer_epoch_count_ ==
-            std::numeric_limits<std::uint64_t>::max()) {
-        exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-        return false;
+        std::numeric_limits<std::uint64_t>::max())
+    {
+        return FailExactMappedSpanPublication(
+            ExactMappedSpanPublicationFailure::EpochCounterOverflow,
+            std::numeric_limits<std::uint64_t>::max() - 1,
+            exact_writer_epoch_count_);
     }
-    if (new_epoch && exact_writer_has_current_) {
-        if (playback_generation <= exact_writer_current_generation_) {
-            exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-            return false;
+    if (new_epoch && exact_writer_has_current_)
+    {
+        if (playback_generation <= exact_writer_current_generation_)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::
+                PlaybackGenerationNotIncreasing,
+                exact_writer_current_generation_,
+                playback_generation);
         }
         previous = LoadExactSlot(exact_writer_current_slot_);
-        if (!previous.has_value() ||
-            (previous->closure.has_value() &&
-             previous->closure != ExactPlaybackClosure::NaturalEnd)) {
-            exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-            return false;
+        if (!previous.has_value())
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::PreviousEpochUnavailable,
+                exact_writer_current_slot_);
         }
-        if (!previous->closure.has_value()) {
+        if (previous->closure.has_value() &&
+            previous->closure != ExactPlaybackClosure::NaturalEnd)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::PreviousEpochAlreadyClosed,
+                static_cast<std::uint64_t>(
+                    ExactPlaybackClosure::NaturalEnd),
+                static_cast<std::uint64_t>(*previous->closure));
+        }
+        if (!previous->closure.has_value())
+        {
             previous->closure = ExactPlaybackClosure::LaterEpoch;
             previous->closed_source_tail = ExactEpochTail(*previous);
-            if (!previous->closed_source_tail.has_value()) {
-                exact_discontinuous_.store(
-                    true, detail::kRenderSpanAtomicOrder);
-                return false;
+            if (!previous->closed_source_tail.has_value())
+            {
+                return FailExactMappedSpanPublication(
+                    ExactMappedSpanPublicationFailure::
+                    PreviousEpochTailUnrepresentable);
             }
         }
-    } else if (!new_epoch) {
+    }
+    else if (!new_epoch)
+    {
         const auto current = LoadExactSlot(exact_writer_current_slot_);
-        if (!current.has_value() || current->closure.has_value() ||
-            current->buffer_instance_id != epoch.buffer_instance_id ||
-            current->endpoint_generation != epoch.endpoint_generation ||
-            current->playback_generation != epoch.playback_generation ||
-            current->origin != epoch.origin ||
-            current->output_origin != epoch.output_origin ||
-            current->source_origin != epoch.source_origin ||
-            current->output_rate != epoch.output_rate ||
-            current->source_rate != epoch.source_rate ||
-            mapped_output_tail <= current->mapped_output_tail) {
-            exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-            return false;
+        if (!current.has_value())
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::CurrentEpochUnavailable,
+                exact_writer_current_slot_);
+        }
+        if (current->closure.has_value())
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::CurrentEpochClosed,
+                0,
+                static_cast<std::uint64_t>(*current->closure) + 1);
+        }
+        if (current->buffer_instance_id != epoch.buffer_instance_id)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::BufferInstanceChanged,
+                current->buffer_instance_id,
+                epoch.buffer_instance_id);
+        }
+        if (current->endpoint_generation != epoch.endpoint_generation)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::EndpointGenerationChanged,
+                current->endpoint_generation,
+                epoch.endpoint_generation);
+        }
+        if (current->playback_generation != epoch.playback_generation)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::PlaybackGenerationChanged,
+                current->playback_generation,
+                epoch.playback_generation);
+        }
+        if (current->origin != epoch.origin)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::OriginChanged,
+                static_cast<std::uint64_t>(current->origin),
+                static_cast<std::uint64_t>(epoch.origin));
+        }
+        if (current->output_origin != epoch.output_origin)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::OutputOriginChanged,
+                current->output_origin,
+                epoch.output_origin);
+        }
+        if (current->source_origin != epoch.source_origin)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::SourceOriginChanged,
+                current->source_origin,
+                epoch.source_origin);
+        }
+        if (current->output_rate != epoch.output_rate)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::OutputRateChanged,
+                current->output_rate,
+                epoch.output_rate);
+        }
+        if (current->source_rate != epoch.source_rate)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::SourceRateChanged,
+                current->source_rate,
+                epoch.source_rate);
+        }
+        if (mapped_output_tail <= current->mapped_output_tail)
+        {
+            return FailExactMappedSpanPublication(
+                ExactMappedSpanPublicationFailure::
+                MappedOutputTailNotIncreasing,
+                current->mapped_output_tail,
+                mapped_output_tail);
         }
         epoch = *current;
         epoch.mapped_output_tail = mapped_output_tail;
-        if (natural_end) {
+        if (natural_end)
+        {
             epoch.closure = ExactPlaybackClosure::NaturalEnd;
             epoch.closed_source_tail = WholeUnsigned(natural_source_tail);
-            if (!epoch.closed_source_tail.has_value()) {
-                exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-                return false;
+            if (!epoch.closed_source_tail.has_value())
+            {
+                return FailExactMappedSpanPublication(
+                    ExactMappedSpanPublicationFailure::
+                    NaturalEndTailUnrepresentable,
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max()),
+                    natural_source_tail);
             }
         }
     }
 
     const auto slot_index = new_epoch
-        ? static_cast<std::size_t>(
-              exact_writer_epoch_count_ % kExactPlaybackEpochCapacity)
-        : exact_writer_current_slot_;
+                                ? static_cast<std::size_t>(
+                                    exact_writer_epoch_count_ % kExactPlaybackEpochCapacity)
+                                : exact_writer_current_slot_;
     std::uint64_t writing{};
-    if (!BeginExactPublication(&writing)) {
-        exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
-        return false;
+    if (!BeginExactPublication(&writing))
+    {
+        return FailExactMappedSpanPublication(
+            ExactMappedSpanPublicationFailure::
+            PublicationSequenceUnavailable);
     }
     bool stored = true;
-    if (previous.has_value()) {
+    auto failed_slot = slot_index;
+    if (previous.has_value())
+    {
         stored = StoreExactSlot(
             exact_writer_current_slot_, *previous);
+        if (!stored)
+        {
+            failed_slot = exact_writer_current_slot_;
+        }
     }
-    stored = StoreExactSlot(slot_index, epoch) && stored;
-    if (stored && new_epoch) {
+    const auto epoch_stored = StoreExactSlot(slot_index, epoch);
+    if (!epoch_stored && stored)
+    {
+        failed_slot = slot_index;
+    }
+    stored = epoch_stored && stored;
+    if (stored && new_epoch)
+    {
         ++exact_writer_epoch_count_;
         exact_writer_current_generation_ = playback_generation;
         exact_writer_current_slot_ = slot_index;
         exact_writer_has_current_ = true;
         exact_published_count_.store(
             exact_writer_epoch_count_, detail::kRenderSpanAtomicOrder);
-        if (exact_writer_epoch_count_ > kExactPlaybackEpochCapacity) {
+        if (exact_writer_epoch_count_ > kExactPlaybackEpochCapacity)
+        {
             exact_prefix_evicted_.store(
                 true, detail::kRenderSpanAtomicOrder);
         }
     }
     EndExactPublication(writing);
-    if (!stored) {
-        exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
+    if (!stored)
+    {
+        return FailExactMappedSpanPublication(
+            ExactMappedSpanPublicationFailure::SlotStoreFailed,
+            failed_slot);
     }
-    return stored;
+    return true;
 }
 
-bool AudioCursorTimeline::CloseExactWriterAfterQuiescence() noexcept {
-    if (!HasExactPlaybackHistory() || !exact_writer_has_current_) {
+bool AudioCursorTimeline::CloseExactWriterAfterQuiescence() noexcept
+{
+    if (!HasExactPlaybackHistory() || !exact_writer_has_current_)
+    {
         return true;
     }
     auto epoch = LoadExactSlot(exact_writer_current_slot_);
-    if (!epoch.has_value()) {
+    if (!epoch.has_value())
+    {
         exact_discontinuous_.store(true, detail::kRenderSpanAtomicOrder);
         return false;
     }

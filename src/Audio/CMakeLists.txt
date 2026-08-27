@@ -4,6 +4,7 @@ add_library(gc_audio STATIC
         AudioBackendController.cpp
         ExactOutputClock.cpp
         Asio/ExactAsioClock.cpp
+        Asio/AsioLogicalRenderSequencer.cpp
         Asio/AsioOutputBackend.cpp
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp

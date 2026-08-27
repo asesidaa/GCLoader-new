@@ -10,6 +10,30 @@ add_test(
         COMMAND gc_exact_asio_clock_tests
 )
 
+add_executable(gc_asio_logical_render_sequencer_tests
+        Audio/Asio/AsioLogicalRenderSequencerTests.cpp
+)
+target_link_libraries(gc_asio_logical_render_sequencer_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME AsioLogicalRenderSequencer
+        COMMAND gc_asio_logical_render_sequencer_tests
+)
+
+add_executable(gc_exact_history_isolation_tests
+        Audio/Mixer/ExactHistoryIsolationTests.cpp
+)
+target_link_libraries(gc_exact_history_isolation_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME ExactHistoryIsolation
+        COMMAND gc_exact_history_isolation_tests
+)
+
 add_executable(gc_ime_suppression_tests
         Input/Win32/ImeSuppressionTests.cpp
 )

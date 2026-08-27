@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <format>
 #include <iomanip>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -184,6 +185,143 @@ namespace gc::audio
             }
         }
 
+        const char* mixer_render_failure_source_name(
+            MixerRenderFailureSource source) noexcept
+        {
+            switch (source)
+            {
+            case MixerRenderFailureSource::None: return "none";
+            case MixerRenderFailureSource::InvalidArguments:
+                return "invalid_arguments";
+            case MixerRenderFailureSource::ReentrantRender:
+                return "reentrant_render";
+            case MixerRenderFailureSource::EngineRead: return "engine_read";
+            }
+            return "unknown";
+        }
+
+        const char* mixer_exact_publication_stage_name(
+            MixerExactPublicationStage stage) noexcept
+        {
+            switch (stage)
+            {
+            case MixerExactPublicationStage::None: return "none";
+            case MixerExactPublicationStage::InvalidOutputSpan:
+                return "invalid_output_span";
+            case MixerExactPublicationStage::EpochAheadOfOutput:
+                return "epoch_ahead_of_output";
+            case MixerExactPublicationStage::EpochOffsetOverflow:
+                return "epoch_offset_overflow";
+            case MixerExactPublicationStage::SourceMappingFailed:
+                return "source_mapping_failed";
+            case MixerExactPublicationStage::TimelineRejected:
+                return "timeline_rejected";
+            case MixerExactPublicationStage::EpochAdvanceOverflow:
+                return "epoch_advance_overflow";
+            }
+            return "unknown";
+        }
+
+        const char* exact_mapped_span_failure_name(
+            ExactMappedSpanPublicationFailure failure) noexcept
+        {
+            switch (failure)
+            {
+            case ExactMappedSpanPublicationFailure::None: return "none";
+            case ExactMappedSpanPublicationFailure::InvalidArguments:
+                return "invalid_arguments";
+            case ExactMappedSpanPublicationFailure::
+            NaturalEndTailUnrepresentable:
+                return "natural_end_tail_unrepresentable";
+            case ExactMappedSpanPublicationFailure::EpochCounterOverflow:
+                return "epoch_counter_overflow";
+            case ExactMappedSpanPublicationFailure::
+            PlaybackGenerationNotIncreasing:
+                return "playback_generation_not_increasing";
+            case ExactMappedSpanPublicationFailure::PreviousEpochUnavailable:
+                return "previous_epoch_unavailable";
+            case ExactMappedSpanPublicationFailure::PreviousEpochAlreadyClosed:
+                return "previous_epoch_already_closed";
+            case ExactMappedSpanPublicationFailure::
+            PreviousEpochTailUnrepresentable:
+                return "previous_epoch_tail_unrepresentable";
+            case ExactMappedSpanPublicationFailure::CurrentEpochUnavailable:
+                return "current_epoch_unavailable";
+            case ExactMappedSpanPublicationFailure::CurrentEpochClosed:
+                return "current_epoch_closed";
+            case ExactMappedSpanPublicationFailure::BufferInstanceChanged:
+                return "buffer_instance_changed";
+            case ExactMappedSpanPublicationFailure::EndpointGenerationChanged:
+                return "endpoint_generation_changed";
+            case ExactMappedSpanPublicationFailure::PlaybackGenerationChanged:
+                return "playback_generation_changed";
+            case ExactMappedSpanPublicationFailure::OriginChanged:
+                return "origin_changed";
+            case ExactMappedSpanPublicationFailure::OutputOriginChanged:
+                return "output_origin_changed";
+            case ExactMappedSpanPublicationFailure::SourceOriginChanged:
+                return "source_origin_changed";
+            case ExactMappedSpanPublicationFailure::OutputRateChanged:
+                return "output_rate_changed";
+            case ExactMappedSpanPublicationFailure::SourceRateChanged:
+                return "source_rate_changed";
+            case ExactMappedSpanPublicationFailure::
+            MappedOutputTailNotIncreasing:
+                return "mapped_output_tail_not_increasing";
+            case ExactMappedSpanPublicationFailure::
+            PublicationSequenceUnavailable:
+                return "publication_sequence_unavailable";
+            case ExactMappedSpanPublicationFailure::SlotStoreFailed:
+                return "slot_store_failed";
+            }
+            return "unknown";
+        }
+
+        void append_mixer_diagnostics(
+            std::ostringstream& stream,
+            const MixerDiagnosticsSnapshot& mixer)
+        {
+            stream
+                << " native_rate_buffers=" << mixer.native_rate_buffers
+                << " sample_format_converted_buffers="
+                << mixer.sample_format_converted_buffers
+                << " sample_rate_converted_buffers="
+                << mixer.sample_rate_converted_buffers
+                << " native_gameplay_buffers=" << mixer.native_gameplay_buffers
+                << " active_voices=" << mixer.active_voices
+                << " maximum_simultaneous_voices="
+                << mixer.maximum_simultaneous_voices
+                << " first_mixer_failure_source="
+                << mixer_render_failure_source_name(
+                    mixer.first_render_failure_source)
+                << " first_engine_read_error=" << mixer.first_engine_read_error
+                << " first_exact_publication_stage="
+                << mixer_exact_publication_stage_name(
+                    mixer.first_exact_publication_stage)
+                << " first_exact_timeline_failure="
+                << exact_mapped_span_failure_name(
+                    mixer.first_exact_timeline_failure)
+                << " first_exact_timeline_expected="
+                << mixer.first_exact_timeline_expected
+                << " first_exact_timeline_actual="
+                << mixer.first_exact_timeline_actual
+                << " first_exact_buffer_instance_id="
+                << mixer.first_exact_buffer_instance_id
+                << " first_exact_playback_generation="
+                << mixer.first_exact_playback_generation
+                << " first_exact_output_begin=" << mixer.first_exact_output_begin
+                << " first_exact_output_frames="
+                << mixer.first_exact_output_frames
+                << " first_exact_epoch_output_frames="
+                << mixer.first_exact_epoch_output_frames
+                << " first_exact_epoch_source_start="
+                << mixer.first_exact_epoch_source_start
+                << " first_exact_source_length_frames="
+                << mixer.first_exact_source_length_frames
+                << " first_exact_output_rate=" << mixer.first_exact_output_rate
+                << " first_exact_source_rate=" << mixer.first_exact_source_rate;
+        }
+
         const char* audio_hook_stage_name(AudioHookStage stage) noexcept
         {
             switch (stage)
@@ -242,26 +380,16 @@ namespace gc::audio
                 << counters.current_submitted_lead_frames
                 << " minimum_submitted_lead_frames="
                 << counters.minimum_submitted_lead_frames
-                << " endpoint_hresult_failures=" << counters.endpoint_hresult_failures
-                << " native_rate_buffers=" << counters.mixer.native_rate_buffers
-                << " sample_format_converted_buffers="
-                << counters.mixer.sample_format_converted_buffers
-                << " sample_rate_converted_buffers="
-                << counters.mixer.sample_rate_converted_buffers
-                << " native_gameplay_buffers="
-                << counters.mixer.native_gameplay_buffers
-                << " active_voices=" << counters.mixer.active_voices
-                << " maximum_simultaneous_voices="
-                << counters.mixer.maximum_simultaneous_voices;
+                << " endpoint_hresult_failures="
+                << counters.endpoint_hresult_failures;
+            append_mixer_diagnostics(stream, counters.mixer);
             return stream.str();
         }
 
         std::string hresult_hex(HRESULT result)
         {
-            std::ostringstream stream;
-            stream << "0x" << std::uppercase << std::hex << std::setfill('0')
-                << std::setw(8) << static_cast<std::uint32_t>(result);
-            return stream.str();
+            return std::format(
+                "0x{:08X}", static_cast<std::uint32_t>(result));
         }
 
         const char* descriptor_name(EndpointFormatKind kind) noexcept
@@ -281,17 +409,13 @@ namespace gc::audio
             }
 
             const auto& wave = initialization.selected_format.wave_format();
-            std::ostringstream stream;
-            stream << "format=pcm16/" << wave.nSamplesPerSec
-                << "Hz/" << wave.nChannels
-                << "ch/" << wave.wBitsPerSample
-                << "bit descriptor="
-                << descriptor_name(initialization.selected_format.kind)
-                << " fallback_rate="
-                << (wave.nSamplesPerSec != kGamePrimarySampleRate
-                        ? "true"
-                        : "false");
-            return stream.str();
+            return std::format(
+                "format=pcm16/{}Hz/{}ch/{}bit descriptor={} fallback_rate={}",
+                wave.nSamplesPerSec,
+                wave.nChannels,
+                wave.wBitsPerSample,
+                descriptor_name(initialization.selected_format.kind),
+                wave.nSamplesPerSec != kGamePrimarySampleRate);
         }
 
         std::string format_attempts_text(
@@ -300,28 +424,29 @@ namespace gc::audio
             const auto attempt_count = std::min<std::size_t>(
                 initialization.format_attempt_count,
                 initialization.format_attempts.size());
-            std::ostringstream stream;
-            stream << "format_attempt_count=" << attempt_count
-                << " format_attempts=\"";
+            std::string text = std::format(
+                "format_attempt_count={} format_attempts=\"", attempt_count);
             for (std::size_t index = 0; index < attempt_count; ++index)
             {
                 if (index != 0)
                 {
-                    stream << ',';
+                    text.push_back(',');
                 }
                 const auto& attempt = initialization.format_attempts[index];
-                stream << attempt.format.wave_format().nSamplesPerSec
-                    << '/' << descriptor_name(attempt.format.kind)
-                    << ':' << hresult_hex(attempt.result);
+                std::format_to(
+                    std::back_inserter(text),
+                    "{}/{}:{}",
+                    attempt.format.wave_format().nSamplesPerSec,
+                    descriptor_name(attempt.format.kind),
+                    hresult_hex(attempt.result));
             }
-            stream << '\"';
-            return stream.str();
+            text.push_back('\"');
+            return text;
         }
 
         std::string startup_text(
             const EndpointInitialization& initialization,
-            AudioBackend requested_backend = AudioBackend::wasapi_exclusive,
-            const AsioFailure* asio_failure = nullptr)
+            AudioBackend requested_backend = AudioBackend::wasapi_exclusive)
         {
             const auto output_sample_rate = initialization.has_selected_format
                                                 ? initialization.selected_format.wave_format().nSamplesPerSec
@@ -378,20 +503,6 @@ namespace gc::audio
                 << " mixer_channels=" << kOutputChannels
                 << " wasapi_buffer_ms="
                 << initialization.configured_duration / kReferenceTimePerMillisecond;
-            if (asio_failure != nullptr)
-            {
-                stream << " fallback_reason=asio_precommit_failure"
-                    << " asio_failure_stage="
-                    << asio_failure_stage_name(asio_failure->stage)
-                    << " asio_failure_domain="
-                    << asio_result_domain_name(asio_failure->domain)
-                    << " asio_failure_result=" << asio_failure->result
-                    << " asio_failure_detail=\"" << asio_failure->detail << '"';
-            }
-            else
-            {
-                stream << " fallback_reason=none";
-            }
             return stream.str();
         }
 
@@ -400,47 +511,42 @@ namespace gc::audio
             const EndpointInitialization& initialization,
             const AudioFailure& failure)
         {
-            std::ostringstream stream;
-            stream << kind
-                << " endpoint_id=\""
-                << (initialization.endpoint_id.empty()
-                        ? "<unknown>"
-                        : utf8(initialization.endpoint_id))
-                << "\" stage=" << audio_failure_stage_name(failure.stage)
-                << " hresult=" << hresult_hex(failure.result)
-                << ' ' << selected_format_text(initialization)
-                << ' ' << format_attempts_text(initialization)
-                << " default_period_100ns=" << initialization.default_period
-                << " minimum_period_100ns=" << initialization.minimum_period
-                << " configured_duration_100ns="
-                << initialization.configured_duration
-                << " requested_duration_100ns="
-                << initialization.requested_duration
-                << " actual_buffer_frames="
-                << initialization.actual_buffer_frames;
-            return stream.str();
+            return std::format(
+                "{} endpoint_id=\"{}\" stage={} hresult={} {} {} "
+                "default_period_100ns={} minimum_period_100ns={} "
+                "configured_duration_100ns={} requested_duration_100ns={} "
+                "actual_buffer_frames={}",
+                kind,
+                initialization.endpoint_id.empty()
+                    ? "<unknown>"
+                    : utf8(initialization.endpoint_id),
+                audio_failure_stage_name(failure.stage),
+                hresult_hex(failure.result),
+                selected_format_text(initialization),
+                format_attempts_text(initialization),
+                initialization.default_period,
+                initialization.minimum_period,
+                initialization.configured_duration,
+                initialization.requested_duration,
+                initialization.actual_buffer_frames);
         }
 
         std::string hook_failure_text(const AudioHookFailure& failure)
         {
-            std::ostringstream stream;
-            stream << "AudioPatch: hook install failed"
-                << " stage=" << audio_hook_stage_name(failure.stage)
-                << " status=" << static_cast<int>(failure.status)
-                << " win32_error=" << failure.win32_error
-                << " target=0x" << std::uppercase << std::hex << std::setfill('0')
-                << std::setw(sizeof(std::uintptr_t) * 2)
-                << reinterpret_cast<std::uintptr_t>(failure.target)
-                << std::dec
-                << " rollback_attempted="
-                << (failure.rollback_attempted ? "true" : "false")
-                << " rollback_disable_status="
-                << static_cast<int>(failure.rollback_disable_status)
-                << " rollback_remove_status="
-                << static_cast<int>(failure.rollback_remove_status)
-                << " rollback_complete="
-                << (failure.rollback_complete ? "true" : "false");
-            return stream.str();
+            return std::format(
+                "AudioPatch: hook install failed stage={} status={} "
+                "win32_error={} target=0x{:0{}X} rollback_attempted={} "
+                "rollback_disable_status={} rollback_remove_status={} "
+                "rollback_complete={}",
+                audio_hook_stage_name(failure.stage),
+                static_cast<int>(failure.status),
+                failure.win32_error,
+                reinterpret_cast<std::uintptr_t>(failure.target),
+                sizeof(std::uintptr_t) * 2,
+                failure.rollback_attempted,
+                static_cast<int>(failure.rollback_disable_status),
+                static_cast<int>(failure.rollback_remove_status),
+                failure.rollback_complete);
         }
 
         std::string audio_config_text(
@@ -449,17 +555,16 @@ namespace gc::audio
         {
             const bool enabled =
                 requested_backend != AudioBackend::directsound;
-            std::ostringstream stream;
-            stream << "Audio config requested_backend="
-                << AudioBackendName(requested_backend)
-                << " active_backend="
-                << (enabled ? "pending" : "directsound")
-                << " hook_installed=" << (enabled ? "true" : "false")
-                << " enabled=" << (enabled ? "true" : "false")
-                << " configured_buffer_ms=" << configured_buffer_ms
-                << " configured_duration_100ns="
-                << BufferMillisecondsToReferenceTime(configured_buffer_ms);
-            return stream.str();
+            return std::format(
+                "Audio config requested_backend={} active_backend={} "
+                "hook_installed={} enabled={} configured_buffer_ms={} "
+                "configured_duration_100ns={}",
+                AudioBackendName(requested_backend),
+                enabled ? "pending" : "directsound",
+                enabled,
+                enabled,
+                configured_buffer_ms,
+                BufferMillisecondsToReferenceTime(configured_buffer_ms));
         }
 
         std::string clsid_text(const CLSID& clsid)
@@ -474,14 +579,16 @@ namespace gc::audio
             std::string_view kind,
             const AsioFailure& failure)
         {
-            std::ostringstream stream;
-            stream << kind
-                << " asio_failure_stage=" << asio_failure_stage_name(failure.stage)
-                << " asio_failure_domain=" << asio_result_domain_name(failure.domain)
-                << " asio_failure_result=" << failure.result
-                << " asio_driver_message=\"" << failure.driver_message << '"'
-                << " asio_failure_detail=\"" << failure.detail << '"';
-            return stream.str();
+            return std::format(
+                "{} asio_failure_stage={} asio_failure_domain={} "
+                "asio_failure_result={} asio_driver_message=\"{}\" "
+                "asio_failure_detail=\"{}\"",
+                kind,
+                asio_failure_stage_name(failure.stage),
+                asio_result_domain_name(failure.domain),
+                failure.result,
+                failure.driver_message,
+                failure.detail);
         }
 
         std::string asio_startup_text(const AsioCapabilityReport& report)
@@ -525,8 +632,7 @@ namespace gc::audio
                 << " asio_overload_notifications="
                 << (report.overload_reporting_supported ? "true" : "false")
                 << " asio_output_ready="
-                << (report.output_ready_supported ? "true" : "false")
-                << " fallback_reason=none";
+                << (report.output_ready_supported ? "true" : "false");
             return stream.str();
         }
 
@@ -566,6 +672,10 @@ namespace gc::audio
                 << counters.sample_position_discontinuities
                 << " render_gap_frames=" << counters.render_gap_frames
                 << " foreground_losses=" << counters.foreground_losses
+                << " physical_session_losses="
+                << counters.physical_session_losses
+                << " physical_session_generation="
+                << counters.physical_session_generation
                 << " session_releases=" << counters.session_releases
                 << " recovery_attempts=" << counters.recovery_attempts
                 << " recovery_failures=" << counters.recovery_failures
@@ -641,28 +751,21 @@ namespace gc::audio
                 << " maximum_absolute_output_sample="
                 << counters.maximum_absolute_output_sample
                 << " pending_cursor_queries=" << counters.pending_cursor_queries
-                << " unmapped_cursor_failures=" << counters.unmapped_cursor_failures
-                << " native_rate_buffers=" << counters.mixer.native_rate_buffers
-                << " sample_format_converted_buffers="
-                << counters.mixer.sample_format_converted_buffers
-                << " sample_rate_converted_buffers="
-                << counters.mixer.sample_rate_converted_buffers
-                << " native_gameplay_buffers="
-                << counters.mixer.native_gameplay_buffers
-                << " active_voices=" << counters.mixer.active_voices
-                << " maximum_simultaneous_voices="
-                << counters.mixer.maximum_simultaneous_voices;
-            return stream.str() + std::format(
-                " exact_anchor_publications={} exact_resolved_queries={}"
-                " exact_pending_queries={}"
-                " exact_temporarily_unavailable_queries={}"
-                " exact_history_lost_queries={} exact_discontinuous_queries={}",
-                counters.exact_anchor_publications,
-                counters.exact_resolved_queries,
-                counters.exact_pending_queries,
-                counters.exact_temporarily_unavailable_queries,
-                counters.exact_history_lost_queries,
-                counters.exact_discontinuous_queries);
+                << " unmapped_cursor_failures="
+                << counters.unmapped_cursor_failures;
+            append_mixer_diagnostics(stream, counters.mixer);
+            stream
+                << " exact_anchor_publications="
+                << counters.exact_anchor_publications
+                << " exact_resolved_queries=" << counters.exact_resolved_queries
+                << " exact_pending_queries=" << counters.exact_pending_queries
+                << " exact_temporarily_unavailable_queries="
+                << counters.exact_temporarily_unavailable_queries
+                << " exact_history_lost_queries="
+                << counters.exact_history_lost_queries
+                << " exact_discontinuous_queries="
+                << counters.exact_discontinuous_queries;
+            return stream.str();
         }
 
         void emit_info(
@@ -698,12 +801,12 @@ namespace gc::audio
         {
             try
             {
-                std::ostringstream stream;
-                stream << "WASAPI audio buffer handoff stage=" << stage
-                    << " configured_buffer_ms="
-                    << configured_duration / kReferenceTimePerMillisecond
-                    << " configured_duration_100ns=" << configured_duration;
-                const auto text = stream.str();
+                const auto text = std::format(
+                    "WASAPI audio buffer handoff stage={} configured_buffer_ms={} "
+                    "configured_duration_100ns={}",
+                    stage,
+                    configured_duration / kReferenceTimePerMillisecond,
+                    configured_duration);
                 emit_info(actions, text.c_str());
             }
             catch (...)
@@ -801,8 +904,6 @@ namespace gc::audio
         struct ProductionDiagnosticContext
         {
             AudioBackend requested_backend{AudioBackend::directsound};
-            std::mutex mutex;
-            std::optional<AsioFailure> asio_fallback;
         };
 
         class ProductionAudioObserver final : public IAudioEngineObserver
@@ -821,15 +922,9 @@ namespace gc::audio
                 try
                 {
                     initialization_ = initialization;
-                    std::optional<AsioFailure> fallback;
-                    {
-                        std::lock_guard lock(diagnostics_.mutex);
-                        fallback = diagnostics_.asio_fallback;
-                    }
                     const auto text = startup_text(
                         initialization,
-                        diagnostics_.requested_backend,
-                        fallback ? &*fallback : nullptr);
+                        diagnostics_.requested_backend);
                     emit_info(actions_, text.c_str());
                 }
                 catch (...)
@@ -915,6 +1010,8 @@ namespace gc::audio
                         {
                         case AsioSessionLifecycleEvent::foreground_lost:
                             return "foreground_lost";
+                        case AsioSessionLifecycleEvent::physical_session_lost:
+                            return "physical_session_lost";
                         case AsioSessionLifecycleEvent::session_released:
                             return "session_released";
                         case AsioSessionLifecycleEvent::foreground_regained:
@@ -1071,50 +1168,22 @@ namespace gc::audio
             {
             }
 
-            void AsioFallback(const AsioFailure& failure) noexcept override
-            {
-                if (diagnostics_ != nullptr)
-                {
-                    try
-                    {
-                        std::lock_guard lock(diagnostics_->mutex);
-                        diagnostics_->asio_fallback = failure;
-                    }
-                    catch (...)
-                    {
-                    }
-                }
-                try
-                {
-                    const auto text = asio_failure_text(
-                        "ASIO startup failed; falling back to WASAPI", failure);
-                    emit_error(actions_, text.c_str());
-                }
-                catch (...)
-                {
-                    emit_error(actions_, "ASIO fallback diagnostics formatting failed");
-                }
-            }
-
             void FatalStartupFailure(
                 const AudioBackendStartupFailure& failure) noexcept override
             {
                 try
                 {
-                    std::ostringstream stream;
-                    stream << failure_text(
-                            "Audio startup fatal",
-                            failure.wasapi_failure.attempted,
-                            failure.wasapi_failure.failure)
-                        << " requested_backend="
-                        << AudioBackendName(failure.requested_backend)
-                        << " active_backend=failed";
-                    if (failure.asio_failure)
-                    {
-                        stream << ' ' << asio_failure_text(
-                            "nested_asio_failure", *failure.asio_failure);
-                    }
-                    const auto text = stream.str();
+                    const auto detail = failure.asio_failure
+                                            ? asio_failure_text(
+                                                "ASIO startup fatal", *failure.asio_failure)
+                                            : failure_text(
+                                                "Audio startup fatal",
+                                                failure.wasapi_failure.attempted,
+                                                failure.wasapi_failure.failure);
+                    const auto text = std::format(
+                        "{} requested_backend={} active_backend=failed",
+                        detail,
+                        AudioBackendName(failure.requested_backend));
                     emit_error(actions_, text.c_str());
                 }
                 catch (...)
@@ -1225,11 +1294,6 @@ namespace gc::audio
             {
                 return wasapi->buffer_ms();
             }
-            if (const auto* asio = std::get_if<AsioSettings>(
-                &settings.selection()))
-            {
-                return asio->wasapi_fallback_buffer_ms();
-            }
             return 0;
         }
 
@@ -1306,7 +1370,7 @@ namespace gc::audio
             bool complete{true};
         };
 
-HRESULT WINAPI DirectSoundCreate8Detour(
+        HRESULT WINAPI DirectSoundCreate8Detour(
             LPCGUID device_guid,
             LPDIRECTSOUND8* output,
             LPUNKNOWN outer)
@@ -1897,7 +1961,9 @@ HRESULT WINAPI DirectSoundCreate8Detour(
             }
             if (pending_state)
             {
-                static_cast<void>(pending_state.release());
+                auto* const committed_state = pending_state.release();
+                g_production_detour_state.store(
+                    committed_state, std::memory_order_release);
             }
             return true;
         }

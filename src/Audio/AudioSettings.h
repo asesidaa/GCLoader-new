@@ -75,21 +75,14 @@ namespace gc::audio
             return output_base_channel_;
         }
 
-        [[nodiscard]] std::uint32_t wasapi_fallback_buffer_ms() const noexcept
-        {
-            return wasapi_fallback_buffer_ms_;
-        }
-
     private:
         AsioSettings(
             std::string driver_name,
             std::uint32_t buffer_frames,
-            std::uint32_t output_base_channel,
-            std::uint32_t wasapi_fallback_buffer_ms)
+            std::uint32_t output_base_channel)
             : driver_name_(std::move(driver_name)),
               buffer_frames_(buffer_frames),
-              output_base_channel_(output_base_channel),
-              wasapi_fallback_buffer_ms_(wasapi_fallback_buffer_ms)
+              output_base_channel_(output_base_channel)
         {
         }
 
@@ -97,7 +90,6 @@ namespace gc::audio
         std::string driver_name_;
         std::uint32_t buffer_frames_{};
         std::uint32_t output_base_channel_{};
-        std::uint32_t wasapi_fallback_buffer_ms_{};
     };
 
     using AudioBackendSettings = std::variant<

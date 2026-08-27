@@ -44,7 +44,6 @@ namespace gc::audio
             state_ = State::starting;
         }
 
-        std::optional<AsioFailure> asio_failure;
         std::unique_ptr<IAudioEngineServices> engine;
         if (config_.requested_backend == AudioBackend::asio)
         {
@@ -58,13 +57,16 @@ namespace gc::audio
                 PublishResult(std::move(engine), State::active_asio);
                 return DS_OK;
             }
-            asio_failure = std::move(failure);
-            reporter_.AsioFallback(*asio_failure);
+            reporter_.FatalStartupFailure(AudioBackendStartupFailure{
+                .requested_backend = config_.requested_backend,
+                .asio_failure = std::move(failure),
+            });
+            PublishResult(nullptr, State::failed);
+            return DSERR_NODRIVER;
         }
 
         AudioStartupFailure wasapi_failure{};
-        if (config_.requested_backend == AudioBackend::asio ||
-            config_.requested_backend == AudioBackend::wasapi_exclusive)
+        if (config_.requested_backend == AudioBackend::wasapi_exclusive)
         {
             engine = wasapi_factory_.Start(
                 config_.wasapi_configured_duration,
@@ -78,7 +80,6 @@ namespace gc::audio
 
         reporter_.FatalStartupFailure(AudioBackendStartupFailure{
             .requested_backend = config_.requested_backend,
-            .asio_failure = std::move(asio_failure),
             .wasapi_failure = std::move(wasapi_failure),
         });
         PublishResult(nullptr, State::failed);

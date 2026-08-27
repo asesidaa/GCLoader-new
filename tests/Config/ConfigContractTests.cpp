@@ -241,11 +241,11 @@ namespace
         }
     }
 
-    void CompilerChecksAsioFallbackWasapiBuffer()
+    void CompilerIgnoresUnselectedWasapiBufferForAsio()
     {
         auto parsed =
             gc::config::ParseConfigDocument(ReadDistributedConfig());
-        Expect(parsed.has_value(), "ASIO fallback source document parses");
+        Expect(parsed.has_value(), "ASIO selection source document parses");
         if (!parsed)
         {
             return;
@@ -253,24 +253,15 @@ namespace
         auto& experimental = parsed->document.experimental();
         experimental.audio_backend = gc::audio::AudioBackend::asio;
         experimental.wasapi_exclusive_buffer_ms = 0;
-        experimental.asio_driver_name = "Fallback ASIO";
+        experimental.asio_driver_name = "Selected ASIO";
         experimental.asio_buffer_frames = 192;
         experimental.asio_output_base_channel = 0;
 
         const auto result =
             gc::config::ConfigCompiler::Compile(parsed->document);
-        Expect(!result.has_value(), "zero ASIO fallback buffer is rejected");
-        if (!result)
-        {
-            Expect(
-                ErrorKeys(result.error()) == std::vector<ErrorKey>{
-                    {
-                        "experimental.wasapi_exclusive_buffer_ms",
-                        gc::config::ConfigErrorCode::out_of_range,
-                    },
-                },
-                "ASIO fallback buffer error has the stable path and code");
-        }
+        Expect(
+            result.has_value(),
+            "ASIO does not depend on an unselected WASAPI buffer");
     }
 
     void DependentRulesRunOnlyAfterTheirLeavesPass()
@@ -413,7 +404,7 @@ namespace
             "formatter preserves compiler error order");
     }
 
-    void CompiledAudioSettingsOwnAsioFallback()
+    void CompiledAudioSettingsOwnAsioSelection()
     {
         std::optional<gc::audio::AudioSettings> owned_settings;
         {
@@ -454,9 +445,6 @@ namespace
         Expect(
             asio->output_base_channel() == 6,
             "owned ASIO output channel survives");
-        Expect(
-            asio->wasapi_fallback_buffer_ms() == 7,
-            "owned ASIO WASAPI fallback buffer survives");
     }
 
     void CompiledInputSettingsOwnControllerBindings()
@@ -638,11 +626,11 @@ int main()
     SemanticInvalidityDoesNotDestroyDocumentShape();
     CompilerReturnsEveryIndependentErrorInDocumentOrder();
     CompilerChecksSelectedWasapiBuffer();
-    CompilerChecksAsioFallbackWasapiBuffer();
+    CompilerIgnoresUnselectedWasapiBufferForAsio();
     DependentRulesRunOnlyAfterTheirLeavesPass();
     CompilerProducesConcreteAudioAndControllerAlternatives();
     FormatterIncludesCompleteCompilerErrorsInOrder();
-    CompiledAudioSettingsOwnAsioFallback();
+    CompiledAudioSettingsOwnAsioSelection();
     CompiledInputSettingsOwnControllerBindings();
     CompiledNesysAndRfidSettingsOwnDerivedValues();
     BackendMismatchReportsOnePrimaryBindingError();

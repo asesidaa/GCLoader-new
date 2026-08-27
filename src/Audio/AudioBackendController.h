@@ -74,7 +74,6 @@ namespace gc::audio
     {
     public:
         virtual ~IAudioBackendControllerReporter() = default;
-        virtual void AsioFallback(const AsioFailure&) noexcept = 0;
         virtual void FatalStartupFailure(
             const AudioBackendStartupFailure&) noexcept = 0;
         virtual void FatalControllerAllocationFailure() noexcept = 0;

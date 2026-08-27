@@ -322,11 +322,10 @@ Startup validates the actual provider, not merely the configured string:
 - a missing provider or backend/domain mismatch stops before gameplay with a
   clear fatal diagnostic.
 
-The existing ASIO audio controller may attempt its pre-commit WASAPI fallback
-for ordinary audio behavior. Absolute judgement must not silently accept that
-fallback when ASIO was configured, because the resulting run would not be an
-ASIO comparison. The provider mismatch therefore stops the process before
-gameplay and logs both the configured backend and active provider domain.
+Configured ASIO is strict for ordinary audio and absolute judgement alike.
+Neither initial failure nor foreground recovery may instantiate WASAPI. A
+backend/provider mismatch remains fatal as defense in depth and logs both the
+configured backend and active provider domain.
 
 There is never a mid-stage ASIO/WASAPI clock switch.
 

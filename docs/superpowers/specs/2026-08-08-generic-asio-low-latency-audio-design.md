@@ -27,8 +27,8 @@ The user chooses the backend and its backend-native buffer size:
 ConfigGUI offers installed drivers and common names as editable suggestions. A
 32-bit helper validates the exact selection before saving without loading an
 arbitrary vendor DLL into ConfigGUI. Runtime performs the authoritative probe
-again. Failure before ASIO becomes active falls back to WASAPI; a committed ASIO
-stream is not hot-switched mid-song.
+again. A foreground-confirmed startup failure is fatal; configured ASIO never
+selects WASAPI. Foreground loss suspends and later reacquires the ASIO stream.
 
 The Steinberg ASIO SDK remains an external CMake dependency. GCLoader uses the
 SDK under GPLv3 for public ASIO-enabled builds and publishes corresponding source
@@ -576,39 +576,42 @@ This preserves the July 28 shared gameplay-song-clock rule: chart, judgement,
 and audio consume one physical presentation timeline. An ASIO label is not
 permission to return a submitted or decoded cursor.
 
-## Failure and Fallback Policy
+## Failure Policy
 
 ### Before backend commit
 
 Any ASIO discovery, initialization, format, channel, buffer, callback, start, or
-clock-establishment failure tears down the partial ASIO host and starts WASAPI
-with the existing WASAPI configuration.
+clock-establishment failure while the game is foreground tears down the partial
+ASIO host and fails startup. Configured ASIO never instantiates WASAPI.
+
+Foreground loss during acquisition or callback stabilization is not a driver
+failure. It commits the logical ASIO backend in its suspended state, releases
+the physical session, and reacquires ASIO after foreground regain as specified
+by the ASIO focus-recovery design.
 
 The log records at minimum:
 
 ```text
 requested_backend=asio
-active_backend=wasapi_exclusive
+active_backend=failed
 asio_driver_name=...
 asio_failure_stage=...
 asio_result=...
-fallback_reason=...
 ```
 
-The config file is not rewritten. If WASAPI also fails, its existing fatal
-behavior and recovery guidance remain authoritative. Original DirectSound is
-used only when the user explicitly selected `directsound`.
+The config file is not rewritten. Original DirectSound and WASAPI exclusive are
+used only when explicitly selected.
 
 ### After backend commit
 
 Driver reset, buffer-size change, sample-rate change, resync request, device
-loss, invalid clock, or callback failure sets a one-way fault flag. A control
-path stops audio and displays guidance to restart. It does not silently switch
-to WASAPI after song playback has begun because the two physical clocks have no
-runtime-validated continuity handoff.
+loss, invalid clock, or callback failure while foreground sets a one-way fault
+flag. A control path stops audio and displays guidance to restart. Explicit
+foreground loss instead releases and later reacquires ASIO without replacing
+the logical clock or backend. No runtime state switches to WASAPI.
 
-The next launch repeats ASIO validation and falls back to WASAPI if the driver
-remains unavailable.
+The next launch repeats strict ASIO validation if the driver remains
+unavailable.
 
 ## Diagnostics
 
@@ -620,7 +623,7 @@ Startup logs include:
 - requested, minimum, maximum, preferred, and granular buffer sizes;
 - reported input and output latencies;
 - time-info, output-ready, and overload-report support;
-- fallback stage and result when applicable.
+- fatal startup stage and result when startup cannot commit.
 
 Low-frequency monitoring consumes callback-published counters and reports:
 
