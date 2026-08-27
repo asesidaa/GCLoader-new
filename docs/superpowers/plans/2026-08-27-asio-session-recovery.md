@@ -90,6 +90,7 @@ Insiders, CLion clangd/clang-tidy.
 - Create: `tests/Audio/Asio/AsioForegroundStateTests.cpp`
 - Modify: `src/Audio/Asio/AsioForegroundMonitor.h:26-63`
 - Modify: `src/Audio/Asio/AsioForegroundMonitor.cpp:261-316`
+- Modify: `src/Audio/Asio/AsioOutputBackend.cpp` (existing foreground reads)
 - Modify: `tests/CMakeLists.txt:13-24`
 
 **Interfaces:**
@@ -248,7 +249,9 @@ if (result == AsioForegroundPublishResult::changed && change_event_ != nullptr)
 
 Expose `snapshot()` by returning `foreground_state_.Read()`. Keep the direct
 Win32 query private as `QueryForegroundWindow()`; only
-`PublishCurrentForeground` calls it. The backend will consume only snapshots.
+`PublishCurrentForeground` calls it. Replace existing backend
+`QueryCurrentForeground()` calls with `snapshot().is_foreground`; Task 4 will
+add loss-generation consumption to those coherent reads.
 
 - [ ] **Step 5: Format and prove the focused test passes**
 
@@ -265,7 +268,7 @@ Expected: the target builds and the single test passes without sleeps.
 - [ ] **Step 6: Commit the coherent foreground publication**
 
 ```powershell
-git add -- src/Audio/Asio/AsioForegroundState.h src/Audio/Asio/AsioForegroundMonitor.h src/Audio/Asio/AsioForegroundMonitor.cpp tests/Audio/Asio/AsioForegroundStateTests.cpp tests/CMakeLists.txt
+git add -- src/Audio/Asio/AsioForegroundState.h src/Audio/Asio/AsioForegroundMonitor.h src/Audio/Asio/AsioForegroundMonitor.cpp src/Audio/Asio/AsioOutputBackend.cpp tests/Audio/Asio/AsioForegroundStateTests.cpp tests/CMakeLists.txt
 git commit -m "Fix ASIO foreground edge publication"
 ```
 

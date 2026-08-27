@@ -157,7 +157,7 @@ namespace gc::audio
             {
                 try
                 {
-                    std::array < char, 320 > suffix{};
+                    std::array<char, 320> suffix{};
                     const auto formatted = std::format_to_n(
                         suffix.data(),
                         suffix.size() - 1,
@@ -1067,7 +1067,7 @@ namespace gc::audio
                     {
                         return std::unexpected(LogicalFailure(*advance_failure));
                     }
-                    if (!foreground_monitor_->QueryCurrentForeground())
+                    if (!foreground_monitor_->snapshot().is_foreground)
                     {
                         return PhysicalSessionStartupOutcome::focus_lost;
                     }
@@ -1247,7 +1247,7 @@ namespace gc::audio
                     {
                         if (HasPublishedFault())
                         {
-                            if (!foreground_monitor_->QueryCurrentForeground())
+                            if (!foreground_monitor_->snapshot().is_foreground)
                             {
                                 return StableRenderOutcome::focus_lost;
                             }
@@ -1257,7 +1257,7 @@ namespace gc::audio
                     }
                     if (wait == WAIT_OBJECT_0 + 1)
                     {
-                        if (!foreground_monitor_->QueryCurrentForeground())
+                        if (!foreground_monitor_->snapshot().is_foreground)
                         {
                             return StableRenderOutcome::focus_lost;
                         }
@@ -1277,7 +1277,7 @@ namespace gc::audio
                                 AsioResultDomain::win32,
                                 foreground_monitor_->failure_code())));
                         }
-                        if (!foreground_monitor_->QueryCurrentForeground())
+                        if (!foreground_monitor_->snapshot().is_foreground)
                         {
                             return StableRenderOutcome::focus_lost;
                         }
@@ -1290,7 +1290,7 @@ namespace gc::audio
                     }
                     if (wait == WAIT_TIMEOUT)
                     {
-                        if (!foreground_monitor_->QueryCurrentForeground())
+                        if (!foreground_monitor_->snapshot().is_foreground)
                         {
                             return StableRenderOutcome::focus_lost;
                         }
@@ -1374,7 +1374,7 @@ namespace gc::audio
                     }
 
                     const bool foreground =
-                        foreground_monitor_->QueryCurrentForeground();
+                        foreground_monitor_->snapshot().is_foreground;
                     if (!foreground)
                     {
                         if (foreground_reported)
@@ -1570,7 +1570,7 @@ namespace gc::audio
                                 {
                                     return std::move(scoped_failure.failure);
                                 }
-                                if (!foreground_monitor_->QueryCurrentForeground())
+                                if (!foreground_monitor_->snapshot().is_foreground)
                                 {
                                     if (foreground_reported)
                                     {
@@ -1673,7 +1673,7 @@ namespace gc::audio
                                         return std::move(scoped_failure.failure);
                                     }
                                     if (lost_focus ||
-                                        !foreground_monitor_->QueryCurrentForeground())
+                                        !foreground_monitor_->snapshot().is_foreground)
                                     {
                                         if (foreground_reported)
                                         {
