@@ -16,7 +16,7 @@ namespace gc::audio
     {
         long buffer_index{};
         ASIOBool direct_process{};
-        bool has_time_info{};
+        bool has_system_time{};
         std::uint64_t sample_position{};
         std::uint64_t system_time_ns{};
     };

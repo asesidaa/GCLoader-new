@@ -14,8 +14,7 @@ namespace gc::audio
 {
     enum class AsioClockDecisionKind : std::uint8_t
     {
-        priming,
-        stable,
+        valid,
         invalid,
     };
 
@@ -24,7 +23,6 @@ namespace gc::audio
         AsioClockDecisionKind kind{AsioClockDecisionKind::invalid};
         std::uint64_t presented_output_frame{};
         std::uint64_t render_output_frame_begin{};
-        std::uint64_t system_time_ns{};
     };
 
     class AsioClockTracker final
@@ -34,8 +32,7 @@ namespace gc::audio
             std::uint32_t buffer_frames,
             std::uint32_t output_latency_frames) noexcept;
         [[nodiscard]] AsioClockDecision Observe(
-            std::uint64_t sample_position,
-            std::uint64_t system_time_ns) noexcept;
+            std::uint64_t sample_position) noexcept;
 
     private:
         [[nodiscard]] AsioClockDecision Fault() noexcept;
@@ -43,8 +40,7 @@ namespace gc::audio
         std::uint32_t buffer_frames_{};
         std::uint32_t output_latency_frames_{};
         std::uint64_t previous_sample_position_{};
-        std::uint32_t previous_system_time_ms_{};
-        std::uint8_t observation_count_{};
+        bool has_previous_sample_position_{};
         bool configured_{};
         bool faulted_{};
     };

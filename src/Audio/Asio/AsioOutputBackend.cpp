@@ -1065,8 +1065,7 @@ namespace gc::audio
                         logical_output_sample_rate_ = session_sample_rate;
                         logical_render_sequencer_ =
                             std::make_unique<AsioLogicalRenderSequencer>(
-                                request_.buffer_frames,
-                                logical_output_sample_rate_);
+                                request_.buffer_frames);
                         logical_timeline_ = AsioLogicalTimeline::Create(
                             actions_.time_get_time_ms(actions_.context),
                             logical_output_sample_rate_);
@@ -1223,6 +1222,8 @@ namespace gc::audio
                     clock_tracker_.Reset(
                         request_.buffer_frames,
                         session_->report().output_latency_frames);
+                    physical_stability_proof_callbacks_.store(
+                        0, std::memory_order_relaxed);
                     has_previous_sample_position_ = false;
                     render_ready_.store(true, std::memory_order_release);
                     if (auto started = session_->Start(); !started)
@@ -2546,8 +2547,31 @@ namespace gc::audio
             {
                 // This clock advances an already-confirmed background interval; it is
                 // never used to infer whether the game owns the foreground.
-                const auto plan = logical_render_sequencer_->TryPlanDetached(
+                const auto projected = logical_timeline_->WholePresentedFrameAt(
                     actions_.time_get_time_ms(actions_.context));
+                if (!projected)
+                {
+                    if (projected.error() ==
+                        AsioLogicalTimelineFailure::SnapshotUnavailable)
+                    {
+                        return std::nullopt;
+                    }
+                    return Failure(
+                        AsioFailureStage::runtime_clock,
+                        std::format(
+                            "ASIO detached logical projection failed: {}",
+                            static_cast<unsigned>(projected.error())));
+                }
+                if (*projected >
+                    (std::numeric_limits<std::uint64_t>::max)() -
+                    logical_output_latency_frames_)
+                {
+                    return Failure(
+                        AsioFailureStage::runtime_clock,
+                        "ASIO detached logical render target overflowed");
+                }
+                const auto plan = logical_render_sequencer_->TryPlanDetached(
+                    *projected + logical_output_latency_frames_);
                 if (!plan)
                 {
                     if (plan.error() == AsioLogicalRenderPlanFailure::Busy ||
@@ -2636,8 +2660,7 @@ namespace gc::audio
 
                 RecordSamplePosition(request.sample_position);
                 const auto decision = clock_tracker_.Observe(
-                    request.sample_position,
-                    request.system_time_ns);
+                    request.sample_position);
                 if (decision.kind == AsioClockDecisionKind::invalid)
                 {
                     ClearAsioBlock(request.buffer_index);
@@ -2647,34 +2670,107 @@ namespace gc::audio
                 const auto physical_session_generation =
                     active_physical_session_generation_.load(
                         std::memory_order_acquire);
-                const auto logical_plan =
-                    logical_render_sequencer_->TryPlanPhysical(
-                        physical_session_generation,
-                        decision);
-                if (!logical_plan)
-                {
-                    ClearAsioBlock(request.buffer_index);
-                    if (logical_plan.error() ==
-                        AsioLogicalRenderPlanFailure::Busy)
-                    {
-                        return;
-                    }
-                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
-                    return;
-                }
+                auto proof_callbacks =
+                    physical_stability_proof_callbacks_.load(
+                        std::memory_order_relaxed);
                 if (handoff_physical_session_generation_.load(
-                        std::memory_order_relaxed) !=
+                        std::memory_order_acquire) !=
                     physical_session_generation)
                 {
+                    if (!request.has_system_time)
+                    {
+                        ClearAsioBlock(request.buffer_index);
+                        (void)CallOutputReady();
+                        return;
+                    }
+                    if (logical_timeline_ == nullptr)
+                    {
+                        ClearAsioBlock(request.buffer_index);
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                        return;
+                    }
+
+                    const auto projected =
+                        logical_timeline_->WholePresentedFrameAtSystemTime(
+                            request.system_time_ns);
+                    if (!projected)
+                    {
+                        ClearAsioBlock(request.buffer_index);
+                        if (projected.error() ==
+                            AsioLogicalTimelineFailure::SnapshotUnavailable)
+                        {
+                            (void)CallOutputReady();
+                            return;
+                        }
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                        return;
+                    }
+                    if (*projected >
+                        (std::numeric_limits<std::uint64_t>::max)() -
+                        logical_output_latency_frames_)
+                    {
+                        ClearAsioBlock(request.buffer_index);
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                        return;
+                    }
+
+                    const auto attachment =
+                        logical_render_sequencer_->AttachPhysicalSession(
+                            physical_session_generation,
+                            *projected + logical_output_latency_frames_,
+                            decision.render_output_frame_begin);
+                    if (!attachment)
+                    {
+                        ClearAsioBlock(request.buffer_index);
+                        if (attachment.error() ==
+                            AsioLogicalRenderPlanFailure::Busy)
+                        {
+                            (void)CallOutputReady();
+                            return;
+                        }
+                        LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                        return;
+                    }
+
                     handoff_logical_render_origin_.store(
-                        logical_plan->timeline.output_frame_begin,
+                        attachment->logical_render_origin,
                         std::memory_order_relaxed);
                     handoff_physical_render_origin_.store(
-                        decision.render_output_frame_begin,
+                        attachment->physical_render_origin,
                         std::memory_order_relaxed);
                     handoff_physical_session_generation_.store(
                         physical_session_generation,
                         std::memory_order_release);
+                    proof_callbacks = 1;
+                    physical_stability_proof_callbacks_.store(
+                        proof_callbacks,
+                        std::memory_order_relaxed);
+                }
+                else if (proof_callbacks < 3)
+                {
+                    ++proof_callbacks;
+                    physical_stability_proof_callbacks_.store(
+                        proof_callbacks,
+                        std::memory_order_relaxed);
+                }
+
+                const auto logical_plan =
+                    logical_render_sequencer_->TryPlanPhysical(
+                        physical_session_generation,
+                        decision.render_output_frame_begin);
+                if (!logical_plan)
+                {
+                    ClearAsioBlock(request.buffer_index);
+                    if (logical_plan.error() ==
+                        AsioLogicalRenderPlanFailure::Busy ||
+                        logical_plan.error() ==
+                        AsioLogicalRenderPlanFailure::NotDue)
+                    {
+                        (void)CallOutputReady();
+                        return;
+                    }
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                    return;
                 }
                 const auto rendered = RenderLogicalBlock(*logical_plan);
                 if (!rendered)
@@ -2683,15 +2779,7 @@ namespace gc::audio
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
-                const AsioClockDecision logical{
-                    .kind = decision.kind,
-                    .presented_output_frame =
-                    logical_plan->presented_output_frame,
-                    .render_output_frame_begin =
-                    logical_plan->timeline.output_frame_begin,
-                    .system_time_ns = logical_plan->system_time_ns,
-                };
-                if (logical.kind == AsioClockDecisionKind::priming)
+                if (proof_callbacks < 3)
                 {
                     ClearAsioBlock(request.buffer_index);
                     if (!logical_render_sequencer_->Commit(*logical_plan))
@@ -3059,6 +3147,7 @@ namespace gc::audio
             std::atomic_uint64_t handoff_physical_session_generation_{};
             std::atomic_uint64_t handoff_logical_render_origin_{};
             std::atomic_uint64_t handoff_physical_render_origin_{};
+            std::atomic_uint32_t physical_stability_proof_callbacks_{};
             std::uint32_t logical_output_sample_rate_{};
             std::uint32_t logical_output_latency_frames_{};
             bool physical_contract_established_{};

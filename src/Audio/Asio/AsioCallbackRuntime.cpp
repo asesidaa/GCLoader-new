@@ -720,7 +720,7 @@ namespace gc::audio
         AsioRenderRequest request{
             buffer_index,
             direct_process,
-            true,
+            false,
             0,
             0,
         };
@@ -729,14 +729,10 @@ namespace gc::audio
         // retain event-specific counters before converging on the same fault.
         // NOLINTBEGIN(bugprone-branch-clone)
         if (time == nullptr ||
-            (time->timeInfo.flags & kSystemTimeValid) == 0 ||
             (time->timeInfo.flags & kSamplePositionValid) == 0 ||
             !ConvertSamples(
                 time->timeInfo.samplePosition,
-                &request.sample_position) ||
-            !ConvertTimestamp(
-                time->timeInfo.systemTime,
-                &request.system_time_ns))
+                &request.sample_position))
         {
             validation_failure = AsioFailureStage::runtime_clock;
         }
@@ -763,9 +759,18 @@ namespace gc::audio
         {
             validation_failure = AsioFailureStage::runtime_clock;
         }
+        else if ((time->timeInfo.flags & kSystemTimeValid) != 0 &&
+            ConvertTimestamp(
+                time->timeInfo.systemTime,
+                &request.system_time_ns) &&
+            request.system_time_ns != 0)
+        {
+            request.has_system_time = true;
+        }
         // NOLINTEND(bugprone-branch-clone)
 
-        if (validation_failure == AsioFailureStage::none)
+        if (validation_failure == AsioFailureStage::none &&
+            request.has_system_time)
         {
             RecordDriverCadence(
                 request.system_time_ns,
@@ -814,13 +819,20 @@ namespace gc::audio
         {
             validation_failure = AsioFailureStage::callback;
         }
-        else if (!ConvertSamples(samples, &request.sample_position) ||
-            !ConvertTimestamp(timestamp, &request.system_time_ns))
+        else if (!ConvertSamples(samples, &request.sample_position))
         {
             validation_failure = AsioFailureStage::runtime_clock;
         }
+        else
+        {
+            request.has_system_time = ConvertTimestamp(
+                    timestamp,
+                    &request.system_time_ns) &&
+                request.system_time_ns != 0;
+        }
 
-        if (validation_failure == AsioFailureStage::none)
+        if (validation_failure == AsioFailureStage::none &&
+            request.has_system_time)
         {
             RecordDriverCadence(
                 request.system_time_ns,

@@ -6,10 +6,10 @@
 
 namespace
 {
-    using gc::audio::AsioClockDecision;
-    using gc::audio::AsioClockDecisionKind;
+    using gc::audio::AsioLogicalRenderPlan;
     using gc::audio::AsioLogicalRenderPlanFailure;
     using gc::audio::AsioLogicalRenderSequencer;
+    using gc::audio::AsioPhysicalAttachmentDisposition;
 
     int g_failures{};
 
@@ -22,152 +22,176 @@ namespace
         }
     }
 
-    AsioClockDecision StableDecision(
-        const std::uint64_t presented,
-        const std::uint64_t render_begin,
-        const std::uint64_t system_time_ns) noexcept
+    void ExpectPlan(
+        const std::expected<AsioLogicalRenderPlan,
+                            AsioLogicalRenderPlanFailure>& plan,
+        const std::uint64_t begin,
+        const std::uint64_t discontinuity,
+        const std::uint64_t tail,
+        const std::string_view message)
     {
-        return {
-            .kind = AsioClockDecisionKind::stable,
-            .presented_output_frame = presented,
-            .render_output_frame_begin = render_begin,
-            .system_time_ns = system_time_ns,
-        };
+        Expect(plan.has_value(), message);
+        if (!plan)
+        {
+            return;
+        }
+        Expect(plan->timeline.output_frame_begin == begin, message);
+        Expect(plan->timeline.discontinuity_frames == discontinuity, message);
+        Expect(plan->submitted_output_tail == tail, message);
     }
 
-    void RecoveryPreservesEveryElapsedFrame()
+    void OneAttachmentOwnsEveryLaterPhysicalCoordinate()
     {
-        AsioLogicalRenderSequencer sequencer{192, 48'000};
-
-        const auto first_generation = sequencer.BeginPhysicalSession();
-        Expect(first_generation.has_value(), "the first physical session receives a generation");
-        if (!first_generation)
-        {
-            return;
-        }
-
-        auto first = sequencer.TryPlanPhysical(
-            *first_generation,
-            StableDecision(0, 384, 1'000'000'000));
-        Expect(first.has_value(), "the first physical callback obtains a logical plan");
-        if (!first)
-        {
-            return;
-        }
-        Expect(first->timeline.output_frame_begin == 0, "the initial logical stream starts at frame zero");
-        Expect(first->timeline.discontinuity_frames == 0, "the initial block has no discontinuity");
-        Expect(first->submitted_output_tail == 192, "the initial block commits one hardware period");
-        Expect(sequencer.Commit(*first), "the initial physical plan commits");
-        Expect(sequencer.EndPhysicalSession(*first_generation), "the first physical session ends cleanly");
-
-        const auto second_generation = sequencer.BeginPhysicalSession();
-        Expect(second_generation.has_value(), "a replacement session receives a generation");
-        Expect(second_generation && *second_generation > *first_generation,
-               "physical generations increase without resetting logical time");
-        if (!second_generation)
-        {
-            return;
-        }
-
-        auto after_twenty_ms = sequencer.TryPlanPhysical(
-            *second_generation,
-            StableDecision(0, 384, 1'020'000'000));
-        Expect(after_twenty_ms.has_value(), "the recovered callback obtains a plan");
-        if (!after_twenty_ms)
-        {
-            return;
-        }
-        Expect(after_twenty_ms->timeline.output_frame_begin == 960,
-               "twenty elapsed milliseconds map to 960 logical frames");
-        Expect(after_twenty_ms->timeline.discontinuity_frames == 768,
-               "the recovered block represents every frame after the prior submitted tail");
-        Expect(after_twenty_ms->presented_output_frame == 576,
-               "physical latency is rebased into the persistent logical domain");
-        Expect(sequencer.Commit(*after_twenty_ms), "the recovered physical plan commits");
-
-        auto contiguous = sequencer.TryPlanPhysical(
-            *second_generation,
-            StableDecision(192, 576, 1'024'000'000));
-        Expect(contiguous.has_value(), "the next physical period obtains a plan");
-        if (!contiguous)
-        {
-            return;
-        }
-        Expect(contiguous->timeline.output_frame_begin == 1'152,
-               "the replacement session advances from its committed mapping");
-        Expect(contiguous->timeline.discontinuity_frames == 0,
-               "the next physical period is contiguous");
-        Expect(sequencer.Commit(*contiguous), "the contiguous physical plan commits");
-        Expect(sequencer.EndPhysicalSession(*second_generation), "the replacement session ends cleanly");
-
-        const auto third_generation = sequencer.BeginPhysicalSession();
-        Expect(third_generation.has_value(), "a second replacement session receives a generation");
-        if (!third_generation)
-        {
-            return;
-        }
-
-        auto after_seven_ms = sequencer.TryPlanPhysical(
-            *third_generation,
-            StableDecision(0, 384, 1'031'000'000));
-        Expect(after_seven_ms.has_value(), "the sub-period recovery gap obtains a plan");
-        if (!after_seven_ms)
-        {
-            return;
-        }
-        Expect(after_seven_ms->timeline.output_frame_begin == 1'488,
-               "seven elapsed milliseconds add all 336 logical frames");
-        Expect(after_seven_ms->timeline.discontinuity_frames == 144,
-               "the sub-period remainder is preserved instead of discarded");
-        Expect(sequencer.Commit(*after_seven_ms), "the frame-accurate replacement plan commits");
-    }
-
-    void ClaimsAreExclusiveAndTransactional()
-    {
-        AsioLogicalRenderSequencer sequencer{192, 48'000};
+        AsioLogicalRenderSequencer sequencer{192};
         const auto generation = sequencer.BeginPhysicalSession();
-        Expect(generation.has_value(), "the ownership test receives a physical generation");
+        Expect(generation.has_value(), "physical generation begins");
         if (!generation)
         {
             return;
         }
 
-        auto first = sequencer.TryPlanPhysical(
+        const auto attached = sequencer.AttachPhysicalSession(
             *generation,
-            StableDecision(0, 384, 2'000'000'000));
-        Expect(first.has_value(), "the first caller acquires the render claim");
-        if (!first)
+            0,
+            500);
+        Expect(attached.has_value(), "first mapping attaches");
+
+        auto first = sequencer.TryPlanPhysical(*generation, 500);
+        ExpectPlan(first, 0, 0, 192, "origin maps exactly");
+        Expect(first && sequencer.Commit(*first), "origin block commits");
+
+        auto second = sequencer.TryPlanPhysical(*generation, 692);
+        ExpectPlan(second,
+                   192,
+                   0,
+                   384,
+                   "later mapping uses only the 192-sample delta");
+        Expect(second && sequencer.Commit(*second), "second block commits");
+
+        const auto duplicate_attach = sequencer.AttachPhysicalSession(
+            *generation,
+            99'000,
+            692);
+        Expect(
+            !duplicate_attach &&
+            duplicate_attach.error() ==
+            AsioLogicalRenderPlanFailure::PhysicalSessionAlreadyAttached,
+            "later callback evidence cannot re-anchor the session");
+    }
+
+    void DetachedCoverageProducesOneWaitOrCatchUp()
+    {
+        AsioLogicalRenderSequencer sequencer{192};
+        const auto first_generation = sequencer.BeginPhysicalSession();
+        Expect(first_generation.has_value(), "initial generation begins");
+        if (!first_generation)
         {
             return;
         }
+        Expect(sequencer.AttachPhysicalSession(
+                            *first_generation,
+                            0,
+                            384)
+                        .has_value(),
+               "initial physical session attaches");
+        auto initial = sequencer.TryPlanPhysical(*first_generation, 384);
+        ExpectPlan(initial, 0, 0, 192, "initial block starts at zero");
+        Expect(initial && sequencer.Commit(*initial), "initial block commits");
+        Expect(sequencer.EndPhysicalSession(*first_generation),
+               "initial physical session ends");
 
-        const auto competing = sequencer.TryPlanPhysical(
-            *generation,
-            StableDecision(0, 384, 2'000'000'000));
-        Expect(!competing.has_value(), "a second caller cannot enter the logical renderer");
-        Expect(!competing && competing.error() == AsioLogicalRenderPlanFailure::Busy,
-               "claim contention is reported distinctly from a clock fault");
+        auto detached = sequencer.TryPlanDetached(960);
+        ExpectPlan(detached,
+                   960,
+                   768,
+                   1'152,
+                   "detached absolute target catches up once");
+        Expect(detached && sequencer.Commit(*detached),
+               "detached block commits");
 
-        Expect(sequencer.Abandon(*first), "an unrendered plan can be abandoned");
-        auto retried = sequencer.TryPlanPhysical(
-            *generation,
-            StableDecision(0, 384, 2'000'000'000));
-        Expect(retried.has_value(), "abandoning releases the claim");
-        if (!retried)
+        const auto second_generation = sequencer.BeginPhysicalSession();
+        Expect(second_generation.has_value(), "replacement generation begins");
+        if (!second_generation)
         {
             return;
         }
-        Expect(retried->timeline.output_frame_begin == 0,
-               "abandoning does not advance the logical cursor");
-        Expect(retried->timeline.discontinuity_frames == 0,
-               "abandoning does not install a hidden discontinuity");
-        Expect(sequencer.Commit(*retried), "the retried plan commits normally");
+        const auto attachment = sequencer.AttachPhysicalSession(
+            *second_generation,
+            1'056,
+            384);
+        Expect(attachment &&
+               attachment->disposition ==
+               AsioPhysicalAttachmentDisposition::WaitForPhysical &&
+               attachment->interval_frames == 96,
+               "replacement reports its one wait interval");
+
+        const auto behind = sequencer.TryPlanPhysical(
+            *second_generation,
+            384);
+        Expect(!behind &&
+               behind.error() == AsioLogicalRenderPlanFailure::NotDue,
+               "covered physical output waits without replay");
+
+        auto caught_up = sequencer.TryPlanPhysical(
+            *second_generation,
+            576);
+        ExpectPlan(caught_up,
+                   1'248,
+                   96,
+                   1'440,
+                   "first ahead callback catches the remaining interval once");
+        Expect(caught_up && sequencer.Commit(*caught_up),
+               "catch-up block commits");
+
+        auto contiguous = sequencer.TryPlanPhysical(
+            *second_generation,
+            768);
+        ExpectPlan(contiguous,
+                   1'440,
+                   0,
+                   1'632,
+                   "next callback is contiguous rather than re-corrected");
+        Expect(contiguous && sequencer.Commit(*contiguous),
+               "contiguous block commits");
+    }
+
+    void ClaimsRemainExclusiveAndAbandonIsTransactional()
+    {
+        AsioLogicalRenderSequencer sequencer{192};
+        const auto generation = sequencer.BeginPhysicalSession();
+        Expect(generation.has_value(), "claim-test generation begins");
+        if (!generation)
+        {
+            return;
+        }
+        Expect(sequencer.AttachPhysicalSession(*generation, 0, 0).has_value(),
+               "claim test attaches");
+        auto held = sequencer.TryPlanPhysical(*generation, 0);
+        Expect(held.has_value(), "first caller owns the claim");
+        if (!held)
+        {
+            return;
+        }
+        const auto competing = sequencer.TryPlanPhysical(*generation, 0);
+        Expect(!competing &&
+               competing.error() == AsioLogicalRenderPlanFailure::Busy,
+               "only one renderer owns the claim");
+        Expect(sequencer.Abandon(*held), "abandon releases the claim");
+        auto retried = sequencer.TryPlanPhysical(*generation, 0);
+        ExpectPlan(retried,
+                   0,
+                   0,
+                   192,
+                   "abandon does not advance hidden state");
+        Expect(retried && sequencer.Commit(*retried),
+               "retried block commits");
     }
 } // namespace
 
 int main()
 {
-    RecoveryPreservesEveryElapsedFrame();
-    ClaimsAreExclusiveAndTransactional();
+    OneAttachmentOwnsEveryLaterPhysicalCoordinate();
+    DetachedCoverageProducesOneWaitOrCatchUp();
+    ClaimsRemainExclusiveAndAbandonIsTransactional();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -9,28 +9,8 @@
 
 namespace gc::audio
 {
-    namespace
-    {
-        constexpr std::uint64_t kNanosecondsPerMillisecond = 1'000'000;
-        constexpr auto kClockAtomicOrder = std::memory_order_seq_cst;
-
-        static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
-        static_assert(std::atomic<bool>::is_always_lock_free);
-
-        std::uint32_t ToWrappingMilliseconds(
-            std::uint64_t system_time_ns) noexcept
-        {
-            return static_cast<std::uint32_t>(
-                system_time_ns / kNanosecondsPerMillisecond);
-        }
-
-        bool IsForwardClockDelta(std::uint32_t elapsed_ms) noexcept
-        {
-            return elapsed_ms <=
-                static_cast<std::uint32_t>(
-                    std::numeric_limits<std::int32_t>::max());
-        }
-    } // namespace
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+    static_assert(std::atomic<bool>::is_always_lock_free);
 
     void AsioClockTracker::Reset(
         std::uint32_t buffer_frames,
@@ -39,8 +19,7 @@ namespace gc::audio
         buffer_frames_ = buffer_frames;
         output_latency_frames_ = output_latency_frames;
         previous_sample_position_ = 0;
-        previous_system_time_ms_ = 0;
-        observation_count_ = 0;
+        has_previous_sample_position_ = false;
         configured_ = buffer_frames != 0;
         faulted_ = !configured_;
     }
@@ -52,29 +31,17 @@ namespace gc::audio
     }
 
     AsioClockDecision AsioClockTracker::Observe(
-        std::uint64_t sample_position,
-        std::uint64_t system_time_ns) noexcept
+        const std::uint64_t sample_position) noexcept
     {
-        if (!configured_ || faulted_ || system_time_ns == 0 ||
-            sample_position % buffer_frames_ != 0)
+        if (!configured_ || faulted_)
         {
             return Fault();
         }
 
-        const auto system_time_ms =
-            ToWrappingMilliseconds(system_time_ns);
-        if (observation_count_ != 0)
+        if (has_previous_sample_position_)
         {
             if (sample_position <= previous_sample_position_ ||
                 sample_position - previous_sample_position_ != buffer_frames_)
-            {
-                return Fault();
-            }
-
-            const auto elapsed_ms =
-                system_time_ms - previous_system_time_ms_;
-            if (!IsForwardClockDelta(elapsed_ms) ||
-                (observation_count_ >= 2 && elapsed_ms == 0))
             {
                 return Fault();
             }
@@ -88,19 +55,12 @@ namespace gc::audio
         }
 
         previous_sample_position_ = sample_position;
-        previous_system_time_ms_ = system_time_ms;
-        if (observation_count_ < 3)
-        {
-            ++observation_count_;
-        }
+        has_previous_sample_position_ = true;
 
         const AsioClockDecision decision{
-            observation_count_ >= 3
-                ? AsioClockDecisionKind::stable
-                : AsioClockDecisionKind::priming,
+            AsioClockDecisionKind::valid,
             sample_position,
             sample_position + output_latency_frames_,
-            system_time_ns,
         };
         return decision;
     }
