@@ -1,228 +1,402 @@
-# ASIO Session Loss and Recovery Design
+# ASIO Focus Suspension and Recovery Design
 
-## Context
+**Status:** Approved design, 2026-08-27
 
-The ASIO backend currently models focus loss as a special recovery path while
-treating a driver or callback fault in the foreground as terminal. It also
-lets physical callbacks and background advancement manipulate the persistent
-mixer through separate, implicit ownership paths.
+**Scope:** ASIO lifecycle, logical audio continuity, and exact judgement time
 
-The reproduced failure proves that reopening IASIO is not sufficient recovery.
-After a successful focus-driven reacquisition, the driver continued delivering
-healthy callbacks while one candidate buffer's exact-playback publication
-failed. A mixer-global sticky latch then substituted silence for every output
-block. Physical-session lifetime, logical rendering, and judgement continuity
-are therefore coupled at the wrong ownership boundaries.
+**Supersedes:** The focus-recovery behavior introduced by `fe0c54a` and extended
+by `8619113`
 
-ASIO focus handling remains an ownership lifecycle, not a clock-health
-inference. Foreground state decides whether the loader should voluntarily own
-IASIO. Explicit driver notifications and callback/session failures are separate
-authorities that can invalidate a physical session even while the game remains
-foreground. Driver time, callback cadence, and elapsed time must never be used
-to infer foreground state.
+## Problem
 
-## Approved behavior
+The current backend turns one ASIO endpoint into two incompletely separated
+lifetimes: a persistent logical audio engine and a replaceable physical driver
+session. The separation is presently inconsistent in four ways:
 
-- Losing foreground ownership fully stops and releases the current IASIO
-  session so another ASIO client may acquire the driver.
-- The DirectSound facade, mixer, active voices, logical output-frame domain,
-  and exact judgement-clock provider survive the release.
-- While no IASIO session exists, active voices advance through silent,
-  discarded mixer renders.
-- Regaining foreground ownership starts acquisition of a fresh IASIO session.
-  Temporary acquisition failures are retried while the game remains
-  foreground. A recovery delay is acceptable.
-- A reset, resync, sample-rate change, buffer-size change, latency change,
-  callback-contract failure, invalid driver clock, or output-ready failure
-  invalidates only the physical session. The loader releases that session and
-  retries ASIO while the game remains foreground.
-- An overload notification is diagnostic evidence, not by itself proof that
-  the session is lost. It does not stop rendering or trigger recovery unless a
-  separate callback/clock contract actually fails.
-- Losing foreground during initial ASIO acquisition or callback stabilization
-  commits the logical ASIO backend in the same background-silent state. It
-  never changes the selected backend to WASAPI.
-- A fresh physical IASIO session does not create a fresh logical endpoint or
-  exact-clock generation. Mid-song judgement state is bound to the existing
-  provider and generation and must remain recoverable.
-- Configured ASIO never starts WASAPI. Initial foreground acquisition may fail
-  startup; after the logical ASIO backend commits, physical acquisition
-  failures remain in ASIO recovery.
-- Logical-engine corruption, checked-arithmetic failure, foreground-monitor
-  failure, or inability to preserve the persistent endpoint contract remains
-  fatal. A physical-session failure does not.
+1. Startup can interpret foreground loss as successful ASIO startup without
+   ever starting the driver or receiving a callback.
+2. A loss followed quickly by a regain can collapse into one final foreground
+   value before the control thread observes the loss.
+3. Detached rendering has no initial logical anchor in that startup path and
+   does not publish exact continuity anchors. Voices, presented audio time, and
+   judgement time can therefore stop while the process is backgrounded.
+4. The judgement scheduler resolves the immutable stage-entry timestamp on
+   every outer loop after activation. Once that timestamp ages out of bounded
+   exact history, every frame performs a full history scan and reports
+   `HistoryLost` even though the active stage clock is already bound.
 
-## Foreground authority
+The current recovery loop also retries physical-session faults indefinitely.
+That hides violations of callback, clock, render, and cleanup contracts and
+allows the game to continue with an audio backend whose correctness is no
+longer known.
 
-An audio-owned monitor installs an out-of-context
-`EVENT_SYSTEM_FOREGROUND` WinEvent hook on a dedicated message-loop thread.
-The callback compares the foreground window's process ID with the current game
-process, publishes only state changes, and signals the ASIO control thread.
+The observed all-foreground runtime log does not show an ASIO driver failure:
+the driver reported no reset, resync, rate, buffer-size, or latency request;
+sample positions remained continuous; and rendered-frame gaps remained zero.
+The redesign must therefore keep the ordinary foreground callback path small
+and stable. Recovery is an explicit focus lifecycle, not a general mechanism
+for masking audio faults.
 
-The WinEvent transition drives normal release and reacquisition. If a driver
-fault races the notification, the control thread directly reads the current
-foreground window and process ID before classifying the fault. This is an
-explicit foreground-state query, not a timing heuristic.
+## Required behavior
 
-The monitor is owned entirely by the ASIO backend. It does not reuse or depend
-on the input polling foreground policy.
+- Configured ASIO always remains ASIO. Neither startup nor recovery may create
+  or select a WASAPI backend.
+- Startup performs one complete physical ASIO acquisition, calls `Start`, and
+  proves stable callbacks even if the process loses foreground during startup.
+- After startup stability is proven, an observed background state or any
+  unconsumed focus-loss generation suspends and releases the physical session.
+- A running focus loss cleanly quiesces callbacks, stops and releases IASIO,
+  but preserves the logical engine and exact-clock identity.
+- While suspended, discarded mixer rendering advances voices, the logical
+  output cursor, the presented clock, and exact judgement time.
+- Foreground regain acquires a fresh physical session and maps its raw sample
+  position into the existing logical output-frame domain.
+- A focus loss cannot be erased by a later regain, even when both occur before
+  the control thread wakes.
+- Ordinary foreground operation never polls, retries, reopens, or performs
+  detached rendering.
+- Once the backend has invoked `Start`, any failure to prove or preserve the
+  physical-session contract is fatal. Continuing with uncertain audio state is
+  forbidden.
+- Judgement is continuous across a confirmed suspension. Elapsed time may
+  advance the logical timeline only after focus state independently places the
+  backend in the suspended lifecycle; elapsed time is never evidence of focus
+  loss.
 
-## Ownership boundary
+## Non-goals
 
-The backend is split conceptually into two lifetimes:
+- Recovering arbitrary ASIO driver resets or broken callback streams in place.
+- Guessing focus from silence, driver timestamps, callback cadence, timeouts,
+  frame drops, or audio-clock drift.
+- Falling back to another backend.
+- Recreating the DirectSound facade, mixer, voices, endpoint generation, or
+  exact-clock provider during focus recovery.
+- Treating one late callback or one long game frame as proof of session loss.
 
-1. **Logical audio engine lifetime**
-   - DirectSound-facing `IAudioEngineServices`
-   - `AudioRenderCore`, miniaudio mixer, and every existing `MixerVoice`
-   - logical 48 kHz output-frame cursor
-   - presented-clock publication
-   - registered `ExactAsioClock` provider and endpoint generation
-   - one logical render sequencer that owns the next render frame, render-time
-     anchor, and the exclusive render claim
-   - foreground monitor and control thread
+## Ownership model
 
-2. **Physical ASIO session lifetime**
-   - driver registration resolution and a newly created IASIO COM object
-   - `AsioSession`
-   - callback runtime and worker
-   - ASIO buffers and channel views
-   - per-session `AsioClockTracker`
-   - mapping from raw driver sample positions to the persistent logical
-     output-frame domain
-   - a monotonically increasing physical-session generation used for
-     diagnostics and handoff validation, not as a new logical endpoint
+The backend owns two explicit lifetimes.
 
-Focus loss destroys only the physical-session lifetime. Final backend shutdown
-destroys both lifetimes.
+### Logical backend lifetime
 
-## State machine
+Created once after configuration and destroyed only during final shutdown:
+
+- DirectSound-facing `IAudioEngineServices`;
+- `AudioRenderCore`, miniaudio mixer, and all live `MixerVoice` objects;
+- monotonically increasing logical 48 kHz output-frame cursor;
+- presented-clock publication;
+- registered `ExactAsioClock` provider and endpoint generation;
+- logical render sequencer and its exclusive render claim;
+- foreground publication and the ASIO control thread.
+
+### Physical session lifetime
+
+Created at startup or recovery and destroyed at focus suspension or final
+shutdown:
+
+- IASIO driver instance and registration resolution;
+- `AsioSession`, buffers, and channel views;
+- callback table, callback runtime, and callback worker;
+- per-session raw sample-position tracker;
+- raw-driver-to-logical-frame mapping;
+- diagnostic physical-session generation.
+
+Only the logical render sequencer may authorize mixer rendering. The physical
+callback path and suspended path are two producers competing for that single
+production claim; they may never enter the mixer concurrently.
+
+## Lifecycle state machine
 
 ```text
-startup --foreground retained + stable callbacks--> active
-startup --foreground lost--> releasing -> detached
-active --foreground lost--> releasing -> detached
-active --physical-session fault--> releasing -> detached
-detached --logical deadline--> discard logical render -> detached
-detached --foreground gained/retained--> reacquiring
-reacquiring --success + stable callbacks--> active
-reacquiring --temporary failure + still foreground--> detached
-reacquiring --foreground lost--> detached
-any state --logical-engine fatal--> final teardown
-any state --backend shutdown--> final teardown
+Starting
+  acquisition/Start/stability succeeds -> Running
+  any failure                         -> Fatal
+
+Running
+  unconsumed focus loss/background    -> Suspending
+  shutdown                            -> Stopping
+  any physical/logical contract fault -> Fatal
+
+Suspending
+  callbacks quiesced and IASIO closed -> Suspended
+  unsafe cleanup                      -> Fatal
+
+Suspended
+  detached logical deadlines          -> Suspended
+  foreground with no pending loss      -> Recovering
+  logical/monitor fault                -> Fatal
+  shutdown                             -> Stopping
+
+Recovering
+  pre-Start acquisition succeeds       -> Start/stability -> Running
+  clean pre-Start acquisition failure  -> bounded retry or Fatal
+  focus loss before Start              -> Suspended
+  Start/stability/contract fault        -> Fatal
+
+Fatal
+  controlled final teardown            -> stopped with fatal result
+
+Stopping
+  controlled final teardown            -> stopped
 ```
 
-The retry delay schedules another acquisition attempt only while the explicit
-state is foreground. Expiration of a timer is never evidence that ownership
-changed.
+`Running` is committed only after the callback stability proof completes. A
+focus loss during `Starting` does not abort that proof. Immediately after the
+proof, the control thread consumes the foreground snapshot; if the process is
+background or a loss occurred during startup, it transitions through
+`Suspending` before doing anything else.
 
-## Logical render sequencer and handoff
+## Foreground publication
 
-The logical render cursor is monotonically increasing for the lifetime of the
-backend. Every mixer render or discarded interval goes through one sequencer.
-The sequencer has one non-blocking exclusive render claim, so an active ASIO
-callback and detached advancement cannot enter miniaudio concurrently.
+Foreground publication is a coherent snapshot containing at least:
 
-Active ASIO callbacks and detached logical renders use an explicit ownership
-handoff:
+- `is_foreground`: the latest observed state; and
+- `loss_generation`: a monotonic counter incremented on every foreground to
+  background transition.
 
-- Before releasing IASIO, callback rendering is disabled, the driver is
-  stopped, and the callback worker is joined.
-- Detached rendering advances the mixer at block-sized render points and
-  discards the samples. Its discontinuity represents every elapsed logical
-  frame, including a sub-period remainder.
-- Physical acquisition may block, but it does not own the logical clock. The
-  first callback of the replacement session computes the frame-accurate logical
-  gap from the last committed logical render to its explicit driver timestamp.
-  The current hardware block renders at that logical position with the
-  intervening frames represented as a discontinuity. The gap is not rounded to
-  a hardware period because that would permanently discard judgement time.
-- The first callback establishes a new raw-driver-to-logical mapping. Raw ASIO
-  sample positions may restart from zero or an unrelated driver coordinate.
-  Subsequent callbacks must agree with that mapping.
-- A render plan changes sequencer state only after `AudioRenderCore::Render`
-  completes. Failed or competing plans cannot partially advance the logical
-  cursor.
+The WinEvent callback is the single publisher. The control thread records the
+last consumed loss generation. Its wake event is only a scheduling hint and
+may coalesce; correctness comes from the snapshot.
 
-The normal DirectSound presented cursor advances during silent rendering. The
-exact judgement provider remains registered with the same generation, but no
-synthetic hardware anchors are published while IASIO is absent. Exact queries
-may therefore remain pending during recovery; once stable ASIO anchors resume,
-the same provider can resolve new input without losing the semantic-stage
-binding.
+If loss and regain occur before one control-thread read, that read sees the
+latest state as foreground **and** a newer loss generation. `Running` must
+therefore suspend the old physical session first, consume the loss, and only
+then recover. A quick regain cannot retroactively prove that the old IASIO
+ownership was continuously valid.
 
-## Voice and judgement ownership
+An initially background process still performs normal startup. Once stable,
+the current background state drives immediate suspension even if no transition
+was observed after monitor initialization.
 
-Exact playback history belongs to one `AudioCursorTimeline`; it is not a mixer
-health signal. Failure to publish one candidate buffer's exact mapping marks
-that timeline discontinuous and records bounded diagnostics, but audio mixing
-continues for every voice. In particular, a menu or preview buffer cannot mute
-the endpoint.
+No foreground query is derived from elapsed time. Timers are used only to wake
+an already suspended state for detached rendering or an already recovering
+state for a scheduled retry.
 
-The native gameplay cursor selection is the authority that chooses the
-timeline used for judgement. Before binding, a discontinuous selected history
-is rejected. Once the resolver has established its stage anchor, that anchor
-remains the gameplay clock authority. Candidate-buffer publication failures do
-not alter the bound anchor and are not promoted to mixer-wide failures.
+## Startup and physical-session stability
+
+Startup has exactly one acquisition attempt and no backend fallback:
+
+1. Create the persistent logical backend and foreground monitor.
+2. Resolve and open the configured IASIO driver.
+3. Establish the immutable physical format contract.
+4. Create buffers and install the process-lifetime callback table.
+5. Invoke `Start`.
+6. Require the existing finite sequence of valid, continuous callbacks that
+   proves the physical session and raw clock mapping are usable.
+7. Enter `Running`, then immediately process any pending focus state/loss.
+
+Foreground changes do not short-circuit steps 2 through 6. Failure in any
+startup step is fatal because no known-good ASIO backend exists. WASAPI is not
+consulted.
+
+The normal steady-state callback path remains unchanged except for the minimum
+publication needed by the persistent logical timeline. It contains no focus
+query, reopen decision, retry decision, or blocking lifecycle operation.
+
+## Suspension and detached logical rendering
+
+Suspension order is strict:
+
+1. Stop authorizing new callback renders.
+2. Stop IASIO.
+3. Join/quiesce the callback worker and prove no callback owns the render claim.
+4. Dispose physical buffers and close the IASIO session.
+5. Enter `Suspended` with the logical engine intact.
+
+Failure to prove safe quiescence or cleanup is fatal; the backend may not open
+a replacement session while the previous callback/session ownership is
+uncertain.
+
+The last accepted physical callback supplies the starting logical frame and
+monotonic-time anchor. While `Suspended`, the logical sequencer uses explicit
+deadlines derived from that anchor to claim mixer renders. It discards samples
+but commits all of the same logical consequences as a hardware render:
+
+- active voices advance;
+- the logical output-frame cursor advances without rounding away a partial
+  interval;
+- the normal presented clock advances;
+- an exact continuity anchor is published for the same provider and endpoint
+  generation.
+
+The detached path may use monotonic elapsed time to calculate how many logical
+frames passed because confirmed focus state has already selected the
+`Suspended` lifecycle. That calculation cannot change lifecycle state.
+
+If shutdown or regain wins a render race, an uncommitted render plan makes no
+state change. Sequencer state advances only after the mixer render and all
+required clock publications succeed.
+
+## Recovery and handoff
+
+Recovery begins only while the latest coherent snapshot is foreground and no
+unconsumed loss must first invalidate a prior session. It creates a new
+physical-session generation but reuses the persistent logical endpoint and
+exact provider.
+
+Before `Start`, a recovery attempt may fail cleanly while opening the driver,
+validating the unchanged format contract, or creating buffers. Such a failure
+is retryable only if complete cleanup proves that no callback and no physical
+resource survived the attempt.
+
+Recovery permits:
+
+- one immediate acquisition attempt;
+- one retry after 1 second; and
+- one final retry after 2 additional seconds.
+
+The waits are interruptible by foreground publication and shutdown. Focus loss
+during a wait or before `Start` cleans the partial attempt, returns to
+`Suspended`, and prevents further attempts until another regain. A failed
+attempt already made remains diagnostic evidence, but suspension itself is not
+a retry failure.
+
+After `Start` is invoked, retry is forbidden. Start failure, callback-stability
+failure, invalid callback/clock/render behavior, or unsafe cleanup is fatal.
+If all three clean pre-Start attempts fail while foreground, the backend is
+fatal. There is no indefinite recovery loop.
+
+During acquisition waits, detached logical rendering continues. At handoff:
+
+1. Detached production is quiesced at a committed logical boundary.
+2. The first accepted physical callback establishes the new raw-driver sample
+   epoch relative to the persistent logical frame.
+3. Any elapsed interval not yet rendered is represented exactly once before
+   the hardware block is committed.
+4. Subsequent callbacks must agree with that mapping and advance continuously.
+
+The mapping does not require a replacement driver to reuse the previous raw
+sample position. It requires only that the persistent logical timeline never
+move backward, double-count, or omit elapsed logical frames.
 
 ## Failure classification
 
-- Focus loss, driver reset/resync/change notifications, and physical
-  clock/callback/output failures all invalidate the current physical session.
-- Stop, buffer-disposal, COM-release, acquisition, and stabilization failures
-  are retained as typed recovery diagnostics. They do not destroy the logical
-  engine after commit.
-- Foreground-monitor, allocation, logical-render ownership, endpoint-contract,
-  exact-provider, and checked-arithmetic failures remain typed logical fatal
-  failures.
-- Reacquisition failures are retained for diagnostics and retried while
-  foreground; they do not switch to WASAPI and do not destroy logical state.
-- Configured ASIO is strict. Initial acquisition failures while foreground are
-  fatal, and neither startup nor recovery may instantiate WASAPI.
-- Foreground loss during initial acquisition or callback stabilization is a
-  suspended ASIO state, not an ASIO startup failure.
-- No exception may cross a callback, COM method, exported DirectSound method,
-  WinEvent callback, or thread entry point.
+Only these failures are retryable, and only during `Recovering` before
+`Start`:
+
+- driver creation/open failure;
+- format/latency/buffer negotiation failure that leaves the persistent
+  configured contract unchanged; and
+- buffer-creation or callback-installation failure with proven complete
+  cleanup.
+
+These conditions are immediately fatal:
+
+- any startup failure;
+- `Start` failure or callback-stability failure;
+- ASIO reset, resync, sample-rate, buffer-size, or latency-change request while
+  running;
+- invalid buffer index, repeated buffer, callback overlap, missed complete
+  period, invalid driver clock, sample-position discontinuity, render gap, or
+  required `outputReady` failure;
+- mixer/render/sequencer/exact-clock publication failure;
+- changed persistent format or endpoint contract;
+- foreground-monitor failure or impossible focus generation;
+- inability to quiesce callbacks or safely close a physical session;
+- checked-arithmetic, allocation, or thread-entry failure that invalidates
+  logical state.
+
+An overload notification or one slow callback is diagnostic data only. It is
+not fatal without a separate violated contract. Conversely, a real contract
+violation is not made recoverable merely because a focus event happened near
+it.
+
+No exception may cross an ASIO callback, COM method, exported DirectSound
+method, WinEvent callback, or thread entry point.
+
+## Judgement-clock behavior and workload
+
+`ExactAsioClock` retains one provider identity and endpoint generation for the
+logical backend lifetime. Accepted physical callbacks and detached logical
+renders both add anchors to that same logical frame domain. Recovery changes
+only the physical-session generation.
+
+Stage activation resolves its immutable entry timestamp only until an active
+stage binding is established. After activation, each outer loop validates that
+the current provider identity/generation still matches the bound provider and
+uses the bound stage anchor directly. It must not repeatedly resolve the old
+entry timestamp.
+
+This preserves the fatal identity contract while removing the age-dependent
+full-history scan. A song lasting longer than the exact-history window must not
+produce `HistoryLost` merely because its already-consumed entry timestamp has
+aged out.
+
+Focus suspension does not reset the binding. Exact anchors from detached
+logical rendering allow input timestamps during suspension to remain in the
+same judgement domain; recovery resumes physical anchors without a new stage
+clock.
 
 ## Diagnostics
 
-Logs record state transitions rather than per-callback activity:
+Logs are transition-oriented rather than callback-oriented. They record:
 
-- foreground loss and completed IASIO release;
-- foreground gain and reacquisition start;
-- the first failed reacquisition attempt;
-- successful restoration with attempt count;
-- physical-session loss reason and physical-session generation;
-- final fatal failures only for logical-engine failures.
+- startup acquisition, Start, and stability result;
+- every published focus loss generation and current foreground state;
+- lifecycle transitions with physical-session generation;
+- completed callback quiescence and physical release;
+- detached logical frame totals and exact-anchor totals;
+- each recovery attempt, typed pre-Start failure, scheduled delay, and outcome;
+- physical-to-logical handoff coordinates;
+- final typed fatal reason;
+- confirmation that no alternate backend was selected.
 
-Runtime counters include focus losses, physical-session losses and generations,
-releases, discarded logical frames, reacquisition attempts, failures, and
-successes. Mixer counters distinguish per-timeline exact-history failures from
-endpoint render failures. No elapsed duration is presented as proof of
-foreground loss or recovery.
+Runtime summaries retain callback cadence, driver-time error, sample-position
+discontinuities, render gaps, driver requests, and exact-clock history results.
+Elapsed duration may describe an interval, but never justify a focus or fault
+classification.
 
-## Verification boundary
+## Automated verification boundary
 
-The repository has no automated oracle for real IASIO ownership transfer.
-Automated tests cover only the production logical-render sequencer and the
-observed per-timeline mixer-isolation regression, using hand-derived
-frame/timestamp and rendered-audio expectations. They do not mock an ASIO
-driver or claim runtime recovery acceptance.
+Automated coverage is limited to behavior with an independent local oracle:
 
-Static verification consists of CLion diagnostics, focused diff review,
-`git diff --check`, and complete x86 Debug and Release builds with the local
-ASIO SDK. Runtime acceptance requires a deployed game run that demonstrates:
+1. A focused concurrency test blocks the consumer, publishes loss then regain,
+   and reads once afterward. It must observe foreground true and a loss
+   generation increment. The expected result comes from the two published
+   transitions, not from production-derived expected data.
+2. Existing logical-sequencer and exact-clock tests remain authoritative for
+   hand-derived 48 kHz/frame arithmetic. They are extended only if the changed
+   contract exposes a currently failing assertion.
+3. No fake IASIO suite, source-text assertion, sleep-based timing test, or
+   test-only production hook is added merely to increase test count.
 
-1. active gameplay audio before focus loss;
-2. explicit foreground-loss logging followed by IASIO release;
-3. silent logical advancement while backgrounded;
-4. fresh IASIO acquisition after focus regain;
-5. audio resuming near the current game position;
-6. the same exact-clock generation before and after recovery;
-7. no absolute-judgement fatal assertion during the transition.
-8. a foreground ASIO reset/session fault releases and reacquires ASIO without
-   starting WASAPI or replacing the logical endpoint generation;
-9. an unrelated candidate timeline failure cannot silence the mixer.
+CLion diagnostics are loaded one changed file at a time by opening that file
+before requesting diagnostics. Static verification also includes focused diff
+review, `git diff --check`, and complete x86 Debug and Release builds using the
+local ASIO SDK. These checks do not claim that a real driver transferred
+ownership correctly.
 
-An initial-background run additionally requires ASIO to commit suspended,
-report foreground loss and physical-session release, then reacquire ASIO after
-foreground regain without any WASAPI startup record.
+## Ordered runtime acceptance
+
+Runtime acceptance uses the deployed artifact identity and loader log as the
+authority. It proceeds in the user-selected order.
+
+### Run 1: lose focus shortly after startup
+
+1. Start normally and move the game to background shortly afterward.
+2. Startup must still acquire ASIO, call `Start`, and prove stable callbacks.
+3. The pending loss/background state must then cause exactly one safe release.
+4. While backgrounded, logical, presented, and exact time must continue.
+5. On regain, ASIO must recover through the immediate normal attempt, preserve
+   endpoint/exact generations, and resume audible output at the current logical
+   position.
+6. No WASAPI record, unbounded retry, duplicated voice interval, judgement-time
+   loss, or fatal contract error may appear.
+
+The two delayed retries exist defensively but are not expected in this run. If
+they are routinely exercised, the design or implementation is still wrong.
+
+### Run 2: all-foreground full session
+
+Only after Run 1 passes, play at least two songs while remaining foreground,
+including one song longer than 60 seconds. The log must show:
+
+- no focus recovery or physical-session replacement;
+- no exact `HistoryLost` or discontinuous result;
+- no render gap or sample-position discontinuity;
+- no ASIO reset/resync/rate/buffer/latency request;
+- stable callback and logical-frame progression;
+- no workload that grows with stage age; and
+- judgement behavior unaffected by a transient game-frame drop.
+
+Static/build success remains separate from both runtime acceptance runs.
