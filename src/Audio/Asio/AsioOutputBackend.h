@@ -3,6 +3,7 @@
 
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
+#include "Audio/Asio/AsioLogicalRenderSequencer.h"
 #include "Audio/Asio/AsioTypes.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
 
@@ -37,7 +38,13 @@ namespace gc::audio
         std::uint64_t recovery_attempts{};
         std::uint64_t recovery_failures{};
         std::uint64_t session_recoveries{};
-        std::uint64_t silent_advance_frames{};
+        std::uint64_t submitted_tail_publications{};
+        std::uint64_t submitted_output_tail{};
+        std::uint64_t total_logically_advanced_frames{};
+        std::uint64_t detached_discarded_frames{};
+        std::uint64_t priming_discarded_frames{};
+        std::uint64_t driver_timeline_residual_samples{};
+        std::uint64_t maximum_absolute_driver_timeline_residual_ns{};
         std::uint64_t expected_period_ns{};
         std::uint64_t callback_interval_samples{};
         std::uint64_t total_callback_interval_ticks{};
@@ -68,8 +75,6 @@ namespace gc::audio
         std::uint64_t non_finite_output_blocks{};
         float maximum_absolute_output_sample{};
         std::uint64_t qpc_frequency{};
-        std::uint64_t exact_anchor_publications{};
-        std::uint64_t detached_exact_anchor_publications{};
         std::uint64_t exact_resolved_queries{};
         std::uint64_t exact_pending_queries{};
         std::uint64_t exact_temporarily_unavailable_queries{};
@@ -80,6 +85,12 @@ namespace gc::audio
         MixerDiagnosticsSnapshot mixer{};
     };
 
+    enum class AsioPhysicalSessionReason : std::uint8_t
+    {
+        startup,
+        focus_recovery,
+    };
+
     enum class AsioSessionLifecycleEvent : std::uint8_t
     {
         foreground_lost,
@@ -87,7 +98,20 @@ namespace gc::audio
         foreground_regained,
         recovery_attempt_started,
         recovery_attempt_failed,
+        physical_session_started,
         session_recovered,
+    };
+
+    struct AsioLogicalBackendRecord final
+    {
+        std::uint32_t origin_raw_ms{};
+        std::uint64_t origin_unwrapped_ms{};
+        std::uint64_t origin_presented_frame{};
+        std::uint64_t endpoint_generation{};
+        std::uint32_t sample_rate{};
+        std::uint32_t period_frames{};
+        std::uint32_t output_latency_frames{};
+        bool alternate_backend_selected{};
     };
 
     struct AsioSessionLifecycleRecord final
@@ -100,6 +124,19 @@ namespace gc::audio
         std::uint32_t retry_delay_ms{};
         std::uint64_t logical_render_origin{};
         std::uint64_t physical_render_origin{};
+        AsioPhysicalSessionReason reason{};
+        double observed_sample_rate{};
+        double active_sample_rate{};
+        bool frozen_rate_requested{};
+        bool sample_rate_changed{};
+        bool restoration_attempted{};
+        bool restoration_succeeded{};
+        std::uint64_t raw_sample_origin{};
+        AsioPhysicalAttachmentDisposition attachment_disposition{};
+        std::uint64_t attachment_interval_frames{};
+        std::uint64_t silent_priming_callbacks{};
+        bool callback_quiesced{};
+        bool buffers_disposed{};
     };
 
     class IAsioOutputObserver
@@ -107,7 +144,8 @@ namespace gc::audio
     public:
         virtual ~IAsioOutputObserver() = default;
         virtual void StartupSucceeded(
-            const AsioCapabilityReport&) noexcept = 0;
+            const AsioCapabilityReport&,
+            const AsioLogicalBackendRecord&) noexcept = 0;
         virtual void RuntimeSummary(
             const AsioRuntimeCountersSnapshot&) noexcept = 0;
         virtual void RuntimeFailed(

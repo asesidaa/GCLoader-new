@@ -185,6 +185,32 @@ namespace gc::audio
             }
         }
 
+        const char* asio_physical_session_reason_name(
+            const AsioPhysicalSessionReason reason) noexcept
+        {
+            switch (reason)
+            {
+            case AsioPhysicalSessionReason::startup: return "startup";
+            case AsioPhysicalSessionReason::focus_recovery:
+                return "focus_recovery";
+            }
+            return "unknown";
+        }
+
+        const char* asio_attachment_disposition_name(
+            const AsioPhysicalAttachmentDisposition disposition) noexcept
+        {
+            switch (disposition)
+            {
+            case AsioPhysicalAttachmentDisposition::Aligned: return "aligned";
+            case AsioPhysicalAttachmentDisposition::WaitForPhysical:
+                return "wait_for_physical";
+            case AsioPhysicalAttachmentDisposition::CatchUpLogical:
+                return "catch_up_logical";
+            }
+            return "unknown";
+        }
+
         const char* mixer_render_failure_source_name(
             MixerRenderFailureSource source) noexcept
         {
@@ -591,7 +617,9 @@ namespace gc::audio
                 failure.detail);
         }
 
-        std::string asio_startup_text(const AsioCapabilityReport& report)
+        std::string asio_startup_text(
+            const AsioCapabilityReport& report,
+            const AsioLogicalBackendRecord& logical)
         {
             const auto base = static_cast<std::size_t>(report.selected_base_channel);
             const auto& left = report.output_channels.at(base);
@@ -603,11 +631,14 @@ namespace gc::audio
                     : 0.0;
             std::ostringstream stream;
             stream << "Audio startup requested_backend=asio active_backend=asio"
+                << " alternate_backend_selected="
+                << (logical.alternate_backend_selected ? "true" : "false")
                 << " asio_registry_name=\"" << report.registration.registry_name << '"'
                 << " asio_reported_name=\"" << report.reported_driver_name << '"'
                 << " asio_clsid=\"" << clsid_text(report.registration.clsid) << '"'
                 << " asio_driver_version=" << report.driver_version
-                << " sample_rate=" << report.sample_rate
+                << " sample_rate_source=driver_current"
+                << " sample_rate=" << logical.sample_rate
                 << " asio_requested_buffer_frames=" << report.effective_buffer_frames
                 << " asio_buffer_frames=" << report.effective_buffer_frames
                 << " asio_expected_callback_us=" << expected_callback_us
@@ -628,6 +659,18 @@ namespace gc::audio
                 << '(' << static_cast<long>(right.sample_type) << ')'
                 << " asio_input_latency_frames=" << report.input_latency_frames
                 << " asio_output_latency_frames=" << report.output_latency_frames
+                << " logical_period_frames=" << logical.period_frames
+                << " logical_output_latency_frames="
+                << logical.output_latency_frames
+                << " logical_origin_raw_ms=" << logical.origin_raw_ms
+                << " logical_origin_unwrapped_ms="
+                << logical.origin_unwrapped_ms
+                << " logical_origin_presented_frame="
+                << logical.origin_presented_frame
+                << " logical_endpoint_generation="
+                << logical.endpoint_generation
+                << " exact_domain=asio_multimedia_ms"
+                << " exact_timestamp_quantum_ms=1"
                 << " asio_time_info_mode=preferred_with_legacy_fallback"
                 << " asio_overload_notifications="
                 << (report.overload_reporting_supported ? "true" : "false")
@@ -680,7 +723,21 @@ namespace gc::audio
                 << " recovery_attempts=" << counters.recovery_attempts
                 << " recovery_failures=" << counters.recovery_failures
                 << " session_recoveries=" << counters.session_recoveries
-                << " silent_advance_frames=" << counters.silent_advance_frames
+                << " submitted_tail_publications="
+                << counters.submitted_tail_publications
+                << " submitted_output_tail="
+                << counters.submitted_output_tail
+                << " total_logically_advanced_frames="
+                << counters.total_logically_advanced_frames
+                << " detached_discarded_frames="
+                << counters.detached_discarded_frames
+                << " priming_discarded_frames="
+                << counters.priming_discarded_frames
+                << " driver_timeline_residual_samples="
+                << counters.driver_timeline_residual_samples
+                << " maximum_absolute_driver_timeline_residual_ns="
+                << counters.maximum_absolute_driver_timeline_residual_ns
+                << " driver_timeline_residual_diagnostic_only=true"
                 << " asio_expected_callback_us="
                 << static_cast<double>(counters.expected_period_ns) / 1'000.0
                 << " callback_interval_samples="
@@ -754,12 +811,7 @@ namespace gc::audio
                 << " unmapped_cursor_failures="
                 << counters.unmapped_cursor_failures;
             append_mixer_diagnostics(stream, counters.mixer);
-            stream
-                << " exact_anchor_publications="
-                << counters.exact_anchor_publications
-                << " detached_exact_anchor_publications="
-                << counters.detached_exact_anchor_publications
-                << " exact_resolved_queries=" << counters.exact_resolved_queries
+            stream << " exact_resolved_queries=" << counters.exact_resolved_queries
                 << " exact_pending_queries=" << counters.exact_pending_queries
                 << " exact_temporarily_unavailable_queries="
                 << counters.exact_temporarily_unavailable_queries
@@ -969,7 +1021,8 @@ namespace gc::audio
             }
 
             void StartupSucceeded(
-                const AsioCapabilityReport& report) noexcept override
+                const AsioCapabilityReport& report,
+                const AsioLogicalBackendRecord& logical) noexcept override
             {
                 try
                 {
@@ -979,7 +1032,7 @@ namespace gc::audio
                 {
                     report_.reset();
                 }
-                detail::ReportAsioStartupSucceeded(report, actions_);
+                detail::ReportAsioStartupSucceeded(report, logical, actions_);
             }
 
             void RuntimeSummary(
@@ -1019,6 +1072,8 @@ namespace gc::audio
                             return "recovery_attempt_started";
                         case AsioSessionLifecycleEvent::recovery_attempt_failed:
                             return "recovery_attempt_failed";
+                        case AsioSessionLifecycleEvent::physical_session_started:
+                            return "physical_session_started";
                         case AsioSessionLifecycleEvent::session_recovered:
                             return "session_recovered";
                         }
@@ -1038,6 +1093,50 @@ namespace gc::audio
                         << record.logical_render_origin
                         << " physical_render_origin="
                         << record.physical_render_origin;
+                    if (record.event ==
+                        AsioSessionLifecycleEvent::physical_session_started ||
+                        record.event ==
+                        AsioSessionLifecycleEvent::session_recovered)
+                    {
+                        stream << " reason="
+                            << asio_physical_session_reason_name(record.reason)
+                            << " observed_sample_rate="
+                            << record.observed_sample_rate
+                            << " active_sample_rate=" << record.active_sample_rate
+                            << " frozen_rate_requested="
+                            << (record.frozen_rate_requested ? "true" : "false")
+                            << " sample_rate_changed="
+                            << (record.sample_rate_changed ? "true" : "false")
+                            << " raw_sample_origin=" << record.raw_sample_origin
+                            << " attachment_disposition="
+                            << asio_attachment_disposition_name(
+                                record.attachment_disposition)
+                            << " attachment_interval_frames="
+                            << record.attachment_interval_frames
+                            << " silent_priming_callbacks="
+                            << record.silent_priming_callbacks;
+                    }
+                    if (record.event ==
+                        AsioSessionLifecycleEvent::session_released)
+                    {
+                        stream << " reason="
+                            << asio_physical_session_reason_name(record.reason)
+                            << " observed_sample_rate="
+                            << record.observed_sample_rate
+                            << " active_sample_rate=" << record.active_sample_rate
+                            << " frozen_rate_requested="
+                            << (record.frozen_rate_requested ? "true" : "false")
+                            << " sample_rate_changed="
+                            << (record.sample_rate_changed ? "true" : "false")
+                            << " restoration_attempted="
+                            << (record.restoration_attempted ? "true" : "false")
+                            << " restoration_succeeded="
+                            << (record.restoration_succeeded ? "true" : "false")
+                            << " callback_quiesced="
+                            << (record.callback_quiesced ? "true" : "false")
+                            << " buffers_disposed="
+                            << (record.buffers_disposed ? "true" : "false");
+                    }
                     if (failure != nullptr)
                     {
                         stream << " asio_failure_stage="
@@ -1580,11 +1679,12 @@ namespace gc::audio
 
         void ReportAsioStartupSucceeded(
             const AsioCapabilityReport& report,
+            const AsioLogicalBackendRecord& logical,
             const AudioPatchPlatformActions& actions) noexcept
         {
             try
             {
-                const auto text = asio_startup_text(report);
+                const auto text = asio_startup_text(report, logical);
                 emit_info(actions, text.c_str());
             }
             catch (...)

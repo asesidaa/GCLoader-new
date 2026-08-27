@@ -63,6 +63,7 @@ namespace gc::audio::detail
         const AudioPatchPlatformActions&) noexcept;
     void ReportAsioStartupSucceeded(
         const AsioCapabilityReport&,
+        const AsioLogicalBackendRecord&,
         const AudioPatchPlatformActions&) noexcept;
     void ReportAsioRuntimeSummary(
         const AsioRuntimeCountersSnapshot&,

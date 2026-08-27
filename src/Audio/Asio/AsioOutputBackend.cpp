@@ -295,6 +295,21 @@ namespace gc::audio
                 SaturatingAddCounter(destination, 1);
             }
 
+            void MaximumCounter(
+                std::atomic_uint64_t& destination,
+                const std::uint64_t value) noexcept
+            {
+                auto observed = destination.load(std::memory_order_relaxed);
+                while (observed < value &&
+                    !destination.compare_exchange_weak(
+                        observed,
+                        value,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed))
+                {
+                }
+            }
+
             std::uint64_t SaturatingSum(
                 std::initializer_list<std::uint64_t> values) noexcept
             {
@@ -743,6 +758,25 @@ namespace gc::audio
                 AsioFailure failure;
             };
 
+            struct PhysicalSessionFacts final
+            {
+                AsioPhysicalSessionReason reason{};
+                double observed_sample_rate{};
+                double active_sample_rate{};
+                bool frozen_rate_requested{};
+                bool sample_rate_changed{};
+            };
+
+            struct ClosedPhysicalSessionFacts final
+            {
+                PhysicalSessionFacts session{};
+                bool callback_quiesced{};
+                bool buffers_disposed{};
+                bool restoration_attempted{};
+                bool restoration_succeeded{};
+                bool available{};
+            };
+
             static PhysicalPreparationFailure PreStartPreparationFailure(
                 const PhysicalSessionPurpose purpose,
                 AsioFailure failure,
@@ -853,7 +887,35 @@ namespace gc::audio
                 }
 
                 committed_.store(true, std::memory_order_release);
-                observer_->StartupSucceeded(session_->report());
+                observer_->StartupSucceeded(
+                    session_->report(),
+                    {
+                        .origin_raw_ms = logical_timeline_->origin_raw_ms(),
+                        .origin_unwrapped_ms = 0,
+                        .origin_presented_frame = 0,
+                        .endpoint_generation = exact_endpoint_generation_,
+                        .sample_rate = logical_contract_.sample_rate,
+                        .period_frames = logical_contract_.period_frames,
+                        .output_latency_frames =
+                        logical_contract_.output_latency_frames,
+                        .alternate_backend_selected = false,
+                    });
+                const auto startup_focus = foreground_monitor_->snapshot();
+                const auto physical_generation =
+                    active_physical_session_generation_.load(
+                        std::memory_order_acquire);
+                ReportLifecycle(
+                    AsioSessionLifecycleEvent::physical_session_started,
+                    startup_focus,
+                    physical_generation,
+                    0,
+                    0,
+                    handoff_logical_render_origin_.load(
+                        std::memory_order_relaxed),
+                    handoff_physical_render_origin_.load(
+                        std::memory_order_relaxed),
+                    nullptr,
+                    &active_physical_session_facts_);
                 startup_succeeded_.store(true, std::memory_order_release);
                 actions_.signal_event(actions_.context, startup_event_);
 
@@ -1048,6 +1110,19 @@ namespace gc::audio
                     }
                     const auto session_sample_rate =
                         static_cast<std::uint32_t>(reported_sample_rate);
+                    active_physical_session_facts_ = {
+                        .reason = purpose == PhysicalSessionPurpose::InitialStartup
+                                      ? AsioPhysicalSessionReason::startup
+                                      : AsioPhysicalSessionReason::focus_recovery,
+                        .observed_sample_rate =
+                        session_->report().original_sample_rate,
+                        .active_sample_rate = reported_sample_rate,
+                        .frozen_rate_requested =
+                        purpose == PhysicalSessionPurpose::FocusRecovery,
+                        .sample_rate_changed =
+                        session_->report().original_sample_rate !=
+                        reported_sample_rate,
+                    };
 
                     if (purpose == PhysicalSessionPurpose::InitialStartup)
                     {
@@ -1504,21 +1579,62 @@ namespace gc::audio
                 const std::uint32_t retry_delay_ms,
                 const std::uint64_t logical_render_origin,
                 const std::uint64_t physical_render_origin,
-                const AsioFailure* failure) const noexcept
+                const AsioFailure* failure,
+                const PhysicalSessionFacts* session_facts = nullptr,
+                const ClosedPhysicalSessionFacts* closed_facts = nullptr) const noexcept
             {
-                observer_->SessionLifecycleChanged(
-                    {
-                        .event = event,
-                        .foreground = focus.is_foreground,
-                        .focus_loss_generation = focus.loss_generation,
-                        .physical_session_generation =
-                        physical_session_generation,
-                        .recovery_attempt = recovery_attempt,
-                        .retry_delay_ms = retry_delay_ms,
-                        .logical_render_origin = logical_render_origin,
-                        .physical_render_origin = physical_render_origin,
-                    },
-                    failure);
+                AsioSessionLifecycleRecord record{
+                    .event = event,
+                    .foreground = focus.is_foreground,
+                    .focus_loss_generation = focus.loss_generation,
+                    .physical_session_generation = physical_session_generation,
+                    .recovery_attempt = recovery_attempt,
+                    .retry_delay_ms = retry_delay_ms,
+                    .logical_render_origin = logical_render_origin,
+                    .physical_render_origin = physical_render_origin,
+                };
+                const auto apply_session_facts = [&record](
+                    const PhysicalSessionFacts& facts) noexcept
+                {
+                    record.reason = facts.reason;
+                    record.observed_sample_rate = facts.observed_sample_rate;
+                    record.active_sample_rate = facts.active_sample_rate;
+                    record.frozen_rate_requested =
+                        facts.frozen_rate_requested;
+                    record.sample_rate_changed = facts.sample_rate_changed;
+                };
+                if (session_facts != nullptr)
+                {
+                    apply_session_facts(*session_facts);
+                }
+                if (closed_facts != nullptr && closed_facts->available)
+                {
+                    apply_session_facts(closed_facts->session);
+                    record.callback_quiesced =
+                        closed_facts->callback_quiesced;
+                    record.buffers_disposed = closed_facts->buffers_disposed;
+                    record.restoration_attempted =
+                        closed_facts->restoration_attempted;
+                    record.restoration_succeeded =
+                        closed_facts->restoration_succeeded;
+                }
+                if (event == AsioSessionLifecycleEvent::physical_session_started ||
+                    event == AsioSessionLifecycleEvent::session_recovered)
+                {
+                    record.raw_sample_origin = handoff_raw_sample_origin_.load(
+                        std::memory_order_relaxed);
+                    record.attachment_disposition =
+                        static_cast<AsioPhysicalAttachmentDisposition>(
+                            handoff_attachment_disposition_.load(
+                                std::memory_order_relaxed));
+                    record.attachment_interval_frames =
+                        handoff_attachment_interval_frames_.load(
+                            std::memory_order_relaxed);
+                    record.silent_priming_callbacks =
+                        physical_silent_priming_callbacks_.load(
+                            std::memory_order_relaxed);
+                }
+                observer_->SessionLifecycleChanged(record, failure);
             }
 
             static std::optional<AsioFailure> ValidateFocusSnapshot(
@@ -1785,7 +1901,9 @@ namespace gc::audio
                                 0,
                                 0,
                                 0,
-                                nullptr);
+                                nullptr,
+                                nullptr,
+                                &last_closed_physical_session_facts_);
                             ClearSessionFault();
                             state = LifecycleState::suspended;
                             break;
@@ -2101,7 +2219,9 @@ namespace gc::audio
                                         0,
                                         0,
                                         0,
-                                        nullptr);
+                                        nullptr,
+                                        nullptr,
+                                        &last_closed_physical_session_facts_);
                                 }
 
                                 const bool focus_interrupted =
@@ -2237,7 +2357,9 @@ namespace gc::audio
                                     0,
                                     0,
                                     0,
-                                    nullptr);
+                                    nullptr,
+                                    nullptr,
+                                    &last_closed_physical_session_facts_);
                                 ClearSessionFault();
                                 suspension_focus = before_start_focus;
                                 suspended_loss_pending = true;
@@ -2336,7 +2458,8 @@ namespace gc::audio
                                 0,
                                 logical_render_origin,
                                 physical_render_origin,
-                                nullptr);
+                                nullptr,
+                                &active_physical_session_facts_);
                             recovery_retry_delay_ms = 0;
                             if (!post_stability_focus.is_foreground ||
                                 post_stability_focus.loss_generation >
@@ -2397,6 +2520,14 @@ namespace gc::audio
                 // Focus release owns only IASIO, its buffers, and callback runtime.
                 // The mixer and both logical clocks must survive this operation so
                 // existing voices and judgement-clock bindings remain valid.
+                last_closed_physical_session_facts_ = {};
+                const bool had_physical_resources =
+                    session_ != nullptr || callback_runtime_ != nullptr;
+                const bool had_session = session_ != nullptr;
+                const auto closing_session_facts =
+                    active_physical_session_facts_;
+                bool callback_quiesced = callback_runtime_ == nullptr;
+                AsioSessionCleanupReport cleanup_report{};
                 render_ready_.store(false, std::memory_order_release);
                 std::optional<AsioFailure> failure;
                 const auto record_failure = [&failure](
@@ -2426,6 +2557,7 @@ namespace gc::audio
                 {
                     callback_runtime_->JoinWorker();
                     callback_runtime_->Uninstall();
+                    callback_quiesced = true;
                     MergeCallbackSnapshot(
                         completed_callback_snapshot_,
                         callback_runtime_->Snapshot());
@@ -2447,6 +2579,7 @@ namespace gc::audio
                     {
                         record_failure(std::move(closed.error()));
                     }
+                    cleanup_report = session_->cleanup_report();
                     session_.reset();
                 }
                 callback_runtime_.reset();
@@ -2455,6 +2588,21 @@ namespace gc::audio
                     channel = {};
                 }
                 has_previous_sample_position_ = false;
+                if (!failure && had_physical_resources)
+                {
+                    last_closed_physical_session_facts_ = {
+                        .session = closing_session_facts,
+                        .callback_quiesced = callback_quiesced,
+                        .buffers_disposed =
+                        !had_session || cleanup_report.buffers_disposed,
+                        .restoration_attempted =
+                        cleanup_report.sample_rate_restoration_attempted,
+                        .restoration_succeeded =
+                        cleanup_report.sample_rate_restored,
+                        .available = true,
+                    };
+                }
+                active_physical_session_facts_ = {};
                 return failure;
             }
 
@@ -2487,6 +2635,9 @@ namespace gc::audio
                 }
                 if (submitted_tail_ != nullptr)
                 {
+                    final_submitted_tail_snapshot_ = submitted_tail_->Read();
+                    has_final_submitted_tail_snapshot_ =
+                        final_submitted_tail_snapshot_.stable;
                     submitted_tail_->Invalidate();
                 }
                 presented_clock_ = nullptr;
@@ -2646,7 +2797,7 @@ namespace gc::audio
                         "ASIO submitted-output tail rejected a committed detached render");
                 }
                 SaturatingAddCounter(
-                    silent_advance_frames_,
+                    detached_discarded_frames_,
                     plan->timeline.discontinuity_frames +
                     request_.buffer_frames);
                 return std::nullopt;
@@ -2834,6 +2985,7 @@ namespace gc::audio
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
+                RecordDriverTimelineResidual(request, *logical_plan);
                 const auto rendered = RenderLogicalBlock(*logical_plan);
                 if (!rendered)
                 {
@@ -2860,7 +3012,7 @@ namespace gc::audio
                         render_gap_frames_,
                         logical_plan->timeline.discontinuity_frames);
                     SaturatingAddCounter(
-                        silent_advance_frames_, request_.buffer_frames);
+                        priming_discarded_frames_, request_.buffer_frames);
                     SaturatingIncrementCounter(
                         physical_silent_priming_callbacks_);
                     CallOutputReady();
@@ -2956,6 +3108,66 @@ namespace gc::audio
                 return false;
             }
 
+            void RecordDriverTimelineResidual(
+                const AsioRenderRequest& request,
+                const AsioLogicalRenderPlan& plan) noexcept
+            {
+                if (!request.has_system_time || logical_timeline_ == nullptr ||
+                    logical_output_sample_rate_ == 0 ||
+                    plan.timeline.output_frame_begin <
+                    logical_output_latency_frames_)
+                {
+                    return;
+                }
+                const auto mapped_presented_frame =
+                    plan.timeline.output_frame_begin -
+                    logical_output_latency_frames_;
+                if (mapped_presented_frame > static_cast<std::uint64_t>(
+                    (std::numeric_limits<std::int64_t>::max)()))
+                {
+                    return;
+                }
+
+                const auto projected =
+                    logical_timeline_->ProjectSystemTimeNanoseconds(
+                        request.system_time_ns);
+                if (!projected)
+                {
+                    return;
+                }
+                const auto residual_frames = projected->Subtract(
+                    gc::timing::CheckedRational::Whole(
+                        static_cast<std::int64_t>(mapped_presented_frame)));
+                if (!residual_frames)
+                {
+                    return;
+                }
+                const auto residual_nanoseconds = residual_frames->Multiply(
+                    1'000'000'000,
+                    logical_output_sample_rate_);
+                if (!residual_nanoseconds)
+                {
+                    return;
+                }
+
+                const auto numerator = residual_nanoseconds->numerator();
+                const auto magnitude = numerator >= 0
+                                           ? static_cast<std::uint64_t>(numerator)
+                                           : std::uint64_t{0} -
+                                           static_cast<std::uint64_t>(numerator);
+                const auto denominator = residual_nanoseconds->denominator();
+                auto absolute_nanoseconds = magnitude / denominator;
+                if (magnitude % denominator != 0)
+                {
+                    ++absolute_nanoseconds;
+                }
+                SaturatingIncrementCounter(
+                    driver_timeline_residual_samples_);
+                MaximumCounter(
+                    maximum_absolute_driver_timeline_residual_ns_,
+                    absolute_nanoseconds);
+            }
+
             void RecordSamplePosition(std::uint64_t sample_position) noexcept
             {
                 if (has_previous_sample_position_)
@@ -3039,6 +3251,12 @@ namespace gc::audio
                                        ? final_exact_clock_counters_
                                        : ExactOutputClockCounters{};
                 const auto render = render_diagnostics_.Snapshot();
+                const auto submitted_tail =
+                    has_final_submitted_tail_snapshot_
+                        ? final_submitted_tail_snapshot_
+                        : submitted_tail_ != nullptr
+                        ? submitted_tail_->Read()
+                        : AsioSubmittedOutputTailSnapshot{};
                 return {
                     .callbacks = callback.callbacks,
                     .time_info_callbacks = callback.time_info_callbacks,
@@ -3081,8 +3299,30 @@ namespace gc::audio
                     recovery_failures_.load(std::memory_order_relaxed),
                     .session_recoveries =
                     session_recoveries_.load(std::memory_order_relaxed),
-                    .silent_advance_frames =
-                    silent_advance_frames_.load(std::memory_order_relaxed),
+                    .submitted_tail_publications =
+                    submitted_tail.stable
+                        ? submitted_tail.publication_sequence
+                        : 0,
+                    .submitted_output_tail =
+                    submitted_tail.stable && submitted_tail.available
+                        ? submitted_tail.submitted_output_tail
+                        : 0,
+                    .total_logically_advanced_frames =
+                    submitted_tail.stable && submitted_tail.available
+                        ? submitted_tail.submitted_output_tail
+                        : 0,
+                    .detached_discarded_frames =
+                    detached_discarded_frames_.load(
+                        std::memory_order_relaxed),
+                    .priming_discarded_frames =
+                    priming_discarded_frames_.load(
+                        std::memory_order_relaxed),
+                    .driver_timeline_residual_samples =
+                    driver_timeline_residual_samples_.load(
+                        std::memory_order_relaxed),
+                    .maximum_absolute_driver_timeline_residual_ns =
+                    maximum_absolute_driver_timeline_residual_ns_.load(
+                        std::memory_order_relaxed),
                     .expected_period_ns = callback.expected_period_ns,
                     .callback_interval_samples =
                     callback.callback_interval_samples,
@@ -3130,8 +3370,6 @@ namespace gc::audio
                     .maximum_absolute_output_sample =
                     render.maximum_absolute_output_sample,
                     .qpc_frequency = callback.qpc_frequency,
-                    .exact_anchor_publications = exact.publication_count,
-                    .detached_exact_anchor_publications = 0,
                     .exact_resolved_queries = exact.resolved_queries,
                     .exact_pending_queries = exact.pending_queries,
                     .exact_temporarily_unavailable_queries =
@@ -3185,7 +3423,11 @@ namespace gc::audio
             logical_render_sequencer_;
             std::shared_ptr<AsioLogicalTimeline> logical_timeline_;
             std::shared_ptr<AsioSubmittedOutputTail> submitted_tail_;
+            AsioSubmittedOutputTailSnapshot final_submitted_tail_snapshot_{};
+            bool has_final_submitted_tail_snapshot_{};
             AsioLogicalOutputContract logical_contract_{};
+            PhysicalSessionFacts active_physical_session_facts_{};
+            ClosedPhysicalSessionFacts last_closed_physical_session_facts_{};
             std::array<ASIOSampleType, 2> channel_types_{};
             std::array<std::array<std::span<std::byte>, 2>, 2> driver_buffers_{};
             AsioCallbackRuntimeSnapshot completed_callback_snapshot_{};
@@ -3201,7 +3443,10 @@ namespace gc::audio
             std::atomic_uint64_t recovery_attempts_{};
             std::atomic_uint64_t recovery_failures_{};
             std::atomic_uint64_t session_recoveries_{};
-            std::atomic_uint64_t silent_advance_frames_{};
+            std::atomic_uint64_t detached_discarded_frames_{};
+            std::atomic_uint64_t priming_discarded_frames_{};
+            std::atomic_uint64_t driver_timeline_residual_samples_{};
+            std::atomic_uint64_t maximum_absolute_driver_timeline_residual_ns_{};
             std::atomic_uint64_t pending_cursor_queries_{};
             std::atomic_uint64_t unmapped_cursor_failures_{};
             std::atomic_bool first_fault_claimed_{};
