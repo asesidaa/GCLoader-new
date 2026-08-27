@@ -50,7 +50,8 @@ namespace gc::audio
             static_assert(std::atomic_bool::is_always_lock_free);
             static_assert(std::numeric_limits<float>::is_iec559);
 
-            constexpr DWORD kRecoveryRetryMs = 250;
+            constexpr std::array<DWORD, 2> kRecoveryRetryDelaysMs{1'000, 2'000};
+            constexpr std::uint64_t kMaximumRecoveryAttempts = 3;
             constexpr std::uint64_t kOutputFramesPerMillisecond = 48;
 
             HRESULT ProductionInitializeCom(void*, DWORD coinit_flags) noexcept
@@ -683,6 +684,26 @@ namespace gc::audio
                 shutdown,
             };
 
+            enum class LifecycleState : std::uint8_t
+            {
+                starting,
+                running,
+                suspending,
+                suspended,
+                recovering,
+                fatal,
+                stopping,
+            };
+
+            enum class RuntimeWake : std::uint8_t
+            {
+                fault,
+                shutdown,
+                foreground_change,
+                message,
+                timeout,
+            };
+
             enum class PhysicalPreparationFailureKind : std::uint8_t
             {
                 retryable_before_start,
@@ -805,7 +826,7 @@ namespace gc::audio
                 startup_succeeded_.store(true, std::memory_order_release);
                 actions_.signal_event(actions_.context, startup_event_);
 
-                auto runtime_failure = MonitorCommittedRuntime(true, true);
+                auto runtime_failure = MonitorCommittedRuntime();
                 const auto teardown_failure = TeardownOnControlThread();
                 if (!runtime_failure && HasPublishedFault())
                 {
@@ -1047,6 +1068,12 @@ namespace gc::audio
                             "ASIO Start requires a prepared physical session"));
                     }
 
+                    handoff_logical_render_origin_.store(
+                        0, std::memory_order_relaxed);
+                    handoff_physical_render_origin_.store(
+                        0, std::memory_order_relaxed);
+                    handoff_physical_session_generation_.store(
+                        0, std::memory_order_release);
                     const auto physical_generation =
                         logical_render_sequencer_.BeginPhysicalSession();
                     if (!physical_generation)
@@ -1261,279 +1288,885 @@ namespace gc::audio
                 }
             }
 
-            std::optional<AsioFailure> MonitorCommittedRuntime(
-                bool session_active,
-                bool foreground_reported) noexcept
+            std::expected<RuntimeWake, AsioFailure> WaitForRuntimeWake(
+                const DWORD timeout_ms) const noexcept
             {
                 const std::array<HANDLE, 3> handles{
                     fault_event_,
                     shutdown_event_,
                     foreground_monitor_->change_event(),
                 };
-                std::uint64_t recovery_attempt{};
-                std::uint64_t next_recovery_ms{};
-                std::uint64_t summary_started =
-                    actions_.tick_count_ms(actions_.context);
-                for (;;)
+                const DWORD wait = actions_.message_wait(
+                    actions_.context,
+                    handles,
+                    timeout_ms);
+                if (wait == WAIT_OBJECT_0)
                 {
-                    // Elapsed time schedules summaries, silent advancement, and retry
-                    // attempts. Foreground ownership is established only by the
-                    // monitor's direct window/process query below.
-                    const auto now_ms = actions_.tick_count_ms(actions_.context);
-                    const DWORD summary_remaining = RemainingTimeout(
-                        summary_started,
-                        now_ms,
-                        actions_.summary_interval_ms);
-                    const DWORD remaining = session_active
-                                                ? summary_remaining
-                                                : (std::min)(summary_remaining, SilentPollIntervalMs());
-                    const DWORD wait = actions_.message_wait(
-                        actions_.context,
-                        handles,
-                        remaining);
-                    if (wait == WAIT_OBJECT_0 + 1)
+                    return RuntimeWake::fault;
+                }
+                if (wait == WAIT_OBJECT_0 + 1)
+                {
+                    return RuntimeWake::shutdown;
+                }
+                if (wait == WAIT_OBJECT_0 + 2)
+                {
+                    return RuntimeWake::foreground_change;
+                }
+                if (wait == WAIT_OBJECT_0 + handles.size())
+                {
+                    actions_.drain_messages(actions_.context);
+                    return RuntimeWake::message;
+                }
+                if (wait == WAIT_TIMEOUT)
+                {
+                    return RuntimeWake::timeout;
+                }
+                return std::unexpected(Failure(
+                    AsioFailureStage::callback,
+                    "ASIO runtime message wait failed",
+                    AsioResultDomain::win32,
+                    wait == WAIT_FAILED ? GetLastError() : wait));
+            }
+
+            void ReportLifecycle(
+                const AsioSessionLifecycleEvent event,
+                const AsioForegroundSnapshot& focus,
+                const std::uint64_t physical_session_generation,
+                const std::uint64_t recovery_attempt,
+                const std::uint32_t retry_delay_ms,
+                const std::uint64_t logical_render_origin,
+                const std::uint64_t physical_render_origin,
+                const AsioFailure* failure) const noexcept
+            {
+                observer_->SessionLifecycleChanged(
+                    {
+                        .event = event,
+                        .foreground = focus.is_foreground,
+                        .focus_loss_generation = focus.loss_generation,
+                        .physical_session_generation =
+                        physical_session_generation,
+                        .recovery_attempt = recovery_attempt,
+                        .retry_delay_ms = retry_delay_ms,
+                        .logical_render_origin = logical_render_origin,
+                        .physical_render_origin = physical_render_origin,
+                    },
+                    failure);
+            }
+
+            static std::optional<AsioFailure> ValidateFocusSnapshot(
+                const AsioForegroundSnapshot& focus,
+                const std::uint64_t consumed_generation) noexcept
+            {
+                if (focus.loss_generation >= consumed_generation)
+                {
+                    return std::nullopt;
+                }
+                return Failure(
+                    AsioFailureStage::foreground_monitor,
+                    "ASIO foreground loss generation regressed");
+            }
+
+            void ConsumeFocusLossGeneration(
+                const AsioForegroundSnapshot& focus,
+                std::uint64_t& consumed_generation) noexcept
+            {
+                if (focus.loss_generation <= consumed_generation)
+                {
+                    return;
+                }
+                SaturatingAddCounter(
+                    foreground_losses_,
+                    focus.loss_generation - consumed_generation);
+                consumed_generation = focus.loss_generation;
+                consumed_focus_loss_generation_.store(
+                    consumed_generation,
+                    std::memory_order_release);
+            }
+
+            void PublishRuntimeSummaryIfDue(
+                std::uint64_t& summary_started_ms) const noexcept
+            {
+                const auto now_ms = actions_.tick_count_ms(actions_.context);
+                if (now_ms - summary_started_ms < actions_.summary_interval_ms)
+                {
+                    return;
+                }
+                observer_->RuntimeSummary(SnapshotCounters());
+                summary_started_ms = now_ms;
+            }
+
+            std::optional<AsioFailure> MonitorCommittedRuntime() noexcept
+            {
+                LifecycleState state = LifecycleState::starting;
+                std::optional<AsioFailure> fatal_failure;
+                std::uint64_t consumed_focus_loss_generation{};
+                std::uint64_t recovery_attempt{};
+                std::uint32_t recovery_retry_delay_ms{};
+                std::uint64_t recovery_retry_started_ms{};
+                std::uint64_t summary_started_ms =
+                    actions_.tick_count_ms(actions_.context);
+                AsioForegroundSnapshot suspension_focus{};
+                bool suspended_loss_pending{};
+
+                const auto fail = [&](AsioFailure failure) noexcept
+                {
+                    fatal_failure = std::move(failure);
+                    state = LifecycleState::fatal;
+                };
+                const auto foreground_monitor_failure =
+                    [&]() -> std::optional<AsioFailure>
+                {
+                    if (foreground_monitor_->healthy())
                     {
                         return std::nullopt;
                     }
-                    if (wait == WAIT_OBJECT_0 + handles.size())
-                    {
-                        actions_.drain_messages(actions_.context);
-                    }
-                    else if (wait != WAIT_OBJECT_0 &&
-                        wait != WAIT_OBJECT_0 + 2 &&
-                        wait != WAIT_TIMEOUT)
-                    {
-                        return Failure(
-                            AsioFailureStage::callback,
-                            "ASIO runtime message wait failed",
-                            AsioResultDomain::win32,
-                            wait == WAIT_FAILED ? GetLastError() : wait);
-                    }
-
-                    if (!foreground_monitor_->healthy())
-                    {
-                        return Failure(
-                            AsioFailureStage::foreground_monitor,
-                            "ASIO foreground monitor stopped unexpectedly",
-                            AsioResultDomain::win32,
-                            foreground_monitor_->failure_code());
-                    }
-
+                    return Failure(
+                        AsioFailureStage::foreground_monitor,
+                        "ASIO foreground monitor stopped unexpectedly",
+                        AsioResultDomain::win32,
+                        foreground_monitor_->failure_code());
+                };
+                const auto close_after_failure =
+                    [&](AsioFailure failure) noexcept
+                {
+                    const auto close_failure = ClosePhysicalSession();
                     if (HasPublishedFault())
                     {
-                        return BuildLatchedFailure();
-                    }
-
-                    const bool foreground =
-                        foreground_monitor_->snapshot().is_foreground;
-                    if (!foreground)
-                    {
-                        if (foreground_reported)
+                        const auto latched = BuildLatchedFailure();
+                        if (latched.stage != failure.stage ||
+                            latched.domain != failure.domain ||
+                            latched.result != failure.result)
                         {
-                            foreground_reported = false;
-                            SaturatingIncrementCounter(foreground_losses_);
-                            observer_->SessionLifecycleChanged(
-                                AsioSessionLifecycleEvent::foreground_lost,
-                                recovery_attempt,
-                                nullptr);
+                            AppendSecondaryFailure(failure, latched);
                         }
-                        if (session_active)
+                    }
+                    if (close_failure)
+                    {
+                        AppendSecondaryFailure(failure, *close_failure);
+                    }
+                    return failure;
+                };
+
+                for (;;)
+                {
+                    switch (state)
+                    {
+                    case LifecycleState::starting:
                         {
-                            auto release_failure = ClosePhysicalSession();
-                            session_active = false;
+                            if (const auto failure = foreground_monitor_failure())
+                            {
+                                fail(*failure);
+                                break;
+                            }
                             if (HasPublishedFault())
                             {
-                                auto runtime_failure = BuildLatchedFailure();
-                                if (release_failure)
-                                {
-                                    AppendSecondaryFailure(
-                                        runtime_failure, *release_failure);
-                                }
-                                release_failure = std::move(runtime_failure);
+                                fail(BuildLatchedFailure());
+                                break;
                             }
-                            SaturatingIncrementCounter(session_releases_);
-                            observer_->SessionLifecycleChanged(
-                                AsioSessionLifecycleEvent::session_released,
-                                recovery_attempt,
-                                release_failure ? &*release_failure : nullptr);
-                            if (release_failure)
+                            const auto focus = foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                focus,
+                                consumed_focus_loss_generation))
                             {
-                                return release_failure;
+                                fail(*failure);
+                                break;
                             }
-                            ClearSessionFault();
-                        }
-                        if (const auto advance_failure = AdvanceSilentRendering())
-                        {
-                            return advance_failure;
-                        }
-                    }
-                    else if (!session_active)
-                    {
-                        if (!foreground_reported)
-                        {
-                            foreground_reported = true;
-                            observer_->SessionLifecycleChanged(
-                                AsioSessionLifecycleEvent::foreground_regained,
-                                recovery_attempt,
-                                nullptr);
-                        }
-                        if (const auto advance_failure = AdvanceSilentRendering())
-                        {
-                            return advance_failure;
+                            if (!focus.is_foreground ||
+                                focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                suspension_focus = focus;
+                                state = LifecycleState::suspending;
+                            }
+                            else
+                            {
+                                state = LifecycleState::running;
+                            }
+                            break;
                         }
 
-                        const auto recovery_now =
-                            actions_.tick_count_ms(actions_.context);
-                        if (next_recovery_ms == 0 ||
-                            recovery_now >= next_recovery_ms)
+                    case LifecycleState::running:
                         {
+                            const auto now_ms =
+                                actions_.tick_count_ms(actions_.context);
+                            const auto summary_remaining = RemainingTimeout(
+                                summary_started_ms,
+                                now_ms,
+                                actions_.summary_interval_ms);
+                            auto wake = WaitForRuntimeWake(summary_remaining);
+                            if (!wake)
+                            {
+                                fail(std::move(wake.error()));
+                                break;
+                            }
+                            if (*wake == RuntimeWake::shutdown)
+                            {
+                                state = LifecycleState::stopping;
+                                break;
+                            }
+                            if (*wake == RuntimeWake::fault ||
+                                HasPublishedFault())
+                            {
+                                fail(BuildLatchedFailure());
+                                break;
+                            }
+                            if (const auto failure = foreground_monitor_failure())
+                            {
+                                fail(*failure);
+                                break;
+                            }
+
+                            const auto focus = foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            if (!focus.is_foreground ||
+                                focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                suspension_focus = focus;
+                                state = LifecycleState::suspending;
+                            }
+                            break;
+                        }
+
+                    case LifecycleState::suspending:
+                        {
+                            if (const auto failure = foreground_monitor_failure())
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            if (const auto failure = ValidateFocusSnapshot(
+                                suspension_focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            ConsumeFocusLossGeneration(
+                                suspension_focus,
+                                consumed_focus_loss_generation);
+                            const auto physical_generation =
+                                active_physical_session_generation_.load(
+                                    std::memory_order_acquire);
+                            ReportLifecycle(
+                                AsioSessionLifecycleEvent::foreground_lost,
+                                suspension_focus,
+                                physical_generation,
+                                recovery_attempt,
+                                0,
+                                0,
+                                0,
+                                nullptr);
+
+                            const auto close_failure = ClosePhysicalSession();
+                            if (HasPublishedFault())
+                            {
+                                auto failure = BuildLatchedFailure();
+                                if (close_failure)
+                                {
+                                    AppendSecondaryFailure(
+                                        failure,
+                                        *close_failure);
+                                }
+                                fail(std::move(failure));
+                                break;
+                            }
+                            if (close_failure)
+                            {
+                                fail(*close_failure);
+                                break;
+                            }
+
+                            SaturatingIncrementCounter(session_releases_);
+                            ReportLifecycle(
+                                AsioSessionLifecycleEvent::session_released,
+                                suspension_focus,
+                                physical_generation,
+                                recovery_attempt,
+                                0,
+                                0,
+                                0,
+                                nullptr);
+                            ClearSessionFault();
+                            state = LifecycleState::suspended;
+                            break;
+                        }
+
+                    case LifecycleState::suspended:
+                        {
+                            if (const auto failure = foreground_monitor_failure())
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            if (HasPublishedFault())
+                            {
+                                fail(BuildLatchedFailure());
+                                break;
+                            }
+
+                            if (suspended_loss_pending)
+                            {
+                                if (const auto failure = ValidateFocusSnapshot(
+                                    suspension_focus,
+                                    consumed_focus_loss_generation))
+                                {
+                                    fail(*failure);
+                                    break;
+                                }
+                                ConsumeFocusLossGeneration(
+                                    suspension_focus,
+                                    consumed_focus_loss_generation);
+                                ReportLifecycle(
+                                    AsioSessionLifecycleEvent::foreground_lost,
+                                    suspension_focus,
+                                    0,
+                                    recovery_attempt,
+                                    0,
+                                    0,
+                                    0,
+                                    nullptr);
+                                suspended_loss_pending = false;
+                            }
+
+                            const auto focus = foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            if (focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                ConsumeFocusLossGeneration(
+                                    focus,
+                                    consumed_focus_loss_generation);
+                                ReportLifecycle(
+                                    AsioSessionLifecycleEvent::foreground_lost,
+                                    focus,
+                                    0,
+                                    recovery_attempt,
+                                    0,
+                                    0,
+                                    0,
+                                    nullptr);
+                            }
+                            if (focus.is_foreground)
+                            {
+                                recovery_attempt = 0;
+                                recovery_retry_delay_ms = 0;
+                                ReportLifecycle(
+                                    AsioSessionLifecycleEvent::foreground_regained,
+                                    focus,
+                                    0,
+                                    recovery_attempt,
+                                    0,
+                                    0,
+                                    0,
+                                    nullptr);
+                                state = LifecycleState::recovering;
+                                break;
+                            }
+
+                            if (const auto failure = AdvanceSilentRendering())
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            const auto now_ms =
+                                actions_.tick_count_ms(actions_.context);
+                            const auto summary_remaining = RemainingTimeout(
+                                summary_started_ms,
+                                now_ms,
+                                actions_.summary_interval_ms);
+                            const auto wait_timeout = (std::min)(
+                                summary_remaining,
+                                SilentPollIntervalMs());
+                            auto wake = WaitForRuntimeWake(wait_timeout);
+                            if (!wake)
+                            {
+                                fail(std::move(wake.error()));
+                                break;
+                            }
+                            if (*wake == RuntimeWake::shutdown)
+                            {
+                                state = LifecycleState::stopping;
+                                break;
+                            }
+                            if (*wake == RuntimeWake::fault ||
+                                HasPublishedFault())
+                            {
+                                fail(BuildLatchedFailure());
+                            }
+                            break;
+                        }
+
+                    case LifecycleState::recovering:
+                        {
+                            auto immediate_wake = WaitForRuntimeWake(0);
+                            if (!immediate_wake)
+                            {
+                                fail(std::move(immediate_wake.error()));
+                                break;
+                            }
+                            if (*immediate_wake == RuntimeWake::shutdown)
+                            {
+                                state = LifecycleState::stopping;
+                                break;
+                            }
+                            if (*immediate_wake == RuntimeWake::fault ||
+                                HasPublishedFault())
+                            {
+                                fail(BuildLatchedFailure());
+                                break;
+                            }
+                            if (const auto failure = foreground_monitor_failure())
+                            {
+                                fail(*failure);
+                                break;
+                            }
+
+                            auto focus = foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            if (!focus.is_foreground ||
+                                focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                suspension_focus = focus;
+                                suspended_loss_pending = true;
+                                state = LifecycleState::suspended;
+                                break;
+                            }
+
+                            if (const auto failure = AdvanceSilentRendering())
+                            {
+                                fail(*failure);
+                                break;
+                            }
+
+                            if (recovery_retry_delay_ms != 0)
+                            {
+                                const auto now_ms =
+                                    actions_.tick_count_ms(actions_.context);
+                                const auto retry_remaining = RemainingTimeout(
+                                    recovery_retry_started_ms,
+                                    now_ms,
+                                    recovery_retry_delay_ms);
+                                if (retry_remaining == 0)
+                                {
+                                    recovery_retry_delay_ms = 0;
+                                    break;
+                                }
+                                const auto summary_remaining = RemainingTimeout(
+                                    summary_started_ms,
+                                    now_ms,
+                                    actions_.summary_interval_ms);
+                                const auto wait_timeout = (std::min)(
+                                    retry_remaining,
+                                    (std::min)(
+                                        summary_remaining,
+                                        SilentPollIntervalMs()));
+                                auto wake = WaitForRuntimeWake(wait_timeout);
+                                if (!wake)
+                                {
+                                    fail(std::move(wake.error()));
+                                    break;
+                                }
+                                if (*wake == RuntimeWake::shutdown)
+                                {
+                                    state = LifecycleState::stopping;
+                                    break;
+                                }
+                                if (*wake == RuntimeWake::fault ||
+                                    HasPublishedFault())
+                                {
+                                    fail(BuildLatchedFailure());
+                                }
+                                break;
+                            }
+
+                            focus = foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(*failure);
+                                break;
+                            }
+                            if (!focus.is_foreground ||
+                                focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                suspension_focus = focus;
+                                suspended_loss_pending = true;
+                                state = LifecycleState::suspended;
+                                break;
+                            }
+                            if (recovery_attempt >= kMaximumRecoveryAttempts)
+                            {
+                                fail(Failure(
+                                    AsioFailureStage::protocol,
+                                    "ASIO recovery attempt limit was exceeded"));
+                                break;
+                            }
+
                             ++recovery_attempt;
                             SaturatingIncrementCounter(recovery_attempts_);
+                            ReportLifecycle(
+                                AsioSessionLifecycleEvent::recovery_attempt_started,
+                                focus,
+                                0,
+                                recovery_attempt,
+                                0,
+                                0,
+                                0,
+                                nullptr);
+
                             auto prepared = PreparePhysicalSession();
                             if (!prepared)
                             {
                                 auto preparation_failure =
                                     std::move(prepared.error());
                                 const bool acquired_resources =
-                                    session_ != nullptr || callback_runtime_ != nullptr;
-                                const auto close_failure = ClosePhysicalSession();
+                                    session_ != nullptr ||
+                                    callback_runtime_ != nullptr;
+                                const auto close_failure =
+                                    ClosePhysicalSession();
+                                if (HasPublishedFault())
+                                {
+                                    auto failure = BuildLatchedFailure();
+                                    AppendSecondaryFailure(
+                                        failure,
+                                        preparation_failure.failure);
+                                    if (close_failure)
+                                    {
+                                        AppendSecondaryFailure(
+                                            failure,
+                                            *close_failure);
+                                    }
+                                    fail(std::move(failure));
+                                    break;
+                                }
                                 if (close_failure)
                                 {
                                     AppendSecondaryFailure(
                                         preparation_failure.failure,
                                         *close_failure);
+                                    fail(std::move(
+                                        preparation_failure.failure));
+                                    break;
                                 }
+                                ClearSessionFault();
+
+                                if (const auto failure =
+                                    foreground_monitor_failure())
+                                {
+                                    auto monitor_failure = *failure;
+                                    AppendSecondaryFailure(
+                                        monitor_failure,
+                                        preparation_failure.failure);
+                                    fail(std::move(monitor_failure));
+                                    break;
+                                }
+                                const auto after_failure_focus =
+                                    foreground_monitor_->snapshot();
+                                if (const auto failure = ValidateFocusSnapshot(
+                                    after_failure_focus,
+                                    consumed_focus_loss_generation))
+                                {
+                                    auto focus_failure = *failure;
+                                    AppendSecondaryFailure(
+                                        focus_failure,
+                                        preparation_failure.failure);
+                                    fail(std::move(focus_failure));
+                                    break;
+                                }
+
                                 if (acquired_resources)
                                 {
                                     SaturatingIncrementCounter(session_releases_);
-                                    observer_->SessionLifecycleChanged(
+                                    ReportLifecycle(
                                         AsioSessionLifecycleEvent::session_released,
+                                        after_failure_focus,
+                                        0,
                                         recovery_attempt,
-                                        &preparation_failure.failure);
+                                        0,
+                                        0,
+                                        0,
+                                        nullptr);
                                 }
-                                if (close_failure)
+
+                                SaturatingIncrementCounter(recovery_failures_);
+                                const bool focus_interrupted =
+                                    !after_failure_focus.is_foreground ||
+                                    after_failure_focus.loss_generation >
+                                    consumed_focus_loss_generation;
+                                std::uint32_t next_retry_delay_ms{};
+                                if (preparation_failure.kind ==
+                                    PhysicalPreparationFailureKind::
+                                    retryable_before_start &&
+                                    !focus_interrupted &&
+                                    recovery_attempt <
+                                    kMaximumRecoveryAttempts)
                                 {
-                                    return std::move(preparation_failure.failure);
+                                    next_retry_delay_ms =
+                                        kRecoveryRetryDelaysMs[
+                                            static_cast<std::size_t>(
+                                                recovery_attempt - 1)];
                                 }
-                                ClearSessionFault();
+                                ReportLifecycle(
+                                    AsioSessionLifecycleEvent::
+                                    recovery_attempt_failed,
+                                    after_failure_focus,
+                                    0,
+                                    recovery_attempt,
+                                    next_retry_delay_ms,
+                                    0,
+                                    0,
+                                    &preparation_failure.failure);
+
                                 if (preparation_failure.kind ==
                                     PhysicalPreparationFailureKind::fatal)
                                 {
-                                    return std::move(preparation_failure.failure);
+                                    fail(std::move(
+                                        preparation_failure.failure));
+                                    break;
                                 }
-                                if (!foreground_monitor_->snapshot().is_foreground)
+                                if (focus_interrupted)
                                 {
-                                    if (foreground_reported)
+                                    suspension_focus = after_failure_focus;
+                                    suspended_loss_pending = true;
+                                    state = LifecycleState::suspended;
+                                    break;
+                                }
+                                if (recovery_attempt >=
+                                    kMaximumRecoveryAttempts)
+                                {
+                                    fail(std::move(
+                                        preparation_failure.failure));
+                                    break;
+                                }
+
+                                recovery_retry_delay_ms =
+                                    next_retry_delay_ms;
+                                recovery_retry_started_ms =
+                                    actions_.tick_count_ms(actions_.context);
+                                break;
+                            }
+
+                            auto prepared_wake = WaitForRuntimeWake(0);
+                            if (!prepared_wake)
+                            {
+                                fail(close_after_failure(
+                                    std::move(prepared_wake.error())));
+                                break;
+                            }
+                            if (*prepared_wake == RuntimeWake::shutdown)
+                            {
+                                state = LifecycleState::stopping;
+                                break;
+                            }
+                            if (*prepared_wake == RuntimeWake::fault ||
+                                HasPublishedFault())
+                            {
+                                fail(close_after_failure(
+                                    BuildLatchedFailure()));
+                                break;
+                            }
+                            if (const auto failure =
+                                foreground_monitor_failure())
+                            {
+                                fail(close_after_failure(*failure));
+                                break;
+                            }
+
+                            const auto before_start_focus =
+                                foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                before_start_focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(close_after_failure(*failure));
+                                break;
+                            }
+                            if (!before_start_focus.is_foreground ||
+                                before_start_focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                const auto close_failure =
+                                    ClosePhysicalSession();
+                                if (HasPublishedFault())
+                                {
+                                    auto failure = BuildLatchedFailure();
+                                    if (close_failure)
                                     {
-                                        foreground_reported = false;
-                                        SaturatingIncrementCounter(foreground_losses_);
-                                        observer_->SessionLifecycleChanged(
-                                            AsioSessionLifecycleEvent::foreground_lost,
-                                            recovery_attempt,
-                                            nullptr);
+                                        AppendSecondaryFailure(
+                                            failure,
+                                            *close_failure);
                                     }
-                                    next_recovery_ms = 0;
+                                    fail(std::move(failure));
+                                    break;
                                 }
-                                else
+                                if (close_failure)
                                 {
-                                    SaturatingIncrementCounter(recovery_failures_);
-                                    observer_->SessionLifecycleChanged(
-                                        AsioSessionLifecycleEvent::recovery_attempt_failed,
-                                        recovery_attempt,
-                                        &preparation_failure.failure);
-                                    next_recovery_ms =
-                                        recovery_now + kRecoveryRetryMs;
+                                    fail(*close_failure);
+                                    break;
                                 }
+                                SaturatingIncrementCounter(session_releases_);
+                                ReportLifecycle(
+                                    AsioSessionLifecycleEvent::session_released,
+                                    before_start_focus,
+                                    0,
+                                    recovery_attempt,
+                                    0,
+                                    0,
+                                    0,
+                                    nullptr);
+                                ClearSessionFault();
+                                suspension_focus = before_start_focus;
+                                suspended_loss_pending = true;
+                                state = LifecycleState::suspended;
+                                break;
+                            }
+
+                            if (auto started = StartPreparedPhysicalSession();
+                                !started)
+                            {
+                                fail(close_after_failure(
+                                    std::move(started.error())));
+                                break;
+                            }
+
+                            auto stable = WaitForStableRender();
+                            if (stable &&
+                                *stable == StableRenderOutcome::shutdown)
+                            {
+                                state = LifecycleState::stopping;
+                                break;
+                            }
+                            if (!stable)
+                            {
+                                fail(close_after_failure(
+                                    std::move(stable.error())));
+                                break;
+                            }
+
+                            auto post_stability_wake =
+                                WaitForRuntimeWake(0);
+                            if (!post_stability_wake)
+                            {
+                                fail(close_after_failure(
+                                    std::move(post_stability_wake.error())));
+                                break;
+                            }
+                            if (*post_stability_wake ==
+                                RuntimeWake::shutdown)
+                            {
+                                state = LifecycleState::stopping;
+                                break;
+                            }
+                            if (*post_stability_wake == RuntimeWake::fault ||
+                                HasPublishedFault())
+                            {
+                                fail(close_after_failure(
+                                    BuildLatchedFailure()));
+                                break;
+                            }
+                            if (const auto failure =
+                                foreground_monitor_failure())
+                            {
+                                fail(close_after_failure(*failure));
+                                break;
+                            }
+
+                            const auto physical_generation =
+                                active_physical_session_generation_.load(
+                                    std::memory_order_acquire);
+                            const auto handoff_generation =
+                                handoff_physical_session_generation_.load(
+                                    std::memory_order_acquire);
+                            if (physical_generation == 0 ||
+                                handoff_generation != physical_generation)
+                            {
+                                fail(close_after_failure(Failure(
+                                    AsioFailureStage::runtime_clock,
+                                    "ASIO recovery reached stability without "
+                                    "publishing its physical-to-logical handoff")));
+                                break;
+                            }
+                            const auto logical_render_origin =
+                                handoff_logical_render_origin_.load(
+                                    std::memory_order_relaxed);
+                            const auto physical_render_origin =
+                                handoff_physical_render_origin_.load(
+                                    std::memory_order_relaxed);
+
+                            const auto post_stability_focus =
+                                foreground_monitor_->snapshot();
+                            if (const auto failure = ValidateFocusSnapshot(
+                                post_stability_focus,
+                                consumed_focus_loss_generation))
+                            {
+                                fail(close_after_failure(*failure));
+                                break;
+                            }
+
+                            SaturatingIncrementCounter(session_recoveries_);
+                            ReportLifecycle(
+                                AsioSessionLifecycleEvent::session_recovered,
+                                post_stability_focus,
+                                physical_generation,
+                                recovery_attempt,
+                                0,
+                                logical_render_origin,
+                                physical_render_origin,
+                                nullptr);
+                            recovery_retry_delay_ms = 0;
+                            if (!post_stability_focus.is_foreground ||
+                                post_stability_focus.loss_generation >
+                                consumed_focus_loss_generation)
+                            {
+                                suspension_focus = post_stability_focus;
+                                state = LifecycleState::suspending;
                             }
                             else
                             {
-                                if (!foreground_monitor_->snapshot().is_foreground)
-                                {
-                                    const auto close_failure =
-                                        ClosePhysicalSession();
-                                    SaturatingIncrementCounter(session_releases_);
-                                    observer_->SessionLifecycleChanged(
-                                        AsioSessionLifecycleEvent::session_released,
-                                        recovery_attempt,
-                                        close_failure ? &*close_failure : nullptr);
-                                    if (close_failure)
-                                    {
-                                        return close_failure;
-                                    }
-                                    ClearSessionFault();
-                                    if (foreground_reported)
-                                    {
-                                        foreground_reported = false;
-                                        SaturatingIncrementCounter(
-                                            foreground_losses_);
-                                        observer_->SessionLifecycleChanged(
-                                            AsioSessionLifecycleEvent::foreground_lost,
-                                            recovery_attempt,
-                                            nullptr);
-                                    }
-                                    next_recovery_ms = 0;
-                                    continue;
-                                }
-
-                                auto started = StartPreparedPhysicalSession();
-                                if (!started)
-                                {
-                                    auto failure = std::move(started.error());
-                                    if (const auto close_failure =
-                                        ClosePhysicalSession())
-                                    {
-                                        AppendSecondaryFailure(
-                                            failure, *close_failure);
-                                    }
-                                    SaturatingIncrementCounter(session_releases_);
-                                    observer_->SessionLifecycleChanged(
-                                        AsioSessionLifecycleEvent::session_released,
-                                        recovery_attempt,
-                                        &failure);
-                                    return failure;
-                                }
-
-                                auto stable = WaitForStableRender();
-                                if (stable &&
-                                    *stable == StableRenderOutcome::shutdown)
-                                {
-                                    return std::nullopt;
-                                }
-                                if (!stable)
-                                {
-                                    auto failure = std::move(stable.error());
-                                    if (const auto close_failure =
-                                        ClosePhysicalSession())
-                                    {
-                                        AppendSecondaryFailure(
-                                            failure, *close_failure);
-                                    }
-                                    SaturatingIncrementCounter(session_releases_);
-                                    observer_->SessionLifecycleChanged(
-                                        AsioSessionLifecycleEvent::session_released,
-                                        recovery_attempt,
-                                        &failure);
-                                    return failure;
-                                }
-
-                                session_active = true;
-                                next_recovery_ms = 0;
-                                SaturatingIncrementCounter(session_recoveries_);
-                                observer_->SessionLifecycleChanged(
-                                    AsioSessionLifecycleEvent::session_recovered,
-                                    recovery_attempt,
-                                    nullptr);
+                                state = LifecycleState::running;
                             }
+                            break;
                         }
+
+                    case LifecycleState::fatal:
+                        if (fatal_failure)
+                        {
+                            return std::move(*fatal_failure);
+                        }
+                        return Failure(
+                            AsioFailureStage::protocol,
+                            "ASIO lifecycle entered Fatal without a failure");
+
+                    case LifecycleState::stopping:
+                        return std::nullopt;
                     }
 
-                    const auto summary_now =
-                        actions_.tick_count_ms(actions_.context);
-                    if (summary_now - summary_started >=
-                        actions_.summary_interval_ms)
+                    if (state != LifecycleState::fatal &&
+                        state != LifecycleState::stopping)
                     {
-                        observer_->RuntimeSummary(SnapshotCounters());
-                        summary_started = summary_now;
+                        PublishRuntimeSummaryIfDue(summary_started_ms);
                     }
                 }
             }
@@ -1864,10 +2497,12 @@ namespace gc::audio
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
                 }
+                const auto physical_session_generation =
+                    active_physical_session_generation_.load(
+                        std::memory_order_acquire);
                 const auto logical_plan =
                     logical_render_sequencer_.TryPlanPhysical(
-                        active_physical_session_generation_.load(
-                            std::memory_order_acquire),
+                        physical_session_generation,
                         decision);
                 if (!logical_plan)
                 {
@@ -1879,6 +2514,20 @@ namespace gc::audio
                     }
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
                     return;
+                }
+                if (handoff_physical_session_generation_.load(
+                        std::memory_order_relaxed) !=
+                    physical_session_generation)
+                {
+                    handoff_logical_render_origin_.store(
+                        logical_plan->timeline.output_frame_begin,
+                        std::memory_order_relaxed);
+                    handoff_physical_render_origin_.store(
+                        decision.render_output_frame_begin,
+                        std::memory_order_relaxed);
+                    handoff_physical_session_generation_.store(
+                        physical_session_generation,
+                        std::memory_order_release);
                 }
                 const auto rendered = RenderLogicalBlock(*logical_plan);
                 if (!rendered)
@@ -2121,8 +2770,8 @@ namespace gc::audio
                     render_gap_frames_.load(std::memory_order_relaxed),
                     .foreground_losses =
                     foreground_losses_.load(std::memory_order_relaxed),
-                    .physical_session_losses =
-                    physical_session_losses_.load(
+                    .consumed_focus_loss_generation =
+                    consumed_focus_loss_generation_.load(
                         std::memory_order_relaxed),
                     .physical_session_generation =
                     logical_render_sequencer_.physical_session_generation(),
@@ -2249,7 +2898,7 @@ namespace gc::audio
             std::atomic_uint64_t sample_position_discontinuities_{};
             std::atomic_uint64_t render_gap_frames_{};
             std::atomic_uint64_t foreground_losses_{};
-            std::atomic_uint64_t physical_session_losses_{};
+            std::atomic_uint64_t consumed_focus_loss_generation_{};
             std::atomic_uint64_t session_releases_{};
             std::atomic_uint64_t recovery_attempts_{};
             std::atomic_uint64_t recovery_failures_{};
@@ -2263,6 +2912,9 @@ namespace gc::audio
             std::atomic<std::uint8_t> first_fault_domain_{};
             std::atomic<std::int64_t> first_fault_result_{};
             std::atomic_uint64_t active_physical_session_generation_{};
+            std::atomic_uint64_t handoff_physical_session_generation_{};
+            std::atomic_uint64_t handoff_logical_render_origin_{};
+            std::atomic_uint64_t handoff_physical_render_origin_{};
             std::uint32_t logical_output_latency_frames_{};
             bool physical_contract_established_{};
             std::uint64_t previous_sample_position_{};

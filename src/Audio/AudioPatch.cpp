@@ -672,8 +672,8 @@ namespace gc::audio
                 << counters.sample_position_discontinuities
                 << " render_gap_frames=" << counters.render_gap_frames
                 << " foreground_losses=" << counters.foreground_losses
-                << " physical_session_losses="
-                << counters.physical_session_losses
+                << " consumed_focus_loss_generation="
+                << counters.consumed_focus_loss_generation
                 << " physical_session_generation="
                 << counters.physical_session_generation
                 << " session_releases=" << counters.session_releases
@@ -1000,24 +1000,23 @@ namespace gc::audio
             }
 
             void SessionLifecycleChanged(
-                const AsioSessionLifecycleEvent event,
-                const std::uint64_t recovery_attempt,
+                const AsioSessionLifecycleRecord& record,
                 const AsioFailure* failure) noexcept override
             {
                 try
                 {
-                    const auto event_name = [event]() noexcept
+                    const auto event_name = [&record]() noexcept
                     {
-                        switch (event)
+                        switch (record.event)
                         {
                         case AsioSessionLifecycleEvent::foreground_lost:
                             return "foreground_lost";
-                        case AsioSessionLifecycleEvent::physical_session_lost:
-                            return "physical_session_lost";
                         case AsioSessionLifecycleEvent::session_released:
                             return "session_released";
                         case AsioSessionLifecycleEvent::foreground_regained:
                             return "foreground_regained";
+                        case AsioSessionLifecycleEvent::recovery_attempt_started:
+                            return "recovery_attempt_started";
                         case AsioSessionLifecycleEvent::recovery_attempt_failed:
                             return "recovery_attempt_failed";
                         case AsioSessionLifecycleEvent::session_recovered:
@@ -1027,7 +1026,18 @@ namespace gc::audio
                     }();
                     std::ostringstream stream;
                     stream << "ASIO session lifecycle event=" << event_name
-                        << " recovery_attempt=" << recovery_attempt;
+                        << " foreground="
+                        << (record.foreground ? "true" : "false")
+                        << " focus_loss_generation="
+                        << record.focus_loss_generation
+                        << " physical_session_generation="
+                        << record.physical_session_generation
+                        << " recovery_attempt=" << record.recovery_attempt
+                        << " retry_delay_ms=" << record.retry_delay_ms
+                        << " logical_render_origin="
+                        << record.logical_render_origin
+                        << " physical_render_origin="
+                        << record.physical_render_origin;
                     if (failure != nullptr)
                     {
                         stream << " asio_failure_stage="

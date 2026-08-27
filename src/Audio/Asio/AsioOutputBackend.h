@@ -31,7 +31,7 @@ namespace gc::audio
         std::uint64_t sample_position_discontinuities{};
         std::uint64_t render_gap_frames{};
         std::uint64_t foreground_losses{};
-        std::uint64_t physical_session_losses{};
+        std::uint64_t consumed_focus_loss_generation{};
         std::uint64_t physical_session_generation{};
         std::uint64_t session_releases{};
         std::uint64_t recovery_attempts{};
@@ -83,11 +83,23 @@ namespace gc::audio
     enum class AsioSessionLifecycleEvent : std::uint8_t
     {
         foreground_lost,
-        physical_session_lost,
         session_released,
         foreground_regained,
+        recovery_attempt_started,
         recovery_attempt_failed,
         session_recovered,
+    };
+
+    struct AsioSessionLifecycleRecord final
+    {
+        AsioSessionLifecycleEvent event{};
+        bool foreground{};
+        std::uint64_t focus_loss_generation{};
+        std::uint64_t physical_session_generation{};
+        std::uint64_t recovery_attempt{};
+        std::uint32_t retry_delay_ms{};
+        std::uint64_t logical_render_origin{};
+        std::uint64_t physical_render_origin{};
     };
 
     class IAsioOutputObserver
@@ -103,8 +115,7 @@ namespace gc::audio
             const AsioRuntimeCountersSnapshot&) noexcept = 0;
 
         virtual void SessionLifecycleChanged(
-            AsioSessionLifecycleEvent,
-            std::uint64_t,
+            const AsioSessionLifecycleRecord&,
             const AsioFailure*) noexcept
         {
         }
