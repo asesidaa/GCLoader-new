@@ -429,7 +429,7 @@ git commit -m "Make ASIO start and runtime faults strict"
 
 - Consumes: `AsioLogicalRenderPlan` and the persistent `ExactAsioClock`.
 - Produces:
-  `std::optional<AsioFailure> PublishExactAnchor(const AsioLogicalRenderPlan&, std::uint64_t presented_output_frame, bool detached) noexcept`.
+  `bool PublishExactAnchor(const AsioLogicalRenderPlan&, std::uint64_t presented_output_frame, bool detached) noexcept`.
 - Produces: `detached_exact_anchor_publications` in
   `AsioRuntimeCountersSnapshot`.
 - Task 4 consumes the same helper during suspended lifecycle advancement.
@@ -460,11 +460,10 @@ Add `PublishExactAnchor` with this behavior:
 
 ```cpp
 if (!enable_absolute_time_judgement_)
-    return std::nullopt;
+    return true;
 if (exact_clock_ == nullptr || exact_endpoint_generation_ == 0 ||
     exact_anchor_sequence_ == (std::numeric_limits<std::uint64_t>::max)())
-    return Failure(AsioFailureStage::runtime_clock,
-                   "ASIO exact clock publication contract is invalid");
+    return false;
 
 const auto next_sequence = exact_anchor_sequence_ + 1;
 if (!exact_clock_->Publish({
@@ -474,13 +473,17 @@ if (!exact_clock_->Publish({
         .system_time_ns = plan.system_time_ns,
         .submitted_output_tail = plan.submitted_output_tail,
     }))
-    return Failure(AsioFailureStage::runtime_clock,
-                   "ASIO exact clock rejected a logical continuity anchor");
+    return false;
 exact_anchor_sequence_ = next_sequence;
 if (detached)
     SaturatingIncrementCounter(detached_exact_anchor_publications_);
-return std::nullopt;
+return true;
 ```
+
+The helper is shared with the real-time callback and therefore performs no
+allocation and constructs no diagnostic string. A callback-side `false`
+latches `AsioFailureStage::runtime_clock`; the control-thread detached caller
+returns the detailed `AsioFailure` text.
 
 Only stable physical callbacks and detached renders publish exact anchors.
 Startup/recovery priming callbacks continue publishing presented continuity
