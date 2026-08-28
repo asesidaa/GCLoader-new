@@ -293,6 +293,8 @@ namespace gc::absolute_judgement
         std::uint64_t endpoint_publication_count{};
 
         std::uint64_t outer_calls{};
+        std::uint64_t maximum_outer_gap_qpc{};
+        std::uint64_t maximum_judgement_dispatch_qpc{};
         std::uint64_t event_scopes{};
         std::uint64_t heartbeat_scopes{};
         std::uint64_t event_only_batches{};
@@ -356,6 +358,8 @@ namespace gc::absolute_judgement
         std::uint64_t endpoint_publication_count{};
 
         std::uint64_t outer_calls{};
+        std::uint64_t maximum_outer_gap_qpc{};
+        std::uint64_t maximum_judgement_dispatch_qpc{};
         std::uint64_t event_scopes{};
         std::uint64_t heartbeat_scopes{};
         std::uint64_t event_only_batches{};
@@ -528,6 +532,9 @@ namespace gc::absolute_judgement
         const noexcept;
 
         void ObserveTransportPendingDepth(std::uint64_t depth) noexcept;
+        void ObserveOuterCallTiming(
+            std::int64_t entry_qpc,
+            std::int64_t dispatch_complete_qpc) noexcept;
         void RecordBatch(std::uint64_t size) noexcept;
         void ObserveBacklog(std::uint64_t depth) noexcept;
         void ObserveEventBacklog(std::uint64_t depth) noexcept;
@@ -595,6 +602,8 @@ namespace gc::absolute_judgement
         struct IntervalMaxima final
         {
             std::uint64_t transport_depth{};
+            std::uint64_t outer_gap_qpc{};
+            std::uint64_t judgement_dispatch_qpc{};
             std::uint64_t batch{};
             std::uint64_t backlog{};
             std::uint64_t event_backlog{};
@@ -624,6 +633,7 @@ namespace gc::absolute_judgement
         std::atomic_bool recognition_stopped_{false};
         std::optional<gc::timing::CheckedRational> last_committed_time_;
         std::uint64_t last_committed_sequence_{};
+        std::int64_t previous_outer_entry_qpc_{};
         bool has_committed_coordinate_{};
         std::int64_t last_heartbeat_index_{};
         bool has_heartbeat_index_{};

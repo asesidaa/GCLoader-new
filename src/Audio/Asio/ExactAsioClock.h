@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Audio/Asio/AsioLogicalTimeline.h"
-#include "Audio/Asio/AsioSubmittedOutputTail.h"
 #include "Audio/ExactOutputClock.h"
 
 #include <atomic>
@@ -18,7 +17,6 @@ namespace gc::audio
         [[nodiscard]] static std::shared_ptr<ExactAsioClock> Create(
             std::uint64_t endpoint_generation,
             std::shared_ptr<const AsioLogicalTimeline> timeline,
-            std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail,
             std::int64_t qpc_frequency,
             std::uint32_t period_frames,
             std::uint32_t output_latency_frames) noexcept;
@@ -34,7 +32,6 @@ namespace gc::audio
         ExactAsioClock(
             std::uint64_t endpoint_generation,
             std::shared_ptr<const AsioLogicalTimeline> timeline,
-            std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail,
             std::int64_t qpc_frequency,
             std::uint32_t period_frames,
             std::uint32_t output_latency_frames) noexcept;
@@ -44,7 +41,6 @@ namespace gc::audio
 
         std::uint64_t endpoint_generation_{};
         std::shared_ptr<const AsioLogicalTimeline> timeline_;
-        std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail_;
         std::int64_t qpc_frequency_{};
         std::uint32_t period_frames_{};
         std::uint32_t output_latency_frames_{};

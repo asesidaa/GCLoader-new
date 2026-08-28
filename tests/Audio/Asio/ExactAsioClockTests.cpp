@@ -84,27 +84,26 @@ namespace
         }
     }
 
-    void ResolvesDirectlyAndOnlyBehindCommittedTail()
+    void ResolvesDirectlyWithoutSubmittedTailGate()
     {
         const auto timeline = AsioLogicalTimeline::Create(1'000, 44'100);
-        const auto tail = std::make_shared<AsioSubmittedOutputTail>();
         const auto clock = ExactAsioClock::Create(
-            7, timeline, tail, 10'000'000, 192, 384);
+            7, timeline, 10'000'000, 192, 384);
         Expect(timeline != nullptr, "timeline creation succeeds");
-        Expect(tail != nullptr, "submitted-tail creation succeeds");
         Expect(clock != nullptr, "persistent exact clock creation succeeds");
-        if (!timeline || !tail || !clock)
+        if (!timeline || !clock)
         {
             return;
         }
 
-        const auto before_commit = clock->Resolve(
+        const auto initial = clock->Resolve(
             AtMillisecond(1'001),
             ExactClockResolveIntent::FinalizedTimestamp);
-        Expect(before_commit.status == ExactClockStatus::Pending,
-               "projection waits only for committed render evidence");
+        ExpectFrame(initial,
+                    441,
+                    10,
+                    "logical judgement resolves without physical output evidence");
 
-        Expect(tail->Publish(1'000), "first submitted tail commits");
         const auto finalized = clock->Resolve(
             AtMillisecond(1'001),
             ExactClockResolveIntent::FinalizedTimestamp);
@@ -132,49 +131,37 @@ namespace
                "clock reports the driver-owned logical sample rate");
     }
 
-    void TailAndInvalidationAreExplicit()
+    void LogicalClockInvalidationIsExplicit()
     {
         const auto timeline = AsioLogicalTimeline::Create(100, 48'000);
-        const auto tail = std::make_shared<AsioSubmittedOutputTail>();
         const auto clock = ExactAsioClock::Create(
-            7, timeline, tail, 10'000'000, 192, 384);
-        Expect(timeline != nullptr, "tail test timeline creation succeeds");
-        Expect(tail != nullptr, "tail test publication creation succeeds");
-        Expect(clock != nullptr, "tail test exact clock creation succeeds");
-        if (!timeline || !tail || !clock)
+            7, timeline, 10'000'000, 192, 384);
+        Expect(timeline != nullptr, "invalidation test timeline creation succeeds");
+        Expect(clock != nullptr, "invalidation test exact clock creation succeeds");
+        if (!timeline || !clock)
         {
             return;
         }
 
-        Expect(tail->Publish(48), "one millisecond of output commits");
-        const auto at_tail = clock->Resolve(
+        const auto resolved = clock->Resolve(
             AtMillisecond(101),
             ExactClockResolveIntent::FinalizedTimestamp);
-        Expect(at_tail.status == ExactClockStatus::Pending,
-               "a frame at the exclusive submitted tail is pending");
-        Expect(at_tail.endpoint_generation == 7,
-               "logical endpoint identity is persistent");
-        Expect(at_tail.anchor_sequence == 1,
-               "tail publication sequence remains observable");
-        Expect(!at_tail.anchor_endpoint_position.has_value(),
-               "there is no physical callback anchor");
-        Expect(clock->counters().publication_count == 1,
-               "clock publication count comes from the shared tail");
-        Expect(clock->counters().history_lost_queries == 0,
-               "a non-existent callback history cannot be lost");
-
-        Expect(tail->Publish(480), "later submitted output commits");
-        const auto after_tail = clock->Resolve(
-            AtMillisecond(101),
-            ExactClockResolveIntent::FinalizedTimestamp);
-        ExpectFrame(after_tail,
+        ExpectFrame(resolved,
                     48,
                     1,
-                    "the same timestamp resolves to its absolute 48 kHz coordinate");
-        Expect(after_tail.anchor_sequence == 2,
-               "resolution reports only the committed-tail publication");
-        Expect(!after_tail.anchor_endpoint_position.has_value(),
-               "48 kHz judgement exposes no physical callback position");
+                    "logical judgement resolves from multimedia time alone");
+        Expect(resolved.endpoint_generation == 7,
+               "logical endpoint identity is persistent");
+        Expect(resolved.submitted_output_tail == 0,
+               "logical judgement exposes no physical submitted tail");
+        Expect(resolved.anchor_sequence == 0,
+               "logical judgement exposes no physical publication sequence");
+        Expect(!resolved.anchor_endpoint_position.has_value(),
+               "there is no physical callback anchor");
+        Expect(clock->counters().publication_count == 0,
+               "logical judgement has no physical publication counter");
+        Expect(clock->counters().history_lost_queries == 0,
+               "a non-existent callback history cannot be lost");
 
         clock->Invalidate();
         const auto invalid = clock->Resolve(
@@ -197,7 +184,7 @@ namespace
             timeline,
             tail);
         const auto exact = ExactAsioClock::Create(
-            17, timeline, tail, 10'000'000, 192, 384);
+            17, timeline, 10'000'000, 192, 384);
         Expect(exact != nullptr, "separate exact clock creation succeeds");
         if (!exact)
         {
@@ -247,8 +234,8 @@ namespace
 
 int main()
 {
-    ResolvesDirectlyAndOnlyBehindCommittedTail();
-    TailAndInvalidationAreExplicit();
+    ResolvesDirectlyWithoutSubmittedTailGate();
+    LogicalClockInvalidationIsExplicit();
     DirectSoundCursorUsesOnlyThePhysicalPresentationClock();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

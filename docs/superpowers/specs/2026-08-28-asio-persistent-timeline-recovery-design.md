@@ -306,30 +306,29 @@ state. It is a small adapter over:
 
 - the immutable logical origin `{T0, U0, F0, R}` and its exact wrap snapshot;
 - persistent endpoint generation `E`;
-- immutable period and output-latency information; and
-- the latest successfully committed logical submitted-output tail.
+- immutable period and output-latency information.
 
 Resolving either an input timestamp or a provisional horizon computes `P(t)`
 directly. Resolve intent never selects different time evidence.
 
 The result is:
 
-- `Resolved` when the rational frame is before the committed submitted tail;
-- `Pending` when render state has not yet been committed far enough;
-- `TemporarilyUnavailable` when a concurrent logical-timeline or tail
-  publication prevents a stable read; and
+- `Resolved` whenever the logical projection is representable;
+- `TemporarilyUnavailable` when a concurrent logical-timeline publication
+  prevents a stable wrap-snapshot read; and
 - `Discontinuous` after explicit invalidation, arithmetic failure, impossible
   domain ambiguity, or logical contract failure.
 
 Normal ASIO operation cannot produce `HistoryLost` because there is no bounded
 callback history to outlive. A future callback is never required to finalize
-an older event, and no callback can rewrite the event coordinate.
+an older event, no callback can rewrite the event coordinate, and physical
+render progress cannot delay logical judgement.
 
-The submitted tail is publication evidence and an exclusive bound. Physical
-and detached renders update it only after the mixer transition and required
-presentation publications commit. It says whether a projected coordinate is
-available; it is not a time anchor. A failed or abandoned render plan makes no
-logical state change.
+The submitted tail remains publication evidence and an exclusive bound for
+rendering and DirectSound presentation. Physical and detached renders update
+it only after the mixer transition and required presentation publications
+commit. `ExactAsioClock` never reads it. A failed or abandoned render plan
+makes no logical state change.
 
 Endpoint identity remains stable across suspension and recovery. An active
 judgement stage therefore keeps the same provider and endpoint generation.
@@ -580,8 +579,9 @@ DirectSound-facing method, or thread entry point.
 ### `ExactAsioClock`
 
 - Adapts `AsioLogicalTimeline` to the backend-neutral exact-clock interface.
-- Reports provider information and reads the committed submitted tail.
+- Reports persistent logical provider information only.
 - Contains no callback anchor ring and performs no callback interpolation.
+- Contains no submitted-tail or physical-presentation dependency.
 - Retains one provider identity and endpoint generation until final shutdown.
 
 ### `AsioLogicalRenderSequencer`
@@ -652,12 +652,16 @@ Aggregate runtime summaries retain:
 - driver-time residual relative to the immutable logical timeline, clearly
   labelled diagnostic-only;
 - physical-session and focus-loss generations;
-- exact resolved/pending/discontinuous counts; and
+- exact resolved/temporary/discontinuous counts; and
 - typed fatal state, when present.
 
-Exact-clock publication counts come from the shared submitted tail. Resolved,
-pending, unavailable, and discontinuity counts remain visible;
-`history_lost` stays zero because ASIO judgement retains no callback history.
+Exact-clock physical publication and pending counts stay zero. Resolved,
+unavailable, and discontinuity counts remain visible; `history_lost` stays
+zero because ASIO judgement retains no callback history.
+Deferred absolute-judgement summaries retain the maximum gap between outer
+calls and the maximum time spent inside judgement dispatch for each five-second
+window. These values are captured in fixed storage and formatted only after the
+stage ends.
 There is no per-callback, per-input, or per-note logging.
 
 ## Automated verification boundary
@@ -669,7 +673,8 @@ a production contract.
    The oracle is hand-derived: at 44.1 kHz, 1 ms is `441/10` frames, while at
    48 kHz it is 48 frames. Finalized and provisional intents must resolve the
    same coordinate; later wrap-snapshot observations may not rewrite it. The
-   submitted tail is tested separately as an exclusive availability bound.
+   physical submitted tail and presentation anchor are tested separately and
+   may not change or delay the logical judgement coordinate.
 2. `AsioLogicalRenderSequencerTests` covers one physical attachment followed
    by continuous sample-position deltas and deliberately irregular later
    callback timestamps. The expected logical frames come from the first
@@ -700,9 +705,10 @@ judgement feel remain runtime acceptance.
    contract.
 4. Thread `R` through the render core, callback timing, raw clock validation,
    presented clock, sequencer, exact provider, and duration diagnostics.
-5. Remove `ExactAsioClock` callback history and make it a logical-timeline and
-   committed-tail adapter. Keep physical anchors only in the separate
-   DirectSound presentation clock.
+5. Remove `ExactAsioClock` callback history and make it a logical-timeline
+   adapter with no submitted-tail dependency. Keep the submitted tail and
+   physical anchors only in rendering and the separate DirectSound
+   presentation clock.
 6. Refactor the logical render sequencer around absolute targets and one-time
    physical-session attachment.
 7. Integrate detached-to-physical handoff, silent priming, and the strict

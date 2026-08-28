@@ -748,7 +748,9 @@ namespace gc::absolute_judgement
                 prefix);
             std::format_to(
                 std::back_inserter(message),
-                " {}outer_calls={} {}event_scopes={} {}heartbeat_scopes={}"
+                " {}outer_calls={} {}maximum_outer_gap_qpc={}"
+                " {}maximum_judgement_dispatch_qpc={}"
+                " {}event_scopes={} {}heartbeat_scopes={}"
                 " {}event_only_batches={} {}heartbeat_only_batches={}"
                 " {}mixed_event_batches={} {}event_barrier_deferrals={}"
                 " {}equal_boundary_substitutions={} {}committed_boundaries={}"
@@ -759,6 +761,10 @@ namespace gc::absolute_judgement
                 " {}recognition_calls={} {}score_calls={}",
                 prefix,
                 counters.outer_calls,
+                prefix,
+                counters.maximum_outer_gap_qpc,
+                prefix,
+                counters.maximum_judgement_dispatch_qpc,
                 prefix,
                 counters.event_scopes,
                 prefix,
@@ -940,6 +946,39 @@ namespace gc::absolute_judgement
             (std::max)(interval_maxima_.transport_depth, depth);
     }
 
+    void AbsoluteJudgementDiagnostics::ObserveOuterCallTiming(
+        const std::int64_t entry_qpc,
+        const std::int64_t dispatch_complete_qpc) noexcept
+    {
+        if (entry_qpc <= 0 || dispatch_complete_qpc < entry_qpc)
+        {
+            return;
+        }
+
+        const auto dispatch_duration = static_cast<std::uint64_t>(
+            dispatch_complete_qpc - entry_qpc);
+        stage_.maximum_judgement_dispatch_qpc = (std::max)(
+            stage_.maximum_judgement_dispatch_qpc,
+            dispatch_duration);
+        interval_maxima_.judgement_dispatch_qpc = (std::max)(
+            interval_maxima_.judgement_dispatch_qpc,
+            dispatch_duration);
+
+        if (previous_outer_entry_qpc_ > 0 &&
+            entry_qpc >= previous_outer_entry_qpc_)
+        {
+            const auto outer_gap = static_cast<std::uint64_t>(
+                entry_qpc - previous_outer_entry_qpc_);
+            stage_.maximum_outer_gap_qpc = (std::max)(
+                stage_.maximum_outer_gap_qpc,
+                outer_gap);
+            interval_maxima_.outer_gap_qpc = (std::max)(
+                interval_maxima_.outer_gap_qpc,
+                outer_gap);
+        }
+        previous_outer_entry_qpc_ = entry_qpc;
+    }
+
     void AbsoluteJudgementDiagnostics::RecordBatch(
         const std::uint64_t size) noexcept
     {
@@ -1007,6 +1046,9 @@ namespace gc::absolute_judgement
             .unavailable_clock_reads = stage_.unavailable_clock_reads,
             .endpoint_publication_count = stage_.endpoint_publication_count,
             .outer_calls = stage_.outer_calls,
+            .maximum_outer_gap_qpc = stage_.maximum_outer_gap_qpc,
+            .maximum_judgement_dispatch_qpc =
+            stage_.maximum_judgement_dispatch_qpc,
             .event_scopes = stage_.event_scopes,
             .heartbeat_scopes = stage_.heartbeat_scopes,
             .event_only_batches = stage_.event_only_batches,
@@ -1059,6 +1101,9 @@ namespace gc::absolute_judgement
         auto interval = SubtractCounters(
             cumulative, last_periodic_snapshot_);
         interval.transport_max_depth = interval_maxima_.transport_depth;
+        interval.maximum_outer_gap_qpc = interval_maxima_.outer_gap_qpc;
+        interval.maximum_judgement_dispatch_qpc =
+            interval_maxima_.judgement_dispatch_qpc;
         interval.maximum_batch = interval_maxima_.batch;
         interval.maximum_backlog = interval_maxima_.backlog;
         interval.maximum_event_backlog = interval_maxima_.event_backlog;
@@ -1081,6 +1126,7 @@ namespace gc::absolute_judgement
         last_periodic_snapshot_ = {};
         last_committed_time_.reset();
         last_committed_sequence_ = 0;
+        previous_outer_entry_qpc_ = 0;
         has_committed_coordinate_ = false;
         last_heartbeat_index_ = 0;
         has_heartbeat_index_ = false;

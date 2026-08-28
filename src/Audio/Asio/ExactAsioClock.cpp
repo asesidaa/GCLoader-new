@@ -1,6 +1,5 @@
 #include "Audio/Asio/ExactAsioClock.h"
 
-#include <limits>
 #include <new>
 #include <optional>
 #include <utility>
@@ -13,15 +12,14 @@ namespace gc::audio
 
         [[nodiscard]] ExactOutputClockResult Result(
             const ExactClockStatus status,
-            const std::uint64_t endpoint_generation,
-            const AsioSubmittedOutputTailSnapshot& tail = {}) noexcept
+            const std::uint64_t endpoint_generation) noexcept
         {
             return {
                 .status = status,
                 .endpoint_generation = endpoint_generation,
                 .output_frame = std::nullopt,
-                .submitted_output_tail = tail.submitted_output_tail,
-                .anchor_sequence = tail.publication_sequence,
+                .submitted_output_tail = 0,
+                .anchor_sequence = 0,
                 .anchor_endpoint_position = std::nullopt,
             };
         }
@@ -30,13 +28,11 @@ namespace gc::audio
     ExactAsioClock::ExactAsioClock(
         const std::uint64_t endpoint_generation,
         std::shared_ptr<const AsioLogicalTimeline> timeline,
-        std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail,
         const std::int64_t qpc_frequency,
         const std::uint32_t period_frames,
         const std::uint32_t output_latency_frames) noexcept
         : endpoint_generation_(endpoint_generation),
           timeline_(std::move(timeline)),
-          submitted_tail_(std::move(submitted_tail)),
           qpc_frequency_(qpc_frequency),
           period_frames_(period_frames),
           output_latency_frames_(output_latency_frames)
@@ -48,13 +44,12 @@ namespace gc::audio
     std::shared_ptr<ExactAsioClock> ExactAsioClock::Create(
         const std::uint64_t endpoint_generation,
         std::shared_ptr<const AsioLogicalTimeline> timeline,
-        std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail,
         const std::int64_t qpc_frequency,
         const std::uint32_t period_frames,
         const std::uint32_t output_latency_frames) noexcept
     {
         if (endpoint_generation == 0 || timeline == nullptr ||
-            submitted_tail == nullptr || qpc_frequency <= 0 || period_frames == 0)
+            qpc_frequency <= 0 || period_frames == 0)
         {
             return {};
         }
@@ -63,7 +58,6 @@ namespace gc::audio
             new(std::nothrow) ExactAsioClock(
                 endpoint_generation,
                 std::move(timeline),
-                std::move(submitted_tail),
                 qpc_frequency,
                 period_frames,
                 output_latency_frames)
@@ -95,25 +89,6 @@ namespace gc::audio
                 ExactClockStatus::Discontinuous, endpoint_generation_));
         }
 
-        const AsioSubmittedOutputTailSnapshot tail = submitted_tail_->Read();
-        if (!tail.valid)
-        {
-            return CountResult(Result(
-                ExactClockStatus::Discontinuous, endpoint_generation_, tail));
-        }
-        if (!tail.stable)
-        {
-            return CountResult(Result(
-                ExactClockStatus::TemporarilyUnavailable,
-                endpoint_generation_,
-                tail));
-        }
-        if (!tail.available)
-        {
-            return CountResult(Result(
-                ExactClockStatus::Pending, endpoint_generation_, tail));
-        }
-
         const auto output_frame = timeline_->ProjectMultimediaMilliseconds(
             timestamp.multimedia_time_ms);
         if (!output_frame)
@@ -123,34 +98,25 @@ namespace gc::audio
                 AsioLogicalTimelineFailure::SnapshotUnavailable
                     ? ExactClockStatus::TemporarilyUnavailable
                     : ExactClockStatus::Discontinuous;
-            return CountResult(Result(status, endpoint_generation_, tail));
+            return CountResult(Result(status, endpoint_generation_));
         }
         if (output_frame->numerator() < 0)
         {
             return CountResult(Result(
-                ExactClockStatus::Discontinuous, endpoint_generation_, tail));
-        }
-
-        if (tail.submitted_output_tail <= static_cast<std::uint64_t>(
-                (std::numeric_limits<std::int64_t>::max)()) &&
-            output_frame->Compare(timing::CheckedRational::Whole(
-                static_cast<std::int64_t>(tail.submitted_output_tail))) >= 0)
-        {
-            return CountResult(Result(
-                ExactClockStatus::Pending, endpoint_generation_, tail));
+                ExactClockStatus::Discontinuous, endpoint_generation_));
         }
 
         if (invalidated_.load(std::memory_order_acquire))
         {
             return CountResult(Result(
-                ExactClockStatus::Discontinuous, endpoint_generation_, tail));
+                ExactClockStatus::Discontinuous, endpoint_generation_));
         }
         return CountResult({
             .status = ExactClockStatus::Resolved,
             .endpoint_generation = endpoint_generation_,
             .output_frame = *output_frame,
-            .submitted_output_tail = tail.submitted_output_tail,
-            .anchor_sequence = tail.publication_sequence,
+            .submitted_output_tail = 0,
+            .anchor_sequence = 0,
             .anchor_endpoint_position = std::nullopt,
         });
     }
@@ -170,12 +136,8 @@ namespace gc::audio
 
     ExactOutputClockCounters ExactAsioClock::counters() const noexcept
     {
-        const auto tail = submitted_tail_->Read();
         return {
-            .publication_count =
-            tail.stable && tail.available
-                ? tail.publication_sequence
-                : 0,
+            .publication_count = 0,
             .resolved_queries =
             resolved_queries_.load(std::memory_order_relaxed),
             .pending_queries = pending_queries_.load(std::memory_order_relaxed),

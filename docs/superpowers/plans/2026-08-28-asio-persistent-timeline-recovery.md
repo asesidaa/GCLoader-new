@@ -105,8 +105,8 @@ Only these independently derived contracts justify automated changes:
 1. A new pure `AsioLogicalTimelineTests` binary proves 44.1/48-kHz rational
    projection, exact 32-bit wrap handling, and snapshot-rebase invariance.
 2. The existing `ExactAsioClockTests` binary is rewritten to prove direct
-   timeline projection, submitted-tail gating, stable endpoint identity, and
-   invalidation. Its callback-anchor tests are removed, not retained.
+   timeline projection without submitted-tail gating, stable endpoint identity,
+   and invalidation. Its callback-anchor tests are removed, not retained.
 3. The existing `AsioLogicalRenderSequencerTests` binary is rewritten to prove
    one-time attachment, raw-sample-delta mapping, exclusive claims, and
    one-time wait/catch-up behavior.
@@ -126,7 +126,8 @@ turn into a test crash.
 - Create `src/Audio/Asio/AsioLogicalTimeline.h/.cpp`: immutable-origin,
   generic-rate, checked rational projection plus control-thread wrap snapshot.
 - Create `src/Audio/Asio/AsioSubmittedOutputTail.h/.cpp`: the one shared,
-  monotonic committed-tail publication consumed by both logical clocks.
+  monotonic committed-tail publication consumed by rendering and the
+  DirectSound presentation clock.
 - Create `tests/Audio/Asio/AsioLogicalTimelineTests.cpp`: the hand-derived
   rational/wrap oracle.
 - Modify `src/Audio/Asio/CMakeLists.txt`: compile the new primitives and link
@@ -146,11 +147,11 @@ turn into a test crash.
   validation and make the presented clock consume explicit physical anchors
   while attached and a logical anchor while detached.
 - Modify `src/Audio/Asio/ExactAsioClock.h/.cpp`: remove callback history and
-  resolve both intents directly from the logical timeline, gated only by the
-  committed submitted tail.
+  resolve both intents directly from the logical timeline with no physical
+  submitted-tail dependency.
 - Modify `tests/Audio/Asio/ExactAsioClockTests.cpp` with hand-derived 44.1/48
-  kHz absolute projection, intent invariance, exclusive-tail, invalidation, and
-  separate presented-cursor contract oracles.
+  kHz absolute projection, intent invariance, invalidation, and separate
+  presented-cursor/exclusive-tail contract oracles.
 - Modify `src/Audio/Asio/AsioLogicalRenderSequencer.h/.cpp`: absolute targets,
   one-time physical attachment, and transactionally committed render claims.
 - Replace `tests/Audio/Asio/AsioLogicalRenderSequencerTests.cpp` with the
@@ -595,7 +596,6 @@ public:
     [[nodiscard]] static std::shared_ptr<ExactAsioClock> Create(
         std::uint64_t endpoint_generation,
         std::shared_ptr<const AsioLogicalTimeline> timeline,
-        std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail,
         std::int64_t qpc_frequency,
         std::uint32_t period_frames,
         std::uint32_t output_latency_frames) noexcept;
@@ -638,24 +638,22 @@ expectations before production code:
    frames. Finalized and provisional resolution must be equal.
 2. At 48 kHz with origin 100 ms, timestamp 101 ms is exactly 48 frames.
 3. Advancing the logical wrap snapshot may not rewrite an earlier timestamp.
-4. A coordinate equal to the submitted tail is `Pending`; the same coordinate
-   becomes `Resolved` after a later tail commit, without changing its value.
-5. The result exposes the tail publication sequence and no physical callback
-   position.
-6. A combined exact/presented-clock case proves that publishing a physical
+4. Logical resolution succeeds before any physical submission and exposes no
+   submitted tail, publication sequence, or callback position.
+5. A combined exact/presented-clock case proves that publishing a physical
    DirectSound anchor advances and saturates that cursor at
    `submitted_tail - 1` without changing the exact clock's absolute result.
 
 The expected values are literal, hand-derived clock arithmetic. The production
-mutation that makes the first five fail is selecting callback interpolation,
-callback extrapolation, or a future-callback wait instead of `P(t)`. The sixth
-case protects the separate half-open DirectSound presentation contract.
+mutation that makes the first four fail is selecting callback interpolation,
+callback extrapolation, or physical submitted-tail readiness instead of
+`P(t)`. The fifth case protects the separate half-open DirectSound
+presentation contract.
 
-Expected RED: the current interpolating provider returns different 44.1/48-kHz
-coordinates, exposes a callback position, and leaves a finalized timestamp
-pending until a future callback.
+Expected RED for the gated implementation: logical resolution remains
+`Pending` before a physical tail publication and at the exclusive tail.
 
-- [ ] **Step 2: Reduce `ExactAsioClock` to a timeline/tail adapter**
+- [ ] **Step 2: Reduce `ExactAsioClock` to a logical-timeline adapter**
 
 Delete `ExactAsioAnchor`, `Slot`, the retention ring, physical-session state,
 `Publish`, `PublishDetached`, and every callback interpolation/extrapolation
@@ -665,19 +663,17 @@ branch.
 
 1. reject an unknown resolve intent or explicit invalidation as
    `Discontinuous`;
-2. read one stable submitted-tail snapshot;
-3. return `TemporarilyUnavailable` for a transient stable-read collision,
-   `Discontinuous` for invalid state, or `Pending` before any tail commits;
-4. project `timestamp.multimedia_time_ms` directly through
+2. project `timestamp.multimedia_time_ms` directly through
    `AsioLogicalTimeline::ProjectMultimediaMilliseconds`;
-5. return `Pending` when the projected rational frame is greater than or equal
-   to the exclusive committed tail; and
-6. otherwise return `Resolved` with the persistent endpoint generation, tail
-   publication sequence, and no callback position.
+3. return `TemporarilyUnavailable` only for a transient logical wrap-snapshot
+   collision and `Discontinuous` for invalid logical state; and
+4. otherwise return `Resolved` with the persistent endpoint generation and no
+   physical submitted-tail, publication-sequence, or callback-position
+   metadata.
 
 Both resolve intents follow the identical path. `info().output_sample_rate`
 comes from the driver-owned logical timeline.
-`counters().publication_count` comes from the shared submitted tail, and
+`counters().publication_count` and `pending_queries` remain zero, and
 `history_lost_queries` remains zero.
 
 - [ ] **Step 3: Keep physical presentation in the presented clock only**
@@ -698,7 +694,8 @@ never publishes into or supplies evidence to `ExactAsioClock`.
 
 After initial `R` is known, create one timeline, submitted tail, presented
 clock, mixer, sequencer, and exact provider with persistent endpoint generation
-`E`. Reuse them through every physical recovery.
+`E`. The exact provider receives only the logical timeline. Reuse all
+persistent objects through every physical recovery.
 
 After a successful physical render commit:
 
@@ -1061,7 +1058,8 @@ std::atomic_uint64_t active_physical_session_generation_{};
    read `L`;
 6. freeze driver identity, `R`, `B`, channel indices/types, `L`, and
    `outputReady`; create the sequencer, persistent endpoint generation `E`, and
-   exact provider over the existing timeline/tail; register `E` exactly once;
+   exact provider over the existing logical timeline; register `E` exactly
+   once;
 7. begin physical generation 1, call `Start`, zero-fill/prime, and require the
    existing finite sequence of valid continuous callbacks; and
 8. publish startup success, enter lifecycle monitoring, then consume any
@@ -1314,8 +1312,12 @@ Retain and log:
 Also retain callback cadence, overload/slow observations, raw sample/buffer
 faults, focus/physical generations, recovery counters, mixer counters, and
 exact resolved/pending/temporary/history-lost/discontinuous counters.
-`exact_history_lost_queries` must remain zero because exact judgement owns no
-bounded callback history.
+`exact_pending_queries` and `exact_history_lost_queries` must remain zero
+because exact judgement owns neither physical readiness gating nor bounded
+callback history.
+The existing deferred absolute-judgement windows also retain maximum
+outer-call gap and maximum judgement-dispatch duration in QPC ticks. Capture
+only fixed-size numeric state during gameplay and format it at stage end.
 
 Residual magnitude is never a failure predicate. Only inability to perform
 required checked logical arithmetic is a logical fault.
@@ -1330,6 +1332,8 @@ reanchor, fallback, and `PreparePhysicalSession`. Confirm:
 - 44.1 and 48 kHz remain legitimate test values;
 - callback anchors appear only in the DirectSound presentation clock and never
   in `ExactAsioClock`;
+- the submitted tail appears only in rendering and DirectSound presentation and
+  never in `ExactAsioClock`;
 - both exact resolve intents project directly through `P(t)`;
 - `GameTimeOffset` appears only in game/audio timeline mapping and ASIO never
   reads or applies `JudgTimeOffset`;

@@ -1391,7 +1391,6 @@ namespace gc::audio
                     exact_clock_ = ExactAsioClock::Create(
                         endpoint_generation,
                         logical_timeline_,
-                        submitted_tail_,
                         static_cast<std::int64_t>(callback.qpc_frequency),
                         request_.buffer_frames,
                         logical_output_latency_frames_);
@@ -1399,7 +1398,7 @@ namespace gc::audio
                     {
                         return std::unexpected(Failure(
                             AsioFailureStage::startup_clock,
-                            "Could not allocate the ASIO exact clock history"));
+                            "Could not allocate the ASIO logical judgement clock"));
                     }
                     exact_endpoint_generation_ = endpoint_generation;
                     if (!detail::RegisterExactOutputClock(exact_clock_))
