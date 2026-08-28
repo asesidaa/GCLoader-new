@@ -1,5 +1,10 @@
 # ASIO Focus Suspension and Recovery Design
 
+> **Superseded:** This document is historical evidence only. Its timing and
+> recovery authority is replaced by
+> `2026-08-29-asio-logical-time-presentation-rewrite-design.md`. Detached
+> physical/exact anchors are not part of the replacement design.
+
 **Status:** Approved design, 2026-08-27
 
 **Scope:** ASIO lifecycle, logical audio continuity, and exact judgement time

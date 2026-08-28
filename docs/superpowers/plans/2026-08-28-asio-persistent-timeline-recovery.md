@@ -1,5 +1,8 @@
 # ASIO Persistent Timeline Recovery Implementation Plan
 
+> **Superseded:** Do not execute this plan. The replacement design is
+> `docs/superpowers/specs/2026-08-29-asio-logical-time-presentation-rewrite-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > **Repository execution choice:** The user selected inline execution. Do not

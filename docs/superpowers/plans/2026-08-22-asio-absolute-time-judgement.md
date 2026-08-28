@@ -1,5 +1,8 @@
 # ASIO Absolute-Time Judgement Implementation Plan
 
+> **Superseded:** Do not execute this plan. The replacement design is
+> `docs/superpowers/specs/2026-08-29-asio-logical-time-presentation-rewrite-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:executing-plans` to implement this plan task-by-task inline.
 > Do not dispatch subagents. Keep the checkboxes and execution record current

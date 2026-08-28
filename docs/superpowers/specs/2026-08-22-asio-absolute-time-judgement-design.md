@@ -1,5 +1,11 @@
 # ASIO Absolute-Time Judgement Design
 
+> **Superseded:** This document is historical evidence only. Its ASIO timing
+> authority is replaced by
+> `2026-08-29-asio-logical-time-presentation-rewrite-design.md`. Do not restore
+> callback-derived judgement, callback interpolation/extrapolation, or
+> physical endpoint lifetime as a judgement dependency from this document.
+
 **Date:** 2026-08-22
 
 **Status:** Architecture approved in conversation; written review pending

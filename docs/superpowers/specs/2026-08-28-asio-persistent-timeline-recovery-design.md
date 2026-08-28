@@ -1,5 +1,9 @@
 # ASIO Persistent Timeline and Replaceable Session Design
 
+> **Superseded:** This document is historical evidence only. Its one-time
+> physical-to-logical attachment and judgement/recovery authority are replaced
+> by `2026-08-29-asio-logical-time-presentation-rewrite-design.md`.
+
 **Date:** 2026-08-28
 
 **Status:** Architecture approved in conversation; written review pending

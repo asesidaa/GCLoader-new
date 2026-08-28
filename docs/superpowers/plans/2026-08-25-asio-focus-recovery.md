@@ -1,5 +1,8 @@
 # ASIO Focus Recovery Implementation Plan
 
+> **Superseded:** Do not execute this plan. The replacement design is
+> `docs/superpowers/specs/2026-08-29-asio-logical-time-presentation-rewrite-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Release IASIO when the game loses foreground ownership and recover a fresh session without losing mixer, voice, cursor, or judgement-clock continuity.
