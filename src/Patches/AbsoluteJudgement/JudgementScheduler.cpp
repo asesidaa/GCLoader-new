@@ -1099,7 +1099,10 @@ namespace gc::absolute_judgement
         }
         diagnostics.ObserveBacklog(PendingWorkCount());
         diagnostics.SetPendingWork(PendingWorkCount());
-        diagnostics.MaybeLogPeriodicDiagnostics(RuntimeSnapshot());
+        if (diagnostics.PeriodicDiagnosticsDue())
+        {
+            diagnostics.CapturePeriodicDiagnostics(RuntimeSnapshot());
+        }
         outer_horizon_.reset();
         outer_scope_count_ = 0;
         outer_event_scope_count_ = 0;

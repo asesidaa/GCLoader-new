@@ -27,21 +27,26 @@ The following established behavior remains authoritative and is not reopened:
 - configured ASIO never falls back to WASAPI or DirectSound; and
 - build and static checks do not replace actual-game acceptance.
 
-The uncommitted change that resolves an ASIO timestamp from the newest past
-callback instead of waiting for a future bracket is not an architectural
-foundation. It removes one source of retroactive interpolation but still lets
-physical callback observations define judgement time. This design replaces
-that model rather than committing the partial change independently.
+The uncommitted change that resolves an ASIO timestamp from physical callback
+brackets is not an architectural foundation. It makes callback scheduling and
+future observations authoritative over an input timestamp that already has an
+absolute host time. This design removes that authority rather than committing
+the partial change.
 
 ## Problem
 
 The current implementation gives physical ASIO callbacks too much authority.
 `ExactAsioClock` retains callback anchors and derives an event coordinate from
 whichever anchors are available when the event is queried. A later callback
-can therefore change the evidence used for an already-final timestamp. Focus
-recovery creates a new raw sample-position epoch, so the same mechanism also
-has to reconstruct continuity while audio, mixer, presented-clock, and
-judgement responsibilities are intertwined.
+can therefore change the evidence used for an already-final timestamp, and a
+finalized query may wait for a callback that did not exist when the input was
+captured.
+
+The observed driver-versus-logical residual and DirectSound cursor failures do
+not prove that callback interpolation is a valid judgement clock. The residual
+is aggregate diagnostic evidence without per-input sign or causation, while
+the cursor failures are a separate presentation-boundary problem. Neither may
+rewrite the absolute judgement contract.
 
 The recovery implementation then compounds the problem:
 
@@ -52,15 +57,17 @@ The recovery implementation then compounds the problem:
 - detached rendering advances through repeated wakeups instead of one stable
   process-lifetime time equation;
 - physical-session replacement can alter the apparent endpoint clock even
-  though the song and judgement lifetime did not change; and
+  though the song and playback lifetime did not change; and
 - attempts to repair a clock symptom locally can change the result produced
   for later songs without correcting the ownership model.
 
 The intended product behavior is simpler. Focus loss may temporarily remove
-audio, but it must not remove or pause judgement time. A replacement ASIO
-session supplies buffers and a raw device position; it does not create a new
-song clock. Recovery is an exceptional physical ownership transition, not a
-general clock-correction mechanism.
+audio, but it must not remove or pause the logical game/audio timeline supplied
+as the scheduler's raw time. A replacement ASIO session supplies buffers and a
+raw device position; it does not create a new game/audio clock. Native judgement
+applies `JudgTimeOffset` afterward in its existing result calculation; ASIO does
+not read or apply it. Recovery is an exceptional physical ownership transition,
+not a general clock-correction mechanism.
 
 ## Decision summary
 
@@ -81,8 +88,14 @@ driver to the frozen rate before `Start`; it may not change the logical rate.
 
 Judgement time is a process-lifetime rational function of the multimedia
 millisecond clock. A physical session attaches to that function exactly once.
-Later callback timestamps are diagnostics only and can never re-anchor,
-correct, slew, pause, or rewrite judgement time.
+Later callback timestamps are diagnostics and physical-presentation evidence
+only. They can never interpolate, extrapolate, re-anchor, correct, slew, pause,
+or rewrite judgement time.
+
+`GameTimeOffset` is applied later when the logical audio coordinate is mapped
+to game time. `JudgTimeOffset` remains solely inside native judgement-result
+calculation. Neither offset participates in ASIO recovery or compensates for
+clock evidence.
 
 ```text
 multimedia-millisecond observations
@@ -106,10 +119,11 @@ new IASIO sample-position epoch -- one-time session attachment -----+
 ### Keep callback bracketing or newest-past-anchor projection
 
 Both forms leave physical callbacks as the evidence for logical judgement.
-Bracketing allows a future callback to change a finalized event result;
-newest-past projection avoids that rewrite only by extrapolating independently
-from whichever callback was newest. Neither provides a process-lifetime clock
-across physical-session replacement.
+Bracketing makes finalization depend on a future callback and allows later
+evidence to change the coordinate. Newest-past projection avoids waiting only
+by extrapolating independently from whichever callback happened to be newest.
+Neither preserves one absolute result across callback cadence and physical
+session replacement.
 
 ### Create a new endpoint/exact provider on every recovery
 
@@ -287,31 +301,35 @@ may remain attached.
 ## Exact judgement provider
 
 `ExactAsioClock` remains the backend-neutral provider registered as
-`asio_multimedia_ms`, but its ASIO callback-anchor ring is removed. It becomes
-a small adapter over:
+`asio_multimedia_ms`, but it owns no callback anchors or physical-session
+state. It is a small adapter over:
 
 - the immutable logical origin `{T0, U0, F0, R}` and its exact wrap snapshot;
 - persistent endpoint generation `E`;
 - immutable period and output-latency information; and
 - the latest successfully committed logical submitted-output tail.
 
-Resolving an input timestamp computes `P(t)` directly. The result is:
+Resolving either an input timestamp or a provisional horizon computes `P(t)`
+directly. Resolve intent never selects different time evidence.
+
+The result is:
 
 - `Resolved` when the rational frame is before the committed submitted tail;
 - `Pending` when render state has not yet been committed far enough;
+- `TemporarilyUnavailable` when a concurrent logical-timeline or tail
+  publication prevents a stable read; and
 - `Discontinuous` after explicit invalidation, arithmetic failure, impossible
   domain ambiguity, or logical contract failure.
 
-Normal ASIO operation no longer produces `HistoryLost` because there is no
-bounded callback-anchor history to outlive. A future callback is not required
-to finalize an older event, and a later callback cannot rewrite the event's
-coordinate. `FinalizedTimestamp` and `ProvisionalHorizon` share the same time
-projection; their consumer intent does not select different callback evidence.
+Normal ASIO operation cannot produce `HistoryLost` because there is no bounded
+callback history to outlive. A future callback is never required to finalize
+an older event, and no callback can rewrite the event coordinate.
 
-The submitted tail is publication evidence, not a clock anchor. Physical and
-detached renders update it only after the mixer transition and all required
-clock publications commit successfully. A failed or abandoned render plan
-makes no logical state change.
+The submitted tail is publication evidence and an exclusive bound. Physical
+and detached renders update it only after the mixer transition and required
+presentation publications commit. It says whether a projected coordinate is
+available; it is not a time anchor. A failed or abandoned render plan makes no
+logical state change.
 
 Endpoint identity remains stable across suspension and recovery. An active
 judgement stage therefore keeps the same provider and endpoint generation.
@@ -358,10 +376,13 @@ After attachment:
 
 - raw sample-position deltas and `B` are authoritative for physical buffer
   continuity;
-- later `systemTime` values may be compared with `P(systemTime)` for aggregate
-  residual diagnostics;
+- later `systemTime` values may publish a physical anchor for the separate
+  DirectSound presented cursor;
+- the difference between the mapped physical coordinate and `P(systemTime)`
+  remains an aggregate residual diagnostic;
 - no later timestamp may correct or slew the physical mapping; and
-- no callback observation may change the logical exact-judgement mapping.
+- no callback observation may change the logical exact-judgement mapping or
+  endpoint identity.
 
 A slow callback or large residual is diagnostic by itself. A repeated or
 skipped sample position, invalid buffer alternation, callback overlap, or other
@@ -521,8 +542,8 @@ The following are fatal:
 - invalid buffer index or alternation, callback overlap, or sample-position
   discontinuity;
 - required `outputReady` failure;
-- mixer, conversion, sequencer, submitted-tail, presented-clock, or exact-clock
-  publication failure;
+- mixer, conversion, sequencer, submitted-tail, or presented-clock publication
+  failure;
 - logical coordinate regression or checked-arithmetic failure;
 - foreground-monitor failure or impossible focus generation;
 - inability to quiesce callbacks or prove safe session cleanup; and
@@ -559,7 +580,7 @@ DirectSound-facing method, or thread entry point.
 ### `ExactAsioClock`
 
 - Adapts `AsioLogicalTimeline` to the backend-neutral exact-clock interface.
-- Publishes provider information and the committed submitted tail.
+- Reports provider information and reads the committed submitted tail.
 - Contains no callback anchor ring and performs no callback interpolation.
 - Retains one provider identity and endpoint generation until final shutdown.
 
@@ -634,22 +655,21 @@ Aggregate runtime summaries retain:
 - exact resolved/pending/discontinuous counts; and
 - typed fatal state, when present.
 
-Anchor-bracket counts, history-window scans, callback re-anchor decisions, and
-per-callback timestamp corrections are removed because the new architecture
-does not perform them. There is no per-callback, per-input, or per-note logging.
+Exact-clock publication counts come from the shared submitted tail. Resolved,
+pending, unavailable, and discontinuity counts remain visible;
+`history_lost` stays zero because ASIO judgement retains no callback history.
+There is no per-callback, per-input, or per-note logging.
 
 ## Automated verification boundary
 
 Tests are added or changed only where an independently derived oracle protects
 a production contract.
 
-1. `ExactAsioClockTests` or a focused logical-timeline test covers 44.1 and
-   48 kHz rational projection. The oracle is hand-derived: at 44.1 kHz,
-   1 ms is `441/10` frames, 10 ms is 441 frames, and 1,000 ms is 44,100
-   frames. Repeated queries must equal direct origin-based projection and may
-   not accumulate truncation. A wrap case crosses `UINT32_MAX`, and a later
-   stable-snapshot update must preserve an earlier event's unwrapped
-   coordinate.
+1. `ExactAsioClockTests` covers 44.1 and 48 kHz absolute rational projection.
+   The oracle is hand-derived: at 44.1 kHz, 1 ms is `441/10` frames, while at
+   48 kHz it is 48 frames. Finalized and provisional intents must resolve the
+   same coordinate; later wrap-snapshot observations may not rewrite it. The
+   submitted tail is tested separately as an exclusive availability bound.
 2. `AsioLogicalRenderSequencerTests` covers one physical attachment followed
    by continuous sample-position deltas and deliberately irregular later
    callback timestamps. The expected logical frames come from the first
@@ -659,8 +679,10 @@ a production contract.
    by regain before one consumer read. It is extended only if a required state
    transition is not already covered.
 
-The current one-sided callback-anchor test is replaced by the persistent
-timeline oracle; it is not retained as additional coverage.
+The callback-interpolation tests are replaced by this absolute-timeline oracle;
+they are not retained as additional coverage. The combined exact/DirectSound
+cursor test verifies that a physical presentation anchor moves only the cursor
+and leaves the exact judgement result unchanged.
 
 No fake IASIO suite, sleep-dependent timing test, source-text assertion,
 log-string test, test-only production hook, or simulated gameplay oracle is
@@ -678,9 +700,9 @@ judgement feel remain runtime acceptance.
    contract.
 4. Thread `R` through the render core, callback timing, raw clock validation,
    presented clock, sequencer, exact provider, and duration diagnostics.
-5. Replace `ExactAsioClock` callback history with the logical-timeline and
-   committed-tail adapter. Supersede the existing dirty one-sided-anchor
-   source/test changes in this step.
+5. Remove `ExactAsioClock` callback history and make it a logical-timeline and
+   committed-tail adapter. Keep physical anchors only in the separate
+   DirectSound presentation clock.
 6. Refactor the logical render sequencer around absolute targets and one-time
    physical-session attachment.
 7. Integrate detached-to-physical handoff, silent priming, and the strict
@@ -748,7 +770,21 @@ complete songs. The run must show:
 - no sample-position, render-gap, reset, resync, rate, buffer, or latency
   fault;
 - no audio fluctuation or timing movement between the first and second song;
-- no judgement degradation attributable to a preceding frame drop; and
+- no judgement degradation attributable to a preceding frame drop;
+- the native timing trace preserves the established relations
+  `applied_offset_ms = recognition_ms - scheduler_native_ms` and
+  `signed_error_ms = recognition_ms - note_target_ms =
+  (scheduler_native_ms - note_target_ms) + applied_offset_ms`;
+- `applied_offset_ms` equals the configured `JudgTimeOffset` (`-9 ms` for the
+  current user configuration), but the per-note `signed_error_ms` remains
+  variable and is never expected to equal `-9 ms`; `GameTimeOffset` remains
+  solely in the game/audio coordinate;
+- ASIO-versus-WASAPI judgement comparison uses the per-note error distribution
+  and the existing judgement-offset advisor, not equality to one fixed error;
+- the DirectSound-facing cursor remains mapped rather than accumulating
+  exclusive-tail lookup failures;
+- the completed credit advances through unlock/reward handling into the normal
+  ranking/demo sequence; and
 - stable human-observed timing relative to the known WASAPI behavior.
 
 ### Run 3: post-start focus transfer and menu activity
@@ -761,11 +797,12 @@ continued logical time, and sustained audio after menu activity.
 ### Run 4: window movement or transient game-frame drop
 
 Moving the game window or causing a transient main-thread frame drop must not
-change endpoint identity, physical attachment, or judgement projection. The
-main thread may temporarily stop presenting frames, but callback audio and the
-logical timeline remain independent. When rendering resumes, native/high-FPS
-song-clock catch-up may consume elapsed time; ASIO does not pause or re-anchor
-judgement to hide the gap.
+change endpoint identity, physical attachment, or the scheduler's raw
+game/audio-time projection. The main thread may temporarily stop presenting
+frames, but callback audio and the logical timeline remain independent. When
+rendering resumes, native/high-FPS song-clock catch-up may consume elapsed time;
+ASIO does not pause or re-anchor the logical game/audio timeline to hide the
+gap.
 
 ### Alternate supported driver rate
 
@@ -778,15 +815,21 @@ adopt that rate, such as 44.1 kHz, without a config change or forced switch to
 
 The redesign is complete only when all of the following hold:
 
-- one persistent logical timeline defines ASIO judgement for the entire
-  backend lifetime;
-- no callback after initial physical attachment can change that timeline;
+- one persistent logical coordinate and endpoint identity define the ASIO
+  game/audio timeline supplied to the scheduler for the entire backend lifetime;
+- `P(t)` is the only ASIO judgement-time authority, and both resolve intents
+  use it directly;
+- callbacks and physical-session generations never participate in judgement
+  interpolation or extrapolation;
 - initial sample rate comes from the driver and recovery preserves it;
-- focus loss may remove audio but cannot pause or lose judgement time;
+- focus loss may remove audio but cannot pause or lose the logical game/audio
+  timeline supplied to the scheduler;
 - recovery is focus-driven, bounded, and normally succeeds immediately;
 - every post-`Start` instability fails closed instead of continuing or
   recovering silently;
 - ASIO never falls back to WASAPI or DirectSound;
+- the configured `GameTimeOffset` and `JudgTimeOffset` retain their separate
+  native meanings, and post-credit ranking/demo progression is unchanged;
 - meaningful pure-contract tests, x86 Debug/Release verification, and diff
   review pass; and
 - the ordered actual-game runs demonstrate startup/background recovery,

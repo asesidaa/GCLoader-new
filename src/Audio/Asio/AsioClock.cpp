@@ -9,7 +9,22 @@
 
 namespace gc::audio
 {
+    namespace
+    {
+        constexpr std::uint64_t kNanosecondsPerMillisecond = 1'000'000;
+        constexpr std::uint64_t kMillisecondsPerSecond = 1'000;
+        constexpr int kStableReadAttempts = 3;
+
+        [[nodiscard]] bool IsForwardClockDelta(
+            const std::uint32_t elapsed_ms) noexcept
+        {
+            return elapsed_ms <= static_cast<std::uint32_t>(
+                (std::numeric_limits<std::int32_t>::max)());
+        }
+    } // namespace
+
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+    static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
     static_assert(std::atomic<bool>::is_always_lock_free);
 
     void AsioClockTracker::Reset(
@@ -75,6 +90,94 @@ namespace gc::audio
     {
     }
 
+    void AsioPresentedClockPublication::StoreAnchor(
+        const Anchor& anchor) noexcept
+    {
+        if (writer_version_ >
+            ((std::numeric_limits<std::uint64_t>::max)() - 2) / 2)
+        {
+            Invalidate();
+            return;
+        }
+
+        const auto writing = writer_version_++ * 2 + 1;
+        anchor_version_.store(writing, std::memory_order_seq_cst);
+        anchor_presented_output_frame_.store(
+            anchor.presented_output_frame, std::memory_order_seq_cst);
+        anchor_submitted_output_tail_.store(
+            anchor.submitted_output_tail, std::memory_order_seq_cst);
+        anchor_multimedia_time_ms_.store(
+            anchor.multimedia_time_ms, std::memory_order_seq_cst);
+        anchor_available_.store(true, std::memory_order_seq_cst);
+        anchor_version_.store(writing + 1, std::memory_order_seq_cst);
+    }
+
+    void AsioPresentedClockPublication::PublishPhysicalAnchor(
+        const std::uint64_t presented_output_frame,
+        const std::uint64_t submitted_output_tail,
+        const std::uint64_t system_time_ns) noexcept
+    {
+        if (invalidated_.load(std::memory_order_acquire) ||
+            system_time_ns == 0 || submitted_output_tail <= presented_output_frame)
+        {
+            Invalidate();
+            return;
+        }
+        StoreAnchor({
+            .presented_output_frame = presented_output_frame,
+            .submitted_output_tail = submitted_output_tail,
+            .multimedia_time_ms = static_cast<std::uint32_t>(
+                system_time_ns / kNanosecondsPerMillisecond),
+        });
+    }
+
+    void AsioPresentedClockPublication::PublishLogicalAnchor(
+        const std::uint64_t presented_output_frame,
+        const std::uint64_t submitted_output_tail,
+        const std::uint32_t multimedia_time_ms) noexcept
+    {
+        if (invalidated_.load(std::memory_order_acquire) ||
+            submitted_output_tail <= presented_output_frame)
+        {
+            Invalidate();
+            return;
+        }
+        StoreAnchor({
+            .presented_output_frame = presented_output_frame,
+            .submitted_output_tail = submitted_output_tail,
+            .multimedia_time_ms = multimedia_time_ms,
+        });
+    }
+
+    std::optional<AsioPresentedClockPublication::Anchor>
+    AsioPresentedClockPublication::ReadStable() const noexcept
+    {
+        for (int attempt = 0; attempt < kStableReadAttempts; ++attempt)
+        {
+            const auto before = anchor_version_.load(std::memory_order_seq_cst);
+            if ((before & 1U) != 0)
+            {
+                continue;
+            }
+            const Anchor candidate{
+                .presented_output_frame =
+                anchor_presented_output_frame_.load(std::memory_order_seq_cst),
+                .submitted_output_tail =
+                anchor_submitted_output_tail_.load(std::memory_order_seq_cst),
+                .multimedia_time_ms =
+                anchor_multimedia_time_ms_.load(std::memory_order_seq_cst),
+            };
+            const bool available =
+                anchor_available_.load(std::memory_order_seq_cst);
+            const auto after = anchor_version_.load(std::memory_order_seq_cst);
+            if (before == after && (after & 1U) == 0)
+            {
+                return available ? std::optional<Anchor>{candidate} : std::nullopt;
+            }
+        }
+        return std::nullopt;
+    }
+
     void AsioPresentedClockPublication::Invalidate() noexcept
     {
         invalidated_.store(true, std::memory_order_release);
@@ -120,31 +223,32 @@ namespace gc::audio
             return std::nullopt;
         }
 
-        const auto tail = submitted_tail_->Read();
-        if (!tail.valid)
-        {
-            Invalidate();
-            return std::nullopt;
-        }
-        if (!tail.stable || !tail.available)
+        const auto anchor = ReadStable();
+        if (!anchor)
         {
             return LastReturned();
         }
-
-        const auto now_ms = actions_.time_get_time_ms(actions_.context);
-        const auto projected = timeline_->WholePresentedFrameAt(now_ms);
-        if (!projected)
+        if (anchor->submitted_output_tail <= anchor->presented_output_frame)
         {
-            if (projected.error() ==
-                AsioLogicalTimelineFailure::SnapshotUnavailable)
-            {
-                return LastReturned();
-            }
             Invalidate();
             return std::nullopt;
         }
 
-        return RememberMonotonic((std::min)(
-            *projected, tail.submitted_output_tail));
+        const auto now_ms = actions_.time_get_time_ms(actions_.context);
+        auto elapsed_ms = now_ms - anchor->multimedia_time_ms;
+        if (!IsForwardClockDelta(elapsed_ms))
+        {
+            elapsed_ms = 0;
+        }
+
+        const auto available_frames =
+            anchor->submitted_output_tail - anchor->presented_output_frame;
+        const auto projected_frames = (std::min)(
+            static_cast<std::uint64_t>(elapsed_ms) *
+            timeline_->output_sample_rate() /
+            kMillisecondsPerSecond,
+            available_frames - 1);
+        return RememberMonotonic(
+            anchor->presented_output_frame + projected_frames);
     }
 } // namespace gc::audio

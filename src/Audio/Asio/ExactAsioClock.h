@@ -24,7 +24,7 @@ namespace gc::audio
             std::uint32_t output_latency_frames) noexcept;
 
         [[nodiscard]] ExactOutputClockResult Resolve(
-            const gc::timing::AbsoluteHostTime& timestamp,
+            const timing::AbsoluteHostTime& timestamp,
             ExactClockResolveIntent intent) const noexcept override;
         [[nodiscard]] ExactOutputClockInfo info() const noexcept override;
         [[nodiscard]] ExactOutputClockCounters counters() const noexcept override;

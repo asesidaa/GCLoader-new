@@ -2796,6 +2796,13 @@ namespace gc::audio
                         AsioFailureStage::runtime_clock,
                         "ASIO submitted-output tail rejected a committed detached render");
                 }
+                const auto presented_output_frame =
+                    plan->timeline.output_frame_begin -
+                    logical_output_latency_frames_;
+                presented_clock_->PublishLogicalAnchor(
+                    presented_output_frame,
+                    rendered->submitted_output_tail,
+                    now_ms);
                 SaturatingAddCounter(
                     detached_discarded_frames_,
                     plan->timeline.discontinuity_frames +
@@ -2830,6 +2837,31 @@ namespace gc::audio
                 return static_cast<AsioFailureStage>(
                         first_fault_stage_.load(std::memory_order_acquire)) !=
                     AsioFailureStage::none;
+            }
+
+            bool PublishPhysicalClockAnchor(
+                const AsioRenderRequest& request,
+                const AsioLogicalRenderPlan& plan,
+                const std::uint64_t physical_session_generation) noexcept
+            {
+                if (!request.has_system_time || request.system_time_ns == 0 ||
+                    presented_clock_ == nullptr ||
+                    plan.timeline.output_frame_begin <
+                    logical_output_latency_frames_ ||
+                    physical_session_generation == 0)
+                {
+                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                    return false;
+                }
+
+                const auto presented_output_frame =
+                    plan.timeline.output_frame_begin -
+                    logical_output_latency_frames_;
+                presented_clock_->PublishPhysicalAnchor(
+                    presented_output_frame,
+                    plan.submitted_output_tail,
+                    request.system_time_ns);
+                return true;
             }
 
             // ReSharper disable once CppOverrideWithDifferentVisibility
@@ -3008,6 +3040,13 @@ namespace gc::audio
                         LatchRuntimeFault(AsioFailureStage::runtime_clock);
                         return;
                     }
+                    if (!PublishPhysicalClockAnchor(
+                        request,
+                        *logical_plan,
+                        physical_session_generation))
+                    {
+                        return;
+                    }
                     SaturatingAddCounter(
                         render_gap_frames_,
                         logical_plan->timeline.discontinuity_frames);
@@ -3047,6 +3086,14 @@ namespace gc::audio
                 {
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
+                    return;
+                }
+                if (!PublishPhysicalClockAnchor(
+                    request,
+                    *logical_plan,
+                    physical_session_generation))
+                {
+                    ClearAsioBlock(request.buffer_index);
                     return;
                 }
                 SaturatingAddCounter(

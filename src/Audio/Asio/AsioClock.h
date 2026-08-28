@@ -60,11 +60,29 @@ namespace gc::audio
             std::shared_ptr<const AsioLogicalTimeline> timeline,
             std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail) noexcept;
 
+        void PublishPhysicalAnchor(
+            std::uint64_t presented_output_frame,
+            std::uint64_t submitted_output_tail,
+            std::uint64_t system_time_ns) noexcept;
+        void PublishLogicalAnchor(
+            std::uint64_t presented_output_frame,
+            std::uint64_t submitted_output_tail,
+            std::uint32_t multimedia_time_ms) noexcept;
+
         [[nodiscard]] std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept override;
         void Invalidate() noexcept override;
 
     private:
+        struct Anchor final
+        {
+            std::uint64_t presented_output_frame{};
+            std::uint64_t submitted_output_tail{};
+            std::uint32_t multimedia_time_ms{};
+        };
+
+        void StoreAnchor(const Anchor& anchor) noexcept;
+        [[nodiscard]] std::optional<Anchor> ReadStable() const noexcept;
         [[nodiscard]] std::optional<std::uint64_t>
         LastReturned() const noexcept;
         std::uint64_t RememberMonotonic(std::uint64_t frame) noexcept;
@@ -73,6 +91,12 @@ namespace gc::audio
         std::shared_ptr<const AsioLogicalTimeline> timeline_;
         std::shared_ptr<const AsioSubmittedOutputTail> submitted_tail_;
         std::atomic_bool invalidated_{};
+        std::atomic_uint64_t anchor_version_{};
+        std::atomic_uint64_t anchor_presented_output_frame_{};
+        std::atomic_uint64_t anchor_submitted_output_tail_{};
+        std::atomic_uint32_t anchor_multimedia_time_ms_{};
+        std::atomic_bool anchor_available_{};
+        std::uint64_t writer_version_{};
         std::atomic_uint64_t last_returned_{};
         std::atomic_bool has_last_returned_{};
     };

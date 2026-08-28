@@ -6,10 +6,10 @@
 > dispatch subagents and do not create a worktree. Work on the existing
 > `fix/asio-lifecycle-recovery` branch.
 
-**Goal:** Replace callback-defined ASIO judgement/recovery timing with one
-driver-rate-aware logical timeline that survives focus suspension, while each
-replaceable IASIO session attaches once and every post-`Start` instability
-fails closed.
+**Goal:** Preserve one driver-rate-aware absolute ASIO judgement coordinate
+across focus suspension, keep callback evidence confined to physical
+presentation and diagnostics, replace only the IASIO session during recovery,
+and fail closed on every post-`Start` instability.
 
 **Architecture:** Initial acquisition adopts the driver's current integral
 sample rate and freezes the complete logical endpoint contract. A persistent
@@ -17,8 +17,11 @@ sample rate and freezes the complete logical endpoint contract. A persistent
 exact provider, render sequencer, and endpoint generation survive focus loss.
 Each physical IASIO session owns only driver/buffer/callback state and receives
 one affine mapping from raw sample position into the persistent logical render
-domain. Multimedia time advances logical time in every lifecycle state, but
-only the coherent foreground snapshot authorizes suspension or recovery.
+domain. Callback `systemTime` and mapped frames may drive the separate
+DirectSound presentation facade and aggregate diagnostics, but exact judgement
+always projects the event's absolute multimedia timestamp through the
+persistent logical timeline. Only the coherent foreground snapshot authorizes
+suspension or recovery.
 
 **Tech Stack:** Windows x86, C++23, Steinberg ASIO SDK, miniaudio, checked
 rational timing, CMake/Ninja, MSVC 18 Insiders, CLion clangd/clang-tidy.
@@ -44,11 +47,17 @@ rational timing, CMake/Ninja, MSVC 18 Insiders, CLion clangd/clang-tidy.
 - Focus state alone selects suspension and recovery. No timeout, silence,
   callback interval, audio-clock residual, frame drop, or window movement may
   infer focus ownership.
-- The logical timeline advances while physical audio is absent. Judgement time
-  and voice state are never paused or recreated by focus recovery.
-- Later ASIO `systemTime` values are diagnostic only. They cannot re-anchor,
-  correct, slew, pause, or invalidate time merely because their residual is
-  large.
+- The logical game/audio timeline supplied as the scheduler's raw time advances
+  while physical audio is absent. Focus recovery never pauses that timeline or
+  recreates voice state; native judgement applies `JudgTimeOffset` afterward in
+  its existing result calculation, outside ASIO.
+- ASIO `systemTime` and mapped frames are physical presentation and diagnostic
+  evidence only. They do not participate in exact judgement. Both exact-clock
+  resolve intents always use the same origin-based `P(t)` projection.
+- `GameTimeOffset` shifts the game/audio timeline before scheduler time is
+  converted to native milliseconds. `JudgTimeOffset` remains exclusively in
+  the game's native judgement-result calculation. ASIO recovery must not add,
+  remove, duplicate, cancel, or compensate either offset.
 - The callback path remains allocation-free, non-blocking, and exception-free.
   It never logs, opens/closes a driver, changes a rate, retries, or reads focus.
 - Preserve value ownership for long-lived platform/callback action tables and
@@ -60,13 +69,14 @@ rational timing, CMake/Ninja, MSVC 18 Insiders, CLion clangd/clang-tidy.
 - Preserve the current coherent foreground publication. The existing
   `AsioForegroundStateTests` already proves loss followed by regain before one
   consumer read; do not add another focus test.
-- Preserve the current uncommitted edits in
+- Task 3 supersedes the uncommitted callback-interpolation edits in
   `src/Audio/Asio/ExactAsioClock.cpp` and
-  `tests/Audio/Asio/ExactAsioClockTests.cpp` until Task 3 replaces both files'
-  callback-anchor model. Do not reset them, commit them separately, or retain
-  their newest-past-anchor behavior.
-- Do not modify judgement, input, WASAPI, configuration schema, ConfigGUI
-  behavior, native song cadence, score behavior, or unrelated formatting.
+  `tests/Audio/Asio/ExactAsioClockTests.cpp`. Preserve other recovery,
+  presentation, diagnostics, and formatting work.
+- Do not modify judgement results, input semantics, WASAPI, configuration
+  schema, ConfigGUI behavior, native song cadence, score behavior, or unrelated
+  formatting. Bounded diagnostics may observe the existing offset contract but
+  may not participate in it.
 - Do not add a fake IASIO suite, sleep-dependent timing test, source-text
   assertion, log-string test, test-only production hook, or simulated gameplay
   oracle.
@@ -133,12 +143,14 @@ turn into a test crash.
   instead of 48 kHz, and separate required raw sample position from the first
   attachment's optional timestamp observation.
 - Modify `src/Audio/Asio/AsioClock.h/.cpp`: keep physical sample continuity
-  validation, remove later timestamp authority, and adapt the presented clock
-  to the persistent timeline/shared tail.
-- Replace the callback ring in `src/Audio/Asio/ExactAsioClock.h/.cpp` with a
-  persistent-timeline/shared-tail adapter.
-- Replace `tests/Audio/Asio/ExactAsioClockTests.cpp` with the persistent exact
-  projection/tail oracle, superseding the dirty newest-past-anchor test.
+  validation and make the presented clock consume explicit physical anchors
+  while attached and a logical anchor while detached.
+- Modify `src/Audio/Asio/ExactAsioClock.h/.cpp`: remove callback history and
+  resolve both intents directly from the logical timeline, gated only by the
+  committed submitted tail.
+- Modify `tests/Audio/Asio/ExactAsioClockTests.cpp` with hand-derived 44.1/48
+  kHz absolute projection, intent invariance, exclusive-tail, invalidation, and
+  separate presented-cursor contract oracles.
 - Modify `src/Audio/Asio/AsioLogicalRenderSequencer.h/.cpp`: absolute targets,
   one-time physical attachment, and transactionally committed render claims.
 - Replace `tests/Audio/Asio/AsioLogicalRenderSequencerTests.cpp` with the
@@ -563,17 +575,16 @@ git add -- src/Audio/Asio/AsioSession.h src/Audio/Asio/AsioSession.cpp src/Audio
 git commit -m "Adopt driver-owned ASIO sample rate"
 ```
 
-### Task 3: Replace Callback Anchors with Persistent Timeline Projection
+### Task 3: Make Exact Judgement an Absolute Timeline Projection
 
 **Files:**
 
 - Modify: `src/Audio/Asio/ExactAsioClock.h`
 - Replace: `src/Audio/Asio/ExactAsioClock.cpp`
 - Replace: `tests/Audio/Asio/ExactAsioClockTests.cpp`
-- Modify: `src/Audio/Asio/AsioClock.h:46-88`
-- Modify: `src/Audio/Asio/AsioClock.cpp:111-242`
-- Modify: `src/Audio/Asio/AsioOutputBackend.cpp` (logical construction,
-  render publication, teardown, and exact counters)
+- Modify: `src/Audio/Asio/AsioClock.h/.cpp`
+- Modify: `src/Audio/Asio/AsioOutputBackend.cpp` (presentation publication,
+  teardown, and exact counters)
 
 **Interfaces:**
 
@@ -602,10 +613,14 @@ public:
 class AsioPresentedClockPublication final : public IPresentedOutputClock
 {
 public:
-    AsioPresentedClockPublication(
-        AsioClockNowActions,
-        std::shared_ptr<const AsioLogicalTimeline>,
-        std::shared_ptr<const AsioSubmittedOutputTail>) noexcept;
+    void PublishPhysicalAnchor(
+        std::uint64_t presented_output_frame,
+        std::uint64_t submitted_output_tail,
+        std::uint64_t system_time_ns) noexcept;
+    void PublishLogicalAnchor(
+        std::uint64_t presented_output_frame,
+        std::uint64_t submitted_output_tail,
+        std::uint32_t multimedia_time_ms) noexcept;
 
     [[nodiscard]] std::optional<std::uint64_t>
     CurrentOutputFrame() noexcept override;
@@ -613,152 +628,103 @@ public:
 };
 ```
 
-- [ ] **Step 1: Replace the dirty anchor test with a failing persistent-clock
+- [ ] **Step 1: Replace interpolation expectations with a failing absolute-time
   oracle**
 
-Do not revert the two dirty files. Replace the current newest-past-anchor tests
-in place. The new test constructs one timeline and one shared submitted tail:
+The current callback-bracket tests assert the regression. Replace those
+expectations before production code:
 
-```cpp
-void ResolvesDirectlyAndOnlyBehindCommittedTail()
-{
-    auto timeline = AsioLogicalTimeline::Create(1'000, 44'100);
-    auto tail = std::make_shared<AsioSubmittedOutputTail>();
-    auto clock = ExactAsioClock::Create(
-        7, timeline, tail, 10'000'000, 192, 384);
+1. At 44.1 kHz with origin 1,000 ms, timestamp 1,001 ms is exactly `441/10`
+   frames. Finalized and provisional resolution must be equal.
+2. At 48 kHz with origin 100 ms, timestamp 101 ms is exactly 48 frames.
+3. Advancing the logical wrap snapshot may not rewrite an earlier timestamp.
+4. A coordinate equal to the submitted tail is `Pending`; the same coordinate
+   becomes `Resolved` after a later tail commit, without changing its value.
+5. The result exposes the tail publication sequence and no physical callback
+   position.
+6. A combined exact/presented-clock case proves that publishing a physical
+   DirectSound anchor advances and saturates that cursor at
+   `submitted_tail - 1` without changing the exact clock's absolute result.
 
-    const auto before_commit = clock->Resolve(
-        AtMillisecond(1'001),
-        ExactClockResolveIntent::FinalizedTimestamp);
-    Expect(before_commit.status == ExactClockStatus::Pending,
-           "projection waits only for committed render evidence");
+The expected values are literal, hand-derived clock arithmetic. The production
+mutation that makes the first five fail is selecting callback interpolation,
+callback extrapolation, or a future-callback wait instead of `P(t)`. The sixth
+case protects the separate half-open DirectSound presentation contract.
 
-    Expect(tail->Publish(1'000), "first submitted tail commits");
-    const auto finalized = clock->Resolve(
-        AtMillisecond(1'001),
-        ExactClockResolveIntent::FinalizedTimestamp);
-    ExpectFrame(finalized, 441, 10,
-                "finalized timestamp uses the immutable timeline");
-
-    const auto horizon = clock->Resolve(
-        AtMillisecond(1'001),
-        ExactClockResolveIntent::ProvisionalHorizon);
-    ExpectSameFrame(horizon, finalized,
-                    "intent does not select different callback evidence");
-
-    Expect(timeline->AdvanceNow(2'000).has_value(),
-           "writer advances the wrap snapshot");
-    const auto after_snapshot = clock->Resolve(
-        AtMillisecond(1'001),
-        ExactClockResolveIntent::FinalizedTimestamp);
-    ExpectSameFrame(after_snapshot, finalized,
-                    "later observations cannot rewrite a finalized event");
-}
-
-void TailAndInvalidationAreExplicit()
-{
-    auto timeline = AsioLogicalTimeline::Create(100, 48'000);
-    auto tail = std::make_shared<AsioSubmittedOutputTail>();
-    auto clock = ExactAsioClock::Create(
-        7, timeline, tail, 10'000'000, 192, 384);
-
-    Expect(tail->Publish(48), "one millisecond of output commits");
-    const auto at_tail = clock->Resolve(
-        AtMillisecond(101),
-        ExactClockResolveIntent::FinalizedTimestamp);
-    Expect(at_tail.status == ExactClockStatus::Pending,
-           "a frame at the exclusive submitted tail is pending");
-    Expect(at_tail.endpoint_generation == 7,
-           "logical endpoint identity is persistent");
-    Expect(at_tail.anchor_sequence == 1,
-           "tail publication sequence remains observable");
-    Expect(!at_tail.anchor_endpoint_position.has_value(),
-           "there is no physical callback anchor");
-    Expect(clock->counters().history_lost_queries == 0,
-           "a non-existent callback history cannot be lost");
-
-    clock->Invalidate();
-    const auto invalid = clock->Resolve(
-        AtMillisecond(100),
-        ExactClockResolveIntent::FinalizedTimestamp);
-    Expect(invalid.status == ExactClockStatus::Discontinuous,
-           "explicit final invalidation is visible");
-}
-```
-
-Expected red result: compilation fails because the new `Create` signature and
-shared-tail clock do not exist. Delete the old bracket/newest-past/future-anchor
-cases; do not keep them as extra coverage.
+Expected RED: the current interpolating provider returns different 44.1/48-kHz
+coordinates, exposes a callback position, and leaves a finalized timestamp
+pending until a future callback.
 
 - [ ] **Step 2: Reduce `ExactAsioClock` to a timeline/tail adapter**
 
-Delete `ExactAsioAnchor`, `Slot`, capacity/retention logic, callback history,
-writer previous-anchor state, and `Publish`.
+Delete `ExactAsioAnchor`, `Slot`, the retention ring, physical-session state,
+`Publish`, `PublishDetached`, and every callback interpolation/extrapolation
+branch.
 
 `Resolve` must:
 
 1. reject an unknown resolve intent or explicit invalidation as
    `Discontinuous`;
 2. read one stable submitted-tail snapshot;
-3. return `TemporarilyUnavailable` for a transient tail read collision,
-   `Discontinuous` for an invalidated tail, or `Pending` if no tail has
-   committed;
+3. return `TemporarilyUnavailable` for a transient stable-read collision,
+   `Discontinuous` for invalid state, or `Pending` before any tail commits;
 4. project `timestamp.multimedia_time_ms` directly through
-   `AsioLogicalTimeline`;
-5. return `TemporarilyUnavailable` only for a transient stable-snapshot read
-   collision, and `Discontinuous` for ambiguity/arithmetic/logical failure;
-6. return `Pending` when the rational frame is greater than or equal to the
-   committed tail; and
-7. otherwise return `Resolved` with the rational frame, persistent endpoint
-   generation, tail publication sequence, and no callback anchor position.
+   `AsioLogicalTimeline::ProjectMultimediaMilliseconds`;
+5. return `Pending` when the projected rational frame is greater than or equal
+   to the exclusive committed tail; and
+6. otherwise return `Resolved` with the persistent endpoint generation, tail
+   publication sequence, and no callback position.
 
-Both resolve intents use the same path. `info().output_sample_rate` comes from
-the timeline. `counters().publication_count` comes from the shared tail;
+Both resolve intents follow the identical path. `info().output_sample_rate`
+comes from the driver-owned logical timeline.
+`counters().publication_count` comes from the shared submitted tail, and
 `history_lost_queries` remains zero.
 
-- [ ] **Step 3: Make the presented cursor read the same timeline and tail**
+- [ ] **Step 3: Keep physical presentation in the presented clock only**
 
-Delete `Publish`, `PublishContinuityAnchor`, callback anchor storage, and the
-hard-coded 48-frames/ms projection from `AsioPresentedClockPublication`.
+`AsioPresentedClockPublication` may retain one physical/logical presentation
+anchor because it answers the DirectSound-facing current-output cursor, not
+judgement. A committed active callback publishes its mapped physical presented
+frame and `systemTime`. Detached rendering publishes a logical anchor at the
+same persistent rate.
 
-`CurrentOutputFrame` reads `timeGetTime`, floors the logical timeline
-projection, clamps it to the committed submitted tail, and retains the existing
-monotonic-last-returned behavior. If no tail has committed or a stable snapshot
-is momentarily unavailable, return the previous value (or `nullopt` before the
-first value). Arithmetic/domain failure invalidates this presented clock.
+`CurrentOutputFrame` advances from that presentation anchor at `R`, preserves
+monotonic return values, and saturates at `submitted_output_tail - 1` because
+the submitted tail is exclusive. Before the first anchor or during a transient
+stable-read collision, return the previous value or `nullopt`. This object
+never publishes into or supplies evidence to `ExactAsioClock`.
 
-- [ ] **Step 4: Create one persistent timeline/tail/provider lifetime in the
-  backend**
+- [ ] **Step 4: Remove exact callback publication from the backend**
 
-After initial `R` is known, capture `T0 = timeGetTime()`, construct one
-`AsioLogicalTimeline`, one `AsioSubmittedOutputTail`, the presented adapter, and
-the render core. After buffers provide `L`, allocate/register one
-`ExactAsioClock` with one logical endpoint generation `E`.
+After initial `R` is known, create one timeline, submitted tail, presented
+clock, mixer, sequencer, and exact provider with persistent endpoint generation
+`E`. Reuse them through every physical recovery.
 
-On recovery, reuse all of those objects and `E`. Remove callback and detached
-exact-anchor publication. After each successful mixer/sequencer commit,
-publish exactly one new submitted tail to the shared object. Final teardown
-invalidates the presented clock, exact provider, timeline consumers, and tail;
-focus release invalidates none of them.
+After a successful physical render commit:
 
-At the top of each post-initialization control-loop iteration, call
-`timeline_->AdvanceNow(timeGetTime())`. Failure is a logical runtime fault; it
-does not change or infer focus state.
+1. publish the committed submitted tail;
+2. publish the mapped physical anchor to the presented clock; and
+3. call required `OutputReady`.
 
-- [ ] **Step 5: Build the rewritten exact contract and `gc_audio`**
+Detached rendering publishes the committed tail and one logical presented-clock
+anchor. It does not mark the exact provider detached. Remove every
+`exact_clock_->Publish`, `PublishDetached`, exact-anchor sequence, and
+physical-session-generation dependency from the exact provider. Final teardown
+still invalidates the exact and presented clocks; focus release invalidates
+neither.
 
-Format with CLion, build `gc_exact_asio_clock_tests` and `gc_audio`, then run
-`ExactAsioClock` and `AsioLogicalTimeline`. Expected: both pass and no
-production ASIO exact-clock code contains a callback ring or fixed 48-kHz
-guard.
+- [ ] **Step 5: Format and build the corrected boundary**
 
-- [ ] **Step 6: Commit the persistent clock migration**
+Format through CLion. Build `gc_exact_asio_clock_tests` and `gc_audio`, then run
+`ExactAsioClock` and `AsioLogicalTimeline`. Expected: both pass, no production
+ASIO exact-clock code contains callback anchors or interpolation, and physical
+presentation still remains behind the exclusive submitted tail.
 
-This commit intentionally consumes the two pre-existing dirty files:
+- [ ] **Step 6: Commit the absolute judgement boundary**
 
 ```powershell
 git add -- src/Audio/Asio/ExactAsioClock.h src/Audio/Asio/ExactAsioClock.cpp src/Audio/Asio/AsioClock.h src/Audio/Asio/AsioClock.cpp src/Audio/Asio/AsioOutputBackend.cpp tests/Audio/Asio/ExactAsioClockTests.cpp
-git commit -m "Project ASIO clocks from persistent timeline"
+git commit -m "Keep ASIO judgement on absolute timeline"
 ```
 
 ### Task 4: Make the Render Sequencer Own One-Time Physical Attachment
@@ -1104,8 +1070,7 @@ std::atomic_uint64_t active_physical_session_generation_{};
 Any failure in these steps is fatal. Do not retry initial startup and do not
 construct another backend.
 
-- [ ] **Step 2: Keep the Task 4 attachment immutable and add diagnostics-only
-  residual observation**
+- [ ] **Step 2: Keep attachment immutable and callbacks out of judgement**
 
 Retain the Task 4 first timestamped, structurally valid callback calculation:
 
@@ -1128,10 +1093,13 @@ structurally valid callback without signaling stability. Duplicate attachment,
 ambiguity, arithmetic error, or generation mismatch latches a fatal
 runtime-clock fault.
 
-Later callbacks derive their target only from `S + L` through the installed
-mapping. They may compare `P(systemTime)` with the mapped presented coordinate
-for aggregate residual diagnostics, but the residual magnitude has no branch
-to attachment, focus, recovery, or fatal classification.
+Later callbacks derive their render target only from `S + L` through the
+installed mapping. After a successful commit, the callback's `systemTime` and
+mapped presented coordinate are published only to the DirectSound-facing
+presented clock. They never enter `ExactAsioClock`. The callback may compare
+`P(systemTime)` with the mapped coordinate for aggregate residual diagnostics,
+but residual magnitude has no branch to judgement, attachment, focus,
+recovery, offset handling, or fatal classification.
 
 - [ ] **Step 3: Make callback rendering commit in one direction**
 
@@ -1148,8 +1116,10 @@ For every valid callback:
 6. zero-fill during priming, otherwise convert into the current driver buffer;
 7. commit the sequencer plan;
 8. publish the committed submitted tail once to the shared tail;
-9. call required `OutputReady`; and
-10. signal the stable-render event only after post-attachment proof callback 3.
+9. publish the mapped physical anchor to the presented clock for every
+   committed priming/stable callback;
+10. call required `OutputReady`; and
+11. signal the stable-render event only after post-attachment proof callback 3.
 
 A mixer/conversion/commit/tail/outputReady failure zero-fills when the current
 buffer is valid, latches one typed fault, signals the control thread, and
@@ -1233,7 +1203,7 @@ git add -- src/Audio/Asio/AsioOutputBackend.cpp src/Audio/Asio/AsioOutputBackend
 git commit -m "Integrate persistent ASIO session recovery"
 ```
 
-### Task 6: Replace Anchor Diagnostics with Logical and Physical Contract Records
+### Task 6: Report Logical, Physical, and Anchor Contract Records
 
 **Files:**
 
@@ -1328,23 +1298,24 @@ enters `Fatal`; do not emit a success-shaped release record.
 Startup uses `reason=startup`; later physical generations use
 `reason=focus_recovery`.
 
-- [ ] **Step 3: Replace obsolete aggregate counters**
+- [ ] **Step 3: Report aggregate logical and physical evidence**
 
-Remove `exact_anchor_publications` and
-`detached_exact_anchor_publications`. Add and log:
+Retain and log:
 
 - `submitted_tail_publications` and current `submitted_output_tail`;
+- presented-clock physical/logical anchor transitions;
+- active/last physical-session generation;
 - total logically advanced frames;
 - detached discarded frames and priming discarded frames;
 - driver-timeline residual sample count; and
 - maximum absolute driver-timeline residual in nanoseconds, labelled
   `diagnostic_only`.
 
-Retain callback cadence, overload/slow observations, raw sample/buffer faults,
-focus/physical generations, recovery counters, mixer counters, and exact
-resolved/pending/temporary/discontinuous counters. `exact_history_lost_queries`
-may remain in the backend-neutral counter shape but must stay zero for ASIO
-because there is no retained callback history.
+Also retain callback cadence, overload/slow observations, raw sample/buffer
+faults, focus/physical generations, recovery counters, mixer counters, and
+exact resolved/pending/temporary/history-lost/discontinuous counters.
+`exact_history_lost_queries` must remain zero because exact judgement owns no
+bounded callback history.
 
 Residual magnitude is never a failure predicate. Only inability to perform
 required checked logical arithmetic is a logical fault.
@@ -1357,7 +1328,11 @@ reanchor, fallback, and `PreparePhysicalSession`. Confirm:
 
 - no production rate calculation assumes 48 kHz;
 - 44.1 and 48 kHz remain legitimate test values;
-- no callback timestamp after attachment changes logical coordinates;
+- callback anchors appear only in the DirectSound presentation clock and never
+  in `ExactAsioClock`;
+- both exact resolve intents project directly through `P(t)`;
+- `GameTimeOffset` appears only in game/audio timeline mapping and ASIO never
+  reads or applies `JudgTimeOffset`;
 - time never changes foreground state;
 - preparation occurs only once at startup and from `Recovering` afterward;
 - no ASIO failure reaches the WASAPI/DirectSound startup path; and
@@ -1490,8 +1465,25 @@ Only after Run 1 passes, ask the user for a fresh all-foreground run containing
 at least two complete songs. Require exactly one physical generation and zero
 recovery, rate/buffer/latency/reset/resync/sample-position/buffer-alternation
 faults, exact history loss/discontinuity, or endpoint changes. A frame drop may
-appear as a game observation but may not alter ASIO attachment or judgement
-projection.
+appear as a game observation but may not alter ASIO attachment or judgement raw
+game/audio-time projection. Require the bounded native timing trace to preserve
+the established relations:
+
+```text
+applied_offset_ms = recognition_ms - scheduler_native_ms
+signed_error_ms   = recognition_ms - note_target_ms
+                  = (scheduler_native_ms - note_target_ms) + applied_offset_ms
+```
+
+`applied_offset_ms` must equal `JudgTimeOffset` (`-9 ms` for the current user
+configuration), while the per-note `signed_error_ms` remains variable.
+`GameTimeOffset` remains solely in the game/audio coordinate. Compare ASIO with
+WASAPI through the per-note error distribution and the existing
+judgement-offset advisor, never by expecting every note error to equal `-9 ms`.
+The DirectSound-facing cursor must remain mapped during the active session
+rather than accumulating exclusive-tail lookup failures. After the credit
+ends, unlock/reward handling must finish and the native sequence must proceed
+normally into ranking/demo.
 
 Only the user accepts stable audio and judgement feel relative to WASAPI.
 
@@ -1522,10 +1514,18 @@ control-panel state on the user's behalf.
 
 Do not call the redesign complete until all of these are true:
 
-- the persistent timeline is the only ASIO judgement-time authority;
-- callback timestamps after first attachment cannot alter it;
+- one persistent logical coordinate and endpoint identity survive the entire
+  backend lifetime;
+- `P(t)` is the only exact judgement-time authority in every lifecycle state;
+- callback cadence, anchors, and physical-session generations never interpolate
+  or extrapolate judgement;
+- `GameTimeOffset` remains the game/audio timeline offset and `JudgTimeOffset`
+  remains solely inside native judgement-result calculation;
+- the native timing trace observes the configured judgement offset without
+  changing it, and a complete credit proceeds through normal ranking/demo;
 - the initial driver rate is adopted and recovery preserves/restores it;
-- focus loss removes only physical audio ownership, not judgement time;
+- focus loss removes only physical audio ownership, not the logical game/audio
+  timeline supplied to the scheduler;
 - recovery is focus-driven, bounded, and normally succeeds immediately;
 - every post-`Start` instability fails closed;
 - ASIO never falls back to WASAPI or DirectSound;

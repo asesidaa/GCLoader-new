@@ -75,7 +75,7 @@ namespace gc::audio
 
         try
         {
-            return std::shared_ptr<ExactAsioClock>{std::move(clock)};
+            return std::shared_ptr{std::move(clock)};
         }
         catch (...)
         {
@@ -84,7 +84,7 @@ namespace gc::audio
     }
 
     ExactOutputClockResult ExactAsioClock::Resolve(
-        const gc::timing::AbsoluteHostTime& timestamp,
+        const timing::AbsoluteHostTime& timestamp,
         const ExactClockResolveIntent intent) const noexcept
     {
         if ((intent != ExactClockResolveIntent::FinalizedTimestamp &&
@@ -133,7 +133,7 @@ namespace gc::audio
 
         if (tail.submitted_output_tail <= static_cast<std::uint64_t>(
                 (std::numeric_limits<std::int64_t>::max)()) &&
-            output_frame->Compare(gc::timing::CheckedRational::Whole(
+            output_frame->Compare(timing::CheckedRational::Whole(
                 static_cast<std::int64_t>(tail.submitted_output_tail))) >= 0)
         {
             return CountResult(Result(

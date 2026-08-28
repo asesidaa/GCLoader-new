@@ -1,5 +1,6 @@
 #include "Audio/Asio/ExactAsioClock.h"
 
+#include "Audio/Asio/AsioClock.h"
 #include "Audio/Asio/AsioLogicalTimeline.h"
 #include "Audio/Asio/AsioSubmittedOutputTail.h"
 
@@ -11,7 +12,9 @@
 
 namespace
 {
+    using gc::audio::AsioClockNowActions;
     using gc::audio::AsioLogicalTimeline;
+    using gc::audio::AsioPresentedClockPublication;
     using gc::audio::AsioSubmittedOutputTail;
     using gc::audio::ExactAsioClock;
     using gc::audio::ExactClockResolveIntent;
@@ -21,6 +24,16 @@ namespace
     using gc::timing::CheckedRational;
 
     int failures = 0;
+
+    struct FakeClock final
+    {
+        std::uint32_t now_ms{};
+
+        static std::uint32_t Read(void* context) noexcept
+        {
+            return static_cast<FakeClock*>(context)->now_ms;
+        }
+    };
 
     void Expect(const bool condition, const std::string_view message)
     {
@@ -73,9 +86,9 @@ namespace
 
     void ResolvesDirectlyAndOnlyBehindCommittedTail()
     {
-        auto timeline = AsioLogicalTimeline::Create(1'000, 44'100);
-        auto tail = std::make_shared<AsioSubmittedOutputTail>();
-        auto clock = ExactAsioClock::Create(
+        const auto timeline = AsioLogicalTimeline::Create(1'000, 44'100);
+        const auto tail = std::make_shared<AsioSubmittedOutputTail>();
+        const auto clock = ExactAsioClock::Create(
             7, timeline, tail, 10'000'000, 192, 384);
         Expect(timeline != nullptr, "timeline creation succeeds");
         Expect(tail != nullptr, "submitted-tail creation succeeds");
@@ -121,9 +134,9 @@ namespace
 
     void TailAndInvalidationAreExplicit()
     {
-        auto timeline = AsioLogicalTimeline::Create(100, 48'000);
-        auto tail = std::make_shared<AsioSubmittedOutputTail>();
-        auto clock = ExactAsioClock::Create(
+        const auto timeline = AsioLogicalTimeline::Create(100, 48'000);
+        const auto tail = std::make_shared<AsioSubmittedOutputTail>();
+        const auto clock = ExactAsioClock::Create(
             7, timeline, tail, 10'000'000, 192, 384);
         Expect(timeline != nullptr, "tail test timeline creation succeeds");
         Expect(tail != nullptr, "tail test publication creation succeeds");
@@ -150,6 +163,19 @@ namespace
         Expect(clock->counters().history_lost_queries == 0,
                "a non-existent callback history cannot be lost");
 
+        Expect(tail->Publish(480), "later submitted output commits");
+        const auto after_tail = clock->Resolve(
+            AtMillisecond(101),
+            ExactClockResolveIntent::FinalizedTimestamp);
+        ExpectFrame(after_tail,
+                    48,
+                    1,
+                    "the same timestamp resolves to its absolute 48 kHz coordinate");
+        Expect(after_tail.anchor_sequence == 2,
+               "resolution reports only the committed-tail publication");
+        Expect(!after_tail.anchor_endpoint_position.has_value(),
+               "48 kHz judgement exposes no physical callback position");
+
         clock->Invalidate();
         const auto invalid = clock->Resolve(
             AtMillisecond(100),
@@ -157,11 +183,72 @@ namespace
         Expect(invalid.status == ExactClockStatus::Discontinuous,
                "explicit final invalidation is visible");
     }
+
+    void DirectSoundCursorUsesOnlyThePhysicalPresentationClock()
+    {
+        const auto timeline = AsioLogicalTimeline::Create(1'000, 48'000);
+        const auto tail = std::make_shared<AsioSubmittedOutputTail>();
+        FakeClock now{.now_ms = 1'004};
+        AsioPresentedClockPublication presented(
+            AsioClockNowActions{
+                .context = &now,
+                .time_get_time_ms = &FakeClock::Read,
+            },
+            timeline,
+            tail);
+        const auto exact = ExactAsioClock::Create(
+            17, timeline, tail, 10'000'000, 192, 384);
+        Expect(exact != nullptr, "separate exact clock creation succeeds");
+        if (!exact)
+        {
+            return;
+        }
+
+        Expect(tail->Publish(676), "shared submitted output commits");
+        const auto exact_before = exact->Resolve(
+            AtMillisecond(now.now_ms),
+            ExactClockResolveIntent::FinalizedTimestamp);
+        ExpectFrame(exact_before,
+                    192,
+                    1,
+                    "absolute judgement starts at the 48 kHz logical coordinate");
+
+        presented.PublishPhysicalAnchor(100, 676, 1'000'000'000);
+        const auto frame = presented.CurrentOutputFrame();
+        Expect(frame == 292,
+               "DirectSound cursor advances from the physical presentation phase");
+
+        const auto nominal = timeline->WholePresentedFrameAt(now.now_ms);
+        Expect(nominal.has_value(), "nominal cursor comparison is available");
+        if (frame && nominal)
+        {
+            Expect(*frame != *nominal,
+                   "physical presentation remains separate from the logical timeline");
+        }
+        Expect(frame && *frame < 676,
+               "physical cursor remains inside the submitted half-open span");
+
+        const auto exact_after = exact->Resolve(
+            AtMillisecond(now.now_ms),
+            ExactClockResolveIntent::FinalizedTimestamp);
+        ExpectSameFrame(
+            exact_after,
+            exact_before,
+            "publishing a physical presentation anchor cannot rewrite judgement");
+        Expect(!exact_after.anchor_endpoint_position.has_value(),
+               "physical presentation metadata never enters judgement");
+
+        now.now_ms = 1'020;
+        const auto saturated = presented.CurrentOutputFrame();
+        Expect(saturated == 675,
+               "DirectSound cursor cannot reach the exclusive submitted tail");
+    }
 } // namespace
 
 int main()
 {
     ResolvesDirectlyAndOnlyBehindCommittedTail();
     TailAndInvalidationAreExplicit();
+    DirectSoundCursorUsesOnlyThePhysicalPresentationClock();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
