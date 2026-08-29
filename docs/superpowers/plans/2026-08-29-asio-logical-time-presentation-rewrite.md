@@ -982,16 +982,13 @@ lifecycle work.
 - [ ] **Step 5: Return the logical DirectSound cursor**
 
 `AsioOutputBackendState::CurrentOutputFrame()` returns the logical presented
-clock's `floor(L(now))`. Before returning, require:
-
-```text
-logical_render_stream.committed_tail > current_logical_frame
-```
-
-If the stream is behind, latch a fatal logical-render fault and return
-`nullopt`; do not freeze or clamp the cursor. This makes DirectSound status,
-drain, natural end, ranking/demo, and second-song sequencing independent of
-physical presentation.
+clock's `floor(L(now))` without consulting the asynchronously advancing render
+tail. A cursor query is not synchronized with the callback or suspension pump
+and therefore cannot classify `committed_tail <= floor(L(now))` as an
+underrun. Keep real planning, render, commit, ownership, bridge-underflow, and
+pump failures fatal at the render owner. This makes DirectSound status, drain,
+natural end, ranking/demo, and second-song sequencing independent of physical
+presentation and callback scheduling races.
 
 - [ ] **Step 6: Delete the rejected model**
 
@@ -1039,16 +1036,17 @@ git commit -m "Route ASIO through logical presentation bridge"
 
 Feed the real controller explicit events and assert directives for:
 
-1. focus loss during initial preparation;
-2. focus loss during priming before render transfer;
-3. focus loss after bridge transfer but before running commit;
-4. focus loss while running;
-5. focus loss during recovery preparation/priming;
-6. foreground regain from suspended;
-7. a clean pre-commit recovery failure followed by delays 1000 ms and 2000 ms;
-8. a third clean pre-commit failure becoming fatal;
-9. any committed-running bridge/callback fault becoming immediately fatal; and
-10. shutdown interrupting either retry delay.
+1. startup beginning with a background foreground snapshot, completing the
+   initial physical commit, and only then entering suspension;
+2. focus loss during initial preparation, priming, and post-transfer state being
+   recorded while the initial transaction continues to commit;
+3. focus loss while running;
+4. focus loss during recovery preparation/priming;
+5. foreground regain from suspended;
+6. a clean pre-commit recovery failure followed by delays 1000 ms and 2000 ms;
+7. a third clean pre-commit failure becoming fatal;
+8. any committed-running bridge/callback fault becoming immediately fatal; and
+9. shutdown interrupting either retry delay.
 
 Assert the directive enum contains no alternate-backend/fallback action.
 Retain the existing foreground test proving loss+regain before one consumer
@@ -1111,9 +1109,11 @@ Every structural fault after `Running` is fatal. Focus interruption returns to
 - [ ] **Step 3: Integrate it into the control loop**
 
 All physical construction, start, priming waits, handoff, stop, cleanup, and
-retry waits remain on the control thread. Waits are interruptible by focus,
-fault, and shutdown events. Time schedules retry only; it never infers focus or
-device loss.
+retry waits remain on the control thread. Recovery waits are interruptible by
+focus, fault, and shutdown events. Initial acquisition records focus changes
+but completes its first physical commit before honoring a background request,
+so synchronous backend startup never waits for foreground. Time schedules retry
+only; it never infers focus or device loss.
 
 Require the recovered driver's exact integral rate to equal the persistent
 logical rate. Continue using the existing recovery rate-restore cleanup
@@ -1304,12 +1304,13 @@ No automated result completes this task. After the user explicitly authorizes
 deployment and the candidate/deployed hashes match, request runs in this order:
 
 1. foreground startup and a complete two-song credit;
-2. startup, shortly background, then foreground recovery;
-3. focus loss/regain after startup before gameplay;
-4. focus loss/regain in menus;
-5. focus loss/regain during gameplay, accepting temporary silence;
-6. an all-foreground two-song credit; and
-7. accepted WASAPI comparison on the same physical listening chain with
+2. startup beginning in the background, then foreground recovery;
+3. startup, shortly background, then foreground recovery;
+4. focus loss/regain after startup before gameplay;
+5. focus loss/regain in menus;
+6. focus loss/regain during gameplay, accepting temporary silence;
+7. an all-foreground two-song credit; and
+8. accepted WASAPI comparison on the same physical listening chain with
    unchanged configuration offsets.
 
 For each run, inspect the latest log only after artifact identity is proven.

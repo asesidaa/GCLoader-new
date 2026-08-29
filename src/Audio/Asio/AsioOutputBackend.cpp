@@ -182,7 +182,7 @@ namespace gc::audio
             {
                 try
                 {
-                    std::array < char, 320 > suffix{};
+                    std::array<char, 320> suffix{};
                     const auto formatted = std::format_to_n(
                         suffix.data(),
                         suffix.size() - 1,
@@ -781,17 +781,10 @@ namespace gc::audio
                 }
                 const auto current =
                     render_core_->CurrentOutputFrame();
-                if (!current)
-                {
-                    return std::nullopt;
-                }
-                if (logical_render_stream_->committed_tail() <=
-                    *current)
-                {
-                    LatchRuntimeFault(
-                        AsioFailureStage::runtime_clock);
-                    return std::nullopt;
-                }
+                // Cursor reads race the callback or suspension-pump render
+                // owner. Only that owner can prove an underrun or a failed
+                // sequential commit; a momentary tail snapshot at or behind
+                // logical now is not itself a render failure.
                 return current;
             }
 
@@ -2717,50 +2710,6 @@ namespace gc::audio
                                     advanced.error())));
                     }
 
-                    const auto now_ms =
-                        actions_.tick_count_ms(actions_.context);
-                    const auto summary_remaining =
-                        RemainingTimeout(
-                            summary_started_ms,
-                            now_ms,
-                            actions_.summary_interval_ms);
-                    auto wake =
-                        WaitForRuntimeWake(summary_remaining);
-                    if (!wake)
-                    {
-                        return std::move(wake.error());
-                    }
-                    if (*wake == RuntimeWake::shutdown)
-                    {
-                        const auto stopped =
-                            lifecycle_controller_.
-                            RequestShutdown();
-                        if (stopped.kind !=
-                            AsioControlDirectiveKind::Stop)
-                        {
-                            return Failure(
-                                AsioFailureStage::protocol,
-                                "ASIO controller rejected shutdown");
-                        }
-                        return std::nullopt;
-                    }
-                    if (*wake == RuntimeWake::fault ||
-                        HasPublishedFault())
-                    {
-                        const auto fatal =
-                            lifecycle_controller_.
-                            ReportRuntimeFault();
-                        if (fatal.kind !=
-                            AsioControlDirectiveKind::
-                            FailFatal)
-                        {
-                            return Failure(
-                                AsioFailureStage::protocol,
-                                "ASIO controller did not make a running fault fatal");
-                        }
-                        return BuildLatchedFailure();
-                    }
-
                     auto observed =
                         ObserveControllerForeground();
                     if (!observed)
@@ -2823,6 +2772,50 @@ namespace gc::audio
 
                     PublishRuntimeSummaryIfDue(
                         summary_started_ms);
+
+                    const auto now_ms =
+                        actions_.tick_count_ms(actions_.context);
+                    const auto summary_remaining =
+                        RemainingTimeout(
+                            summary_started_ms,
+                            now_ms,
+                            actions_.summary_interval_ms);
+                    auto wake =
+                        WaitForRuntimeWake(summary_remaining);
+                    if (!wake)
+                    {
+                        return std::move(wake.error());
+                    }
+                    if (*wake == RuntimeWake::shutdown)
+                    {
+                        const auto stopped =
+                            lifecycle_controller_.
+                            RequestShutdown();
+                        if (stopped.kind !=
+                            AsioControlDirectiveKind::Stop)
+                        {
+                            return Failure(
+                                AsioFailureStage::protocol,
+                                "ASIO controller rejected shutdown");
+                        }
+                        return std::nullopt;
+                    }
+                    if (*wake == RuntimeWake::fault ||
+                        HasPublishedFault())
+                    {
+                        const auto fatal =
+                            lifecycle_controller_.
+                            ReportRuntimeFault();
+                        if (fatal.kind !=
+                            AsioControlDirectiveKind::
+                            FailFatal)
+                        {
+                            return Failure(
+                                AsioFailureStage::protocol,
+                                "ASIO controller did not make a running fault fatal");
+                        }
+                        return BuildLatchedFailure();
+                    }
                 }
             }
 

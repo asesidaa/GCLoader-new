@@ -28,13 +28,6 @@ namespace gc::audio
         started_ = true;
         desired_foreground_ = foreground.is_foreground;
         consumed_focus_loss_generation_ = foreground.loss_generation;
-        if (!desired_foreground_)
-        {
-            state_ = AsioLifecycleState::Suspended;
-            return Directive(
-                AsioControlDirectiveKind::ContinuePump,
-                recovery_attempt_);
-        }
         return BeginPhysicalAttempt();
     }
 
@@ -75,6 +68,17 @@ namespace gc::audio
                 foreground.loss_generation;
             recovery_attempt_ = 0;
             retry_waiting_ = false;
+        }
+
+        // Initial acquisition establishes the driver-owned logical rate and
+        // must be allowed to finish so synchronous backend startup can return.
+        // A focus loss is retained in desired_foreground_ and is honored as
+        // soon as the initial physical session commits.
+        if (state_ == AsioLifecycleState::Starting)
+        {
+            return Directive(
+                AsioControlDirectiveKind::ContinuePump,
+                recovery_attempt_);
         }
 
         if (observed_loss)
@@ -337,7 +341,7 @@ namespace gc::audio
     AsioPhysicalSessionController::BeginPhysicalAttempt() noexcept
     {
         if (!started_ ||
-            !desired_foreground_ ||
+            (!desired_foreground_ && ever_prepared_) ||
             release_pending_ ||
             retry_waiting_ ||
             attempt_in_progress_)

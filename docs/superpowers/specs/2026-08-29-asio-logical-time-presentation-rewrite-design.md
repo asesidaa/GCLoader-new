@@ -395,14 +395,18 @@ failure.
 ### 6. Game-facing DirectSound cursor
 
 For ASIO, `CurrentOutputFrame()` becomes the whole logical coordinate
-`floor(L(now))`, independent of physical presentation and submitted ASIO
-buffers. `GetCurrentPosition`, `GetStatus`, drain completion, and song-end
-behavior resolve from the logical playback history at that coordinate.
+`floor(L(now))`, independent of physical presentation, submitted ASIO buffers,
+and an asynchronously sampled logical-render tail. `GetCurrentPosition`,
+`GetStatus`, drain completion, and song-end behavior resolve from the logical
+playback history at that coordinate.
 
-The logical render stream is required to keep up with the cursor. Failure to
-do so is fatal; the cursor is not frozen to conceal a late renderer. This keeps
-normal ranking/demo and second-song transitions independent of focus recovery
-and physical output availability.
+The active render owner remains required to advance the logical stream
+sequentially. An actual planning, render, commit, ownership, bridge-underflow,
+or pump failure is fatal. A game-thread cursor read cannot infer such a failure
+from a momentary `committed_tail <= floor(L(now))` snapshot because that read is
+not synchronized with the callback or suspension pump. This keeps normal
+ranking/demo and second-song transitions independent of both physical output
+and callback scheduling races.
 
 Physical presented position remains available only to the ASIO bridge and
 aggregate diagnostics. It must not be returned through the DirectSound facade
@@ -431,10 +435,15 @@ logical time.
 - Initial startup has no alternate backend.
 - Driver capability discovery adopts the driver's accepted integral sample
   rate before the logical audio contract is committed.
-- A focus-loss edge during acquisition is not treated as proof of driver
-  failure. Acquisition is safely completed or unwound according to the
-  serialized transaction, then the backend enters `Suspended` if background
-  ownership is still requested.
+- Initial physical acquisition proceeds through its first `Running` commit even
+  when the initial foreground snapshot is false or a focus-loss edge arrives
+  during acquisition. The serialized controller records the desired background
+  state but may not park the attempt before synchronous backend startup has
+  completed. Immediately after startup commits, a still-background request
+  enters `Suspended` through the normal quiesce, lease-transfer, and release
+  transaction. This both validates the driver-owned rate and prevents startup
+  from waiting on a foreground transition that the blocked game thread cannot
+  complete.
 - A real initial acquisition failure fails backend startup. The game does not
   continue under a silently broken ASIO selection.
 
@@ -711,14 +720,15 @@ candidate.
 The minimum runtime matrix is:
 
 1. foreground startup and a complete multi-song credit;
-2. startup followed shortly by backgrounding, then foreground recovery;
-3. focus loss and regain after startup but before gameplay;
-4. focus loss and regain in menus;
-5. focus loss and regain during gameplay, accepting temporary silence while
+2. startup beginning while the game is backgrounded, then foreground recovery;
+3. startup followed shortly by backgrounding, then foreground recovery;
+4. focus loss and regain after startup but before gameplay;
+5. focus loss and regain in menus;
+6. focus loss and regain during gameplay, accepting temporary silence while
    logical judgement time continues;
-6. a full two-song session with no second-song timing drift, loader-caused
+7. a full two-song session with no second-song timing drift, loader-caused
    frame drop, end-of-song crash, or ranking/demo sequence stall; and
-7. comparison with the accepted WASAPI path on the same physical listening
+8. comparison with the accepted WASAPI path on the same physical listening
    chain and unchanged offsets.
 
 Acceptance requires:
