@@ -2,8 +2,7 @@
 
 **Date:** 2026-08-29
 
-**Status:** Architecture direction approved in conversation; written review
-pending
+**Status:** Approved for implementation
 
 **Scope:** Absolute judgement time, logical DirectSound playback, ASIO physical
 presentation, focus suspension, and physical-session recovery
