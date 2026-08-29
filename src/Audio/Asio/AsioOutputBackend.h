@@ -3,7 +3,6 @@
 
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
-#include "Audio/Asio/AsioLogicalRenderSequencer.h"
 #include "Audio/Asio/AsioTypes.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
 
@@ -122,8 +121,7 @@ namespace gc::audio
         std::uint64_t physical_session_generation{};
         std::uint64_t recovery_attempt{};
         std::uint32_t retry_delay_ms{};
-        std::uint64_t logical_render_origin{};
-        std::uint64_t physical_render_origin{};
+        std::uint64_t handoff_logical_tail{};
         AsioPhysicalSessionReason reason{};
         double observed_sample_rate{};
         double active_sample_rate{};
@@ -131,9 +129,6 @@ namespace gc::audio
         bool sample_rate_changed{};
         bool restoration_attempted{};
         bool restoration_succeeded{};
-        std::uint64_t raw_sample_origin{};
-        AsioPhysicalAttachmentDisposition attachment_disposition{};
-        std::uint64_t attachment_interval_frames{};
         std::uint64_t silent_priming_callbacks{};
         bool callback_quiesced{};
         bool buffers_disposed{};

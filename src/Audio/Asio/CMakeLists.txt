@@ -1,5 +1,4 @@
 add_library(gc_asio STATIC
-        AsioSubmittedOutputTail.cpp
         AsioBufferRules.cpp
         AsioCallbackRuntime.cpp
         AsioCapabilityProbe.cpp

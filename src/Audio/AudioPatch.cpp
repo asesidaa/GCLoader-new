@@ -197,20 +197,6 @@ namespace gc::audio
             return "unknown";
         }
 
-        const char* asio_attachment_disposition_name(
-            const AsioPhysicalAttachmentDisposition disposition) noexcept
-        {
-            switch (disposition)
-            {
-            case AsioPhysicalAttachmentDisposition::Aligned: return "aligned";
-            case AsioPhysicalAttachmentDisposition::WaitForPhysical:
-                return "wait_for_physical";
-            case AsioPhysicalAttachmentDisposition::CatchUpLogical:
-                return "catch_up_logical";
-            }
-            return "unknown";
-        }
-
         const char* mixer_render_failure_source_name(
             MixerRenderFailureSource source) noexcept
         {
@@ -1089,10 +1075,8 @@ namespace gc::audio
                         << record.physical_session_generation
                         << " recovery_attempt=" << record.recovery_attempt
                         << " retry_delay_ms=" << record.retry_delay_ms
-                        << " logical_render_origin="
-                        << record.logical_render_origin
-                        << " physical_render_origin="
-                        << record.physical_render_origin;
+                        << " handoff_logical_tail="
+                        << record.handoff_logical_tail;
                     if (record.event ==
                         AsioSessionLifecycleEvent::physical_session_started ||
                         record.event ==
@@ -1107,12 +1091,6 @@ namespace gc::audio
                             << (record.frozen_rate_requested ? "true" : "false")
                             << " sample_rate_changed="
                             << (record.sample_rate_changed ? "true" : "false")
-                            << " raw_sample_origin=" << record.raw_sample_origin
-                            << " attachment_disposition="
-                            << asio_attachment_disposition_name(
-                                record.attachment_disposition)
-                            << " attachment_interval_frames="
-                            << record.attachment_interval_frames
                             << " silent_priming_callbacks="
                             << record.silent_priming_callbacks;
                     }
