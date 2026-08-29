@@ -19,7 +19,7 @@ struct AbsoluteJudgementOuterProbe {
     bool group2_cursor_selected{};
     std::optional<gc::audio::GameplayAudioCursorObservation>
         group2_observation;
-    std::shared_ptr<const gc::audio::ExactJudgementTimeline> endpoint;
+    std::shared_ptr<const gc::audio::ExactJudgementTimeline> timeline;
     gc::timing::AbsoluteHostTime now{};
 };
 
@@ -171,7 +171,7 @@ private:
     std::optional<gc::timing::CheckedRational> last_output_frame_;
     std::optional<gc::timing::CheckedRational> last_j_;
     std::uint64_t last_anchor_sequence_{};
-    std::optional<std::uint64_t> last_endpoint_position_;
+    std::optional<std::uint64_t> last_provider_position_;
     std::int64_t outer_now_qpc_{};
     std::int64_t last_qpc_{};
 };

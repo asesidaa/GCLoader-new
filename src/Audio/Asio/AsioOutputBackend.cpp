@@ -665,13 +665,13 @@ namespace gc::audio
                     const auto buffer_instance_id = timeline != nullptr
                                                         ? timeline->exact_buffer_instance_id()
                                                         : 0;
-                    const auto endpoint_generation = logical_clock_ != nullptr
+                    const auto timeline_generation = logical_clock_ != nullptr
                                                          ? logical_clock_->info().timeline_generation
                                                          : 0;
                     if (logical_clock_ == nullptr || timeline == nullptr ||
-                        buffer_instance_id == 0 || endpoint_generation == 0 ||
+                        buffer_instance_id == 0 || timeline_generation == 0 ||
                         !timeline->ConfigureExactPlaybackHistory(
-                            buffer_instance_id, endpoint_generation))
+                            buffer_instance_id, timeline_generation))
                     {
                         if (result != nullptr)
                         {
@@ -893,7 +893,7 @@ namespace gc::audio
                         .origin_raw_ms = logical_clock_->origin_raw_ms(),
                         .origin_unwrapped_ms = 0,
                         .origin_presented_frame = 0,
-                        .endpoint_generation = logical_timeline_generation_,
+                        .timeline_generation = logical_timeline_generation_,
                         .sample_rate = logical_contract_.sample_rate,
                         .period_frames = logical_contract_.period_frames,
                         .output_latency_frames =

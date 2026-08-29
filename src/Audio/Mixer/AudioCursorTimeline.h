@@ -59,7 +59,7 @@ enum class ExactPlaybackClosure : std::uint8_t {
 
 struct ExactPlaybackEpoch {
     std::uint64_t buffer_instance_id{};
-    std::uint64_t endpoint_generation{};
+    std::uint64_t timeline_generation{};
     std::uint64_t playback_generation{};
     ExactPlaybackOrigin origin{};
     std::uint64_t output_origin{};
@@ -104,7 +104,7 @@ enum class ExactMappedSpanPublicationFailure : std::uint8_t
     CurrentEpochUnavailable,
     CurrentEpochClosed,
     BufferInstanceChanged,
-    EndpointGenerationChanged,
+    TimelineGenerationChanged,
     PlaybackGenerationChanged,
     OriginChanged,
     OutputOriginChanged,
@@ -136,11 +136,11 @@ public:
 
     bool ConfigureExactPlaybackHistory(
         std::uint64_t buffer_instance_id,
-        std::uint64_t endpoint_generation) noexcept;
+        std::uint64_t timeline_generation) noexcept;
     bool AssignBufferInstanceId(std::uint64_t buffer_instance_id) noexcept;
     [[nodiscard]] bool HasExactPlaybackHistory() const noexcept;
     [[nodiscard]] std::uint64_t exact_buffer_instance_id() const noexcept;
-    [[nodiscard]] std::uint64_t exact_endpoint_generation() const noexcept;
+    [[nodiscard]] std::uint64_t exact_timeline_generation() const noexcept;
     bool ExpectExactPlaybackGeneration(
         std::uint64_t playback_generation) noexcept;
     bool PublishExactMappedSpan(
@@ -189,7 +189,7 @@ private:
     {
         std::atomic_uint64_t version{};
         std::atomic_uint64_t buffer_instance_id{};
-        std::atomic_uint64_t endpoint_generation{};
+        std::atomic_uint64_t timeline_generation{};
         std::atomic_uint64_t playback_generation{};
         std::atomic_uint8_t origin{};
         std::atomic_uint64_t output_origin{};
@@ -208,7 +208,7 @@ private:
     exact_slots_;
     std::atomic_bool exact_configured_{};
     std::atomic_uint64_t exact_buffer_instance_id_{};
-    std::atomic_uint64_t exact_endpoint_generation_{};
+    std::atomic_uint64_t exact_timeline_generation_{};
     std::atomic_uint64_t exact_publication_sequence_{};
     std::atomic_uint64_t exact_published_count_{};
     std::atomic_uint64_t exact_requested_generation_{};

@@ -121,29 +121,29 @@ JudgementStage::BindOrValidateNative(
 }
 
 std::expected<void, JudgementStageError>
-JudgementStage::BindEndpointOrValidate(
-    const std::uint64_t endpoint_generation,
-    const std::int64_t endpoint_qpc_frequency) noexcept {
-    if (!open_ || !bound_ || endpoint_generation == 0 ||
-        endpoint_qpc_frequency <= 0) {
+JudgementStage::BindTimelineOrValidate(
+    const std::uint64_t timeline_generation,
+    const std::int64_t timeline_qpc_frequency) noexcept {
+    if (!open_ || !bound_ || timeline_generation == 0 ||
+        timeline_qpc_frequency <= 0) {
         return std::unexpected(JudgementStageError::StageNotOpen);
     }
-    if (endpoint_qpc_frequency != cutoff_.qpc_frequency) {
+    if (timeline_qpc_frequency != cutoff_.qpc_frequency) {
         return std::unexpected(JudgementStageError::QpcFrequencyChanged);
     }
-    if (endpoint_generation_ == 0) {
-        endpoint_generation_ = endpoint_generation;
+    if (timeline_generation_ == 0) {
+        timeline_generation_ = timeline_generation;
         return {};
     }
-    if (endpoint_generation != endpoint_generation_) {
+    if (timeline_generation != timeline_generation_) {
         return std::unexpected(
-            JudgementStageError::EndpointGenerationChanged);
+            JudgementStageError::TimelineGenerationChanged);
     }
     return {};
 }
 
 void JudgementStage::Activate() noexcept {
-    if (open_ && bound_ && endpoint_generation_ != 0) {
+    if (open_ && bound_ && timeline_generation_ != 0) {
         active_ = true;
     }
 }
@@ -154,7 +154,7 @@ void JudgementStage::Reset() noexcept {
     failure_transport_status_ = {};
     generation_ = 0;
     tune_manager_ = 0;
-    endpoint_generation_ = 0;
+    timeline_generation_ = 0;
     entry_game_time_offset_ms_ = 0;
     entry_hold_safe_frame_ = 0;
     entry_slide_hold_safe_frame_ = 0;
@@ -192,8 +192,8 @@ const gc::input::GameplayTransitionCutoff& JudgementStage::cutoff()
     return cutoff_;
 }
 
-std::uint64_t JudgementStage::endpoint_generation() const noexcept {
-    return endpoint_generation_;
+std::uint64_t JudgementStage::timeline_generation() const noexcept {
+    return timeline_generation_;
 }
 
 const gc::input::GameplayTransitionStatus&

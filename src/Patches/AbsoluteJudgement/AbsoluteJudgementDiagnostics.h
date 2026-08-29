@@ -20,9 +20,9 @@ namespace gc::absolute_judgement
     {
         None = 0,
         InputCapabilityUnavailable,
-        EndpointCapabilityUnavailable,
+        TimelineCapabilityUnavailable,
         NativeIdentityChanged,
-        EndpointGenerationChanged,
+        TimelineGenerationChanged,
         InputGenerationChanged,
         NativeStateMismatch,
         ClockHistoryLost,
@@ -66,8 +66,8 @@ namespace gc::absolute_judgement
         QueryPerformanceCounterFailed,
         AudioBackendUnsupportedForAbsoluteJudgement,
         ExactAudioHookRouteUnavailable,
-        ExactOutputProviderMissing,
-        ExactOutputProviderDomainMismatch,
+        ExactTimelineProviderMissing,
+        ExactTimelineProviderDomainMismatch,
         InputTransportRateNot1000,
         InputTransportInactiveAtStageEntry,
         InputTransportWorkerBecameInactive,
@@ -87,16 +87,16 @@ namespace gc::absolute_judgement
         BoosterIdentityChanged,
         HoldSafeFrameNonZero,
         SlideHoldSafeFrameNonZero,
-        EndpointProviderMissingAtStageExit,
+        TimelineProviderMissingAtStageExit,
         StageOriginUnboundAtStageExit,
-        EndpointGenerationChanged,
-        EndpointProviderIdentityChanged,
-        EndpointPublicationSequenceRegressed,
-        EndpointQpcFrequencyMismatch,
-        EndpointProjectionDiscontinuous,
+        TimelineGenerationChanged,
+        TimelineProviderIdentityChanged,
+        ProviderPublicationSequenceRegressed,
+        TimelineQpcFrequencyMismatch,
+        TimelineProjectionDiscontinuous,
         StageOriginHistoryLost,
         PlaybackHistoryObjectChangedBeforeAnchor,
-        PlaybackHistoryEndpointChangedBeforeAnchor,
+        PlaybackHistoryTimelineChangedBeforeAnchor,
         TransportEvicted,
         TransportSequenceDiscontinuous,
         TransportMaskMismatch,
@@ -290,7 +290,7 @@ namespace gc::absolute_judgement
         std::uint64_t pending_clock_reads{};
         std::uint64_t resolved_clock_reads{};
         std::uint64_t unavailable_clock_reads{};
-        std::uint64_t endpoint_publication_count{};
+        std::uint64_t provider_publication_count{};
 
         std::uint64_t outer_calls{};
         std::uint64_t maximum_outer_gap_qpc{};
@@ -355,7 +355,7 @@ namespace gc::absolute_judgement
         std::uint64_t pending_clock_reads{};
         std::uint64_t resolved_clock_reads{};
         std::uint64_t unavailable_clock_reads{};
-        std::uint64_t endpoint_publication_count{};
+        std::uint64_t provider_publication_count{};
 
         std::uint64_t outer_calls{};
         std::uint64_t maximum_outer_gap_qpc{};
@@ -399,8 +399,8 @@ namespace gc::absolute_judgement
 
     struct AbsoluteJudgementRuntimeSnapshot
     {
-        std::uint64_t last_endpoint_anchor_sequence{};
-        std::optional<std::uint64_t> last_endpoint_position;
+        std::uint64_t last_provider_anchor_sequence{};
+        std::optional<std::uint64_t> last_provider_position;
         std::optional<gc::timing::CheckedRational> last_output_frame;
         std::int64_t last_qpc{};
         std::optional<gc::timing::CheckedRational> last_j;
@@ -442,19 +442,18 @@ namespace gc::absolute_judgement
     {
         AbsoluteJudgementNativeIdentityDiagnostic native{};
         std::uint64_t input_generation{};
-        std::uint64_t endpoint_generation{};
+        std::uint64_t timeline_generation{};
         std::string_view provider_domain;
-        std::int64_t endpoint_qpc_frequency{};
-        std::uint32_t provider_output_rate{};
+        std::int64_t timeline_qpc_frequency{};
+        std::uint32_t logical_output_rate{};
         std::uint32_t provider_period_frames{};
         std::uint32_t provider_output_latency_frames{};
         std::uint32_t provider_timestamp_quantum_ns{};
         std::uint64_t provider_publication_count{};
         std::uint64_t buffer_instance_id{};
         std::uint64_t playback_generation{};
-        std::uint64_t output_origin{};
+        std::uint64_t logical_output_origin{};
         std::uint64_t source_origin{};
-        std::uint32_t output_rate{};
         std::uint32_t source_rate{};
         gc::timing::CheckedRational initial_j =
             gc::timing::CheckedRational::Whole(0);
@@ -515,7 +514,7 @@ namespace gc::absolute_judgement
         bool enabled{};
         AbsoluteJudgementNativeIdentityDiagnostic native{};
         std::uint64_t input_generation{};
-        std::uint64_t endpoint_generation{};
+        std::uint64_t timeline_generation{};
         std::uint64_t last_anchor_sequence{};
         AbsoluteJudgementRuntimeSnapshot runtime{};
     };

@@ -413,24 +413,24 @@ namespace gc::absolute_judgement
                 const auto dispatch_entry_qpc = observe_outer_timing
                                                     ? CapturePerformanceCounterOrFatal()
                                                     : 0;
-                auto endpoint = gc::audio::AcquireExactJudgementTimeline();
-                if (!endpoint)
+                auto timeline = gc::audio::AcquireExactJudgementTimeline();
+                if (!timeline)
                 {
                     Fail(
-                        AbsoluteJudgementFatalPredicate::ExactOutputProviderMissing,
-                        AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable,
+                        AbsoluteJudgementFatalPredicate::ExactTimelineProviderMissing,
+                        AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable,
                         {static_cast<std::uint64_t>(expected_domain_)});
                 }
-                const auto endpoint_info = endpoint->info();
-                if (endpoint_info.domain != expected_domain_)
+                const auto timeline_info = timeline->info();
+                if (timeline_info.domain != expected_domain_)
                 {
                     Fail(
                         AbsoluteJudgementFatalPredicate::
-                        ExactOutputProviderDomainMismatch,
-                        AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable,
+                        ExactTimelineProviderDomainMismatch,
+                        AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable,
                         {
                             static_cast<std::uint64_t>(expected_domain_),
-                            static_cast<std::uint64_t>(endpoint_info.domain)
+                            static_cast<std::uint64_t>(timeline_info.domain)
                         });
                 }
 
@@ -473,7 +473,7 @@ namespace gc::absolute_judgement
                     .native = native,
                     .group2_cursor_selected = group2_cursor_selected,
                     .group2_observation = std::move(observation),
-                    .endpoint = std::move(endpoint),
+                    .timeline = std::move(timeline),
                     .now = now,
                 };
                 scheduler_.PrepareOuterCall(probe);
@@ -875,12 +875,12 @@ namespace gc::absolute_judgement
                 gc::timing::CheckedRational delivery_delay =
                     gc::timing::CheckedRational::Whole(0);
                 if (event_qpc && probe.now.qpc_ticks >= *event_qpc &&
-                    probe.endpoint)
+                    probe.timeline)
                 {
-                    const auto endpoint_info = probe.endpoint->info();
+                    const auto timeline_info = probe.timeline->info();
                     const auto resolved_delay = gc::timing::CheckedRational::Create(
                         probe.now.qpc_ticks - *event_qpc,
-                        endpoint_info.qpc_frequency);
+                        timeline_info.qpc_frequency);
                     if (!resolved_delay)
                     {
                         JudgementDiagnostics().

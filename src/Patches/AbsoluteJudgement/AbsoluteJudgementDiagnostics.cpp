@@ -126,7 +126,7 @@ namespace gc::absolute_judgement
             GC_SUBTRACT_COUNTER(pending_clock_reads);
             GC_SUBTRACT_COUNTER(resolved_clock_reads);
             GC_SUBTRACT_COUNTER(unavailable_clock_reads);
-            GC_SUBTRACT_COUNTER(endpoint_publication_count);
+            GC_SUBTRACT_COUNTER(provider_publication_count);
             GC_SUBTRACT_COUNTER(outer_calls);
             GC_SUBTRACT_COUNTER(event_scopes);
             GC_SUBTRACT_COUNTER(heartbeat_scopes);
@@ -183,12 +183,12 @@ namespace gc::absolute_judgement
             case AbsoluteJudgementFatalReason::None: return "none";
             case AbsoluteJudgementFatalReason::InputCapabilityUnavailable:
                 return "input_capability_unavailable";
-            case AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable:
-                return "endpoint_capability_unavailable";
+            case AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable:
+                return "timeline_capability_unavailable";
             case AbsoluteJudgementFatalReason::NativeIdentityChanged:
                 return "native_identity_changed";
-            case AbsoluteJudgementFatalReason::EndpointGenerationChanged:
-                return "endpoint_generation_changed";
+            case AbsoluteJudgementFatalReason::TimelineGenerationChanged:
+                return "timeline_generation_changed";
             case AbsoluteJudgementFatalReason::InputGenerationChanged:
                 return "input_generation_changed";
             case AbsoluteJudgementFatalReason::NativeStateMismatch:
@@ -292,11 +292,11 @@ namespace gc::absolute_judgement
                                    "configured_backend");
             GC_FATAL_PREDICATE(ExactAudioHookRouteUnavailable,
                                    "the audio hook required to create the configured exact output clock was not committed before judgement startup");
-            GC_FATAL_PREDICATE(ExactOutputProviderMissing,
-                                   "an owned judgement call has no exact output-clock provider for the configured backend",
+            GC_FATAL_PREDICATE(ExactTimelineProviderMissing,
+                                   "an owned judgement call has no exact timeline provider for the configured backend",
                                    "expected_domain");
-            GC_FATAL_PREDICATE(ExactOutputProviderDomainMismatch,
-                                   "the active exact output-clock provider domain differs from the configured backend",
+            GC_FATAL_PREDICATE(ExactTimelineProviderDomainMismatch,
+                                   "the active exact timeline provider domain differs from the configured backend",
                                    "expected_domain", "actual_domain");
             GC_FATAL_PREDICATE(InputTransportRateNot1000,
                                    "configured input transport rate is not exactly 1000 Hz",
@@ -355,32 +355,32 @@ namespace gc::absolute_judgement
             GC_FATAL_PREDICATE(SlideHoldSafeFrameNonZero,
                                    "SlideHoldSafeFrame is nonzero; only native default judgement is supported",
                                    "value");
-            GC_FATAL_PREDICATE(EndpointProviderMissingAtStageExit,
-                                   "semantic stage exited without ever observing an exact endpoint provider");
+            GC_FATAL_PREDICATE(TimelineProviderMissingAtStageExit,
+                                   "semantic stage exited without ever observing an exact timeline provider");
             GC_FATAL_PREDICATE(StageOriginUnboundAtStageExit,
                                    "semantic stage exited before its absolute origin could bind");
-            GC_FATAL_PREDICATE(EndpointGenerationChanged,
-                                   "exact endpoint generation changed during one semantic stage",
+            GC_FATAL_PREDICATE(TimelineGenerationChanged,
+                                   "exact timeline generation changed during one semantic stage",
                                    "expected_generation", "actual_generation");
-            GC_FATAL_PREDICATE(EndpointProviderIdentityChanged,
-                                   "exact endpoint provider object changed during one semantic stage",
+            GC_FATAL_PREDICATE(TimelineProviderIdentityChanged,
+                                   "exact timeline provider object changed during one semantic stage",
                                    "expected_provider", "actual_provider");
-            GC_FATAL_PREDICATE(EndpointPublicationSequenceRegressed,
-                                   "endpoint publication sequence moved backwards",
+            GC_FATAL_PREDICATE(ProviderPublicationSequenceRegressed,
+                                   "provider publication sequence moved backwards",
                                    "previous_sequence", "current_sequence");
-            GC_FATAL_PREDICATE(EndpointQpcFrequencyMismatch,
-                                   "endpoint QPC frequency differs from input QPC frequency",
-                                   "input_frequency", "endpoint_frequency");
-            GC_FATAL_PREDICATE(EndpointProjectionDiscontinuous,
-                                   "fixed endpoint projection cannot represent a requested QPC coordinate",
+            GC_FATAL_PREDICATE(TimelineQpcFrequencyMismatch,
+                                   "timeline QPC frequency differs from input QPC frequency",
+                                   "input_frequency", "timeline_frequency");
+            GC_FATAL_PREDICATE(TimelineProjectionDiscontinuous,
+                                   "fixed timeline projection cannot represent a requested host-time coordinate",
                                    "qpc_ticks");
             GC_FATAL_PREDICATE(StageOriginHistoryLost,
                                    "required Play epoch preceding stage entry is no longer retained");
             GC_FATAL_PREDICATE(PlaybackHistoryObjectChangedBeforeAnchor,
                                    "pending playback history provider changed before anchor binding",
                                    "expected_provider", "actual_provider");
-            GC_FATAL_PREDICATE(PlaybackHistoryEndpointChangedBeforeAnchor,
-                                   "pending endpoint generation changed before anchor binding",
+            GC_FATAL_PREDICATE(PlaybackHistoryTimelineChangedBeforeAnchor,
+                                   "pending timeline generation changed before anchor binding",
                                    "expected_generation", "actual_generation");
             GC_FATAL_PREDICATE(TransportEvicted,
                                    "transport eviction count changed during the semantic stage",
@@ -478,8 +478,8 @@ namespace gc::absolute_judgement
             {
             case P::AudioBackendUnsupportedForAbsoluteJudgement:
             case P::ExactAudioHookRouteUnavailable:
-            case P::ExactOutputProviderMissing:
-            case P::ExactOutputProviderDomainMismatch:
+            case P::ExactTimelineProviderMissing:
+            case P::ExactTimelineProviderDomainMismatch:
             case P::InputTransportRateNot1000:
             case P::InputTransportInactiveAtStageEntry:
             case P::InputTransportWorkerBecameInactive:
@@ -490,15 +490,15 @@ namespace gc::absolute_judgement
             case P::BoosterMissing:
             case P::HoldSafeFrameNonZero:
             case P::SlideHoldSafeFrameNonZero:
-            case P::EndpointProviderMissingAtStageExit:
+            case P::TimelineProviderMissingAtStageExit:
             case P::StageOriginUnboundAtStageExit:
-            case P::EndpointGenerationChanged:
-            case P::EndpointProviderIdentityChanged:
-            case P::EndpointQpcFrequencyMismatch:
-            case P::EndpointProjectionDiscontinuous:
+            case P::TimelineGenerationChanged:
+            case P::TimelineProviderIdentityChanged:
+            case P::TimelineQpcFrequencyMismatch:
+            case P::TimelineProjectionDiscontinuous:
             case P::StageOriginHistoryLost:
             case P::PlaybackHistoryObjectChangedBeforeAnchor:
-            case P::PlaybackHistoryEndpointChangedBeforeAnchor:
+            case P::PlaybackHistoryTimelineChangedBeforeAnchor:
                 return C::ExplicitlyUnsupported;
             case P::StageGenerationExhausted:
             case P::TransportEvicted:
@@ -734,7 +734,7 @@ namespace gc::absolute_judgement
                 std::back_inserter(message),
                 " {}clock_reads={} {}clock_pending={} {}clock_resolved={}"
                 " {}clock_unavailable={}"
-                " {}endpoint_publication_count={} {}rounded_fallback=0",
+                " {}provider_publication_count={} {}rounded_fallback=0",
                 prefix,
                 counters.exact_clock_reads,
                 prefix,
@@ -744,7 +744,7 @@ namespace gc::absolute_judgement
                 prefix,
                 counters.unavailable_clock_reads,
                 prefix,
-                counters.endpoint_publication_count,
+                counters.provider_publication_count,
                 prefix);
             std::format_to(
                 std::back_inserter(message),
@@ -861,20 +861,20 @@ namespace gc::absolute_judgement
         {
             std::format_to(
                 std::back_inserter(message),
-                " last_endpoint_anchor_sequence={}",
-                runtime.last_endpoint_anchor_sequence);
-            if (runtime.last_endpoint_position)
+                " last_provider_anchor_sequence={}",
+                runtime.last_provider_anchor_sequence);
+            if (runtime.last_provider_position)
             {
                 std::format_to(
                     std::back_inserter(message),
-                    " last_endpoint_position={}",
-                    *runtime.last_endpoint_position);
+                    " last_provider_position={}",
+                    *runtime.last_provider_position);
             }
             else
             {
                 std::format_to(
                     std::back_inserter(message),
-                    " last_endpoint_position=none");
+                    " last_provider_position=none");
             }
             AppendRational(message, "last_output_frame", runtime.last_output_frame);
             std::format_to(
@@ -1044,7 +1044,7 @@ namespace gc::absolute_judgement
             .pending_clock_reads = stage_.pending_clock_reads,
             .resolved_clock_reads = stage_.resolved_clock_reads,
             .unavailable_clock_reads = stage_.unavailable_clock_reads,
-            .endpoint_publication_count = stage_.endpoint_publication_count,
+            .provider_publication_count = stage_.provider_publication_count,
             .outer_calls = stage_.outer_calls,
             .maximum_outer_gap_qpc = stage_.maximum_outer_gap_qpc,
             .maximum_judgement_dispatch_qpc =
@@ -1207,14 +1207,14 @@ namespace gc::absolute_judgement
         auto message = std::format(
             "AbsoluteJudgement: absolute-stage-activation stage_generation={}"
             " native_manager={} tune={} judgement_state={} score_state={}"
-            " booster={} player={} input_generation={} endpoint_generation={}"
-            " provider_domain={} endpoint_qpc_frequency={}"
-            " provider_output_rate={} provider_period_frames={}"
+            " booster={} player={} input_generation={} timeline_generation={}"
+            " provider_domain={} timeline_qpc_frequency={}"
+            " logical_output_rate={} provider_period_frames={}"
             " provider_output_latency_frames={}"
             " provider_timestamp_quantum_ns={}"
             " provider_publication_count={}"
-            " buffer_instance_id={} playback_generation={} output_origin={}"
-            " source_origin={} output_rate={} source_rate={}",
+            " buffer_instance_id={} playback_generation={}"
+            " logical_output_origin={} source_origin={} source_rate={}",
             record.native.stage_generation,
             record.native.native_manager,
             record.native.tune,
@@ -1223,19 +1223,18 @@ namespace gc::absolute_judgement
             record.native.booster,
             record.native.player,
             record.input_generation,
-            record.endpoint_generation,
+            record.timeline_generation,
             record.provider_domain,
-            record.endpoint_qpc_frequency,
-            record.provider_output_rate,
+            record.timeline_qpc_frequency,
+            record.logical_output_rate,
             record.provider_period_frames,
             record.provider_output_latency_frames,
             record.provider_timestamp_quantum_ns,
             record.provider_publication_count,
             record.buffer_instance_id,
             record.playback_generation,
-            record.output_origin,
+            record.logical_output_origin,
             record.source_origin,
-            record.output_rate,
             record.source_rate);
         AppendRational(message, "initial_j", record.initial_j);
         std::format_to(
@@ -1843,9 +1842,9 @@ namespace gc::absolute_judgement
             " operand6_label={} operand6={} operand7_label={} operand7={}"
             " mode={} target_fps={} snapshot_stage_generation={}"
             " native_manager={} tune={} judgement_state={} score_state={}"
-            " booster={} player={} input_generation={} endpoint_generation={}"
-            " last_anchor_sequence={} last_endpoint_position_present={}"
-            " last_endpoint_position={} last_output_frame_present={}"
+            " booster={} player={} input_generation={} timeline_generation={}"
+            " last_anchor_sequence={} last_provider_position_present={}"
+            " last_provider_position={} last_output_frame_present={}"
             " last_output_frame={}/{} last_qpc={} last_j_present={}"
             " last_j={}/{} committed_boundary={} pending_work={}"
             " last_sequence={} held_mask={} game_time_offset_ms={}"
@@ -1878,10 +1877,10 @@ namespace gc::absolute_judgement
             snapshot.native.booster,
             snapshot.native.player,
             snapshot.input_generation,
-            snapshot.endpoint_generation,
+            snapshot.timeline_generation,
             snapshot.last_anchor_sequence,
-            snapshot.runtime.last_endpoint_position.has_value() ? 1 : 0,
-            snapshot.runtime.last_endpoint_position.value_or(0),
+            snapshot.runtime.last_provider_position.has_value() ? 1 : 0,
+            snapshot.runtime.last_provider_position.value_or(0),
             output_present ? 1 : 0,
             output_numerator,
             output_denominator,

@@ -676,7 +676,7 @@ std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
             buffer_instance_id == 0 ||
             !timeline->ConfigureExactPlaybackHistory(
                 buffer_instance_id,
-                exact_clock_->endpoint_generation())) {
+                exact_clock_->info().timeline_generation)) {
             if (result != nullptr) {
                 *result = MA_INVALID_OPERATION;
             }

@@ -382,8 +382,8 @@ bool AudioCursorTimeline::StoreExactSlot(
     slot.version.store(writing, detail::kRenderSpanAtomicOrder);
     slot.buffer_instance_id.store(
         epoch.buffer_instance_id, detail::kRenderSpanAtomicOrder);
-    slot.endpoint_generation.store(
-        epoch.endpoint_generation, detail::kRenderSpanAtomicOrder);
+    slot.timeline_generation.store(
+        epoch.timeline_generation, detail::kRenderSpanAtomicOrder);
     slot.playback_generation.store(
         epoch.playback_generation, detail::kRenderSpanAtomicOrder);
     slot.origin.store(
@@ -437,7 +437,7 @@ std::optional<ExactPlaybackEpoch> AudioCursorTimeline::LoadExactSlot(
         }
         const auto buffer_instance_id = slot.buffer_instance_id.load(
             detail::kRenderSpanAtomicOrder);
-        const auto endpoint_generation = slot.endpoint_generation.load(
+        const auto timeline_generation = slot.timeline_generation.load(
             detail::kRenderSpanAtomicOrder);
         const auto playback_generation = slot.playback_generation.load(
             detail::kRenderSpanAtomicOrder);
@@ -476,7 +476,7 @@ std::optional<ExactPlaybackEpoch> AudioCursorTimeline::LoadExactSlot(
 
         ExactPlaybackEpoch epoch{
             .buffer_instance_id = buffer_instance_id,
-            .endpoint_generation = endpoint_generation,
+            .timeline_generation = timeline_generation,
             .playback_generation = playback_generation,
             .origin = static_cast<ExactPlaybackOrigin>(origin_value),
             .output_origin = output_origin,
@@ -504,8 +504,8 @@ std::optional<ExactPlaybackEpoch> AudioCursorTimeline::LoadExactSlot(
 
 bool AudioCursorTimeline::ConfigureExactPlaybackHistory(
     std::uint64_t buffer_instance_id,
-    std::uint64_t endpoint_generation) noexcept {
-    if (buffer_instance_id == 0 || endpoint_generation == 0 ||
+    std::uint64_t timeline_generation) noexcept {
+    if (buffer_instance_id == 0 || timeline_generation == 0 ||
         HasExactPlaybackHistory() ||
         exact_buffer_instance_id_.load(detail::kRenderSpanAtomicOrder) !=
             buffer_instance_id) {
@@ -520,8 +520,8 @@ bool AudioCursorTimeline::ConfigureExactPlaybackHistory(
     if (slots == nullptr) {
         return false;
     }
-    exact_endpoint_generation_.store(
-        endpoint_generation, detail::kRenderSpanAtomicOrder);
+    exact_timeline_generation_.store(
+        timeline_generation, detail::kRenderSpanAtomicOrder);
     exact_slots_ = std::move(slots);
     bool expected = false;
     if (!exact_configured_.compare_exchange_strong(
@@ -555,8 +555,8 @@ std::uint64_t AudioCursorTimeline::exact_buffer_instance_id() const noexcept {
     return exact_buffer_instance_id_.load(detail::kRenderSpanAtomicOrder);
 }
 
-std::uint64_t AudioCursorTimeline::exact_endpoint_generation() const noexcept {
-    return exact_endpoint_generation_.load(detail::kRenderSpanAtomicOrder);
+std::uint64_t AudioCursorTimeline::exact_timeline_generation() const noexcept {
+    return exact_timeline_generation_.load(detail::kRenderSpanAtomicOrder);
 }
 
 bool AudioCursorTimeline::ExpectExactPlaybackGeneration(
@@ -642,7 +642,7 @@ bool AudioCursorTimeline::PublishExactMappedSpan(
 
     ExactPlaybackEpoch epoch{
         .buffer_instance_id = exact_buffer_instance_id(),
-        .endpoint_generation = exact_endpoint_generation(),
+        .timeline_generation = exact_timeline_generation(),
         .playback_generation = playback_generation,
         .origin = origin,
         .output_origin = output_origin,
@@ -739,12 +739,12 @@ bool AudioCursorTimeline::PublishExactMappedSpan(
                 current->buffer_instance_id,
                 epoch.buffer_instance_id);
         }
-        if (current->endpoint_generation != epoch.endpoint_generation)
+        if (current->timeline_generation != epoch.timeline_generation)
         {
             return FailExactMappedSpanPublication(
-                ExactMappedSpanPublicationFailure::EndpointGenerationChanged,
-                current->endpoint_generation,
-                epoch.endpoint_generation);
+                ExactMappedSpanPublicationFailure::TimelineGenerationChanged,
+                current->timeline_generation,
+                epoch.timeline_generation);
         }
         if (current->playback_generation != epoch.playback_generation)
         {
@@ -1005,7 +1005,7 @@ ExactSourceFrameResult AudioCursorTimeline::ResolveExactSourceFrame(
         const bool has_closure = epoch.closure.has_value();
         const bool has_closed_tail = epoch.closed_source_tail.has_value();
         if (epoch.buffer_instance_id == 0 ||
-            epoch.endpoint_generation == 0 ||
+            epoch.timeline_generation == 0 ||
             epoch.playback_generation == 0 || epoch.output_rate == 0 ||
             epoch.source_rate == 0 ||
             epoch.mapped_output_tail <= epoch.output_origin ||
@@ -1032,7 +1032,7 @@ ExactSourceFrameResult AudioCursorTimeline::ResolveExactSourceFrame(
         }
         const auto& previous = epochs[index - 1];
         if (epoch.buffer_instance_id != previous.buffer_instance_id ||
-            epoch.endpoint_generation != previous.endpoint_generation ||
+            epoch.timeline_generation != previous.timeline_generation ||
             epoch.output_rate != previous.output_rate ||
             epoch.source_rate != previous.source_rate ||
             epoch.playback_generation <= previous.playback_generation ||

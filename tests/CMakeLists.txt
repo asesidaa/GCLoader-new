@@ -70,6 +70,30 @@ add_test(
         COMMAND gc_exact_history_isolation_tests
 )
 
+add_executable(gc_logical_judgement_timeline_tests
+        Patches/AbsoluteJudgement/LogicalJudgementTimelineTests.cpp
+)
+target_link_libraries(gc_logical_judgement_timeline_tests PRIVATE
+        gc_runtime_patches
+)
+
+add_test(
+        NAME LogicalJudgementTimeline
+        COMMAND gc_logical_judgement_timeline_tests
+)
+
+add_executable(gc_directsound_logical_cursor_tests
+        Audio/DirectSound/LogicalCursorContinuityTests.cpp
+)
+target_link_libraries(gc_directsound_logical_cursor_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME DirectSoundLogicalCursor
+        COMMAND gc_directsound_logical_cursor_tests
+)
+
 add_executable(gc_ime_suppression_tests
         Input/Win32/ImeSuppressionTests.cpp
 )

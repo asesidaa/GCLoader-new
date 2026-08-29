@@ -107,7 +107,7 @@ namespace gc::audio
         std::uint32_t origin_raw_ms{};
         std::uint64_t origin_unwrapped_ms{};
         std::uint64_t origin_presented_frame{};
-        std::uint64_t endpoint_generation{};
+        std::uint64_t timeline_generation{};
         std::uint32_t sample_rate{};
         std::uint32_t period_frames{};
         std::uint32_t output_latency_frames{};

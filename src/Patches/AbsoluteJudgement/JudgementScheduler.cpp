@@ -124,10 +124,10 @@ namespace gc::absolute_judgement
             Fatal(AbsoluteJudgementFatalPredicate::ScopeLifetimeMismatch,
                   AbsoluteJudgementFatalReason::ScopeLifetimeViolation);
         }
-        if (stage_.endpoint_generation() == 0)
+        if (stage_.timeline_generation() == 0)
         {
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointProviderMissingAtStageExit,
-                  AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable);
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineProviderMissingAtStageExit,
+                  AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable);
         }
         if (!clock_resolver_.bound() || !stage_.active())
         {
@@ -206,7 +206,7 @@ namespace gc::absolute_judgement
         last_output_frame_.reset();
         last_j_.reset();
         last_anchor_sequence_ = 0;
-        last_endpoint_position_.reset();
+        last_provider_position_.reset();
         outer_now_qpc_ = 0;
         last_qpc_ = 0;
     }
@@ -218,35 +218,35 @@ namespace gc::absolute_judgement
         {
             FatalStageError(native.error(), &probe.native);
         }
-        if (!probe.endpoint)
+        if (!probe.timeline)
         {
-            Fatal(AbsoluteJudgementFatalPredicate::ExactOutputProviderMissing,
-                  AbsoluteJudgementFatalReason::EndpointCapabilityUnavailable);
+            Fatal(AbsoluteJudgementFatalPredicate::ExactTimelineProviderMissing,
+                  AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable);
         }
-        const auto endpoint_info = probe.endpoint->info();
-        const auto endpoint =
-            stage_.BindEndpointOrValidate(endpoint_info.timeline_generation, endpoint_info.qpc_frequency);
-        if (!endpoint)
+        const auto timeline_info = probe.timeline->info();
+        const auto timeline =
+            stage_.BindTimelineOrValidate(timeline_info.timeline_generation, timeline_info.qpc_frequency);
+        if (!timeline)
         {
-            if (endpoint.error() == JudgementStageError::EndpointGenerationChanged)
+            if (timeline.error() == JudgementStageError::TimelineGenerationChanged)
             {
-                Fatal(AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
-                      AbsoluteJudgementFatalReason::EndpointGenerationChanged,
-                      {stage_.endpoint_generation(), endpoint_info.timeline_generation});
+                Fatal(AbsoluteJudgementFatalPredicate::TimelineGenerationChanged,
+                      AbsoluteJudgementFatalReason::TimelineGenerationChanged,
+                      {stage_.timeline_generation(), timeline_info.timeline_generation});
             }
-            if (endpoint.error() == JudgementStageError::QpcFrequencyChanged)
+            if (timeline.error() == JudgementStageError::QpcFrequencyChanged)
             {
-                Fatal(AbsoluteJudgementFatalPredicate::EndpointQpcFrequencyMismatch,
+                Fatal(AbsoluteJudgementFatalPredicate::TimelineQpcFrequencyMismatch,
                       AbsoluteJudgementFatalReason::ClockDiscontinuous,
                       {
                           static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency),
-                          static_cast<std::uint64_t>(endpoint_info.qpc_frequency)
+                          static_cast<std::uint64_t>(timeline_info.qpc_frequency)
                       });
             }
-            FatalStageError(endpoint.error(), &probe.native);
+            FatalStageError(timeline.error(), &probe.native);
         }
-        JudgementDiagnostics().stage_counters().endpoint_publication_count =
-            probe.endpoint->counters().publication_count;
+        JudgementDiagnostics().stage_counters().provider_publication_count =
+            probe.timeline->counters().publication_count;
     }
 
     void JudgementScheduler::PrepareOuterCall(const AbsoluteJudgementOuterProbe& probe)
@@ -281,13 +281,13 @@ namespace gc::absolute_judgement
         {
             if (probe.group2_cursor_selected && !probe.group2_observation)
             {
-                Fatal(AbsoluteJudgementFatalPredicate::EndpointProjectionDiscontinuous,
+                Fatal(AbsoluteJudgementFatalPredicate::TimelineProjectionDiscontinuous,
                       AbsoluteJudgementFatalReason::NativeStateMismatch,
                       {static_cast<std::uint64_t>(probe.now.qpc_ticks)});
             }
             if (probe.group2_cursor_selected && probe.group2_observation)
             {
-                entry_clock = clock_resolver_.TryBind(*probe.group2_observation, probe.endpoint, left_epoch_scratch_);
+                entry_clock = clock_resolver_.TryBind(*probe.group2_observation, probe.timeline, left_epoch_scratch_);
                 if (entry_clock.status == JudgementClockStatus::CheckedArithmeticFailure ||
                     entry_clock.status == JudgementClockStatus::HistoryLostBeforeBinding ||
                     entry_clock.status == JudgementClockStatus::UnsupportedContinuity)
@@ -298,20 +298,20 @@ namespace gc::absolute_judgement
         }
         else
         {
-            const auto endpoint_info = probe.endpoint->info();
-            if (endpoint_info.timeline_generation != clock_resolver_.anchor().endpoint_generation ||
-                probe.endpoint.get() != clock_resolver_.anchor().endpoint.get())
+            const auto timeline_info = probe.timeline->info();
+            if (timeline_info.timeline_generation != clock_resolver_.anchor().timeline_generation ||
+                probe.timeline.get() != clock_resolver_.anchor().timeline.get())
             {
                 const auto expected_provider =
-                    reinterpret_cast<std::uintptr_t>(clock_resolver_.anchor().endpoint.get());
-                const auto actual_provider = reinterpret_cast<std::uintptr_t>(probe.endpoint.get());
-                Fatal(endpoint_info.timeline_generation != clock_resolver_.anchor().endpoint_generation
-                          ? AbsoluteJudgementFatalPredicate::EndpointGenerationChanged
-                          : AbsoluteJudgementFatalPredicate::EndpointProviderIdentityChanged,
-                      AbsoluteJudgementFatalReason::EndpointGenerationChanged,
+                    reinterpret_cast<std::uintptr_t>(clock_resolver_.anchor().timeline.get());
+                const auto actual_provider = reinterpret_cast<std::uintptr_t>(probe.timeline.get());
+                Fatal(timeline_info.timeline_generation != clock_resolver_.anchor().timeline_generation
+                          ? AbsoluteJudgementFatalPredicate::TimelineGenerationChanged
+                          : AbsoluteJudgementFatalPredicate::TimelineProviderIdentityChanged,
+                      AbsoluteJudgementFatalReason::TimelineGenerationChanged,
                       {
-                           clock_resolver_.anchor().endpoint_generation, endpoint_info.timeline_generation,
-                          expected_provider, actual_provider
+                           clock_resolver_.anchor().timeline_generation, timeline_info.timeline_generation,
+                           expected_provider, actual_provider
                       });
             }
             if (!stage_.active())
@@ -579,13 +579,13 @@ namespace gc::absolute_judgement
             last_qpc_ = record.observed_time.qpc_ticks;
             last_output_frame_ = resolved.output_frame;
             last_j_ = resolved.judgement_seconds;
-            if (resolved.endpoint_anchor_sequence != 0)
+            if (resolved.provider_anchor_sequence != 0)
             {
-                last_anchor_sequence_ = resolved.endpoint_anchor_sequence;
+                last_anchor_sequence_ = resolved.provider_anchor_sequence;
             }
-            if (resolved.endpoint_position)
+            if (resolved.provider_position)
             {
-                last_endpoint_position_ = resolved.endpoint_position;
+                last_provider_position_ = resolved.provider_position;
             }
             if (resolved.status == JudgementClockStatus::Pending)
             {
@@ -689,15 +689,15 @@ namespace gc::absolute_judgement
             Fatal(AbsoluteJudgementFatalPredicate::CommitTopologyMismatch,
                   AbsoluteJudgementFatalReason::NativeStateMismatch,
                   {
-                      stage_.open() ? 1u : 0u, stage_.bound() ? 1u : 0u, stage_.endpoint_generation(),
+                      stage_.open() ? 1u : 0u, stage_.bound() ? 1u : 0u, stage_.timeline_generation(),
                       stage_.active() ? 1u : 0u
                   });
         }
         last_j_ = entry_clock.judgement_seconds;
         JudgementDiagnostics().SeedHeartbeatIndex(committed_boundary_index_);
         const auto& anchor = clock_resolver_.anchor();
-        const auto provider_info = anchor.endpoint->info();
-        const auto provider_counters = anchor.endpoint->counters();
+        const auto provider_info = anchor.timeline->info();
+        const auto provider_counters = anchor.timeline->counters();
         JudgementDiagnostics().LogAbsoluteStageActivation({
             .native =
             {
@@ -710,19 +710,18 @@ namespace gc::absolute_judgement
                 .player = stage_.native().player,
             },
             .input_generation = stage_.cutoff().transport_epoch,
-            .endpoint_generation = stage_.endpoint_generation(),
+            .timeline_generation = stage_.timeline_generation(),
             .provider_domain = gc::audio::ExactJudgementTimelineDomainName(provider_info.domain),
-            .endpoint_qpc_frequency = provider_info.qpc_frequency,
-            .provider_output_rate = provider_info.logical_output_rate,
+            .timeline_qpc_frequency = provider_info.qpc_frequency,
+            .logical_output_rate = provider_info.logical_output_rate,
             .provider_period_frames = provider_info.provider_period_frames,
             .provider_output_latency_frames = provider_info.provider_output_latency_frames,
             .provider_timestamp_quantum_ns = provider_info.timestamp_quantum_ns,
             .provider_publication_count = provider_counters.publication_count,
             .buffer_instance_id = anchor.buffer_instance_id,
             .playback_generation = anchor.playback_generation,
-            .output_origin = anchor.output_origin,
+            .logical_output_origin = anchor.logical_output_origin,
             .source_origin = anchor.source_origin,
-            .output_rate = anchor.output_rate,
             .source_rate = anchor.source_rate,
             .initial_j = *entry_clock.judgement_seconds,
             .committed_boundary_seed = committed_boundary_index_,
@@ -753,13 +752,13 @@ namespace gc::absolute_judgement
         const auto current = clock_resolver_.Resolve(probe.now, gc::audio::ExactClockResolveIntent::ProvisionalHorizon);
         last_output_frame_ = current.output_frame;
         last_j_ = current.judgement_seconds;
-        if (current.endpoint_anchor_sequence != 0)
+        if (current.provider_anchor_sequence != 0)
         {
-            last_anchor_sequence_ = current.endpoint_anchor_sequence;
+            last_anchor_sequence_ = current.provider_anchor_sequence;
         }
-        if (current.endpoint_position)
+        if (current.provider_position)
         {
-            last_endpoint_position_ = current.endpoint_position;
+            last_provider_position_ = current.provider_position;
         }
         if (current.status == JudgementClockStatus::TemporarilyUnavailable)
         {
@@ -784,7 +783,7 @@ namespace gc::absolute_judgement
     {
         if (committed_frontier_ && ready.Compare(committed_frontier_->judgement_seconds) < 0)
         {
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointProjectionDiscontinuous,
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineProjectionDiscontinuous,
                   AbsoluteJudgementFatalReason::ClockDiscontinuous, {static_cast<std::uint64_t>(last_qpc_)});
         }
         if (!has_committed_boundary_index_)
@@ -1272,24 +1271,24 @@ namespace gc::absolute_judgement
                       stage_.generation(), static_cast<std::uint64_t>(stage_.cutoff().stage_entry_time.qpc_ticks),
                       clock_resolver_.bound() ? 1u : 0u, stage_.active() ? 1u : 0u
                   });
-        case JudgementClockFailure::EndpointProviderChanged:
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointProviderIdentityChanged,
-                  AbsoluteJudgementFatalReason::EndpointGenerationChanged);
-        case JudgementClockFailure::EndpointGenerationChanged:
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
-                  AbsoluteJudgementFatalReason::EndpointGenerationChanged, {stage_.endpoint_generation(), 0});
+        case JudgementClockFailure::TimelineProviderChanged:
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineProviderIdentityChanged,
+                  AbsoluteJudgementFatalReason::TimelineGenerationChanged);
+        case JudgementClockFailure::TimelineGenerationChanged:
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineGenerationChanged,
+                  AbsoluteJudgementFatalReason::TimelineGenerationChanged, {stage_.timeline_generation(), 0});
         case JudgementClockFailure::PlaybackHistoryObjectChangedBeforeAnchor:
             Fatal(AbsoluteJudgementFatalPredicate::PlaybackHistoryObjectChangedBeforeAnchor,
                   AbsoluteJudgementFatalReason::ClockDiscontinuous);
-        case JudgementClockFailure::PlaybackHistoryEndpointChangedBeforeAnchor:
-            Fatal(AbsoluteJudgementFatalPredicate::PlaybackHistoryEndpointChangedBeforeAnchor,
-                  AbsoluteJudgementFatalReason::EndpointGenerationChanged);
+        case JudgementClockFailure::PlaybackHistoryTimelineChangedBeforeAnchor:
+            Fatal(AbsoluteJudgementFatalPredicate::PlaybackHistoryTimelineChangedBeforeAnchor,
+                  AbsoluteJudgementFatalReason::TimelineGenerationChanged);
         case JudgementClockFailure::StageOriginHistoryLost:
             Fatal(AbsoluteJudgementFatalPredicate::StageOriginHistoryLost,
                   AbsoluteJudgementFatalReason::ClockHistoryLost);
-        case JudgementClockFailure::EndpointProjectionDiscontinuous:
+        case JudgementClockFailure::TimelineProjectionDiscontinuous:
         case JudgementClockFailure::InvalidClockRates:
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointProjectionDiscontinuous,
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineProjectionDiscontinuous,
                   AbsoluteJudgementFatalReason::ClockDiscontinuous, {static_cast<std::uint64_t>(last_qpc_)});
         case JudgementClockFailure::RationalOperationUnrepresentable:
             Fatal(AbsoluteJudgementFatalPredicate::RationalOperationUnrepresentable,
@@ -1368,11 +1367,11 @@ namespace gc::absolute_judgement
         case JudgementStageError::PlayerChanged:
             Fatal(AbsoluteJudgementFatalPredicate::PlayerIdentityChanged,
                   AbsoluteJudgementFatalReason::NativeIdentityChanged, {stage_.native().player, actual.player});
-        case JudgementStageError::EndpointGenerationChanged:
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
-                  AbsoluteJudgementFatalReason::EndpointGenerationChanged, {stage_.endpoint_generation(), 0});
+        case JudgementStageError::TimelineGenerationChanged:
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineGenerationChanged,
+                  AbsoluteJudgementFatalReason::TimelineGenerationChanged, {stage_.timeline_generation(), 0});
         case JudgementStageError::QpcFrequencyChanged:
-            Fatal(AbsoluteJudgementFatalPredicate::EndpointQpcFrequencyMismatch,
+            Fatal(AbsoluteJudgementFatalPredicate::TimelineQpcFrequencyMismatch,
                   AbsoluteJudgementFatalReason::ClockDiscontinuous,
                   {static_cast<std::uint64_t>(stage_.cutoff().qpc_frequency), 0});
         case JudgementStageError::HoldSafeFrameNonZero:
@@ -1436,8 +1435,8 @@ namespace gc::absolute_judgement
     AbsoluteJudgementRuntimeSnapshot JudgementScheduler::RuntimeSnapshot() const noexcept
     {
         return {
-            .last_endpoint_anchor_sequence = last_anchor_sequence_,
-            .last_endpoint_position = last_endpoint_position_,
+            .last_provider_anchor_sequence = last_anchor_sequence_,
+            .last_provider_position = last_provider_position_,
             .last_output_frame = last_output_frame_,
             .last_qpc = last_qpc_,
             .last_j = last_j_,
@@ -1485,7 +1484,7 @@ namespace gc::absolute_judgement
             .enabled = true,
             .native = native,
             .input_generation = stage_.open() ? stage_.cutoff().transport_epoch : 0,
-            .endpoint_generation = stage_.endpoint_generation(),
+            .timeline_generation = stage_.timeline_generation(),
             .last_anchor_sequence = last_anchor_sequence_,
             .runtime = RuntimeSnapshot(),
         };

@@ -39,7 +39,7 @@ enum class JudgementStageError : std::uint8_t {
     ScoreStateChanged,
     BoosterChanged,
     PlayerChanged,
-    EndpointGenerationChanged,
+    TimelineGenerationChanged,
     QpcFrequencyChanged,
     HoldSafeFrameNonZero,
     SlideHoldSafeFrameNonZero,
@@ -56,9 +56,9 @@ public:
     [[nodiscard]] std::expected<void, JudgementStageError>
     BindOrValidateNative(const NativeJudgementIdentity& native) noexcept;
     [[nodiscard]] std::expected<void, JudgementStageError>
-    BindEndpointOrValidate(
-        std::uint64_t endpoint_generation,
-        std::int64_t endpoint_qpc_frequency) noexcept;
+    BindTimelineOrValidate(
+        std::uint64_t timeline_generation,
+        std::int64_t timeline_qpc_frequency) noexcept;
     void Activate() noexcept;
     void Reset() noexcept;
 
@@ -70,7 +70,7 @@ public:
     [[nodiscard]] const NativeJudgementIdentity& native() const noexcept;
     [[nodiscard]] const gc::input::GameplayTransitionCutoff& cutoff()
         const noexcept;
-    [[nodiscard]] std::uint64_t endpoint_generation() const noexcept;
+    [[nodiscard]] std::uint64_t timeline_generation() const noexcept;
     [[nodiscard]] const gc::input::GameplayTransitionStatus&
     failure_transport_status() const noexcept;
 
@@ -80,7 +80,7 @@ private:
     gc::input::GameplayTransitionStatus failure_transport_status_{};
     std::uint64_t generation_{};
     std::uintptr_t tune_manager_{};
-    std::uint64_t endpoint_generation_{};
+    std::uint64_t timeline_generation_{};
     std::int32_t entry_game_time_offset_ms_{};
     std::int32_t entry_hold_safe_frame_{};
     std::int32_t entry_slide_hold_safe_frame_{};

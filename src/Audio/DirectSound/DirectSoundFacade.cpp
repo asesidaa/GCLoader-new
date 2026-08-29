@@ -571,8 +571,8 @@ SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept {
             .source_frame_unwrapped = source_frame_unwrapped,
             .source_sample_rate = format_.sample_rate,
             .buffer_instance_id = buffer_instance_id_,
-            .endpoint_generation = has_exact_history
-                ? timeline_->exact_endpoint_generation()
+            .timeline_generation = has_exact_history
+                ? timeline_->exact_timeline_generation()
                 : 0,
             .playback_generation = playback_generation_,
             .origin = playback_origin_,

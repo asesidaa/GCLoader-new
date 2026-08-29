@@ -277,8 +277,8 @@ namespace gc::audio
                 return "current_epoch_closed";
             case ExactMappedSpanPublicationFailure::BufferInstanceChanged:
                 return "buffer_instance_changed";
-            case ExactMappedSpanPublicationFailure::EndpointGenerationChanged:
-                return "endpoint_generation_changed";
+            case ExactMappedSpanPublicationFailure::TimelineGenerationChanged:
+                return "timeline_generation_changed";
             case ExactMappedSpanPublicationFailure::PlaybackGenerationChanged:
                 return "playback_generation_changed";
             case ExactMappedSpanPublicationFailure::OriginChanged:
@@ -667,8 +667,8 @@ namespace gc::audio
                 << logical.origin_unwrapped_ms
                 << " logical_origin_presented_frame="
                 << logical.origin_presented_frame
-                << " logical_endpoint_generation="
-                << logical.endpoint_generation
+                << " logical_timeline_generation="
+                << logical.timeline_generation
                 << " exact_domain=asio_multimedia_ms"
                 << " exact_timestamp_quantum_ms=1"
                 << " asio_time_info_mode=preferred_with_legacy_fallback"
