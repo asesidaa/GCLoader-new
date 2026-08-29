@@ -58,6 +58,18 @@ add_test(
         COMMAND gc_asio_foreground_state_tests
 )
 
+add_executable(gc_asio_physical_session_controller_tests
+        Audio/Asio/AsioPhysicalSessionControllerTests.cpp
+)
+target_link_libraries(gc_asio_physical_session_controller_tests PRIVATE
+        gc_asio
+)
+
+add_test(
+        NAME AsioPhysicalSessionController
+        COMMAND gc_asio_physical_session_controller_tests
+)
+
 add_executable(gc_exact_history_isolation_tests
         Audio/Mixer/ExactHistoryIsolationTests.cpp
 )

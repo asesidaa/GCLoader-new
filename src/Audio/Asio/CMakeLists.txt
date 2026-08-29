@@ -9,6 +9,7 @@ add_library(gc_asio STATIC
         AsioDriverCatalog.cpp
         AsioForegroundMonitor.cpp
         AsioIsolatedProcess.cpp
+        AsioPhysicalSessionController.cpp
         AsioProbeClient.cpp
         AsioProbeProtocol.cpp
         AsioSampleConverter.cpp
