@@ -22,6 +22,18 @@ add_test(
         COMMAND gc_exact_asio_clock_tests
 )
 
+add_executable(gc_exact_wasapi_clock_compatibility_tests
+        Audio/Wasapi/ExactWasapiClockCompatibilityTests.cpp
+)
+target_link_libraries(gc_exact_wasapi_clock_compatibility_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME ExactWasapiClockCompatibility
+        COMMAND gc_exact_wasapi_clock_compatibility_tests
+)
+
 add_executable(gc_asio_logical_render_sequencer_tests
         Audio/Asio/AsioLogicalRenderSequencerTests.cpp
 )

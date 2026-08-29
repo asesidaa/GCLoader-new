@@ -10,28 +10,28 @@ namespace gc::audio
     {
         constexpr std::uint32_t kNanosecondsPerMillisecond = 1'000'000;
 
-        [[nodiscard]] ExactOutputClockResult Result(
+        [[nodiscard]] ExactJudgementTimelineResult Result(
             const ExactClockStatus status,
-            const std::uint64_t endpoint_generation) noexcept
+            const std::uint64_t timeline_generation) noexcept
         {
             return {
                 .status = status,
-                .endpoint_generation = endpoint_generation,
-                .output_frame = std::nullopt,
-                .submitted_output_tail = 0,
-                .anchor_sequence = 0,
-                .anchor_endpoint_position = std::nullopt,
+                .timeline_generation = timeline_generation,
+                .logical_output_frame = std::nullopt,
+                .available_output_tail = 0,
+                .provider_anchor_sequence = 0,
+                .provider_position = std::nullopt,
             };
         }
     } // namespace
 
     ExactAsioClock::ExactAsioClock(
-        const std::uint64_t endpoint_generation,
+        const std::uint64_t timeline_generation,
         std::shared_ptr<const AsioLogicalTimeline> timeline,
         const std::int64_t qpc_frequency,
         const std::uint32_t period_frames,
         const std::uint32_t output_latency_frames) noexcept
-        : endpoint_generation_(endpoint_generation),
+        : timeline_generation_(timeline_generation),
           timeline_(std::move(timeline)),
           qpc_frequency_(qpc_frequency),
           period_frames_(period_frames),
@@ -42,13 +42,13 @@ namespace gc::audio
     ExactAsioClock::~ExactAsioClock() = default;
 
     std::shared_ptr<ExactAsioClock> ExactAsioClock::Create(
-        const std::uint64_t endpoint_generation,
+        const std::uint64_t timeline_generation,
         std::shared_ptr<const AsioLogicalTimeline> timeline,
         const std::int64_t qpc_frequency,
         const std::uint32_t period_frames,
         const std::uint32_t output_latency_frames) noexcept
     {
-        if (endpoint_generation == 0 || timeline == nullptr ||
+        if (timeline_generation == 0 || timeline == nullptr ||
             qpc_frequency <= 0 || period_frames == 0)
         {
             return {};
@@ -56,7 +56,7 @@ namespace gc::audio
 
         std::unique_ptr<ExactAsioClock> clock{
             new(std::nothrow) ExactAsioClock(
-                endpoint_generation,
+                timeline_generation,
                 std::move(timeline),
                 qpc_frequency,
                 period_frames,
@@ -77,7 +77,7 @@ namespace gc::audio
         }
     }
 
-    ExactOutputClockResult ExactAsioClock::Resolve(
+    ExactJudgementTimelineResult ExactAsioClock::Resolve(
         const timing::AbsoluteHostTime& timestamp,
         const ExactClockResolveIntent intent) const noexcept
     {
@@ -86,7 +86,7 @@ namespace gc::audio
             invalidated_.load(std::memory_order_acquire))
         {
             return CountResult(Result(
-                ExactClockStatus::Discontinuous, endpoint_generation_));
+                ExactClockStatus::Discontinuous, timeline_generation_));
         }
 
         const auto output_frame = timeline_->ProjectMultimediaMilliseconds(
@@ -98,43 +98,43 @@ namespace gc::audio
                 AsioLogicalTimelineFailure::SnapshotUnavailable
                     ? ExactClockStatus::TemporarilyUnavailable
                     : ExactClockStatus::Discontinuous;
-            return CountResult(Result(status, endpoint_generation_));
+            return CountResult(Result(status, timeline_generation_));
         }
         if (output_frame->numerator() < 0)
         {
             return CountResult(Result(
-                ExactClockStatus::Discontinuous, endpoint_generation_));
+                ExactClockStatus::Discontinuous, timeline_generation_));
         }
 
         if (invalidated_.load(std::memory_order_acquire))
         {
             return CountResult(Result(
-                ExactClockStatus::Discontinuous, endpoint_generation_));
+                ExactClockStatus::Discontinuous, timeline_generation_));
         }
         return CountResult({
             .status = ExactClockStatus::Resolved,
-            .endpoint_generation = endpoint_generation_,
-            .output_frame = *output_frame,
-            .submitted_output_tail = 0,
-            .anchor_sequence = 0,
-            .anchor_endpoint_position = std::nullopt,
+            .timeline_generation = timeline_generation_,
+            .logical_output_frame = *output_frame,
+            .available_output_tail = 0,
+            .provider_anchor_sequence = 0,
+            .provider_position = std::nullopt,
         });
     }
 
-    ExactOutputClockInfo ExactAsioClock::info() const noexcept
+    ExactJudgementTimelineInfo ExactAsioClock::info() const noexcept
     {
         return {
-            .domain = ExactOutputClockDomain::AsioMultimediaMilliseconds,
-            .endpoint_generation = endpoint_generation_,
+            .domain = ExactJudgementTimelineDomain::LogicalMultimediaMilliseconds,
+            .timeline_generation = timeline_generation_,
             .qpc_frequency = qpc_frequency_,
-            .output_sample_rate = timeline_->output_sample_rate(),
-            .period_frames = period_frames_,
-            .output_latency_frames = output_latency_frames_,
+            .logical_output_rate = timeline_->output_sample_rate(),
+            .provider_period_frames = period_frames_,
+            .provider_output_latency_frames = output_latency_frames_,
             .timestamp_quantum_ns = kNanosecondsPerMillisecond,
         };
     }
 
-    ExactOutputClockCounters ExactAsioClock::counters() const noexcept
+    ExactJudgementTimelineCounters ExactAsioClock::counters() const noexcept
     {
         return {
             .publication_count = 0,
@@ -155,8 +155,8 @@ namespace gc::audio
         invalidated_.store(true, std::memory_order_release);
     }
 
-    ExactOutputClockResult ExactAsioClock::CountResult(
-        ExactOutputClockResult&& result) const noexcept
+    ExactJudgementTimelineResult ExactAsioClock::CountResult(
+        ExactJudgementTimelineResult&& result) const noexcept
     {
         switch (result.status)
         {

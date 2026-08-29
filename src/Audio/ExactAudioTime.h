@@ -24,13 +24,13 @@ struct EndpointClockMapping {
     std::uint32_t output_sample_rate{};
 };
 
-struct ExactOutputClockResult {
+struct ExactJudgementTimelineResult {
     ExactClockStatus status{};
-    std::uint64_t endpoint_generation{};
-    std::optional<gc::timing::CheckedRational> output_frame;
-    std::uint64_t submitted_output_tail{};
-    std::uint64_t anchor_sequence{};
-    std::optional<std::uint64_t> anchor_endpoint_position;
+    std::uint64_t timeline_generation{};
+    std::optional<gc::timing::CheckedRational> logical_output_frame;
+    std::uint64_t available_output_tail{};
+    std::uint64_t provider_anchor_sequence{};
+    std::optional<std::uint64_t> provider_position;
 };
 
 } // namespace gc::audio

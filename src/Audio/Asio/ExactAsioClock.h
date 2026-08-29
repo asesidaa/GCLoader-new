@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Audio/Asio/AsioLogicalTimeline.h"
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 
 #include <atomic>
 #include <cstdint>
@@ -9,37 +9,37 @@
 
 namespace gc::audio
 {
-    class ExactAsioClock final : public ExactOutputClock
+    class ExactAsioClock final : public ExactJudgementTimeline
     {
     public:
         ~ExactAsioClock() override;
 
         [[nodiscard]] static std::shared_ptr<ExactAsioClock> Create(
-            std::uint64_t endpoint_generation,
+            std::uint64_t timeline_generation,
             std::shared_ptr<const AsioLogicalTimeline> timeline,
             std::int64_t qpc_frequency,
             std::uint32_t period_frames,
             std::uint32_t output_latency_frames) noexcept;
 
-        [[nodiscard]] ExactOutputClockResult Resolve(
+        [[nodiscard]] ExactJudgementTimelineResult Resolve(
             const timing::AbsoluteHostTime& timestamp,
             ExactClockResolveIntent intent) const noexcept override;
-        [[nodiscard]] ExactOutputClockInfo info() const noexcept override;
-        [[nodiscard]] ExactOutputClockCounters counters() const noexcept override;
+        [[nodiscard]] ExactJudgementTimelineInfo info() const noexcept override;
+        [[nodiscard]] ExactJudgementTimelineCounters counters() const noexcept override;
         void Invalidate() noexcept override;
 
     private:
         ExactAsioClock(
-            std::uint64_t endpoint_generation,
+            std::uint64_t timeline_generation,
             std::shared_ptr<const AsioLogicalTimeline> timeline,
             std::int64_t qpc_frequency,
             std::uint32_t period_frames,
             std::uint32_t output_latency_frames) noexcept;
 
-        [[nodiscard]] ExactOutputClockResult CountResult(
-            ExactOutputClockResult&& result) const noexcept;
+        [[nodiscard]] ExactJudgementTimelineResult CountResult(
+            ExactJudgementTimelineResult&& result) const noexcept;
 
-        std::uint64_t endpoint_generation_{};
+        std::uint64_t timeline_generation_{};
         std::shared_ptr<const AsioLogicalTimeline> timeline_;
         std::int64_t qpc_frequency_{};
         std::uint32_t period_frames_{};

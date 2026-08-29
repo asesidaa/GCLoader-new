@@ -19,7 +19,7 @@ namespace
     using gc::audio::ExactAsioClock;
     using gc::audio::ExactClockResolveIntent;
     using gc::audio::ExactClockStatus;
-    using gc::audio::ExactOutputClockResult;
+    using gc::audio::ExactJudgementTimelineResult;
     using gc::timing::AbsoluteHostTime;
     using gc::timing::CheckedRational;
 
@@ -54,7 +54,7 @@ namespace
         };
     }
 
-    void ExpectFrame(const ExactOutputClockResult& result,
+    void ExpectFrame(const ExactJudgementTimelineResult& result,
                      const std::int64_t numerator,
                      const std::uint64_t denominator,
                      const std::string_view message)
@@ -62,24 +62,24 @@ namespace
         const auto expected = CheckedRational::Create(numerator, denominator);
         Expect(expected.has_value(), "test expectation is representable");
         Expect(result.status == ExactClockStatus::Resolved, message);
-        Expect(result.output_frame.has_value(), message);
-        if (expected && result.output_frame)
+        Expect(result.logical_output_frame.has_value(), message);
+        if (expected && result.logical_output_frame)
         {
-            Expect(result.output_frame->Compare(*expected) == 0, message);
+            Expect(result.logical_output_frame->Compare(*expected) == 0, message);
         }
     }
 
-    void ExpectSameFrame(const ExactOutputClockResult& actual,
-                         const ExactOutputClockResult& expected,
+    void ExpectSameFrame(const ExactJudgementTimelineResult& actual,
+                         const ExactJudgementTimelineResult& expected,
                          const std::string_view message)
     {
         Expect(actual.status == ExactClockStatus::Resolved, message);
         Expect(expected.status == ExactClockStatus::Resolved, message);
-        Expect(actual.output_frame.has_value(), message);
-        Expect(expected.output_frame.has_value(), message);
-        if (actual.output_frame && expected.output_frame)
+        Expect(actual.logical_output_frame.has_value(), message);
+        Expect(expected.logical_output_frame.has_value(), message);
+        if (actual.logical_output_frame && expected.logical_output_frame)
         {
-            Expect(actual.output_frame->Compare(*expected.output_frame) == 0,
+            Expect(actual.logical_output_frame->Compare(*expected.logical_output_frame) == 0,
                    message);
         }
     }
@@ -127,7 +127,7 @@ namespace
         ExpectSameFrame(after_snapshot,
                         finalized,
                         "later observations cannot rewrite a finalized event");
-        Expect(clock->info().output_sample_rate == 44'100,
+        Expect(clock->info().logical_output_rate == 44'100,
                "clock reports the driver-owned logical sample rate");
     }
 
@@ -150,13 +150,13 @@ namespace
                     48,
                     1,
                     "logical judgement resolves from multimedia time alone");
-        Expect(resolved.endpoint_generation == 7,
+        Expect(resolved.timeline_generation == 7,
                "logical endpoint identity is persistent");
-        Expect(resolved.submitted_output_tail == 0,
+        Expect(resolved.available_output_tail == 0,
                "logical judgement exposes no physical submitted tail");
-        Expect(resolved.anchor_sequence == 0,
+        Expect(resolved.provider_anchor_sequence == 0,
                "logical judgement exposes no physical publication sequence");
-        Expect(!resolved.anchor_endpoint_position.has_value(),
+        Expect(!resolved.provider_position.has_value(),
                "there is no physical callback anchor");
         Expect(clock->counters().publication_count == 0,
                "logical judgement has no physical publication counter");
@@ -222,7 +222,7 @@ namespace
             exact_after,
             exact_before,
             "publishing a physical presentation anchor cannot rewrite judgement");
-        Expect(!exact_after.anchor_endpoint_position.has_value(),
+        Expect(!exact_after.provider_position.has_value(),
                "physical presentation metadata never enters judgement");
 
         now.now_ms = 1'020;

@@ -1,7 +1,7 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
 
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 #include "Patches/AbsoluteJudgement/JudgementScheduler.h"
 #include "Patches/AbsoluteJudgement/NativeJudgementAbi.h"
 
@@ -270,7 +270,7 @@ namespace gc::absolute_judgement
         public:
             void Initialize(
                 const std::uintptr_t executable_base,
-                const gc::audio::ExactOutputClockDomain expected_domain) noexcept
+                const gc::audio::ExactJudgementTimelineDomain expected_domain) noexcept
             {
                 executable_base_ = executable_base;
                 expected_domain_ = expected_domain;
@@ -413,7 +413,7 @@ namespace gc::absolute_judgement
                 const auto dispatch_entry_qpc = observe_outer_timing
                                                     ? CapturePerformanceCounterOrFatal()
                                                     : 0;
-                auto endpoint = gc::audio::AcquireExactOutputClock();
+                auto endpoint = gc::audio::AcquireExactJudgementTimeline();
                 if (!endpoint)
                 {
                     Fail(
@@ -947,7 +947,7 @@ namespace gc::absolute_judgement
 
             std::uintptr_t executable_base_{};
             std::uintptr_t native_manager_{};
-            gc::audio::ExactOutputClockDomain expected_domain_{};
+            gc::audio::ExactJudgementTimelineDomain expected_domain_{};
             JudgementScheduler scheduler_;
         };
 
@@ -960,7 +960,7 @@ namespace gc::absolute_judgement
 
     void InitializeAbsoluteJudgementRuntime(
         const std::uintptr_t executable_base,
-        const gc::audio::ExactOutputClockDomain expected_domain) noexcept
+        const gc::audio::ExactJudgementTimelineDomain expected_domain) noexcept
     {
         Runtime().Initialize(executable_base, expected_domain);
     }

@@ -225,14 +225,14 @@ namespace gc::absolute_judgement
         }
         const auto endpoint_info = probe.endpoint->info();
         const auto endpoint =
-            stage_.BindEndpointOrValidate(endpoint_info.endpoint_generation, endpoint_info.qpc_frequency);
+            stage_.BindEndpointOrValidate(endpoint_info.timeline_generation, endpoint_info.qpc_frequency);
         if (!endpoint)
         {
             if (endpoint.error() == JudgementStageError::EndpointGenerationChanged)
             {
                 Fatal(AbsoluteJudgementFatalPredicate::EndpointGenerationChanged,
                       AbsoluteJudgementFatalReason::EndpointGenerationChanged,
-                      {stage_.endpoint_generation(), endpoint_info.endpoint_generation});
+                      {stage_.endpoint_generation(), endpoint_info.timeline_generation});
             }
             if (endpoint.error() == JudgementStageError::QpcFrequencyChanged)
             {
@@ -299,18 +299,18 @@ namespace gc::absolute_judgement
         else
         {
             const auto endpoint_info = probe.endpoint->info();
-            if (endpoint_info.endpoint_generation != clock_resolver_.anchor().endpoint_generation ||
+            if (endpoint_info.timeline_generation != clock_resolver_.anchor().endpoint_generation ||
                 probe.endpoint.get() != clock_resolver_.anchor().endpoint.get())
             {
                 const auto expected_provider =
                     reinterpret_cast<std::uintptr_t>(clock_resolver_.anchor().endpoint.get());
                 const auto actual_provider = reinterpret_cast<std::uintptr_t>(probe.endpoint.get());
-                Fatal(endpoint_info.endpoint_generation != clock_resolver_.anchor().endpoint_generation
+                Fatal(endpoint_info.timeline_generation != clock_resolver_.anchor().endpoint_generation
                           ? AbsoluteJudgementFatalPredicate::EndpointGenerationChanged
                           : AbsoluteJudgementFatalPredicate::EndpointProviderIdentityChanged,
                       AbsoluteJudgementFatalReason::EndpointGenerationChanged,
                       {
-                          clock_resolver_.anchor().endpoint_generation, endpoint_info.endpoint_generation,
+                           clock_resolver_.anchor().endpoint_generation, endpoint_info.timeline_generation,
                           expected_provider, actual_provider
                       });
             }
@@ -711,11 +711,11 @@ namespace gc::absolute_judgement
             },
             .input_generation = stage_.cutoff().transport_epoch,
             .endpoint_generation = stage_.endpoint_generation(),
-            .provider_domain = gc::audio::ExactOutputClockDomainName(provider_info.domain),
+            .provider_domain = gc::audio::ExactJudgementTimelineDomainName(provider_info.domain),
             .endpoint_qpc_frequency = provider_info.qpc_frequency,
-            .provider_output_rate = provider_info.output_sample_rate,
-            .provider_period_frames = provider_info.period_frames,
-            .provider_output_latency_frames = provider_info.output_latency_frames,
+            .provider_output_rate = provider_info.logical_output_rate,
+            .provider_period_frames = provider_info.provider_period_frames,
+            .provider_output_latency_frames = provider_info.provider_output_latency_frames,
             .provider_timestamp_quantum_ns = provider_info.timestamp_quantum_ns,
             .provider_publication_count = provider_counters.publication_count,
             .buffer_instance_id = anchor.buffer_instance_id,

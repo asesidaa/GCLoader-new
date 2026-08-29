@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 
 #include <cstdint>
 #include <memory>
@@ -21,7 +21,7 @@ namespace gc::absolute_judgement
         std::uint32_t output_rate{};
         std::uint32_t source_rate{};
         std::int32_t game_time_offset_ms{};
-        std::shared_ptr<const gc::audio::ExactOutputClock> endpoint;
+        std::shared_ptr<const gc::audio::ExactJudgementTimeline> endpoint;
     };
 
     enum class JudgementClockStatus : std::uint8_t
@@ -65,7 +65,7 @@ namespace gc::absolute_judgement
         std::int32_t game_time_offset_ms{};
         std::uint64_t pending_buffer_instance_id{};
         std::uint64_t pending_endpoint_generation{};
-        std::shared_ptr<const gc::audio::ExactOutputClock> pending_endpoint;
+        std::shared_ptr<const gc::audio::ExactJudgementTimeline> pending_endpoint;
         std::shared_ptr<gc::audio::AudioCursorTimeline> pending_history;
         std::optional<JudgementStageClockAnchor> anchor;
     };
@@ -80,7 +80,7 @@ namespace gc::absolute_judgement
         [[nodiscard]] const JudgementStageClockAnchor& anchor() const noexcept;
 
         [[nodiscard]] JudgementClockResult TryBind(const gc::audio::GameplayAudioCursorObservation& selected,
-                                                   const std::shared_ptr<const gc::audio::ExactOutputClock>& endpoint,
+                                                    const std::shared_ptr<const gc::audio::ExactJudgementTimeline>& endpoint,
                                                    std::span<gc::audio::ExactPlaybackEpoch> scratch) noexcept;
 
         [[nodiscard]] JudgementClockResult Resolve(const gc::timing::AbsoluteHostTime& timestamp,

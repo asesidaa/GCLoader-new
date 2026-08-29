@@ -787,7 +787,7 @@ namespace gc::config
 
             audio::AudioBackendSettings audio_selection =
                 audio::DirectSoundSettings{};
-            std::optional<audio::ExactOutputClockDomain> clock_domain;
+            std::optional<audio::ExactJudgementTimelineDomain> clock_domain;
             if (audio_backend ==
                 audio::AudioBackend::wasapi_exclusive)
             {
@@ -796,7 +796,7 @@ namespace gc::config
                         document.experimental()
                                 .wasapi_exclusive_buffer_ms()),
                 };
-                clock_domain = audio::ExactOutputClockDomain::WasapiQpc;
+                clock_domain = audio::ExactJudgementTimelineDomain::WasapiQpc;
             }
             else if (audio_backend == audio::AudioBackend::asio)
             {
@@ -809,8 +809,8 @@ namespace gc::config
                                 .asio_output_base_channel()),
                 };
                 clock_domain =
-                    audio::ExactOutputClockDomain::
-                    AsioMultimediaMilliseconds;
+                    audio::ExactJudgementTimelineDomain::
+                    LogicalMultimediaMilliseconds;
             }
 
             std::optional<nesys_service::RegistryOverrideValues>

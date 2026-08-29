@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 #include "Patches/AbsoluteJudgement/JudgementScope.h"
 
@@ -14,7 +14,7 @@ namespace gc::absolute_judgement {
 
 void InitializeAbsoluteJudgementRuntime(
     std::uintptr_t executable_base,
-    gc::audio::ExactOutputClockDomain expected_domain) noexcept;
+    gc::audio::ExactJudgementTimelineDomain expected_domain) noexcept;
 
 void BeginAbsoluteJudgementSemanticStage(
     std::uintptr_t tune_manager) noexcept;

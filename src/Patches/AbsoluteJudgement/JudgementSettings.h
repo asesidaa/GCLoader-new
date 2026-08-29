@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 #include "Audio/AudioSettings.h"
 
 #include <cstdint>
@@ -36,7 +36,7 @@ namespace gc::absolute_judgement
             return audio_backend_;
         }
 
-        [[nodiscard]] std::optional<audio::ExactOutputClockDomain>
+        [[nodiscard]] std::optional<audio::ExactJudgementTimelineDomain>
         expected_clock_domain() const noexcept
         {
             return expected_clock_domain_;
@@ -48,7 +48,7 @@ namespace gc::absolute_judgement
             std::uint32_t target_fps,
             std::uint32_t input_rate_hz,
             audio::AudioBackend audio_backend,
-            std::optional<audio::ExactOutputClockDomain>
+            std::optional<audio::ExactJudgementTimelineDomain>
             expected_clock_domain) noexcept
             : enabled_(enabled),
               target_fps_(target_fps),
@@ -63,6 +63,6 @@ namespace gc::absolute_judgement
         std::uint32_t target_fps_{};
         std::uint32_t input_rate_hz_{};
         audio::AudioBackend audio_backend_{};
-        std::optional<audio::ExactOutputClockDomain> expected_clock_domain_;
+        std::optional<audio::ExactJudgementTimelineDomain> expected_clock_domain_;
     };
 } // namespace gc::absolute_judgement

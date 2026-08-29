@@ -39,7 +39,7 @@ namespace gc::absolute_judgement
             }
         }
 
-        [[nodiscard]] JudgementClockResult EndpointFailure(const gc::audio::ExactOutputClockResult& endpoint,
+        [[nodiscard]] JudgementClockResult EndpointFailure(const gc::audio::ExactJudgementTimelineResult& endpoint,
                                                            const bool before_binding) noexcept
         {
             return {
@@ -48,9 +48,9 @@ namespace gc::absolute_judgement
                                ? (before_binding ? JudgementClockFailure::StageOriginHistoryLost
                                                  : JudgementClockFailure::EndpointProjectionDiscontinuous)
                                : JudgementClockFailure::None,
-                .output_frame = endpoint.output_frame,
-                .endpoint_anchor_sequence = endpoint.anchor_sequence,
-                .endpoint_position = endpoint.anchor_endpoint_position,
+                .output_frame = endpoint.logical_output_frame,
+                .endpoint_anchor_sequence = endpoint.provider_anchor_sequence,
+                .endpoint_position = endpoint.provider_position,
             };
         }
     } // namespace
@@ -78,7 +78,7 @@ namespace gc::absolute_judgement
 
     JudgementClockResult JudgementClockResolver::TryBind(
         const gc::audio::GameplayAudioCursorObservation& selected,
-        const std::shared_ptr<const gc::audio::ExactOutputClock>& endpoint,
+        const std::shared_ptr<const gc::audio::ExactJudgementTimeline>& endpoint,
         const std::span<ExactPlaybackEpoch> scratch) noexcept
     {
         if (bound())
@@ -97,7 +97,7 @@ namespace gc::absolute_judgement
             return {.status = JudgementClockStatus::Pending};
         }
 
-        const auto endpoint_generation = endpoint->info().endpoint_generation;
+        const auto endpoint_generation = endpoint->info().timeline_generation;
         if (endpoint_generation == 0)
         {
             return {
@@ -108,7 +108,7 @@ namespace gc::absolute_judgement
         if (binding_.pending_endpoint)
         {
             if (binding_.pending_endpoint.get() != endpoint.get() ||
-                binding_.pending_endpoint->info().endpoint_generation != endpoint_generation)
+                binding_.pending_endpoint->info().timeline_generation != endpoint_generation)
             {
                 return {
                     .status = JudgementClockStatus::UnsupportedContinuity,
@@ -169,14 +169,14 @@ namespace gc::absolute_judgement
 
         const auto entry_output =
             endpoint->Resolve(binding_.stage_entry_time, gc::audio::ExactClockResolveIntent::FinalizedTimestamp);
-        if (entry_output.endpoint_generation != endpoint_generation)
+        if (entry_output.timeline_generation != endpoint_generation)
         {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
                 .failure = JudgementClockFailure::EndpointGenerationChanged,
             };
         }
-        if (entry_output.status != ExactClockStatus::Resolved || !entry_output.output_frame)
+        if (entry_output.status != ExactClockStatus::Resolved || !entry_output.logical_output_frame)
         {
             return EndpointFailure(entry_output, true);
         }
@@ -188,9 +188,9 @@ namespace gc::absolute_judgement
             return {
                 .status = JudgementClockStatus::HistoryLostBeforeBinding,
                 .failure = JudgementClockFailure::StageOriginHistoryLost,
-                .output_frame = entry_output.output_frame,
-                .endpoint_anchor_sequence = entry_output.anchor_sequence,
-                .endpoint_position = entry_output.anchor_endpoint_position,
+                .output_frame = entry_output.logical_output_frame,
+                .endpoint_anchor_sequence = entry_output.provider_anchor_sequence,
+                .endpoint_position = entry_output.provider_position,
             };
         }
         if (history_status.status == ExactClockStatus::Pending ||
@@ -198,18 +198,18 @@ namespace gc::absolute_judgement
         {
             return {
                 .status = JudgementClockStatus::Pending,
-                .output_frame = entry_output.output_frame,
-                .endpoint_anchor_sequence = entry_output.anchor_sequence,
-                .endpoint_position = entry_output.anchor_endpoint_position,
+                .output_frame = entry_output.logical_output_frame,
+                .endpoint_anchor_sequence = entry_output.provider_anchor_sequence,
+                .endpoint_position = entry_output.provider_position,
             };
         }
         if (history_status.status == ExactClockStatus::TemporarilyUnavailable)
         {
             return {
                 .status = JudgementClockStatus::TemporarilyUnavailable,
-                .output_frame = entry_output.output_frame,
-                .endpoint_anchor_sequence = entry_output.anchor_sequence,
-                .endpoint_position = entry_output.anchor_endpoint_position,
+                .output_frame = entry_output.logical_output_frame,
+                .endpoint_anchor_sequence = entry_output.provider_anchor_sequence,
+                .endpoint_position = entry_output.provider_position,
             };
         }
         if (history_status.status != ExactClockStatus::Resolved)
@@ -217,9 +217,9 @@ namespace gc::absolute_judgement
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
                 .failure = JudgementClockFailure::PlaybackHistoryObjectChangedBeforeAnchor,
-                .output_frame = entry_output.output_frame,
-                .endpoint_anchor_sequence = entry_output.anchor_sequence,
-                .endpoint_position = entry_output.anchor_endpoint_position,
+                .output_frame = entry_output.logical_output_frame,
+                .endpoint_anchor_sequence = entry_output.provider_anchor_sequence,
+                .endpoint_position = entry_output.provider_position,
             };
         }
 
@@ -242,7 +242,7 @@ namespace gc::absolute_judgement
                     .failure = JudgementClockFailure::RationalOperationUnrepresentable,
                 };
             }
-            if (output_origin->Compare(*entry_output.output_frame) < 0)
+            if (output_origin->Compare(*entry_output.logical_output_frame) < 0)
             {
                 continue;
             }
@@ -264,9 +264,9 @@ namespace gc::absolute_judgement
         {
             return {
                 .status = JudgementClockStatus::Pending,
-                .output_frame = entry_output.output_frame,
-                .endpoint_anchor_sequence = entry_output.anchor_sequence,
-                .endpoint_position = entry_output.anchor_endpoint_position,
+                .output_frame = entry_output.logical_output_frame,
+                .endpoint_anchor_sequence = entry_output.provider_anchor_sequence,
+                .endpoint_position = entry_output.provider_position,
             };
         }
 
@@ -295,7 +295,7 @@ namespace gc::absolute_judgement
         }
         const auto& stage_anchor = *binding_.anchor;
         if (!stage_anchor.endpoint || stage_anchor.endpoint_generation == 0 ||
-            stage_anchor.endpoint->info().endpoint_generation != stage_anchor.endpoint_generation)
+            stage_anchor.endpoint->info().timeline_generation != stage_anchor.endpoint_generation)
         {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
@@ -305,14 +305,14 @@ namespace gc::absolute_judgement
         }
 
         const auto endpoint = stage_anchor.endpoint->Resolve(timestamp, intent);
-        if (endpoint.endpoint_generation != stage_anchor.endpoint_generation)
+        if (endpoint.timeline_generation != stage_anchor.endpoint_generation)
         {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
                 .failure = JudgementClockFailure::EndpointGenerationChanged,
             };
         }
-        if (endpoint.status != ExactClockStatus::Resolved || !endpoint.output_frame)
+        if (endpoint.status != ExactClockStatus::Resolved || !endpoint.logical_output_frame)
         {
             return EndpointFailure(endpoint, false);
         }
@@ -330,7 +330,7 @@ namespace gc::absolute_judgement
         }
         const auto source_origin_seconds = source_origin->Multiply(1, stage_anchor.source_rate);
         const auto game_offset_seconds = CheckedRational::Whole(stage_anchor.game_time_offset_ms).Multiply(1, 1000);
-        const auto output_delta = endpoint.output_frame->Subtract(*output_origin);
+        const auto output_delta = endpoint.logical_output_frame->Subtract(*output_origin);
         if (!source_origin_seconds || !game_offset_seconds || !output_delta)
         {
             return {
@@ -358,10 +358,10 @@ namespace gc::absolute_judgement
 
         return {
             .status = JudgementClockStatus::Resolved,
-            .output_frame = endpoint.output_frame,
+            .output_frame = endpoint.logical_output_frame,
             .judgement_seconds = *judgement,
-            .endpoint_anchor_sequence = endpoint.anchor_sequence,
-            .endpoint_position = endpoint.anchor_endpoint_position,
+            .endpoint_anchor_sequence = endpoint.provider_anchor_sequence,
+            .endpoint_position = endpoint.provider_position,
         };
     }
 } // namespace gc::absolute_judgement

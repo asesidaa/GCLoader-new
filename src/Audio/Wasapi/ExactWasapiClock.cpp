@@ -104,8 +104,9 @@ namespace gc::audio
             return *delta;
         }
 
-        ExactOutputClockResult Result(ExactClockStatus status, std::uint64_t endpoint_generation,
-                                      std::uint64_t submitted_output_tail = 0, std::uint64_t anchor_sequence = 0,
+        ExactJudgementTimelineResult Result(ExactClockStatus status, std::uint64_t endpoint_generation,
+                                            std::uint64_t submitted_output_tail = 0,
+                                            std::uint64_t anchor_sequence = 0,
                                       // Keep this small optional value parameter self-contained in the result
                                       // helper.
                                       // ReSharper disable once CppPassValueParameterByConstReference
@@ -113,11 +114,11 @@ namespace gc::audio
         {
             return {
                 .status = status,
-                .endpoint_generation = endpoint_generation,
-                .output_frame = std::nullopt,
-                .submitted_output_tail = submitted_output_tail,
-                .anchor_sequence = anchor_sequence,
-                .anchor_endpoint_position = anchor_endpoint_position,
+                .timeline_generation = endpoint_generation,
+                .logical_output_frame = std::nullopt,
+                .available_output_tail = submitted_output_tail,
+                .provider_anchor_sequence = anchor_sequence,
+                .provider_position = anchor_endpoint_position,
             };
         }
 
@@ -293,7 +294,7 @@ namespace gc::audio
         return false;
     }
 
-    ExactOutputClockResult ExactWasapiClock::ResolveQpc(std::int64_t raw_qpc_ticks) const noexcept
+    ExactJudgementTimelineResult ExactWasapiClock::ResolveQpc(std::int64_t raw_qpc_ticks) const noexcept
     {
         if (invalidated_.load(kExactClockAtomicOrder))
         {
@@ -428,16 +429,16 @@ namespace gc::audio
 
         return {
             .status = ExactClockStatus::Resolved,
-            .endpoint_generation = endpoint_generation_,
-            .output_frame = *output_frame,
-            .submitted_output_tail = anchor.submitted_output_tail,
-            .anchor_sequence = anchor.sequence,
-            .anchor_endpoint_position = anchor.endpoint_position,
+            .timeline_generation = endpoint_generation_,
+            .logical_output_frame = *output_frame,
+            .available_output_tail = anchor.submitted_output_tail,
+            .provider_anchor_sequence = anchor.sequence,
+            .provider_position = anchor.endpoint_position,
         };
     }
 
-    ExactOutputClockResult ExactWasapiClock::Resolve(const gc::timing::AbsoluteHostTime& timestamp,
-                                                     const ExactClockResolveIntent) const noexcept
+    ExactJudgementTimelineResult ExactWasapiClock::Resolve(const gc::timing::AbsoluteHostTime& timestamp,
+                                                           const ExactClockResolveIntent) const noexcept
     {
         const auto result = ResolveQpc(timestamp.qpc_ticks);
         switch (result.status)
@@ -464,20 +465,20 @@ namespace gc::audio
         return result;
     }
 
-    ExactOutputClockInfo ExactWasapiClock::info() const noexcept
+    ExactJudgementTimelineInfo ExactWasapiClock::info() const noexcept
     {
         return {
-            .domain = ExactOutputClockDomain::WasapiQpc,
-            .endpoint_generation = endpoint_generation_,
+            .domain = ExactJudgementTimelineDomain::WasapiQpc,
+            .timeline_generation = endpoint_generation_,
             .qpc_frequency = qpc_frequency_,
-            .output_sample_rate = output_sample_rate_,
-            .period_frames = period_frames_,
-            .output_latency_frames = 0,
+            .logical_output_rate = output_sample_rate_,
+            .provider_period_frames = period_frames_,
+            .provider_output_latency_frames = 0,
             .timestamp_quantum_ns = 0,
         };
     }
 
-    ExactOutputClockCounters ExactWasapiClock::counters() const noexcept
+    ExactJudgementTimelineCounters ExactWasapiClock::counters() const noexcept
     {
         return {
             .publication_count = published_count_.load(kExactClockAtomicOrder),
@@ -506,8 +507,8 @@ namespace gc::audio
 
     std::shared_ptr<const ExactWasapiClock> AcquireExactWasapiClock() noexcept
     {
-        auto provider = AcquireExactOutputClock();
-        if (provider == nullptr || provider->info().domain != ExactOutputClockDomain::WasapiQpc)
+        auto provider = AcquireExactJudgementTimeline();
+        if (provider == nullptr || provider->info().domain != ExactJudgementTimelineDomain::WasapiQpc)
         {
             return nullptr;
         }

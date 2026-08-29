@@ -12,7 +12,7 @@
 #include "Audio/Asio/ExactAsioClock.h"
 #include "Audio/Asio/AsioSampleConverter.h"
 #include "Audio/Asio/AsioSession.h"
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 #include "Audio/Mixer/AudioRenderCore.h"
 
 #include <Windows.h>
@@ -666,7 +666,7 @@ namespace gc::audio
                                                         ? timeline->exact_buffer_instance_id()
                                                         : 0;
                     const auto endpoint_generation = exact_clock_ != nullptr
-                                                         ? exact_clock_->info().endpoint_generation
+                                                         ? exact_clock_->info().timeline_generation
                                                          : 0;
                     if (exact_clock_ == nullptr || timeline == nullptr ||
                         buffer_instance_id == 0 || endpoint_generation == 0 ||
@@ -1379,7 +1379,7 @@ namespace gc::audio
                 {
                     const auto callback = callback_runtime_->Snapshot();
                     const auto endpoint_generation =
-                        detail::NextExactOutputClockGeneration();
+                        detail::NextExactJudgementTimelineGeneration();
                     if (endpoint_generation == 0 || callback.qpc_frequency == 0 ||
                         callback.qpc_frequency > static_cast<std::uint64_t>(
                             (std::numeric_limits<std::int64_t>::max)()))
@@ -1401,7 +1401,7 @@ namespace gc::audio
                             "Could not allocate the ASIO logical judgement clock"));
                     }
                     exact_endpoint_generation_ = endpoint_generation;
-                    if (!detail::RegisterExactOutputClock(exact_clock_))
+                    if (!detail::RegisterExactJudgementTimeline(exact_clock_))
                     {
                         return std::unexpected(Failure(
                             AsioFailureStage::startup_clock,
@@ -2625,7 +2625,7 @@ namespace gc::audio
                     exact_clock_->Invalidate();
                     if (exact_clock_registered_)
                     {
-                        detail::UnregisterExactOutputClock(
+                        detail::UnregisterExactJudgementTimeline(
                             exact_endpoint_generation_);
                     }
                     exact_clock_registered_ = false;
@@ -3295,7 +3295,7 @@ namespace gc::audio
                                        ? exact_clock_->counters()
                                        : has_final_exact_clock_counters_
                                        ? final_exact_clock_counters_
-                                       : ExactOutputClockCounters{};
+                                       : ExactJudgementTimelineCounters{};
                 const auto render = render_diagnostics_.Snapshot();
                 const auto submitted_tail =
                     has_final_submitted_tail_snapshot_
@@ -3459,7 +3459,7 @@ namespace gc::audio
             std::unique_ptr<AsioCallbackRuntime> callback_runtime_;
             std::unique_ptr<AudioRenderCore> render_core_;
             std::shared_ptr<ExactAsioClock> exact_clock_;
-            ExactOutputClockCounters final_exact_clock_counters_{};
+            ExactJudgementTimelineCounters final_exact_clock_counters_{};
             bool has_final_exact_clock_counters_{};
             bool exact_clock_registered_{};
             std::uint64_t exact_endpoint_generation_{};

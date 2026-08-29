@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Audio/ExactOutputClock.h"
+#include "Audio/ExactJudgementTimeline.h"
 
 #include <atomic>
 // ReSharper disable once CppUnusedIncludeDirective
@@ -20,7 +20,7 @@ namespace gc::audio
         std::uint64_t submitted_output_tail{};
     };
 
-    class ExactWasapiClock final : public ExactOutputClock
+    class ExactWasapiClock final : public ExactJudgementTimeline
     {
     public:
         ~ExactWasapiClock() override;
@@ -31,11 +31,11 @@ namespace gc::audio
                                                         std::uint32_t period_frames) noexcept;
         void Publish(const ExactWasapiAnchor&) noexcept;
         void Invalidate() noexcept override;
-        [[nodiscard]] ExactOutputClockResult Resolve(const gc::timing::AbsoluteHostTime& timestamp,
-                                                     ExactClockResolveIntent intent) const noexcept override;
-        [[nodiscard]] ExactOutputClockInfo info() const noexcept override;
-        [[nodiscard]] ExactOutputClockCounters counters() const noexcept override;
-        ExactOutputClockResult ResolveQpc(std::int64_t raw_qpc_ticks) const noexcept;
+        [[nodiscard]] ExactJudgementTimelineResult Resolve(const gc::timing::AbsoluteHostTime& timestamp,
+                                                           ExactClockResolveIntent intent) const noexcept override;
+        [[nodiscard]] ExactJudgementTimelineInfo info() const noexcept override;
+        [[nodiscard]] ExactJudgementTimelineCounters counters() const noexcept override;
+        ExactJudgementTimelineResult ResolveQpc(std::int64_t raw_qpc_ticks) const noexcept;
         [[nodiscard]] std::uint64_t endpoint_generation() const noexcept;
         [[nodiscard]] std::int64_t qpc_frequency() const noexcept;
         [[nodiscard]] std::uint64_t publication_count() const noexcept;
