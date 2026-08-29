@@ -7,715 +7,825 @@
 #include <type_traits>
 #include <utility>
 
-namespace gc::audio {
+namespace gc::audio
+{
+    namespace
+    {
+        constexpr DWORD kRenderWaitMs = 2'000;
 
-namespace {
+        static_assert(std::is_nothrow_move_constructible_v<EndpointInitialization>);
+        static_assert(std::is_nothrow_move_assignable_v<EndpointInitialization>);
+        static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
+        static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
 
-constexpr DWORD kRenderWaitMs = 2'000;
-
-static_assert(std::is_nothrow_move_constructible_v<EndpointInitialization>);
-static_assert(std::is_nothrow_move_assignable_v<EndpointInitialization>);
-static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
-static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
-
-HRESULT LastErrorResult() noexcept {
-    const auto error = GetLastError();
-    return HRESULT_FROM_WIN32(error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error);
-}
-
-} // namespace
-
-ExclusiveAudioEngine::ExclusiveAudioEngine(
-    std::unique_ptr<IWasapiApi> api,
-    std::shared_ptr<IAudioEngineObserver> observer,
-    REFERENCE_TIME configured_duration,
-    bool enable_absolute_time_judgement,
-    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
-    DWORD summary_interval_ms) noexcept
-    : pending_api_(std::move(api)),
-      configured_duration_(configured_duration),
-      enable_absolute_time_judgement_(enable_absolute_time_judgement),
-      observer_(std::move(observer)),
-      mixer_allocations_(std::move(mixer_allocations)),
-      summary_interval_ms_(summary_interval_ms) {}
-
-ExclusiveAudioEngine::~ExclusiveAudioEngine() {
-    if (shutdown_event_ != nullptr) {
-        SetEvent(shutdown_event_);
-    }
-    if (audio_thread_.joinable()) {
-        if (audio_exited_event_ != nullptr) {
-            WaitForSingleObject(audio_exited_event_, INFINITE);
+        HRESULT LastErrorResult() noexcept
+        {
+            const auto error = GetLastError();
+            return HRESULT_FROM_WIN32(error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error);
         }
-        audio_thread_.join();
-    }
-    if (monitor_thread_.joinable()) {
-        monitor_thread_.join();
+    } // namespace
+
+    ExclusiveAudioEngine::ExclusiveAudioEngine(
+        std::unique_ptr<IWasapiApi> api,
+        std::shared_ptr<IAudioEngineObserver> observer,
+        REFERENCE_TIME configured_duration,
+        bool enable_absolute_time_judgement,
+        std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+        DWORD summary_interval_ms) noexcept
+        : pending_api_(std::move(api)),
+          configured_duration_(configured_duration),
+          enable_absolute_time_judgement_(enable_absolute_time_judgement),
+          observer_(std::move(observer)),
+          mixer_allocations_(std::move(mixer_allocations)),
+          summary_interval_ms_(summary_interval_ms)
+    {
     }
 
-    CleanupExactClock();
-
-    // Every finite post-create path resets the endpoint on the audio thread.
-    // If a future regression violates that invariant, abandon rather than run
-    // thread-affine endpoint destruction on this controlling thread.
-    if (endpoint_ != nullptr) {
-        static_cast<void>(endpoint_.release());
-    }
-    CloseControlEvents();
-}
-
-std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
-    std::unique_ptr<IWasapiApi> api,
-    std::shared_ptr<IAudioEngineObserver> observer,
-    DWORD timeout_ms,
-    REFERENCE_TIME configured_duration,
-    bool enable_absolute_time_judgement,
-    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
-    AudioStartupFailure* startup_failure) noexcept {
-    return detail::StartExclusiveAudioEngineAndWait(
-        std::move(api),
-        std::move(observer),
-        timeout_ms,
-        configured_duration,
-        enable_absolute_time_judgement,
-        std::move(mixer_allocations),
-        detail::ExclusiveAudioEngineTiming{},
-        startup_failure);
-}
-
-std::unique_ptr<ExclusiveAudioEngine>
-detail::StartExclusiveAudioEngineAndWait(
-    std::unique_ptr<IWasapiApi> api,
-    std::shared_ptr<IAudioEngineObserver> observer,
-    DWORD timeout_ms,
-    REFERENCE_TIME configured_duration,
-    bool enable_absolute_time_judgement,
-    std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
-    const ExclusiveAudioEngineTiming& timing,
-    AudioStartupFailure* startup_failure) noexcept {
-    if (startup_failure != nullptr) {
-        *startup_failure = {};
-    }
-    if (api == nullptr || observer == nullptr) {
-        if (startup_failure != nullptr) {
-            startup_failure->failure = {
-                AudioFailureStage::InitializeMixer, E_INVALIDARG};
+    ExclusiveAudioEngine::~ExclusiveAudioEngine()
+    {
+        if (shutdown_event_ != nullptr)
+        {
+            SetEvent(shutdown_event_);
         }
-        return nullptr;
+        if (audio_thread_.joinable())
+        {
+            if (audio_exited_event_ != nullptr)
+            {
+                WaitForSingleObject(audio_exited_event_, INFINITE);
+            }
+            audio_thread_.join();
+        }
+        if (monitor_thread_.joinable())
+        {
+            monitor_thread_.join();
+        }
+
+        CleanupExactClock();
+
+        // Every finite post-create path resets the endpoint on the audio thread.
+        // If a future regression violates that invariant, abandon rather than run
+        // thread-affine endpoint destruction on this controlling thread.
+        if (endpoint_ != nullptr)
+        {
+            static_cast<void>(endpoint_.release()); // NOLINT(bugprone-unused-return-value)
+        }
+        CloseControlEvents();
     }
 
-    auto engine = std::unique_ptr<ExclusiveAudioEngine>(
-        new (std::nothrow) ExclusiveAudioEngine(
+    std::unique_ptr<ExclusiveAudioEngine> ExclusiveAudioEngine::StartAndWait(
+        std::unique_ptr<IWasapiApi> api,
+        std::shared_ptr<IAudioEngineObserver> observer,
+        DWORD timeout_ms,
+        REFERENCE_TIME configured_duration,
+        bool enable_absolute_time_judgement,
+        std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+        AudioStartupFailure* startup_failure) noexcept
+    {
+        return detail::StartExclusiveAudioEngineAndWait(
             std::move(api),
             std::move(observer),
+            timeout_ms,
             configured_duration,
             enable_absolute_time_judgement,
             std::move(mixer_allocations),
-            timing.summary_interval_ms));
-    if (engine == nullptr) {
-        if (startup_failure != nullptr) {
-            startup_failure->failure = {
-                AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
-        }
-        return nullptr;
-    }
-    if (!engine->CreateControlEvents() || !engine->StartThreads()) {
-        if (startup_failure != nullptr) {
-            *startup_failure = std::move(engine->startup_failure_);
-        }
-        return nullptr;
+            detail::ExclusiveAudioEngineTiming{},
+            startup_failure);
     }
 
-    const auto wait = WaitForSingleObject(
-        engine->initialization_event_,
-        detail::ClampExclusiveAudioStartupTimeout(timeout_ms));
-    if (wait == WAIT_TIMEOUT) {
-        if (startup_failure != nullptr) {
-            startup_failure->failure = {
-                AudioFailureStage::InitializationTimeout,
-                HRESULT_FROM_WIN32(ERROR_TIMEOUT)};
+    std::unique_ptr<ExclusiveAudioEngine>
+    detail::StartExclusiveAudioEngineAndWait(
+        std::unique_ptr<IWasapiApi> api,
+        std::shared_ptr<IAudioEngineObserver> observer,
+        DWORD timeout_ms,
+        REFERENCE_TIME configured_duration,
+        bool enable_absolute_time_judgement,
+        std::shared_ptr<const ma_allocation_callbacks> mixer_allocations,
+        const ExclusiveAudioEngineTiming& timing,
+        AudioStartupFailure* startup_failure) noexcept
+    {
+        if (startup_failure != nullptr)
+        {
+            *startup_failure = {};
         }
-        // Initialization may be stuck inside COM or a driver. The enabled
-        // caller reports a fatal startup error immediately, so blocking or
-        // destroying this thread-affine object here is forbidden.
-        static_cast<void>(engine.release());
-        return nullptr;
-    }
-    if (wait != WAIT_OBJECT_0) {
-        if (startup_failure != nullptr) {
-            startup_failure->failure = {
-                AudioFailureStage::InitializationTimeout,
-                wait == WAIT_FAILED ? LastErrorResult() : E_UNEXPECTED};
+        if (api == nullptr || observer == nullptr)
+        {
+            if (startup_failure != nullptr)
+            {
+                startup_failure->failure = {
+                    AudioFailureStage::InitializeMixer, E_INVALIDARG
+                };
+            }
+            return nullptr;
         }
-        static_cast<void>(engine.release());
-        return nullptr;
-    }
 
-    if (!engine->initialization_succeeded_.load(std::memory_order_acquire)) {
-        if (startup_failure != nullptr) {
-            *startup_failure = std::move(engine->startup_failure_);
+        auto engine = std::unique_ptr<ExclusiveAudioEngine>(
+            new(std::nothrow) ExclusiveAudioEngine(
+                std::move(api),
+                std::move(observer),
+                configured_duration,
+                enable_absolute_time_judgement,
+                std::move(mixer_allocations),
+                timing.summary_interval_ms));
+        if (engine == nullptr)
+        {
+            if (startup_failure != nullptr)
+            {
+                startup_failure->failure = {
+                    AudioFailureStage::InitializeMixer, E_OUTOFMEMORY
+                };
+            }
+            return nullptr;
         }
-        return nullptr;
+        if (!engine->CreateControlEvents() || !engine->StartThreads())
+        {
+            if (startup_failure != nullptr)
+            {
+                *startup_failure = std::move(engine->startup_failure_);
+            }
+            return nullptr;
+        }
+
+        const auto wait = WaitForSingleObject(
+            engine->initialization_event_,
+            detail::ClampExclusiveAudioStartupTimeout(timeout_ms));
+        if (wait == WAIT_TIMEOUT)
+        {
+            if (startup_failure != nullptr)
+            {
+                startup_failure->failure = {
+                    AudioFailureStage::InitializationTimeout,
+                    HRESULT_FROM_WIN32(ERROR_TIMEOUT)
+                };
+            }
+            // Initialization may be stuck inside COM or a driver. The enabled
+            // caller reports a fatal startup error immediately, so blocking or
+            // destroying this thread-affine object here is forbidden.
+            static_cast<void>(engine.release()); // NOLINT(bugprone-unused-return-value)
+            return nullptr;
+        }
+        if (wait != WAIT_OBJECT_0)
+        {
+            if (startup_failure != nullptr)
+            {
+                startup_failure->failure = {
+                    AudioFailureStage::InitializationTimeout,
+                    wait == WAIT_FAILED ? LastErrorResult() : E_UNEXPECTED
+                };
+            }
+            static_cast<void>(engine.release()); // NOLINT(bugprone-unused-return-value)
+            return nullptr;
+        }
+
+        if (!engine->initialization_succeeded_.load(std::memory_order_acquire))
+        {
+            if (startup_failure != nullptr)
+            {
+                *startup_failure = std::move(engine->startup_failure_);
+            }
+            return nullptr;
+        }
+
+        engine->observer_->StartupSucceeded(engine->initialization_);
+        SetEvent(engine->startup_reported_event_);
+        return engine;
     }
 
-    engine->observer_->StartupSucceeded(engine->initialization_);
-    SetEvent(engine->startup_reported_event_);
-    return engine;
-}
-
-bool ExclusiveAudioEngine::CreateControlEvents() noexcept {
-    initialization_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    startup_reported_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    fatal_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    shutdown_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    audio_exited_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (initialization_event_ != nullptr &&
-        startup_reported_event_ != nullptr && fatal_event_ != nullptr &&
-        shutdown_event_ != nullptr && audio_exited_event_ != nullptr) {
-        return true;
-    }
-    startup_failure_.failure = {
-        AudioFailureStage::InitializeMixer, LastErrorResult()};
-    return false;
-}
-
-bool ExclusiveAudioEngine::StartThreads() noexcept {
-    try {
-        monitor_thread_ = std::thread([this] { MonitorThreadMain(); });
-        audio_thread_ = std::thread([this] { AudioThreadMain(); });
-        return true;
-    } catch (const std::system_error&) {
+    bool ExclusiveAudioEngine::CreateControlEvents() noexcept
+    {
+        initialization_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        startup_reported_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        fatal_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        shutdown_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        audio_exited_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (initialization_event_ != nullptr &&
+            startup_reported_event_ != nullptr && fatal_event_ != nullptr &&
+            shutdown_event_ != nullptr && audio_exited_event_ != nullptr)
+        {
+            return true;
+        }
         startup_failure_.failure = {
-            AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
-    } catch (const std::bad_alloc&) {
-        startup_failure_.failure = {
-            AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
+            AudioFailureStage::InitializeMixer, LastErrorResult()
+        };
+        return false;
     }
-    if (initialization_event_ != nullptr) {
-        SetEvent(initialization_event_);
-    }
-    if (shutdown_event_ != nullptr) {
-        SetEvent(shutdown_event_);
-    }
-    return false;
-}
 
-void ExclusiveAudioEngine::AudioThreadMain() noexcept {
-    AudioFailure failure{};
-    EndpointInitialization attempted{};
-    bool endpoint_initialized = false;
-    try {
-        endpoint_ = WasapiEndpoint::Create(
-            std::move(pending_api_),
-            configured_duration_,
-            &attempted,
-            &failure);
-        if (endpoint_ == nullptr) {
-            SignalInitializationFailure(
-                failure, std::move(attempted));
-            SetEvent(audio_exited_event_);
-            return;
+    bool ExclusiveAudioEngine::StartThreads() noexcept
+    {
+        try
+        {
+            monitor_thread_ = std::thread([this] { MonitorThreadMain(); });
+            audio_thread_ = std::thread([this] { AudioThreadMain(); });
+            return true;
         }
+        catch (const std::system_error&)
+        {
+            startup_failure_.failure = {
+                AudioFailureStage::InitializeMixer, E_OUTOFMEMORY
+            };
+        }
+        catch (const std::bad_alloc&)
+        {
+            startup_failure_.failure = {
+                AudioFailureStage::InitializeMixer, E_OUTOFMEMORY
+            };
+        }
+        if (initialization_event_ != nullptr)
+        {
+            SetEvent(initialization_event_);
+        }
+        if (shutdown_event_ != nullptr)
+        {
+            SetEvent(shutdown_event_);
+        }
+        return false;
+    }
 
-        initialization_ = std::move(attempted);
-        endpoint_initialized = true;
-        const auto frames = initialization_.actual_buffer_frames;
-        const auto output_sample_rate = initialization_.has_selected_format
-            ? initialization_.selected_format.wave_format().nSamplesPerSec
-            : 0;
-        if (!initialization_.has_selected_format ||
-            !initialization_.selected_format.valid() ||
-            !IsSupportedEndpointSampleRate(output_sample_rate)) {
-            failure = {AudioFailureStage::InitializeMixer, E_INVALIDARG};
+    void ExclusiveAudioEngine::AudioThreadMain() noexcept
+    {
+        AudioFailure failure{};
+        EndpointInitialization attempted{};
+        bool endpoint_initialized = false;
+        try
+        {
+            endpoint_ = WasapiEndpoint::Create(
+                std::move(pending_api_),
+                configured_duration_,
+                &attempted,
+                &failure);
+            if (endpoint_ == nullptr)
+            {
+                SignalInitializationFailure(
+                    failure, std::move(attempted));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+
+            initialization_ = std::move(attempted);
+            endpoint_initialized = true;
+            const auto frames = initialization_.actual_buffer_frames;
+            const auto output_sample_rate = initialization_.has_selected_format
+                                                ? initialization_.selected_format.wave_format().nSamplesPerSec
+                                                : 0;
+            if (!initialization_.has_selected_format ||
+                !initialization_.selected_format.valid() ||
+                !IsSupportedEndpointSampleRate(output_sample_rate))
+            {
+                failure = {AudioFailureStage::InitializeMixer, E_INVALIDARG};
+                CleanupEndpointOnAudioThread();
+                SignalInitializationFailure(
+                    failure, std::move(initialization_));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+            endpoint_buffer_frames_.store(frames, std::memory_order_release);
+            output_sample_rate_.store(
+                output_sample_rate, std::memory_order_release);
+
+            const auto presented_clock_actions =
+                ProductionWasapiPresentedOutputClockActions();
+            auto presented_clock = std::make_unique<WasapiPresentedOutputClock>(
+                output_sample_rate,
+                presented_clock_actions);
+            presented_clock_ = presented_clock.get();
+            ma_result mixer_result = MA_ERROR;
+            render_core_ = AudioRenderCore::Create(
+                frames,
+                output_sample_rate,
+                std::move(mixer_allocations_),
+                std::move(presented_clock),
+                &mixer_result);
+            if (render_core_ == nullptr)
+            {
+                presented_clock_ = nullptr;
+                failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
+                CleanupEndpointOnAudioThread();
+                SignalInitializationFailure(
+                    failure, std::move(initialization_));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+
+            pcm16_mix_.resize(
+                static_cast<std::size_t>(frames) * kOutputChannels);
+
+            EndpointClockPosition initial_clock{};
+            if (FAILED(endpoint_->ReadClock(&initial_clock, &failure)))
+            {
+                CleanupEndpointOnAudioThread();
+                SignalInitializationFailure(
+                    failure, std::move(initialization_));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+            clock_mapper_.Reset(
+                initial_clock.position,
+                initialization_.clock_frequency,
+                0,
+                output_sample_rate);
+            pacing_tracker_.emplace(frames, output_sample_rate);
+
+            if (enable_absolute_time_judgement_)
+            {
+                const auto endpoint_generation =
+                    detail::NextExactJudgementTimelineGeneration();
+                if (endpoint_generation == 0 ||
+                    presented_clock_actions.qpc_frequency == 0 ||
+                    presented_clock_actions.qpc_frequency >
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max()))
+                {
+                    failure = {
+                        AudioFailureStage::InitializeMixer,
+                        E_UNEXPECTED,
+                    };
+                    CleanupEndpointOnAudioThread();
+                    SignalInitializationFailure(
+                        failure, std::move(initialization_));
+                    SetEvent(audio_exited_event_);
+                    return;
+                }
+                exact_clock_ = ExactWasapiClock::Create(
+                    endpoint_generation,
+                    output_sample_rate,
+                    initialization_.clock_frequency,
+                    static_cast<std::int64_t>(
+                        presented_clock_actions.qpc_frequency),
+                    frames);
+                if (exact_clock_ == nullptr ||
+                    !detail::RegisterExactJudgementTimeline(exact_clock_))
+                {
+                    failure = {
+                        AudioFailureStage::InitializeMixer,
+                        E_OUTOFMEMORY,
+                    };
+                    CleanupEndpointOnAudioThread();
+                    SignalInitializationFailure(
+                        failure, std::move(initialization_));
+                    SetEvent(audio_exited_event_);
+                    return;
+                }
+            }
+            current_submitted_lead_frames_.store(
+                frames, std::memory_order_relaxed);
+            minimum_submitted_lead_frames_.store(
+                frames, std::memory_order_relaxed);
+
+            if (FAILED(endpoint_->Start(&failure)))
+            {
+                CleanupEndpointOnAudioThread();
+                SignalInitializationFailure(
+                    failure, std::move(initialization_));
+                SetEvent(audio_exited_event_);
+                return;
+            }
+            last_qpc_100ns_ = 0;
+            has_last_qpc_sample_ = false;
+            actual_period_100ns_ = FramesToReferenceTime(
+                frames, output_sample_rate);
+            initialization_succeeded_.store(true, std::memory_order_release);
+            SetEvent(initialization_event_);
+
+            RenderLoop();
             CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(
-                failure, std::move(initialization_));
-            SetEvent(audio_exited_event_);
-            return;
         }
-        endpoint_buffer_frames_.store(frames, std::memory_order_release);
-        output_sample_rate_.store(
-            output_sample_rate, std::memory_order_release);
-
-        const auto presented_clock_actions =
-            ProductionWasapiPresentedOutputClockActions();
-        auto presented_clock = std::make_unique<WasapiPresentedOutputClock>(
-            output_sample_rate,
-            presented_clock_actions);
-        presented_clock_ = presented_clock.get();
-        ma_result mixer_result = MA_ERROR;
-        render_core_ = AudioRenderCore::Create(
-            frames,
-            output_sample_rate,
-            std::move(mixer_allocations_),
-            std::move(presented_clock),
-            &mixer_result);
-        if (render_core_ == nullptr) {
-            presented_clock_ = nullptr;
+        catch (const std::bad_alloc&)
+        {
             failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
             CleanupEndpointOnAudioThread();
             SignalInitializationFailure(
-                failure, std::move(initialization_));
-            SetEvent(audio_exited_event_);
-            return;
+                failure,
+                endpoint_initialized
+                    ? std::move(initialization_)
+                    : std::move(attempted));
         }
-
-        pcm16_mix_.resize(
-            static_cast<std::size_t>(frames) * kOutputChannels);
-
-        EndpointClockPosition initial_clock{};
-        if (FAILED(endpoint_->ReadClock(&initial_clock, &failure))) {
+        catch (...)
+        {
+            failure = {AudioFailureStage::InitializeMixer, E_UNEXPECTED};
             CleanupEndpointOnAudioThread();
             SignalInitializationFailure(
-                failure, std::move(initialization_));
-            SetEvent(audio_exited_event_);
-            return;
+                failure,
+                endpoint_initialized
+                    ? std::move(initialization_)
+                    : std::move(attempted));
         }
-        clock_mapper_.Reset(
-            initial_clock.position,
-            initialization_.clock_frequency,
-            0,
-            output_sample_rate);
-        pacing_tracker_.emplace(frames, output_sample_rate);
-
-        if (enable_absolute_time_judgement_) {
-            const auto endpoint_generation =
-                detail::NextExactJudgementTimelineGeneration();
-            if (endpoint_generation == 0 ||
-                presented_clock_actions.qpc_frequency == 0 ||
-                presented_clock_actions.qpc_frequency >
-                    static_cast<std::uint64_t>(
-                        std::numeric_limits<std::int64_t>::max())) {
-                failure = {
-                    AudioFailureStage::InitializeMixer,
-                    E_UNEXPECTED,
-                };
-                CleanupEndpointOnAudioThread();
-                SignalInitializationFailure(
-                    failure, std::move(initialization_));
-                SetEvent(audio_exited_event_);
-                return;
-            }
-            exact_clock_ = ExactWasapiClock::Create(
-                endpoint_generation,
-                output_sample_rate,
-                initialization_.clock_frequency,
-                static_cast<std::int64_t>(
-                    presented_clock_actions.qpc_frequency),
-                frames);
-            if (exact_clock_ == nullptr ||
-                !detail::RegisterExactJudgementTimeline(exact_clock_)) {
-                failure = {
-                    AudioFailureStage::InitializeMixer,
-                    E_OUTOFMEMORY,
-                };
-                CleanupEndpointOnAudioThread();
-                SignalInitializationFailure(
-                    failure, std::move(initialization_));
-                SetEvent(audio_exited_event_);
-                return;
-            }
-        }
-        current_submitted_lead_frames_.store(
-            frames, std::memory_order_relaxed);
-        minimum_submitted_lead_frames_.store(
-            frames, std::memory_order_relaxed);
-
-        if (FAILED(endpoint_->Start(&failure))) {
-            CleanupEndpointOnAudioThread();
-            SignalInitializationFailure(
-                failure, std::move(initialization_));
-            SetEvent(audio_exited_event_);
-            return;
-        }
-        last_qpc_100ns_ = 0;
-        has_last_qpc_sample_ = false;
-        actual_period_100ns_ = FramesToReferenceTime(
-            frames, output_sample_rate);
-        initialization_succeeded_.store(true, std::memory_order_release);
-        SetEvent(initialization_event_);
-
-        RenderLoop();
-        CleanupEndpointOnAudioThread();
-    } catch (const std::bad_alloc&) {
-        failure = {AudioFailureStage::InitializeMixer, E_OUTOFMEMORY};
-        CleanupEndpointOnAudioThread();
-        SignalInitializationFailure(
-            failure,
-            endpoint_initialized
-                ? std::move(initialization_)
-                : std::move(attempted));
-    } catch (...) {
-        failure = {AudioFailureStage::InitializeMixer, E_UNEXPECTED};
-        CleanupEndpointOnAudioThread();
-        SignalInitializationFailure(
-            failure,
-            endpoint_initialized
-                ? std::move(initialization_)
-                : std::move(attempted));
+        SetEvent(audio_exited_event_);
     }
-    SetEvent(audio_exited_event_);
-}
 
-void ExclusiveAudioEngine::RenderLoop() noexcept {
-    while (!ShutdownRequested() &&
-           failure_stage_.load(std::memory_order_acquire) ==
-               static_cast<std::uint32_t>(AudioFailureStage::None)) {
-        AudioFailure failure{};
-        if (FAILED(endpoint_->WaitForRender(kRenderWaitMs, &failure))) {
-            if (!ShutdownRequested()) {
+    void ExclusiveAudioEngine::RenderLoop() noexcept
+    {
+        while (!ShutdownRequested() &&
+            failure_stage_.load(std::memory_order_acquire) ==
+            static_cast<std::uint32_t>(AudioFailureStage::None))
+        {
+            AudioFailure failure{};
+            if (FAILED(endpoint_->WaitForRender(kRenderWaitMs, &failure)))
+            {
+                if (!ShutdownRequested())
+                {
+                    RecordRuntimeFailure(failure);
+                }
+                break;
+            }
+            if (ShutdownRequested() ||
+                failure_stage_.load(std::memory_order_acquire) !=
+                static_cast<std::uint32_t>(AudioFailureStage::None))
+            {
+                break;
+            }
+
+            EndpointClockPosition clock{};
+            if (FAILED(endpoint_->ReadClock(&clock, &failure)))
+            {
+                if (exact_clock_ != nullptr)
+                {
+                    exact_clock_->Invalidate();
+                }
+                static_cast<void>(endpoint_->TrySubmitSilence());
                 RecordRuntimeFailure(failure);
+                break;
             }
-            break;
-        }
-        if (ShutdownRequested() ||
-            failure_stage_.load(std::memory_order_acquire) !=
-                static_cast<std::uint32_t>(AudioFailureStage::None)) {
-            break;
-        }
+            CountLateWake(clock.qpc_100ns);
 
-        EndpointClockPosition clock{};
-        if (FAILED(endpoint_->ReadClock(&clock, &failure))) {
-            if (exact_clock_ != nullptr) {
-                exact_clock_->Invalidate();
+            const auto presented = clock_mapper_.ToOutputFrame(clock.position);
+            if (!presented.has_value() || !pacing_tracker_.has_value())
+            {
+                static_cast<void>(endpoint_->TrySubmitSilence());
+                RecordRuntimeFailure({
+                    AudioFailureStage::InvalidClockPosition,
+                    E_FAIL,
+                });
+                break;
             }
-            static_cast<void>(endpoint_->TrySubmitSilence());
-            RecordRuntimeFailure(failure);
-            break;
-        }
-        CountLateWake(clock.qpc_100ns);
 
-        const auto presented = clock_mapper_.ToOutputFrame(clock.position);
-        if (!presented.has_value() || !pacing_tracker_.has_value()) {
-            static_cast<void>(endpoint_->TrySubmitSilence());
-            RecordRuntimeFailure({
-                AudioFailureStage::InvalidClockPosition,
-                E_FAIL,
-            });
-            break;
-        }
+            const auto decision = pacing_tracker_->Plan(*presented);
+            if (decision.kind == OutputPacingDecisionKind::InvalidClock)
+            {
+                static_cast<void>(endpoint_->TrySubmitSilence());
+                RecordRuntimeFailure({
+                    AudioFailureStage::InvalidClockPosition,
+                    E_FAIL,
+                });
+                break;
+            }
+            if (decision.kind == OutputPacingDecisionKind::ChronicGap)
+            {
+                RecordPacingDecision(decision);
+                chronic_pacing_failures_.fetch_add(
+                    1, std::memory_order_relaxed);
+                static_cast<void>(endpoint_->TrySubmitSilence());
+                RecordRuntimeFailure({
+                    AudioFailureStage::ChronicOutputGap,
+                    E_FAIL,
+                });
+                break;
+            }
 
-        const auto decision = pacing_tracker_->Plan(*presented);
-        if (decision.kind == OutputPacingDecisionKind::InvalidClock) {
-            static_cast<void>(endpoint_->TrySubmitSilence());
-            RecordRuntimeFailure({
-                AudioFailureStage::InvalidClockPosition,
-                E_FAIL,
-            });
-            break;
-        }
-        if (decision.kind == OutputPacingDecisionKind::ChronicGap) {
+            const auto block = render_core_->Render(
+                MixerRenderTimeline{
+                    decision.block_begin,
+                    decision.discontinuity_frames,
+                });
+            if (enable_absolute_time_judgement_ &&
+                block.mixer_result != MA_SUCCESS)
+            {
+                static_cast<void>(endpoint_->TrySubmitSilence());
+                RecordRuntimeFailure({
+                    AudioFailureStage::InitializeMixer,
+                    E_FAIL,
+                });
+                break;
+            }
+            if (block.silence_substituted)
+            {
+                silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
+            }
+            ConvertFloatToPcm16(block.interleaved_stereo, pcm16_mix_);
+            if (FAILED(endpoint_->SubmitPcm16(pcm16_mix_, &failure)))
+            {
+                RecordRuntimeFailure(failure);
+                break;
+            }
+            if (!pacing_tracker_->Commit(decision))
+            {
+                RecordRuntimeFailure({
+                    AudioFailureStage::InvalidClockPosition,
+                    E_FAIL,
+                });
+                break;
+            }
+            const auto submitted_tail = pacing_tracker_->submitted_tail();
+            if (presented_clock_ != nullptr)
+            {
+                presented_clock_->Publish(
+                    *presented,
+                    clock.qpc_100ns,
+                    submitted_tail);
+            }
+            if (exact_clock_ != nullptr)
+            {
+                exact_clock_->Publish({
+                    ++exact_anchor_sequence_,
+                    exact_clock_->endpoint_generation(),
+                    clock.position,
+                    clock.qpc_100ns,
+                    clock_mapper_.mapping(),
+                    submitted_tail,
+                });
+            }
             RecordPacingDecision(decision);
-            chronic_pacing_failures_.fetch_add(
-                1, std::memory_order_relaxed);
-            static_cast<void>(endpoint_->TrySubmitSilence());
-            RecordRuntimeFailure({
-                AudioFailureStage::ChronicOutputGap,
-                E_FAIL,
-            });
-            break;
+            render_callbacks_.fetch_add(1, std::memory_order_relaxed);
         }
-
-        const auto block = render_core_->Render(
-            MixerRenderTimeline{
-                decision.block_begin,
-                decision.discontinuity_frames,
-            });
-        if (enable_absolute_time_judgement_ &&
-            block.mixer_result != MA_SUCCESS) {
-            static_cast<void>(endpoint_->TrySubmitSilence());
-            RecordRuntimeFailure({
-                AudioFailureStage::InitializeMixer,
-                E_FAIL,
-            });
-            break;
-        }
-        if (block.silence_substituted) {
-            silence_fallbacks_.fetch_add(1, std::memory_order_relaxed);
-        }
-        ConvertFloatToPcm16(block.interleaved_stereo, pcm16_mix_);
-        if (FAILED(endpoint_->SubmitPcm16(pcm16_mix_, &failure))) {
-            RecordRuntimeFailure(failure);
-            break;
-        }
-        if (!pacing_tracker_->Commit(decision)) {
-            RecordRuntimeFailure({
-                AudioFailureStage::InvalidClockPosition,
-                E_FAIL,
-            });
-            break;
-        }
-        const auto submitted_tail = pacing_tracker_->submitted_tail();
-        if (presented_clock_ != nullptr) {
-            presented_clock_->Publish(
-                *presented,
-                clock.qpc_100ns,
-                submitted_tail);
-        }
-        if (exact_clock_ != nullptr) {
-            exact_clock_->Publish({
-                ++exact_anchor_sequence_,
-                exact_clock_->endpoint_generation(),
-                clock.position,
-                clock.qpc_100ns,
-                clock_mapper_.mapping(),
-                submitted_tail,
-            });
-        }
-        RecordPacingDecision(decision);
-        render_callbacks_.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-// Monitoring performs a stateful wait/notification loop through external handles.
-// ReSharper disable once CppMemberFunctionMayBeConst
-void ExclusiveAudioEngine::MonitorThreadMain() noexcept {
-    if (WaitForSingleObject(initialization_event_, INFINITE) != WAIT_OBJECT_0 ||
-        !initialization_succeeded_.load(std::memory_order_acquire)) {
-        return;
     }
 
-    const HANDLE startup_controls[]{startup_reported_event_, shutdown_event_};
-    const auto startup_wait = WaitForMultipleObjects(
-        static_cast<DWORD>(std::size(startup_controls)),
-        startup_controls,
-        FALSE,
-        INFINITE);
-    if (startup_wait != WAIT_OBJECT_0) {
-        return;
-    }
+    // Monitoring performs a stateful wait/notification loop through external handles.
+    // ReSharper disable once CppMemberFunctionMayBeConst
+    void ExclusiveAudioEngine::MonitorThreadMain() noexcept
+    {
+        if (WaitForSingleObject(initialization_event_, INFINITE) != WAIT_OBJECT_0 ||
+            !initialization_succeeded_.load(std::memory_order_acquire))
+        {
+            return;
+        }
 
-    const HANDLE controls[]{fatal_event_, shutdown_event_};
-    for (;;) {
-        const auto wait = WaitForMultipleObjects(
-            static_cast<DWORD>(std::size(controls)),
-            controls,
+        const HANDLE startup_controls[]{startup_reported_event_, shutdown_event_};
+        const auto startup_wait = WaitForMultipleObjects(
+            static_cast<DWORD>(std::size(startup_controls)),
+            startup_controls,
             FALSE,
-            summary_interval_ms_);
-        if (wait == WAIT_OBJECT_0) {
-            const auto stage = static_cast<AudioFailureStage>(
-                failure_stage_.load(std::memory_order_acquire));
-            const auto result = static_cast<HRESULT>(
-                failure_result_.load(std::memory_order_relaxed));
-            observer_->RuntimeFailed({stage, result}, SnapshotCounters());
+            INFINITE);
+        if (startup_wait != WAIT_OBJECT_0)
+        {
             return;
         }
-        if (wait == WAIT_OBJECT_0 + 1) {
+
+        const HANDLE controls[]{fatal_event_, shutdown_event_};
+        for (;;)
+        {
+            const auto wait = WaitForMultipleObjects(
+                static_cast<DWORD>(std::size(controls)),
+                controls,
+                FALSE,
+                summary_interval_ms_);
+            if (wait == WAIT_OBJECT_0)
+            {
+                const auto stage = static_cast<AudioFailureStage>(
+                    failure_stage_.load(std::memory_order_acquire));
+                const auto result = static_cast<HRESULT>(
+                    failure_result_.load(std::memory_order_relaxed));
+                observer_->RuntimeFailed({stage, result}, SnapshotCounters());
+                return;
+            }
+            if (wait == WAIT_OBJECT_0 + 1)
+            {
+                return;
+            }
+            if (wait == WAIT_TIMEOUT)
+            {
+                observer_->RuntimeSummary(SnapshotCounters());
+                continue;
+            }
             return;
         }
-        if (wait == WAIT_TIMEOUT) {
-            observer_->RuntimeSummary(SnapshotCounters());
-            continue;
+    }
+
+    void ExclusiveAudioEngine::CleanupExactClock() noexcept
+    {
+        if (exact_clock_ == nullptr)
+        {
+            return;
         }
-        return;
+        const auto endpoint_generation =
+            exact_clock_->endpoint_generation();
+        exact_clock_->Invalidate();
+        detail::UnregisterExactJudgementTimeline(endpoint_generation);
+        exact_clock_.reset();
     }
-}
 
-void ExclusiveAudioEngine::CleanupExactClock() noexcept {
-    if (exact_clock_ == nullptr) {
-        return;
+    void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept
+    {
+        CleanupExactClock();
+        if (render_core_ != nullptr)
+        {
+            render_core_->InvalidatePresentationClock();
+        }
+        if (endpoint_ == nullptr)
+        {
+            return;
+        }
+        static_cast<void>(endpoint_->ShutdownOnInitializingThread());
+        endpoint_.reset();
     }
-    const auto endpoint_generation =
-        exact_clock_->endpoint_generation();
-    exact_clock_->Invalidate();
-    detail::UnregisterExactJudgementTimeline(endpoint_generation);
-    exact_clock_.reset();
-}
 
-void ExclusiveAudioEngine::CleanupEndpointOnAudioThread() noexcept {
-    CleanupExactClock();
-    if (render_core_ != nullptr) {
-        render_core_->InvalidatePresentationClock();
+    void ExclusiveAudioEngine::SignalInitializationFailure(
+        AudioFailure failure,
+        EndpointInitialization attempted) noexcept
+    {
+        startup_failure_.failure = failure;
+        startup_failure_.attempted = std::move(attempted);
+        initialization_succeeded_.store(false, std::memory_order_release);
+        SetEvent(initialization_event_);
     }
-    if (endpoint_ == nullptr) {
-        return;
-    }
-    static_cast<void>(endpoint_->ShutdownOnInitializingThread());
-    endpoint_.reset();
-}
 
-void ExclusiveAudioEngine::SignalInitializationFailure(
-    AudioFailure failure,
-    EndpointInitialization attempted) noexcept {
-    startup_failure_.failure = failure;
-    startup_failure_.attempted = std::move(attempted);
-    initialization_succeeded_.store(false, std::memory_order_release);
-    SetEvent(initialization_event_);
-}
-
-void ExclusiveAudioEngine::RecordRuntimeFailure(
-    const AudioFailure& failure) noexcept {
-    if (failure.stage != AudioFailureStage::InvalidClockPosition &&
-        failure.stage != AudioFailureStage::ChronicOutputGap) {
-        endpoint_hresult_failures_.fetch_add(1, std::memory_order_relaxed);
-    }
-    bool expected = false;
-    if (!failure_claimed_.compare_exchange_strong(
+    void ExclusiveAudioEngine::RecordRuntimeFailure(
+        const AudioFailure& failure) noexcept
+    {
+        if (failure.stage != AudioFailureStage::InvalidClockPosition &&
+            failure.stage != AudioFailureStage::ChronicOutputGap)
+        {
+            endpoint_hresult_failures_.fetch_add(1, std::memory_order_relaxed);
+        }
+        bool expected = false;
+        if (!failure_claimed_.compare_exchange_strong(
             expected,
             true,
             std::memory_order_acq_rel,
-            std::memory_order_relaxed)) {
-        return;
+            std::memory_order_relaxed))
+        {
+            return;
+        }
+        failure_result_.store(failure.result, std::memory_order_relaxed);
+        failure_stage_.store(
+            static_cast<std::uint32_t>(failure.stage),
+            std::memory_order_release);
+        SetEvent(fatal_event_);
     }
-    failure_result_.store(failure.result, std::memory_order_relaxed);
-    failure_stage_.store(
-        static_cast<std::uint32_t>(failure.stage),
-        std::memory_order_release);
-    SetEvent(fatal_event_);
-}
 
-void ExclusiveAudioEngine::RecordPacingDecision(
-    const OutputPacingDecision& decision) noexcept {
-    if (decision.kind == OutputPacingDecisionKind::InvalidClock) {
-        return;
-    }
-    current_submitted_lead_frames_.store(
-        decision.submitted_lead_frames,
-        std::memory_order_relaxed);
-    auto minimum = minimum_submitted_lead_frames_.load(
-        std::memory_order_relaxed);
-    while (decision.submitted_lead_frames < minimum &&
-           !minimum_submitted_lead_frames_.compare_exchange_weak(
-               minimum,
-               decision.submitted_lead_frames,
-               std::memory_order_relaxed,
-               std::memory_order_relaxed)) {
-    }
-    if (decision.kind != OutputPacingDecisionKind::RecoverableGap &&
-        decision.kind != OutputPacingDecisionKind::ChronicGap) {
-        return;
-    }
-    confirmed_gap_events_.fetch_add(1, std::memory_order_relaxed);
-    skipped_output_frames_.fetch_add(
-        decision.discontinuity_frames,
-        std::memory_order_relaxed);
-    auto maximum = maximum_skipped_output_frames_.load(
-        std::memory_order_relaxed);
-    while (decision.discontinuity_frames > maximum &&
-           !maximum_skipped_output_frames_.compare_exchange_weak(
-               maximum,
-               decision.discontinuity_frames,
-               std::memory_order_relaxed,
-               std::memory_order_relaxed)) {
-    }
-}
-
-void ExclusiveAudioEngine::CountLateWake(std::uint64_t qpc_100ns) noexcept {
-    if (has_last_qpc_sample_ && qpc_100ns > last_qpc_100ns_) {
-        const auto delta = qpc_100ns - last_qpc_100ns_;
-        const auto period = static_cast<std::uint64_t>(
-            std::max<REFERENCE_TIME>(actual_period_100ns_, 0));
-        if (delta > period + period / 2) {
-            late_event_wakes_.fetch_add(1, std::memory_order_relaxed);
+    void ExclusiveAudioEngine::RecordPacingDecision(
+        const OutputPacingDecision& decision) noexcept
+    {
+        if (decision.kind == OutputPacingDecisionKind::InvalidClock)
+        {
+            return;
+        }
+        current_submitted_lead_frames_.store(
+            decision.submitted_lead_frames,
+            std::memory_order_relaxed);
+        auto minimum = minimum_submitted_lead_frames_.load(
+            std::memory_order_relaxed);
+        while (decision.submitted_lead_frames < minimum &&
+            !minimum_submitted_lead_frames_.compare_exchange_weak(
+                minimum,
+                decision.submitted_lead_frames,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed))
+        {
+        }
+        if (decision.kind != OutputPacingDecisionKind::RecoverableGap &&
+            decision.kind != OutputPacingDecisionKind::ChronicGap)
+        {
+            return;
+        }
+        confirmed_gap_events_.fetch_add(1, std::memory_order_relaxed);
+        skipped_output_frames_.fetch_add(
+            decision.discontinuity_frames,
+            std::memory_order_relaxed);
+        auto maximum = maximum_skipped_output_frames_.load(
+            std::memory_order_relaxed);
+        while (decision.discontinuity_frames > maximum &&
+            !maximum_skipped_output_frames_.compare_exchange_weak(
+                maximum,
+                decision.discontinuity_frames,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed))
+        {
         }
     }
-    last_qpc_100ns_ = qpc_100ns;
-    has_last_qpc_sample_ = true;
-}
 
-AudioRuntimeCountersSnapshot
-ExclusiveAudioEngine::SnapshotCounters() const noexcept {
-    return {
-        render_callbacks_.load(std::memory_order_relaxed),
-        late_event_wakes_.load(std::memory_order_relaxed),
-        silence_fallbacks_.load(std::memory_order_relaxed),
-        pending_cursor_queries_.load(std::memory_order_relaxed),
-        unmapped_cursor_failures_.load(std::memory_order_relaxed),
-        confirmed_gap_events_.load(std::memory_order_relaxed),
-        skipped_output_frames_.load(std::memory_order_relaxed),
-        maximum_skipped_output_frames_.load(std::memory_order_relaxed),
-        chronic_pacing_failures_.load(std::memory_order_relaxed),
-        current_submitted_lead_frames_.load(std::memory_order_relaxed),
-        minimum_submitted_lead_frames_.load(std::memory_order_relaxed),
-        endpoint_hresult_failures_.load(std::memory_order_relaxed),
-        render_core_ != nullptr
-            ? render_core_->diagnostics()
-            : MixerDiagnosticsSnapshot{},
-    };
-}
-
-bool ExclusiveAudioEngine::ShutdownRequested() const noexcept {
-    return shutdown_event_ != nullptr &&
-        WaitForSingleObject(shutdown_event_, 0) == WAIT_OBJECT_0;
-}
-
-void ExclusiveAudioEngine::CloseControlEvents() noexcept {
-    const HANDLE handles[]{
-        initialization_event_, startup_reported_event_, fatal_event_,
-        shutdown_event_, audio_exited_event_};
-    for (const auto handle : handles) {
-        if (handle != nullptr) {
-            CloseHandle(handle);
+    void ExclusiveAudioEngine::CountLateWake(std::uint64_t qpc_100ns) noexcept
+    {
+        if (has_last_qpc_sample_ && qpc_100ns > last_qpc_100ns_)
+        {
+            const auto delta = qpc_100ns - last_qpc_100ns_;
+            const auto period = static_cast<std::uint64_t>(
+                std::max<REFERENCE_TIME>(actual_period_100ns_, 0));
+            if (delta > period + period / 2)
+            {
+                late_event_wakes_.fetch_add(1, std::memory_order_relaxed);
+            }
         }
+        last_qpc_100ns_ = qpc_100ns;
+        has_last_qpc_sample_ = true;
     }
-    initialization_event_ = nullptr;
-    startup_reported_event_ = nullptr;
-    fatal_event_ = nullptr;
-    shutdown_event_ = nullptr;
-    audio_exited_event_ = nullptr;
-}
 
-std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
-    const NormalizedSourceFormat& format,
-    std::shared_ptr<AudioSnapshot> snapshot,
-    std::shared_ptr<AudioCursorTimeline> timeline,
-    VoiceUsage usage,
-    ma_result* result) noexcept {
-    if (render_core_ == nullptr) {
-        if (result != nullptr) {
-            *result = MA_INVALID_OPERATION;
-        }
-        return nullptr;
+    AudioRuntimeCountersSnapshot
+    ExclusiveAudioEngine::SnapshotCounters() const noexcept
+    {
+        return {
+            render_callbacks_.load(std::memory_order_relaxed),
+            late_event_wakes_.load(std::memory_order_relaxed),
+            silence_fallbacks_.load(std::memory_order_relaxed),
+            pending_cursor_queries_.load(std::memory_order_relaxed),
+            unmapped_cursor_failures_.load(std::memory_order_relaxed),
+            confirmed_gap_events_.load(std::memory_order_relaxed),
+            skipped_output_frames_.load(std::memory_order_relaxed),
+            maximum_skipped_output_frames_.load(std::memory_order_relaxed),
+            chronic_pacing_failures_.load(std::memory_order_relaxed),
+            current_submitted_lead_frames_.load(std::memory_order_relaxed),
+            minimum_submitted_lead_frames_.load(std::memory_order_relaxed),
+            endpoint_hresult_failures_.load(std::memory_order_relaxed),
+            render_core_ != nullptr
+                ? render_core_->diagnostics()
+                : MixerDiagnosticsSnapshot{},
+        };
     }
-    if (enable_absolute_time_judgement_ &&
-        usage == VoiceUsage::GameplayNativeCandidate) {
-        const auto buffer_instance_id = timeline != nullptr
-            ? timeline->exact_buffer_instance_id()
-            : 0;
-        if (exact_clock_ == nullptr || timeline == nullptr ||
-            buffer_instance_id == 0 ||
-            !timeline->ConfigureExactPlaybackHistory(
-                buffer_instance_id,
-                exact_clock_->info().timeline_generation)) {
-            if (result != nullptr) {
+
+    bool ExclusiveAudioEngine::ShutdownRequested() const noexcept
+    {
+        return shutdown_event_ != nullptr &&
+            WaitForSingleObject(shutdown_event_, 0) == WAIT_OBJECT_0;
+    }
+
+    void ExclusiveAudioEngine::CloseControlEvents() noexcept
+    {
+        const HANDLE handles[]{
+            initialization_event_, startup_reported_event_, fatal_event_,
+            shutdown_event_, audio_exited_event_
+        };
+        for (const auto handle : handles)
+        {
+            if (handle != nullptr)
+            {
+                CloseHandle(handle);
+            }
+        }
+        initialization_event_ = nullptr;
+        startup_reported_event_ = nullptr;
+        fatal_event_ = nullptr;
+        shutdown_event_ = nullptr;
+        audio_exited_event_ = nullptr;
+    }
+
+    std::unique_ptr<MixerVoice> ExclusiveAudioEngine::CreateVoice(
+        const NormalizedSourceFormat& format,
+        std::shared_ptr<AudioSnapshot> snapshot,
+        std::shared_ptr<AudioCursorTimeline> timeline,
+        VoiceUsage usage,
+        ma_result* result) noexcept
+    {
+        if (render_core_ == nullptr)
+        {
+            if (result != nullptr)
+            {
                 *result = MA_INVALID_OPERATION;
             }
-            RecordRuntimeFailure({
-                AudioFailureStage::InitializeMixer,
-                E_FAIL,
-            });
             return nullptr;
         }
+        if (enable_absolute_time_judgement_ &&
+            usage == VoiceUsage::GameplayNativeCandidate)
+        {
+            const auto buffer_instance_id = timeline != nullptr
+                                                ? timeline->exact_buffer_instance_id()
+                                                : 0;
+            if (exact_clock_ == nullptr || timeline == nullptr ||
+                buffer_instance_id == 0 ||
+                !timeline->ConfigureExactPlaybackHistory(
+                    buffer_instance_id,
+                    exact_clock_->info().timeline_generation))
+            {
+                if (result != nullptr)
+                {
+                    *result = MA_INVALID_OPERATION;
+                }
+                RecordRuntimeFailure({
+                    AudioFailureStage::InitializeMixer,
+                    E_FAIL,
+                });
+                return nullptr;
+            }
+        }
+        return render_core_->CreateVoice(
+            format,
+            std::move(snapshot),
+            std::move(timeline),
+            usage,
+            result);
     }
-    return render_core_->CreateVoice(
-        format,
-        std::move(snapshot),
-        std::move(timeline),
-        usage,
-        result);
-}
 
-std::optional<std::uint64_t>
-ExclusiveAudioEngine::CurrentOutputFrame() noexcept {
-    return render_core_ != nullptr
-        ? render_core_->CurrentOutputFrame()
-        : std::nullopt;
-}
+    std::optional<std::uint64_t>
+    ExclusiveAudioEngine::CurrentOutputFrame() noexcept
+    {
+        return render_core_ != nullptr
+                   ? render_core_->CurrentOutputFrame()
+                   : std::nullopt;
+    }
 
-std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept {
-    return endpoint_buffer_frames_.load(std::memory_order_acquire);
-}
+    std::uint32_t ExclusiveAudioEngine::endpoint_buffer_frames() const noexcept
+    {
+        return endpoint_buffer_frames_.load(std::memory_order_acquire);
+    }
 
-std::uint32_t ExclusiveAudioEngine::output_sample_rate() const noexcept {
-    return output_sample_rate_.load(std::memory_order_acquire);
-}
+    std::uint32_t ExclusiveAudioEngine::output_sample_rate() const noexcept
+    {
+        return output_sample_rate_.load(std::memory_order_acquire);
+    }
 
-void ExclusiveAudioEngine::CountPendingCursorQuery() noexcept {
-    pending_cursor_queries_.fetch_add(1, std::memory_order_relaxed);
-}
+    void ExclusiveAudioEngine::CountPendingCursorQuery() noexcept
+    {
+        pending_cursor_queries_.fetch_add(1, std::memory_order_relaxed);
+    }
 
-void ExclusiveAudioEngine::CountUnmappedCursorFailure() noexcept {
-    unmapped_cursor_failures_.fetch_add(1, std::memory_order_relaxed);
-}
-
+    void ExclusiveAudioEngine::CountUnmappedCursorFailure() noexcept
+    {
+        unmapped_cursor_failures_.fetch_add(1, std::memory_order_relaxed);
+    }
 } // namespace gc::audio

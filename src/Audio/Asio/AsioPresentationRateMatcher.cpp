@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstddef>
+#include <cstddef> // IWYU pragma: keep
 #include <limits>
 #include <new>
 #include <utility>
@@ -20,7 +20,7 @@ namespace gc::audio
         {
             return frames <=
                 (std::numeric_limits<std::size_t>::max)() /
-                    kChannels;
+                kChannels;
         }
     } // namespace
 
@@ -29,7 +29,7 @@ namespace gc::audio
         const std::uint32_t driver_rate,
         const std::uint32_t period_frames,
         std::shared_ptr<const ma_allocation_callbacks>
-            allocation_callbacks) noexcept
+        allocation_callbacks) noexcept
         : logical_rate_(logical_rate),
           driver_rate_(driver_rate),
           period_frames_(period_frames),
@@ -46,25 +46,28 @@ namespace gc::audio
         }
     }
 
-    std::expected<std::unique_ptr<AsioPresentationRateMatcher>,
-                  AsioPresentationRateMatcherFailure>
+    std::expected<std::unique_ptr<AsioPresentationRateMatcher>
+                  ,
+                  AsioPresentationRateMatcherFailure
+    >
     AsioPresentationRateMatcher::Create(
         const std::uint32_t logical_rate,
         const std::uint32_t driver_rate,
         const std::uint32_t period_frames,
         std::shared_ptr<const ma_allocation_callbacks>
-            allocation_callbacks) noexcept
+        allocation_callbacks) noexcept
     {
         if (logical_rate == 0 || driver_rate == 0 ||
             period_frames == 0)
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InvalidConfiguration);
+                InvalidConfiguration);
         }
 
         auto matcher =
-            std::unique_ptr<AsioPresentationRateMatcher>{
+            std::unique_ptr<AsioPresentationRateMatcher>
+            {
                 new(std::nothrow) AsioPresentationRateMatcher(
                     logical_rate,
                     driver_rate,
@@ -75,7 +78,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InitializationFailed);
+                InitializationFailed);
         }
         const auto initialized = matcher->Initialize();
         if (!initialized)
@@ -102,7 +105,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InitializationFailed);
+                InitializationFailed);
         }
         initialized_ = true;
         input_latency_frames_ =
@@ -110,24 +113,16 @@ namespace gc::audio
         output_latency_frames_ =
             ma_resampler_get_output_latency(&resampler_);
 
-        if (period_frames_ >
-                (std::numeric_limits<std::uint64_t>::max)() /
-                    kInputPeriods)
-        {
-            return std::unexpected(
-                AsioPresentationRateMatcherFailure::
-                    ArithmeticOverflow);
-        }
         const auto base_capacity =
             kInputPeriods * period_frames_;
         if (input_latency_frames_ >
-                ((std::numeric_limits<std::uint64_t>::max)() -
-                    base_capacity - 2) /
-                    2)
+            ((std::numeric_limits<std::uint64_t>::max)() -
+                base_capacity - 2) /
+            2)
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    ArithmeticOverflow);
+                ArithmeticOverflow);
         }
         input_capacity_frames_ =
             base_capacity + 2 * input_latency_frames_ + 2;
@@ -136,7 +131,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    ArithmeticOverflow);
+                ArithmeticOverflow);
         }
 
         try
@@ -151,7 +146,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InitializationFailed);
+                InitializationFailed);
         }
         return {};
     }
@@ -163,7 +158,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InvalidConfiguration);
+                InvalidConfiguration);
         }
 
         // The generic miniaudio set_rate_ratio wrapper truncates to a
@@ -176,7 +171,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    RateChangeFailed);
+                RateChangeFailed);
         }
         input_read_frame_ = 0;
         buffered_input_frames_ = 0;
@@ -193,7 +188,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InvalidRateRatio);
+                InvalidRateRatio);
         }
 
         const double scaled =
@@ -201,12 +196,12 @@ namespace gc::audio
             static_cast<double>(kRateRatioDenominator);
         if (!std::isfinite(scaled) || scaled < 1.0 ||
             scaled >
-                static_cast<double>(
-                    (std::numeric_limits<std::uint32_t>::max)()))
+            static_cast<double>(
+                (std::numeric_limits<std::uint32_t>::max)()))
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InvalidRateRatio);
+                InvalidRateRatio);
         }
         const auto numerator =
             static_cast<std::uint32_t>(std::llround(scaled));
@@ -218,7 +213,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    RateChangeFailed);
+                RateChangeFailed);
         }
 
         rate_ratio_ =
@@ -236,17 +231,17 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InvalidConfiguration);
+                InvalidConfiguration);
         }
         ma_uint64 required{};
         if (ma_resampler_get_required_input_frame_count(
-                &resampler_,
-                output_frames,
-                &required) != MA_SUCCESS)
+            &resampler_,
+            output_frames,
+            &required) != MA_SUCCESS)
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    ConversionFailed);
+                ConversionFailed);
         }
         return required;
     }
@@ -260,7 +255,7 @@ namespace gc::audio
         {
             return std::unexpected(
                 AsioPresentationRateMatcherFailure::
-                    InvalidConfiguration);
+                InvalidConfiguration);
         }
         const auto frames =
             static_cast<std::uint64_t>(
@@ -282,14 +277,14 @@ namespace gc::audio
             interleaved_stereo.begin(),
             first_samples,
             input_.begin() +
-                static_cast<std::ptrdiff_t>(
-                    write_frame * kChannels));
+            static_cast<std::ptrdiff_t>(
+                write_frame * kChannels));
         const auto second_frames = frames - first_frames;
         if (second_frames != 0)
         {
             std::copy_n(
                 interleaved_stereo.begin() +
-                    static_cast<std::ptrdiff_t>(first_samples),
+                static_cast<std::ptrdiff_t>(first_samples),
                 static_cast<std::size_t>(
                     second_frames * kChannels),
                 input_.begin());
@@ -326,15 +321,15 @@ namespace gc::audio
             ma_uint64 consumed = contiguous;
             ma_uint64 requested = output_frames - produced;
             const float* input = contiguous == 0
-                ? nullptr
-                : input_.data() +
-                    static_cast<std::ptrdiff_t>(
-                        input_read_frame_ * kChannels);
+                                     ? nullptr
+                                     : input_.data() +
+                                     static_cast<std::ptrdiff_t>(
+                                         input_read_frame_ * kChannels);
             float* destination = output == nullptr
-                ? nullptr
-                : output +
-                    static_cast<std::ptrdiff_t>(
-                        produced * kChannels);
+                                     ? nullptr
+                                     : output +
+                                     static_cast<std::ptrdiff_t>(
+                                         produced * kChannels);
             const auto result = ma_resampler_process_pcm_frames(
                 &resampler_,
                 input,
@@ -345,7 +340,7 @@ namespace gc::audio
             {
                 return std::unexpected(
                     AsioPresentationRateMatcherFailure::
-                        ConversionFailed);
+                    ConversionFailed);
             }
 
             input_read_frame_ =

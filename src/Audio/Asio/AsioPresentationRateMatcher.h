@@ -33,7 +33,7 @@ namespace gc::audio
             std::uint32_t driver_rate,
             std::uint32_t period_frames,
             std::shared_ptr<const ma_allocation_callbacks>
-                allocation_callbacks = {}) noexcept;
+            allocation_callbacks = {}) noexcept;
 
         ~AsioPresentationRateMatcher();
         AsioPresentationRateMatcher(
@@ -78,7 +78,7 @@ namespace gc::audio
             std::uint32_t driver_rate,
             std::uint32_t period_frames,
             std::shared_ptr<const ma_allocation_callbacks>
-                allocation_callbacks) noexcept;
+            allocation_callbacks) noexcept;
 
         [[nodiscard]]
         std::expected<void, AsioPresentationRateMatcherFailure>
@@ -94,7 +94,7 @@ namespace gc::audio
         const std::uint32_t driver_rate_;
         const std::uint32_t period_frames_;
         std::shared_ptr<const ma_allocation_callbacks>
-            allocation_callbacks_;
+        allocation_callbacks_;
         ma_resampler resampler_{};
         bool initialized_{};
 

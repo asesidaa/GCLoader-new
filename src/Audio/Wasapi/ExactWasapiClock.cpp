@@ -107,10 +107,11 @@ namespace gc::audio
         ExactJudgementTimelineResult Result(ExactClockStatus status, std::uint64_t endpoint_generation,
                                             std::uint64_t submitted_output_tail = 0,
                                             std::uint64_t anchor_sequence = 0,
-                                      // Keep this small optional value parameter self-contained in the result
-                                      // helper.
-                                      // ReSharper disable once CppPassValueParameterByConstReference
-                                      std::optional<std::uint64_t> anchor_endpoint_position = std::nullopt) noexcept
+                                            // Keep this small optional value parameter self-contained in the result
+                                            // helper.
+                                            // ReSharper disable once CppPassValueParameterByConstReference
+                                            std::optional<std::uint64_t> anchor_endpoint_position = std::nullopt)
+            noexcept
         {
             return {
                 .status = status,
@@ -125,8 +126,8 @@ namespace gc::audio
         bool SameMapping(const EndpointClockMapping& left, const EndpointClockMapping& right) noexcept
         {
             return left.origin_position == right.origin_position && left.clock_frequency == right.clock_frequency &&
-                   left.origin_output_frame == right.origin_output_frame &&
-                   left.output_sample_rate == right.output_sample_rate;
+                left.origin_output_frame == right.origin_output_frame &&
+                left.output_sample_rate == right.output_sample_rate;
         }
     } // namespace
 
@@ -185,15 +186,15 @@ namespace gc::audio
             return nullptr;
         }
 
-        auto slots = std::unique_ptr<Slot[]>(new (std::nothrow) Slot[static_cast<std::size_t>(capacity)]);
+        auto slots = std::unique_ptr<Slot[]>(new(std::nothrow) Slot[static_cast<std::size_t>(capacity)]);
         if (slots == nullptr)
         {
             return nullptr;
         }
 
         auto* provider =
-            new (std::nothrow) ExactWasapiClock(endpoint_generation, output_sample_rate, clock_frequency, qpc_frequency,
-                                                period_frames, static_cast<std::size_t>(capacity), std::move(slots));
+            new(std::nothrow) ExactWasapiClock(endpoint_generation, output_sample_rate, clock_frequency, qpc_frequency,
+                                               period_frames, static_cast<std::size_t>(capacity), std::move(slots));
         if (provider == nullptr)
         {
             return nullptr;
@@ -213,15 +214,15 @@ namespace gc::audio
             anchor.mapping.output_sample_rate != output_sample_rate_ ||
             anchor.endpoint_position < anchor.mapping.origin_position ||
             anchor.endpoint_position - anchor.mapping.origin_position >
-                static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
             anchor.mapping.origin_output_frame > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
             anchor.submitted_output_tail > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
         const bool decreasing_identity =
             writer_has_anchor_ && (anchor.sequence <= writer_previous_.sequence ||
-                                   anchor.endpoint_position < writer_previous_.endpoint_position ||
-                                   anchor.qpc_100ns < writer_previous_.qpc_100ns ||
-                                   anchor.submitted_output_tail < writer_previous_.submitted_output_tail ||
-                                   !SameMapping(anchor.mapping, writer_previous_.mapping));
+                anchor.endpoint_position < writer_previous_.endpoint_position ||
+                anchor.qpc_100ns < writer_previous_.qpc_100ns ||
+                anchor.submitted_output_tail < writer_previous_.submitted_output_tail ||
+                !SameMapping(anchor.mapping, writer_previous_.mapping));
         if (anchor.sequence == 0 || anchor.endpoint_generation != endpoint_generation_ || invalid_mapping ||
             decreasing_identity || writer_publication_count_ > (std::numeric_limits<std::uint64_t>::max() - 2) / 2)
         {
@@ -408,7 +409,7 @@ namespace gc::audio
         }
         const auto output_frame =
             gc::timing::CheckedRational::Whole(static_cast<std::int64_t>(anchor.mapping.origin_output_frame))
-                .Add(*output_offset);
+            .Add(*output_offset);
         if (!output_frame.has_value() || output_frame->Compare(gc::timing::CheckedRational::Whole(0)) < 0)
         {
             return Result(ExactClockStatus::Discontinuous, endpoint_generation_, anchor.submitted_output_tail,
@@ -421,7 +422,7 @@ namespace gc::audio
         }
 
         if (anchor.submitted_output_tail == 0 || output_frame->Compare(gc::timing::CheckedRational::Whole(
-                                                     static_cast<std::int64_t>(anchor.submitted_output_tail))) >= 0)
+            static_cast<std::int64_t>(anchor.submitted_output_tail))) >= 0)
         {
             return Result(ExactClockStatus::Pending, endpoint_generation_, anchor.submitted_output_tail,
                           anchor.sequence, anchor.endpoint_position);

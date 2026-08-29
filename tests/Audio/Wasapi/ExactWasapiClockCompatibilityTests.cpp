@@ -55,7 +55,7 @@ namespace
             .submitted_output_tail = 960,
         });
 
-        const AbsoluteHostTime event{
+        constexpr AbsoluteHostTime event{
             .qpc_ticks = 150'000,
             .multimedia_time_ms = 0,
         };
@@ -81,7 +81,7 @@ namespace
         Expect(result.available_output_tail == 960,
                "resolved event reports the submitted output tail");
 
-        const AbsoluteHostTime at_tail{
+        constexpr AbsoluteHostTime at_tail{
             .qpc_ticks = 200'000,
             .multimedia_time_ms = 0,
         };

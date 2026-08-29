@@ -88,7 +88,7 @@ namespace gc::audio
             return {};
         }
 
-        std::unique_ptr<LogicalPresentationClock> clock{
+        std::unique_ptr < LogicalPresentationClock > clock{
             new(std::nothrow) LogicalPresentationClock(
                 timeline_generation,
                 origin_raw_ms,
@@ -102,7 +102,10 @@ namespace gc::audio
 
         try
         {
-            return std::shared_ptr<LogicalPresentationClock>{std::move(clock)};
+            return std::shared_ptr < LogicalPresentationClock >
+            {
+                std::move(clock)
+            };
         }
         catch (...)
         {
@@ -116,7 +119,7 @@ namespace gc::audio
     {
         const std::uint32_t delta = observed_raw_ms - writer_raw_ms_;
         if (delta > static_cast<std::uint32_t>(
-                (std::numeric_limits<std::int32_t>::max)()))
+            (std::numeric_limits<std::int32_t>::max)()))
         {
             return std::unexpected(
                 LogicalPresentationClockFailure::WriterDeltaAmbiguous);
@@ -163,9 +166,9 @@ namespace gc::audio
 
             const Snapshot snapshot{
                 .observed_raw_ms =
-                    observed_raw_ms_.load(std::memory_order_relaxed),
+                observed_raw_ms_.load(std::memory_order_relaxed),
                 .observed_unwrapped_ms =
-                    observed_unwrapped_ms_.load(std::memory_order_relaxed),
+                observed_unwrapped_ms_.load(std::memory_order_relaxed),
             };
             const std::uint64_t after =
                 snapshot_version_.load(std::memory_order_acquire);
@@ -205,17 +208,17 @@ namespace gc::audio
         const std::uint64_t unwrapped_ms) const noexcept
     {
         if (unwrapped_ms > static_cast<std::uint64_t>(
-                (std::numeric_limits<std::int64_t>::max)()))
+            (std::numeric_limits<std::int64_t>::max)()))
         {
             return std::unexpected(
                 LogicalPresentationClockFailure::ArithmeticOverflow);
         }
 
         const auto result = gc::timing::CheckedRational::Whole(
-                                static_cast<std::int64_t>(unwrapped_ms))
-                                .Multiply(
-                                    logical_output_rate_,
-                                    kMillisecondsPerSecond);
+                static_cast<std::int64_t>(unwrapped_ms))
+            .Multiply(
+                logical_output_rate_,
+                kMillisecondsPerSecond);
         if (!result)
         {
             return std::unexpected(MapRationalFailure(result.error()));
@@ -253,10 +256,10 @@ namespace gc::audio
         const std::uint64_t remainder_ns =
             system_time_ns % kNanosecondsPerMillisecond;
         const auto remainder = gc::timing::CheckedRational::Whole(
-                                   static_cast<std::int64_t>(remainder_ns))
-                                   .Multiply(
-                                       logical_output_rate_,
-                                       kNanosecondsPerSecond);
+                static_cast<std::int64_t>(remainder_ns))
+            .Multiply(
+                logical_output_rate_,
+                kNanosecondsPerSecond);
         if (!remainder)
         {
             return std::unexpected(MapRationalFailure(remainder.error()));
@@ -316,7 +319,7 @@ namespace gc::audio
         const ExactClockResolveIntent intent) const noexcept
     {
         if ((intent != ExactClockResolveIntent::FinalizedTimestamp &&
-             intent != ExactClockResolveIntent::ProvisionalHorizon) ||
+                intent != ExactClockResolveIntent::ProvisionalHorizon) ||
             invalidated_.load(std::memory_order_acquire))
         {
             return CountResult(Result(
@@ -329,7 +332,7 @@ namespace gc::audio
         {
             const auto status =
                 logical_output_frame.error() ==
-                        LogicalPresentationClockFailure::SnapshotUnavailable
+                LogicalPresentationClockFailure::SnapshotUnavailable
                     ? ExactClockStatus::TemporarilyUnavailable
                     : ExactClockStatus::Discontinuous;
             return CountResult(Result(status, timeline_generation_));
@@ -355,14 +358,14 @@ namespace gc::audio
     {
         return {
             .domain =
-                ExactJudgementTimelineDomain::LogicalMultimediaMilliseconds,
+            ExactJudgementTimelineDomain::LogicalMultimediaMilliseconds,
             .timeline_generation = timeline_generation_,
             .qpc_frequency = qpc_frequency_,
             .logical_output_rate = logical_output_rate_,
             .provider_period_frames = 0,
             .provider_output_latency_frames = 0,
             .timestamp_quantum_ns =
-                static_cast<std::uint32_t>(kNanosecondsPerMillisecond),
+            static_cast<std::uint32_t>(kNanosecondsPerMillisecond),
         };
     }
 
@@ -372,15 +375,15 @@ namespace gc::audio
         return {
             .publication_count = 0,
             .resolved_queries =
-                resolved_queries_.load(std::memory_order_relaxed),
+            resolved_queries_.load(std::memory_order_relaxed),
             .pending_queries =
-                pending_queries_.load(std::memory_order_relaxed),
+            pending_queries_.load(std::memory_order_relaxed),
             .temporarily_unavailable_queries =
-                temporarily_unavailable_queries_.load(std::memory_order_relaxed),
+            temporarily_unavailable_queries_.load(std::memory_order_relaxed),
             .history_lost_queries =
-                history_lost_queries_.load(std::memory_order_relaxed),
+            history_lost_queries_.load(std::memory_order_relaxed),
             .discontinuous_queries =
-                discontinuous_queries_.load(std::memory_order_relaxed),
+            discontinuous_queries_.load(std::memory_order_relaxed),
         };
     }
 

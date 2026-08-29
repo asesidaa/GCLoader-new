@@ -114,7 +114,7 @@ namespace gc::audio
         AsioSampleRatePolicy sample_rate_policy) noexcept
         : driver_(std::move(driver)),
           creating_thread_id_(GetCurrentThreadId()),
-          sample_rate_policy_(std::move(sample_rate_policy))
+          sample_rate_policy_(sample_rate_policy)
     {
         report_.registration = std::move(registration);
     }
@@ -132,9 +132,9 @@ namespace gc::audio
         }
     }
 
-    std::expected<std::unique_ptr < AsioSession>
-    ,
-    AsioSessionPreparationFailure
+    std::expected<std::unique_ptr<AsioSession>
+                  ,
+                  AsioSessionPreparationFailure
     >
     AsioSession::Prepare(
         AsioDriverRegistration registration,
@@ -144,11 +144,11 @@ namespace gc::audio
         AsioProbeMode mode,
         AsioSampleRatePolicy sample_rate_policy) noexcept
     {
-        std::unique_ptr < AsioSession > session;
+        std::unique_ptr<AsioSession> session;
         const auto fail_after_cleanup = [&session](
-                       AsioFailure failure)
-                       -> std::expected<std::unique_ptr < AsioSession>,
-                   AsioSessionPreparationFailure>
+            AsioFailure failure)
+            -> std::expected<std::unique_ptr<AsioSession>,
+                             AsioSessionPreparationFailure>
         {
             if (session == nullptr)
             {
@@ -182,10 +182,10 @@ namespace gc::audio
                     AsioFailureStage::com,
                     "ASIO session requires a driver interface"));
             }
-            session = std::unique_ptr < AsioSession > (new AsioSession(
+            session = std::unique_ptr<AsioSession>(new AsioSession(
                 std::move(registration),
                 std::move(driver),
-                std::move(sample_rate_policy)));
+                sample_rate_policy));
             auto prepared = session->PrepareDriver(
                 request,
                 system_reference,

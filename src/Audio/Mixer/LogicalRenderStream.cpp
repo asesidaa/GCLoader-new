@@ -24,7 +24,8 @@ namespace gc::audio
         {
             return {};
         }
-        return std::unique_ptr<LogicalRenderStream>{
+        return std::unique_ptr < LogicalRenderStream >
+        {
             new(std::nothrow) LogicalRenderStream(render_core)
         };
     }
@@ -172,7 +173,7 @@ namespace gc::audio
             committed_tail_.load(std::memory_order_relaxed);
         if (begin >
             (std::numeric_limits<std::uint64_t>::max)() -
-                period_frames_)
+            period_frames_)
         {
             ReleaseClaim();
             return std::unexpected(
@@ -224,7 +225,7 @@ namespace gc::audio
             .active_voices = 0,
             .missing_frames = 0,
             .silence_reason =
-                AudioRenderSilenceReason::render_contract_error,
+            AudioRenderSilenceReason::render_contract_error,
             .silence_substituted = true,
         };
     }

@@ -182,7 +182,7 @@ namespace gc::audio
             {
                 try
                 {
-                    std::array<char, 320> suffix{};
+                    std::array < char, 320 > suffix{};
                     const auto formatted = std::format_to_n(
                         suffix.data(),
                         suffix.size() - 1,
@@ -291,21 +291,6 @@ namespace gc::audio
                 std::atomic_uint64_t& destination) noexcept
             {
                 SaturatingAddCounter(destination, 1);
-            }
-
-            void MaximumCounter(
-                std::atomic_uint64_t& destination,
-                const std::uint64_t value) noexcept
-            {
-                auto observed = destination.load(std::memory_order_relaxed);
-                while (observed < value &&
-                    !destination.compare_exchange_weak(
-                        observed,
-                        value,
-                        std::memory_order_relaxed,
-                        std::memory_order_relaxed))
-                {
-                }
             }
 
             std::uint64_t SaturatingSum(
@@ -418,7 +403,7 @@ namespace gc::audio
                         destination;
                     destination = value > remaining
                                       ? (std::numeric_limits<
-                                            std::uint64_t>::max)()
+                                          std::uint64_t>::max)()
                                       : destination + value;
                 };
                 const auto previous_running_callbacks =
@@ -426,9 +411,9 @@ namespace gc::audio
 
                 total.state = session.state;
                 if (total.first_fault ==
-                        AsioPresentationBridgeFault::None &&
+                    AsioPresentationBridgeFault::None &&
                     session.first_fault !=
-                        AsioPresentationBridgeFault::None)
+                    AsioPresentationBridgeFault::None)
                 {
                     total.first_fault = session.first_fault;
                 }
@@ -1013,7 +998,7 @@ namespace gc::audio
                         .sample_rate = logical_contract_.sample_rate,
                         .period_frames = logical_contract_.period_frames,
                         .timestamp_quantum_ns =
-                            logical_clock_->info().timestamp_quantum_ns,
+                        logical_clock_->info().timestamp_quantum_ns,
                         .alternate_backend_selected = false,
                     });
                 const auto startup_focus = foreground_monitor_->snapshot();
@@ -1028,7 +1013,7 @@ namespace gc::audio
                     0,
                     presentation_bridge_ != nullptr
                         ? presentation_bridge_->Snapshot().
-                            handoff_logical_tail
+                                                handoff_logical_tail
                         : 0,
                     nullptr,
                     &active_physical_session_facts_);
@@ -1409,16 +1394,16 @@ namespace gc::audio
                         AsioPresentationBridge::Create(
                             {
                                 .physical_session_generation =
-                                    physical_generation,
+                                physical_generation,
                                 .logical_rate =
-                                    logical_output_sample_rate_,
+                                logical_output_sample_rate_,
                                 .driver_rate = session_sample_rate,
                                 .period_frames =
-                                    request_.buffer_frames,
+                                request_.buffer_frames,
                                 .driver_output_latency_frames =
-                                    session_->report().output_latency_frames,
+                                session_->report().output_latency_frames,
                                 .timestamp_quantum_ns =
-                                    logical_clock_->info().timestamp_quantum_ns,
+                                logical_clock_->info().timestamp_quantum_ns,
                             },
                             logical_clock_,
                             *logical_render_stream_,
@@ -1434,7 +1419,7 @@ namespace gc::audio
                     physical_float_output_.assign(
                         static_cast<std::size_t>(
                             request_.buffer_frames) *
-                            2,
+                        2,
                         0.0F);
                     active_physical_session_generation_.store(
                         physical_generation,
@@ -1601,9 +1586,9 @@ namespace gc::audio
 
                 const auto focus = foreground_monitor_->snapshot();
                 if (const auto failure = ValidateFocusSnapshot(
-                        focus,
-                        lifecycle_controller_.
-                            consumed_focus_loss_generation()))
+                    focus,
+                    lifecycle_controller_.
+                    consumed_focus_loss_generation()))
                 {
                     return std::unexpected(*failure);
                 }
@@ -1614,7 +1599,7 @@ namespace gc::audio
                     lifecycle_controller_.ObserveForeground(focus);
                 const auto consumed_generation =
                     lifecycle_controller_.
-                        consumed_focus_loss_generation();
+                    consumed_focus_loss_generation();
                 if (consumed_generation > previous_generation)
                 {
                     SaturatingAddCounter(
@@ -1695,7 +1680,7 @@ namespace gc::audio
                     {
                         const auto committed =
                             lifecycle_controller_.
-                                ReportRunningCommitted();
+                            ReportRunningCommitted();
                         if (committed.kind !=
                             AsioControlDirectiveKind::CommitRunning)
                         {
@@ -1707,14 +1692,14 @@ namespace gc::audio
                     }
 
                     if (const auto failure =
-                            AdvanceSilentRendering())
+                        AdvanceSilentRendering())
                     {
                         return std::unexpected(*failure);
                     }
                     if (physical_stability_proof_callbacks_.load(
                             std::memory_order_acquire) >= 3 &&
                         presentation_bridge_->state() ==
-                            AsioPresentationBridgeState::Priming)
+                        AsioPresentationBridgeState::Priming)
                     {
                         const auto now_ms =
                             actions_.time_get_time_ms(
@@ -1725,7 +1710,7 @@ namespace gc::audio
                         {
                             if (projected.error() !=
                                 LogicalPresentationClockFailure::
-                                    SnapshotUnavailable)
+                                SnapshotUnavailable)
                             {
                                 return std::unexpected(Failure(
                                     AsioFailureStage::runtime_clock,
@@ -1736,16 +1721,16 @@ namespace gc::audio
                             }
                         }
                         else if (*projected <=
-                                 (std::numeric_limits<
-                                     std::uint64_t>::max)() -
-                                     request_.buffer_frames)
+                            (std::numeric_limits<
+                                std::uint64_t>::max)() -
+                            request_.buffer_frames)
                         {
                             const auto required_tail =
                                 *projected +
                                 request_.buffer_frames;
                             const auto committed_tail =
                                 logical_render_stream_->
-                                    committed_tail();
+                                committed_tail();
                             if (committed_tail > required_tail)
                             {
                                 if (!pending_bridge_lease_)
@@ -1755,26 +1740,26 @@ namespace gc::audio
                                         return std::unexpected(
                                             Failure(
                                                 AsioFailureStage::
-                                                    runtime_clock,
+                                                runtime_clock,
                                                 "ASIO bridge handoff has no pump lease"));
                                     }
                                     const auto transferred =
                                         logical_render_stream_->
-                                            Transfer(
-                                                *pump_lease_,
-                                                LogicalRenderOwner::
-                                                    AsioBridge,
-                                                committed_tail);
+                                        Transfer(
+                                            *pump_lease_,
+                                            LogicalRenderOwner::
+                                            AsioBridge,
+                                            committed_tail);
                                     if (!transferred)
                                     {
                                         if (transferred.error() !=
                                             LogicalRenderFailure::
-                                                Busy)
+                                            Busy)
                                         {
                                             return std::unexpected(
                                                 Failure(
                                                     AsioFailureStage::
-                                                        runtime_clock,
+                                                    runtime_clock,
                                                     std::format(
                                                         "ASIO bridge lease transfer failed: {}",
                                                         static_cast<unsigned>(
@@ -1788,10 +1773,10 @@ namespace gc::audio
                                         pump_lease_.reset();
                                         const auto handoff =
                                             lifecycle_controller_.
-                                                ReportRenderLeaseTransferred();
+                                            ReportRenderLeaseTransferred();
                                         if (handoff.kind !=
                                             AsioControlDirectiveKind::
-                                                ContinuePump)
+                                            ContinuePump)
                                         {
                                             return std::unexpected(Failure(
                                                 AsioFailureStage::protocol,
@@ -1809,12 +1794,12 @@ namespace gc::audio
                                     {
                                         if (armed.error() !=
                                             AsioPresentationBridgeControlFailure::
-                                                Busy)
+                                            Busy)
                                         {
                                             return std::unexpected(
                                                 Failure(
                                                     AsioFailureStage::
-                                                        runtime_clock,
+                                                    runtime_clock,
                                                     std::format(
                                                         "ASIO bridge arm failed: {}",
                                                         static_cast<unsigned>(
@@ -2008,7 +1993,7 @@ namespace gc::audio
                     record.silent_priming_callbacks =
                         presentation_bridge_ != nullptr
                             ? presentation_bridge_->Snapshot().
-                                priming_callbacks
+                                                    priming_callbacks
                             : 0;
                 }
                 observer_->SessionLifecycleChanged(record, failure);
@@ -2053,7 +2038,7 @@ namespace gc::audio
                 const bool bridge_had_running_callback =
                     presentation_bridge_ != nullptr &&
                     presentation_bridge_->Snapshot().
-                        running_callbacks != 0;
+                                          running_callbacks != 0;
                 const bool had_physical_resources =
                     session_ != nullptr ||
                     callback_runtime_ != nullptr ||
@@ -2071,8 +2056,8 @@ namespace gc::audio
                 auto close_failure = ClosePhysicalSession();
                 if (HasPublishedFault() &&
                     (commit_phase ==
-                         AsioPhysicalCommitPhase::Running ||
-                     bridge_had_running_callback))
+                        AsioPhysicalCommitPhase::Running ||
+                        bridge_had_running_callback))
                 {
                     auto failure = BuildLatchedFailure();
                     if (close_failure)
@@ -2149,7 +2134,7 @@ namespace gc::audio
                 const bool bridge_had_running_callback =
                     presentation_bridge_ != nullptr &&
                     presentation_bridge_->Snapshot().
-                        running_callbacks != 0;
+                                          running_callbacks != 0;
                 if (bridge_had_running_callback)
                 {
                     failure_kind =
@@ -2179,7 +2164,7 @@ namespace gc::audio
                     callback_runtime_ == nullptr &&
                     presentation_bridge_ == nullptr &&
                     (logical_render_stream_ == nullptr ||
-                     pump_lease_.has_value());
+                        pump_lease_.has_value());
 
                 AsioForegroundSnapshot focus{};
                 if (foreground_monitor_ == nullptr ||
@@ -2217,11 +2202,11 @@ namespace gc::audio
                 }
 
                 if (purpose ==
-                        PhysicalSessionPurpose::FocusRecovery &&
+                    PhysicalSessionPurpose::FocusRecovery &&
                     cleanup_complete &&
                     failure_kind ==
-                        AsioPhysicalAttemptFailureKind::
-                            RetryableBeforeRunning)
+                    AsioPhysicalAttemptFailureKind::
+                    RetryableBeforeRunning)
                 {
                     auto observed =
                         ObserveControllerForeground();
@@ -2238,7 +2223,7 @@ namespace gc::audio
                     focus = observed->focus;
                     if (observed->directive.kind ==
                         AsioControlDirectiveKind::
-                            ReleaseToSuspended)
+                        ReleaseToSuspended)
                     {
                         if (cleanup_complete)
                         {
@@ -2271,7 +2256,7 @@ namespace gc::audio
                         recovery_failures_);
                     ReportLifecycle(
                         AsioSessionLifecycleEvent::
-                            recovery_attempt_failed,
+                        recovery_attempt_failed,
                         focus,
                         0,
                         recovery_attempt,
@@ -2307,7 +2292,7 @@ namespace gc::audio
                 const AsioControlDirective& wait_directive) noexcept
             {
                 if (wait_directive.kind !=
-                        AsioControlDirectiveKind::WaitRetry ||
+                    AsioControlDirectiveKind::WaitRetry ||
                     wait_directive.retry_delay_ms == 0)
                 {
                     return std::unexpected(Failure(
@@ -2322,7 +2307,7 @@ namespace gc::audio
                     if (logical_clock_ != nullptr)
                     {
                         if (const auto failure =
-                                AdvanceSilentRendering())
+                            AdvanceSilentRendering())
                         {
                             return std::unexpected(*failure);
                         }
@@ -2368,7 +2353,7 @@ namespace gc::audio
                     }
                     if (observed->directive.kind ==
                         AsioControlDirectiveKind::
-                            ReleaseToSuspended)
+                        ReleaseToSuspended)
                     {
                         return observed->directive;
                     }
@@ -2381,17 +2366,17 @@ namespace gc::audio
                     }
 
                     if (RemainingTimeout(
-                            started_ms,
-                            actions_.tick_count_ms(
-                                actions_.context),
-                            wait_directive.retry_delay_ms) == 0)
+                        started_ms,
+                        actions_.tick_count_ms(
+                            actions_.context),
+                        wait_directive.retry_delay_ms) == 0)
                     {
                         const auto retry =
                             lifecycle_controller_.
-                                ReportRetryDelayElapsed();
+                            ReportRetryDelayElapsed();
                         if (retry.kind !=
                             AsioControlDirectiveKind::
-                                BeginPhysicalAttempt)
+                            BeginPhysicalAttempt)
                         {
                             return std::unexpected(Failure(
                                 AsioFailureStage::protocol,
@@ -2422,7 +2407,7 @@ namespace gc::audio
                             if (logical_clock_ != nullptr)
                             {
                                 if (const auto failure =
-                                        AdvanceSilentRendering())
+                                    AdvanceSilentRendering())
                                 {
                                     return std::unexpected(
                                         *failure);
@@ -2441,7 +2426,7 @@ namespace gc::audio
                             {
                                 directive =
                                     lifecycle_controller_.
-                                        RequestShutdown();
+                                    RequestShutdown();
                                 break;
                             }
                             if (*wake == RuntimeWake::fault ||
@@ -2463,11 +2448,11 @@ namespace gc::audio
                                 observed->directive;
                             if (directive.kind ==
                                 AsioControlDirectiveKind::
-                                    BeginPhysicalAttempt)
+                                BeginPhysicalAttempt)
                             {
                                 ReportLifecycle(
                                     AsioSessionLifecycleEvent::
-                                        foreground_regained,
+                                    foreground_regained,
                                     observed->focus,
                                     0,
                                     directive.recovery_attempt,
@@ -2479,23 +2464,23 @@ namespace gc::audio
                         }
 
                     case AsioControlDirectiveKind::
-                        BeginPhysicalAttempt:
+                    BeginPhysicalAttempt:
                         {
                             const auto purpose =
                                 logical_output_sample_rate_ == 0
                                     ? PhysicalSessionPurpose::
-                                        InitialStartup
+                                    InitialStartup
                                     : PhysicalSessionPurpose::
-                                        FocusRecovery;
+                                    FocusRecovery;
                             if (purpose ==
                                 PhysicalSessionPurpose::
-                                    FocusRecovery)
+                                FocusRecovery)
                             {
                                 SaturatingIncrementCounter(
                                     recovery_attempts_);
                                 ReportLifecycle(
                                     AsioSessionLifecycleEvent::
-                                        recovery_attempt_started,
+                                    recovery_attempt_started,
                                     foreground_monitor_->snapshot(),
                                     0,
                                     directive.recovery_attempt,
@@ -2510,18 +2495,18 @@ namespace gc::audio
                             {
                                 const auto kind =
                                     prepared.error().kind ==
-                                        PhysicalPreparationFailureKind::
-                                            retryable_before_start
+                                    PhysicalPreparationFailureKind::
+                                    retryable_before_start
                                         ? AsioPhysicalAttemptFailureKind::
-                                            RetryableBeforeRunning
+                                        RetryableBeforeRunning
                                         : AsioPhysicalAttemptFailureKind::
-                                            Fatal;
+                                        Fatal;
                                 auto classified =
                                     HandlePhysicalAttemptFailure(
                                         purpose,
                                         std::move(
                                             prepared.error().
-                                                failure),
+                                                     failure),
                                         kind);
                                 if (!classified)
                                 {
@@ -2535,10 +2520,10 @@ namespace gc::audio
 
                             const auto prepared_directive =
                                 lifecycle_controller_.
-                                    ReportPrepared();
+                                ReportPrepared();
                             if (prepared_directive.kind !=
                                 AsioControlDirectiveKind::
-                                    ContinuePump)
+                                ContinuePump)
                             {
                                 return std::unexpected(Failure(
                                     AsioFailureStage::protocol,
@@ -2555,7 +2540,7 @@ namespace gc::audio
                             }
                             if (observed->directive.kind ==
                                 AsioControlDirectiveKind::
-                                    ReleaseToSuspended)
+                                ReleaseToSuspended)
                             {
                                 directive =
                                     observed->directive;
@@ -2563,7 +2548,7 @@ namespace gc::audio
                             }
                             if (observed->directive.kind !=
                                 AsioControlDirectiveKind::
-                                    ContinuePump)
+                                ContinuePump)
                             {
                                 return std::unexpected(Failure(
                                     AsioFailureStage::protocol,
@@ -2580,12 +2565,12 @@ namespace gc::audio
                                         std::move(
                                             started.error()),
                                         purpose ==
-                                                PhysicalSessionPurpose::
-                                                    FocusRecovery
+                                        PhysicalSessionPurpose::
+                                        FocusRecovery
                                             ? AsioPhysicalAttemptFailureKind::
-                                                RetryableBeforeRunning
+                                            RetryableBeforeRunning
                                             : AsioPhysicalAttemptFailureKind::
-                                                Fatal);
+                                            Fatal);
                                 if (!classified)
                                 {
                                     return std::unexpected(
@@ -2598,10 +2583,10 @@ namespace gc::audio
 
                             const auto priming_directive =
                                 lifecycle_controller_.
-                                    ReportPrimingStarted();
+                                ReportPrimingStarted();
                             if (priming_directive.kind !=
                                 AsioControlDirectiveKind::
-                                    ContinuePump)
+                                ContinuePump)
                             {
                                 return std::unexpected(Failure(
                                     AsioFailureStage::protocol,
@@ -2614,23 +2599,23 @@ namespace gc::audio
                             {
                                 const bool bridge_committed =
                                     presentation_bridge_ !=
-                                        nullptr &&
+                                    nullptr &&
                                     presentation_bridge_->
-                                        Snapshot().
-                                        running_callbacks != 0;
+                                    Snapshot().
+                                    running_callbacks != 0;
                                 auto classified =
                                     HandlePhysicalAttemptFailure(
                                         purpose,
                                         std::move(
                                             stable.error()),
                                         bridge_committed ||
-                                            purpose ==
-                                                PhysicalSessionPurpose::
-                                                    InitialStartup
+                                        purpose ==
+                                        PhysicalSessionPurpose::
+                                        InitialStartup
                                             ? AsioPhysicalAttemptFailureKind::
-                                                Fatal
+                                            Fatal
                                             : AsioPhysicalAttemptFailureKind::
-                                                RetryableBeforeRunning);
+                                            RetryableBeforeRunning);
                                 if (!classified)
                                 {
                                     return std::unexpected(
@@ -2645,7 +2630,7 @@ namespace gc::audio
                             {
                                 directive =
                                     lifecycle_controller_.
-                                        RequestShutdown();
+                                    RequestShutdown();
                                 break;
                             }
                             if (*stable ==
@@ -2653,11 +2638,11 @@ namespace gc::audio
                             {
                                 directive = {
                                     .kind =
-                                        AsioControlDirectiveKind::
-                                            ReleaseToSuspended,
+                                    AsioControlDirectiveKind::
+                                    ReleaseToSuspended,
                                     .recovery_attempt =
-                                        lifecycle_controller_.
-                                            recovery_attempt(),
+                                    lifecycle_controller_.
+                                    recovery_attempt(),
                                 };
                                 break;
                             }
@@ -2665,7 +2650,7 @@ namespace gc::audio
                         }
 
                     case AsioControlDirectiveKind::
-                        ReleaseToSuspended:
+                    ReleaseToSuspended:
                         {
                             auto released =
                                 ReleasePhysicalSessionToSuspended();
@@ -2749,7 +2734,7 @@ namespace gc::audio
                     {
                         const auto stopped =
                             lifecycle_controller_.
-                                RequestShutdown();
+                            RequestShutdown();
                         if (stopped.kind !=
                             AsioControlDirectiveKind::Stop)
                         {
@@ -2764,10 +2749,10 @@ namespace gc::audio
                     {
                         const auto fatal =
                             lifecycle_controller_.
-                                ReportRuntimeFault();
+                            ReportRuntimeFault();
                         if (fatal.kind !=
                             AsioControlDirectiveKind::
-                                FailFatal)
+                            FailFatal)
                         {
                             return Failure(
                                 AsioFailureStage::protocol,
@@ -2784,7 +2769,7 @@ namespace gc::audio
                     }
                     if (observed->directive.kind ==
                         AsioControlDirectiveKind::
-                            ReleaseToSuspended)
+                        ReleaseToSuspended)
                     {
                         auto recovered =
                             DrivePhysicalLifecycle(
@@ -2802,8 +2787,8 @@ namespace gc::audio
                         if (session_ == nullptr ||
                             presentation_bridge_ == nullptr ||
                             presentation_bridge_->state() !=
-                                AsioPresentationBridgeState::
-                                    Running)
+                            AsioPresentationBridgeState::
+                            Running)
                         {
                             return Failure(
                                 AsioFailureStage::runtime_clock,
@@ -2814,22 +2799,22 @@ namespace gc::audio
                             session_recoveries_);
                         ReportLifecycle(
                             AsioSessionLifecycleEvent::
-                                session_recovered,
+                            session_recovered,
                             foreground_monitor_->snapshot(),
                             active_physical_session_generation_.
-                                load(std::memory_order_acquire),
+                            load(std::memory_order_acquire),
                             lifecycle_controller_.
-                                recovery_attempt(),
+                            recovery_attempt(),
                             0,
                             presentation_bridge_->
-                                Snapshot().
-                                handoff_logical_tail,
+                            Snapshot().
+                            handoff_logical_tail,
                             nullptr,
                             &active_physical_session_facts_);
                     }
                     else if (observed->directive.kind !=
-                             AsioControlDirectiveKind::
-                                 ContinuePump)
+                        AsioControlDirectiveKind::
+                        ContinuePump)
                     {
                         return Failure(
                             AsioFailureStage::protocol,
@@ -2932,7 +2917,7 @@ namespace gc::audio
                             presentation_bridge_->ReleaseLease(
                                 logical_render_stream_ != nullptr
                                     ? logical_render_stream_->
-                                        committed_tail()
+                                    committed_tail()
                                     : 0);
                         if (!released)
                         {
@@ -2961,7 +2946,7 @@ namespace gc::audio
                     {
                         const auto tail =
                             logical_render_stream_->
-                                committed_tail();
+                            committed_tail();
                         const auto transferred =
                             logical_render_stream_->Transfer(
                                 *bridge_lease,
@@ -3133,7 +3118,7 @@ namespace gc::audio
                 {
                     return Failure(
                         AsioFailureStage::runtime_clock,
-                        "ASIO logical timeline is unavailable during detached rendering");
+                        "ASIO logical timeline is unavailable during logical pump rendering");
                 }
                 if (!pump_lease_)
                 {
@@ -3147,7 +3132,7 @@ namespace gc::audio
                     return Failure(
                         AsioFailureStage::runtime_clock,
                         std::format(
-                            "ASIO detached timeline advance failed: {}",
+                            "ASIO logical pump timeline advance failed: {}",
                             static_cast<unsigned>(advanced.error())));
                 }
                 const auto projected = logical_clock_->WholeFrameAt(
@@ -3162,7 +3147,7 @@ namespace gc::audio
                     return Failure(
                         AsioFailureStage::runtime_clock,
                         std::format(
-                            "ASIO detached logical projection failed: {}",
+                            "ASIO logical pump projection failed: {}",
                             static_cast<unsigned>(projected.error())));
                 }
                 if (*projected >
@@ -3171,13 +3156,13 @@ namespace gc::audio
                 {
                     return Failure(
                         AsioFailureStage::runtime_clock,
-                        "ASIO detached logical render target overflowed");
+                        "ASIO logical pump render target overflowed");
                 }
                 const auto target =
                     *projected + request_.buffer_frames;
                 for (std::uint32_t block_index = 0;
                      block_index <
-                         kMaximumPrimingRenderBlocksPerCallback &&
+                     kMaximumPrimingRenderBlocksPerCallback &&
                      logical_render_stream_->committed_tail() <= target;
                      ++block_index)
                 {
@@ -3268,9 +3253,9 @@ namespace gc::audio
                 }
                 if (presentation_bridge_ == nullptr ||
                     physical_float_output_.size() !=
-                        static_cast<std::size_t>(
-                            request_.buffer_frames) *
-                            2)
+                    static_cast<std::size_t>(
+                        request_.buffer_frames) *
+                    2)
                 {
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(
@@ -3283,9 +3268,9 @@ namespace gc::audio
                         request,
                         physical_float_output_);
                 if (processed.first_fault !=
-                        AsioPresentationBridgeFault::None ||
+                    AsioPresentationBridgeFault::None ||
                     processed.output_frames !=
-                        request_.buffer_frames)
+                    request_.buffer_frames)
                 {
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(
@@ -3313,17 +3298,17 @@ namespace gc::audio
                     });
                 const AudioRenderBlock bridge_output{
                     .interleaved_stereo =
-                        physical_float_output_,
+                    physical_float_output_,
                     .mixer_result = MA_SUCCESS,
                     .frames_read = request_.buffer_frames,
                     .active_voices = 0,
                     .missing_frames = 0,
                     .silence_reason = processed.audible
-                        ? AudioRenderSilenceReason::none
-                        : AudioRenderSilenceReason::
-                            no_active_voice,
+                                          ? AudioRenderSilenceReason::none
+                                          : AudioRenderSilenceReason::
+                                          no_active_voice,
                     .silence_substituted =
-                        !processed.audible,
+                    !processed.audible,
                 };
                 render_diagnostics_.RecordConversion(
                     bridge_output, conversion);
@@ -3340,7 +3325,7 @@ namespace gc::audio
                 }
                 if (proof_callbacks >= 3 ||
                     processed.state ==
-                        AsioPresentationBridgeState::Running)
+                    AsioPresentationBridgeState::Running)
                 {
                     actions_.signal_event(
                         actions_.context,
@@ -3474,7 +3459,7 @@ namespace gc::audio
                 {
                     logical_timeline_generation =
                         logical_clock_->info().
-                            timeline_generation;
+                                        timeline_generation;
                     const auto current_frame =
                         logical_clock_->WholeFrameAt(
                             actions_.time_get_time_ms(
@@ -3489,18 +3474,18 @@ namespace gc::audio
                 {
                     logical_render_tail =
                         logical_render_stream_->
-                            committed_tail();
+                        committed_tail();
                 }
 
                 const auto phase_frames_to_nanoseconds =
                     [this](const double frames) noexcept
-                    {
-                        return logical_output_sample_rate_ == 0
-                                   ? 0.0
-                                   : frames * 1'000'000'000.0 /
-                                   static_cast<double>(
-                                       logical_output_sample_rate_);
-                    };
+                {
+                    return logical_output_sample_rate_ == 0
+                               ? 0.0
+                               : frames * 1'000'000'000.0 /
+                               static_cast<double>(
+                                   logical_output_sample_rate_);
+                };
 
                 return {
                     .callbacks = callback.callbacks,
@@ -3518,214 +3503,214 @@ namespace gc::audio
                     .reset_requests = callback.reset_requests,
                     .resync_requests = callback.resync_requests,
                     .latency_change_requests =
-                        callback.latency_change_requests,
+                    callback.latency_change_requests,
                     .buffer_size_change_requests =
-                        callback.buffer_size_change_requests,
+                    callback.buffer_size_change_requests,
                     .sample_rate_change_requests =
-                        callback.sample_rate_change_requests,
+                    callback.sample_rate_change_requests,
                     .foreground_losses =
-                        foreground_losses_.load(
-                            std::memory_order_relaxed),
+                    foreground_losses_.load(
+                        std::memory_order_relaxed),
                     .consumed_focus_loss_generation =
-                        consumed_focus_loss_generation_.load(
-                            std::memory_order_relaxed),
+                    consumed_focus_loss_generation_.load(
+                        std::memory_order_relaxed),
                     .logical_timeline_generation =
-                        logical_timeline_generation,
+                    logical_timeline_generation,
                     .logical_sample_rate =
-                        logical_output_sample_rate_,
+                    logical_output_sample_rate_,
                     .logical_current_frame =
-                        logical_current_frame,
+                    logical_current_frame,
                     .logical_render_tail =
-                        logical_render_tail,
+                    logical_render_tail,
                     .physical_session_generation =
-                        physical_session_generation_,
+                    physical_session_generation_,
                     .physical_sample_rate =
-                        physical_contract_established_
-                            ? logical_contract_.sample_rate
-                            : 0,
+                    physical_contract_established_
+                        ? logical_contract_.sample_rate
+                        : 0,
                     .physical_period_frames =
-                        physical_contract_established_
-                            ? logical_contract_.period_frames
-                            : 0,
+                    physical_contract_established_
+                        ? logical_contract_.period_frames
+                        : 0,
                     .physical_output_latency_frames =
-                        physical_contract_established_
-                            ? logical_contract_.
-                                output_latency_frames
-                            : 0,
+                    physical_contract_established_
+                        ? logical_contract_.
+                        output_latency_frames
+                        : 0,
                     .lifecycle_state =
-                        lifecycle_controller_.state(),
+                    lifecycle_controller_.state(),
                     .session_releases =
-                        session_releases_.load(
-                            std::memory_order_relaxed),
+                    session_releases_.load(
+                        std::memory_order_relaxed),
                     .recovery_attempts =
-                        recovery_attempts_.load(
-                            std::memory_order_relaxed),
+                    recovery_attempts_.load(
+                        std::memory_order_relaxed),
                     .recovery_failures =
-                        recovery_failures_.load(
-                            std::memory_order_relaxed),
+                    recovery_failures_.load(
+                        std::memory_order_relaxed),
                     .session_recoveries =
-                        session_recoveries_.load(
-                            std::memory_order_relaxed),
+                    session_recoveries_.load(
+                        std::memory_order_relaxed),
                     .sequential_pump_rendered_frames =
-                        sequential_pump_rendered_frames_.load(
-                            std::memory_order_relaxed),
+                    sequential_pump_rendered_frames_.load(
+                        std::memory_order_relaxed),
                     .bridge_callbacks =
-                        has_bridge ? bridge.callbacks : 0,
+                    has_bridge ? bridge.callbacks : 0,
                     .bridge_priming_callbacks =
-                        has_bridge
-                            ? bridge.priming_callbacks
-                            : 0,
+                    has_bridge
+                        ? bridge.priming_callbacks
+                        : 0,
                     .bridge_running_callbacks =
-                        has_bridge
-                            ? bridge.running_callbacks
-                            : 0,
+                    has_bridge
+                        ? bridge.running_callbacks
+                        : 0,
                     .bridge_handoff_logical_tail =
-                        has_bridge
-                            ? bridge.handoff_logical_tail
-                            : 0,
+                    has_bridge
+                        ? bridge.handoff_logical_tail
+                        : 0,
                     .bridge_logical_rendered_frames =
-                        has_bridge
-                            ? bridge.logical_rendered_frames
-                            : 0,
+                    has_bridge
+                        ? bridge.logical_rendered_frames
+                        : 0,
                     .bridge_initial_phase_error_frames =
-                        has_bridge
-                            ? bridge.initial_phase_error_frames
-                            : 0.0,
+                    has_bridge
+                        ? bridge.initial_phase_error_frames
+                        : 0.0,
                     .bridge_maximum_absolute_phase_error_frames =
-                        has_bridge
-                            ? bridge.
-                                maximum_absolute_phase_error_frames
-                            : 0.0,
+                    has_bridge
+                        ? bridge.
+                        maximum_absolute_phase_error_frames
+                        : 0.0,
                     .bridge_final_phase_error_frames =
-                        has_bridge
-                            ? bridge.final_phase_error_frames
-                            : 0.0,
+                    has_bridge
+                        ? bridge.final_phase_error_frames
+                        : 0.0,
                     .bridge_initial_phase_error_ns =
-                        has_bridge
-                            ? phase_frames_to_nanoseconds(
-                                bridge.initial_phase_error_frames)
-                            : 0.0,
+                    has_bridge
+                        ? phase_frames_to_nanoseconds(
+                            bridge.initial_phase_error_frames)
+                        : 0.0,
                     .bridge_maximum_absolute_phase_error_ns =
-                        has_bridge
-                            ? phase_frames_to_nanoseconds(
-                                bridge.
-                                    maximum_absolute_phase_error_frames)
-                            : 0.0,
+                    has_bridge
+                        ? phase_frames_to_nanoseconds(
+                            bridge.
+                            maximum_absolute_phase_error_frames)
+                        : 0.0,
                     .bridge_final_phase_error_ns =
-                        has_bridge
-                            ? phase_frames_to_nanoseconds(
-                                bridge.final_phase_error_frames)
-                            : 0.0,
+                    has_bridge
+                        ? phase_frames_to_nanoseconds(
+                            bridge.final_phase_error_frames)
+                        : 0.0,
                     .bridge_minimum_rate_ratio_ppm =
-                        has_bridge
-                            ? bridge.minimum_rate_ratio_ppm
-                            : 0.0,
+                    has_bridge
+                        ? bridge.minimum_rate_ratio_ppm
+                        : 0.0,
                     .bridge_maximum_rate_ratio_ppm =
-                        has_bridge
-                            ? bridge.maximum_rate_ratio_ppm
-                            : 0.0,
+                    has_bridge
+                        ? bridge.maximum_rate_ratio_ppm
+                        : 0.0,
                     .bridge_final_rate_ratio_ppm =
-                        has_bridge
-                            ? bridge.final_rate_ratio_ppm
-                            : 0.0,
+                    has_bridge
+                        ? bridge.final_rate_ratio_ppm
+                        : 0.0,
                     .bridge_input_high_water_frames =
-                        has_bridge
-                            ? bridge.input_high_water_frames
-                            : 0,
+                    has_bridge
+                        ? bridge.input_high_water_frames
+                        : 0,
                     .bridge_input_underflows =
-                        has_bridge
-                            ? bridge.input_underflows
-                            : 0,
+                    has_bridge
+                        ? bridge.input_underflows
+                        : 0,
                     .bridge_input_overflows =
-                        has_bridge
-                            ? bridge.input_overflows
-                            : 0,
+                    has_bridge
+                        ? bridge.input_overflows
+                        : 0,
                     .bridge_conversion_failures =
-                        has_bridge
-                            ? bridge.conversion_failures
-                            : 0,
+                    has_bridge
+                        ? bridge.conversion_failures
+                        : 0,
                     .bridge_phase_envelope_violations =
-                        has_bridge
-                            ? bridge.phase_envelope_violations
-                            : 0,
+                    has_bridge
+                        ? bridge.phase_envelope_violations
+                        : 0,
                     .bridge_non_finite_output_blocks =
-                        has_bridge
-                            ? bridge.non_finite_output_blocks
-                            : 0,
+                    has_bridge
+                        ? bridge.non_finite_output_blocks
+                        : 0,
                     .expected_period_ns = callback.expected_period_ns,
                     .callback_interval_samples =
-                        callback.callback_interval_samples,
+                    callback.callback_interval_samples,
                     .total_callback_interval_ticks =
-                        callback.total_callback_interval_ticks,
+                    callback.total_callback_interval_ticks,
                     .maximum_callback_interval_ticks =
-                        callback.maximum_callback_interval_ticks,
+                    callback.maximum_callback_interval_ticks,
                     .early_callback_intervals =
-                        callback.early_callback_intervals,
+                    callback.early_callback_intervals,
                     .late_callback_intervals =
-                        callback.late_callback_intervals,
+                    callback.late_callback_intervals,
                     .severe_callback_intervals =
-                        callback.severe_callback_intervals,
+                    callback.severe_callback_intervals,
                     .timed_callback_work_samples =
-                        callback.timed_callback_work_samples,
+                    callback.timed_callback_work_samples,
                     .total_callback_ticks =
-                        callback.total_callback_ticks,
+                    callback.total_callback_ticks,
                     .maximum_callback_ticks =
-                        callback.maximum_callback_ticks,
+                    callback.maximum_callback_ticks,
                     .timed_render_work_samples =
-                        callback.timed_render_work_samples,
+                    callback.timed_render_work_samples,
                     .total_render_ticks =
-                        callback.total_render_ticks,
+                    callback.total_render_ticks,
                     .maximum_render_ticks =
-                        callback.maximum_render_ticks,
+                    callback.maximum_render_ticks,
                     .driver_interval_samples =
-                        callback.driver_interval_samples,
+                    callback.driver_interval_samples,
                     .maximum_driver_period_error_ns =
-                        callback.maximum_driver_period_error_ns,
+                    callback.maximum_driver_period_error_ns,
                     .maximum_host_driver_interval_skew_ns =
-                        callback.maximum_host_driver_interval_skew_ns,
+                    callback.maximum_host_driver_interval_skew_ns,
                     .buffer_alternation_violations =
-                        callback.buffer_alternation_violations,
+                    callback.buffer_alternation_violations,
                     .no_active_voice_silence_blocks =
-                        render.no_active_voice_silence_blocks,
+                    render.no_active_voice_silence_blocks,
                     .active_short_read_blocks =
-                        render.active_short_read_blocks,
+                    render.active_short_read_blocks,
                     .mixer_error_blocks =
-                        render.mixer_error_blocks,
+                    render.mixer_error_blocks,
                     .render_contract_error_blocks =
-                        render.render_contract_error_blocks,
+                    render.render_contract_error_blocks,
                     .short_read_missing_frames =
-                        render.short_read_missing_frames,
+                    render.short_read_missing_frames,
                     .first_mixer_error =
-                        render.first_mixer_error,
+                    render.first_mixer_error,
                     .clipped_output_blocks =
-                        render.clipped_output_blocks,
+                    render.clipped_output_blocks,
                     .clipped_output_samples =
-                        render.clipped_output_samples,
+                    render.clipped_output_samples,
                     .zero_output_blocks_with_active_voice =
-                        render.zero_output_blocks_with_active_voice,
+                    render.zero_output_blocks_with_active_voice,
                     .zero_output_blocks_without_active_voice =
-                        render.zero_output_blocks_without_active_voice,
+                    render.zero_output_blocks_without_active_voice,
                     .non_finite_output_blocks =
-                        render.non_finite_output_blocks,
+                    render.non_finite_output_blocks,
                     .maximum_absolute_output_sample =
-                        render.maximum_absolute_output_sample,
+                    render.maximum_absolute_output_sample,
                     .qpc_frequency = callback.qpc_frequency,
                     .judgement_timeline_resolved_queries =
-                        timeline.resolved_queries,
+                    timeline.resolved_queries,
                     .judgement_timeline_pending_queries =
-                        timeline.pending_queries,
+                    timeline.pending_queries,
                     .judgement_timeline_temporarily_unavailable_queries =
-                        timeline.temporarily_unavailable_queries,
+                    timeline.temporarily_unavailable_queries,
                     .judgement_timeline_history_lost_queries =
-                        timeline.history_lost_queries,
+                    timeline.history_lost_queries,
                     .judgement_timeline_discontinuous_queries =
-                        timeline.discontinuous_queries,
+                    timeline.discontinuous_queries,
                     .pending_cursor_queries =
-                        pending_cursor_queries_.load(
-                            std::memory_order_relaxed),
+                    pending_cursor_queries_.load(
+                        std::memory_order_relaxed),
                     .unmapped_cursor_failures =
-                        unmapped_cursor_failures_.load(
-                            std::memory_order_relaxed),
+                    unmapped_cursor_failures_.load(
+                        std::memory_order_relaxed),
                     .mixer = render_core_ != nullptr
                                  ? render_core_->diagnostics()
                                  : MixerDiagnosticsSnapshot{},
@@ -3760,14 +3745,14 @@ namespace gc::audio
             std::unique_ptr<AsioSession> session_;
             std::unique_ptr<AsioCallbackRuntime> callback_runtime_;
             std::unique_ptr<AsioPresentationBridge>
-                presentation_bridge_;
+            presentation_bridge_;
             std::vector<float> physical_float_output_;
             std::unique_ptr<AudioRenderCore> render_core_;
             std::unique_ptr<LogicalRenderStream>
-                logical_render_stream_;
+            logical_render_stream_;
             std::optional<LogicalRenderLease> pump_lease_;
             std::optional<LogicalRenderLease>
-                pending_bridge_lease_;
+            pending_bridge_lease_;
             std::shared_ptr<LogicalPresentationClock> logical_clock_;
             ExactJudgementTimelineCounters final_exact_clock_counters_{};
             bool has_final_exact_clock_counters_{};

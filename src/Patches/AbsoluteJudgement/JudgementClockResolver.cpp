@@ -21,7 +21,7 @@ namespace gc::absolute_judgement
         }
 
         [[nodiscard]] JudgementClockStatus TimelineStatus(const ExactClockStatus status,
-                                                           const bool before_binding) noexcept
+                                                          const bool before_binding) noexcept
         {
             switch (status)
             {
@@ -30,8 +30,9 @@ namespace gc::absolute_judgement
             case ExactClockStatus::TemporarilyUnavailable:
                 return JudgementClockStatus::TemporarilyUnavailable;
             case ExactClockStatus::HistoryLost:
-                return before_binding ? JudgementClockStatus::HistoryLostBeforeBinding
-                                      : JudgementClockStatus::UnsupportedContinuity;
+                return before_binding
+                           ? JudgementClockStatus::HistoryLostBeforeBinding
+                           : JudgementClockStatus::UnsupportedContinuity;
             case ExactClockStatus::Resolved:
                 return JudgementClockStatus::Resolved;
             default:
@@ -40,13 +41,14 @@ namespace gc::absolute_judgement
         }
 
         [[nodiscard]] JudgementClockResult TimelineFailure(const gc::audio::ExactJudgementTimelineResult& timeline,
-                                                            const bool before_binding) noexcept
+                                                           const bool before_binding) noexcept
         {
             return {
                 .status = TimelineStatus(timeline.status, before_binding),
                 .failure = timeline.status == ExactClockStatus::HistoryLost
-                               ? (before_binding ? JudgementClockFailure::StageOriginHistoryLost
-                                                 : JudgementClockFailure::TimelineProjectionDiscontinuous)
+                               ? (before_binding
+                                      ? JudgementClockFailure::StageOriginHistoryLost
+                                      : JudgementClockFailure::TimelineProjectionDiscontinuous)
                                : JudgementClockFailure::None,
                 .output_frame = timeline.logical_output_frame,
                 .provider_anchor_sequence = timeline.provider_anchor_sequence,
@@ -255,7 +257,7 @@ namespace gc::absolute_judgement
             }
             if (earliest == nullptr || epoch.output_origin < earliest->output_origin ||
                 (epoch.output_origin == earliest->output_origin &&
-                 epoch.playback_generation < earliest->playback_generation))
+                    epoch.playback_generation < earliest->playback_generation))
             {
                 earliest = &epoch;
             }
@@ -299,8 +301,9 @@ namespace gc::absolute_judgement
         {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
-                .failure = !stage_anchor.timeline ? JudgementClockFailure::TimelineProviderChanged
-                                                  : JudgementClockFailure::TimelineGenerationChanged,
+                .failure = !stage_anchor.timeline
+                               ? JudgementClockFailure::TimelineProviderChanged
+                               : JudgementClockFailure::TimelineGenerationChanged,
             };
         }
 

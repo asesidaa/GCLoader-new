@@ -144,12 +144,14 @@ namespace
             return core_->CurrentOutputFrame();
         }
 
-        std::uint32_t endpoint_buffer_frames() const noexcept override
+        [[nodiscard]] std::uint32_t
+        endpoint_buffer_frames() const noexcept override
         {
             return kPeriodFrames;
         }
 
-        std::uint32_t output_sample_rate() const noexcept override
+        [[nodiscard]] std::uint32_t
+        output_sample_rate() const noexcept override
         {
             return kLogicalRate;
         }
@@ -224,7 +226,7 @@ namespace
         const std::string_view message)
     {
         Expect(CurrentPlayCursor(buffer) ==
-                   static_cast<DWORD>(expected_frame * kBlockAlign),
+               static_cast<DWORD>(expected_frame * kBlockAlign),
                message);
     }
 
@@ -241,7 +243,7 @@ namespace
         const DSBUFFERDESC descriptor{
             .dwSize = sizeof(DSBUFFERDESC),
             .dwFlags = DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME |
-                DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER,
+            DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER,
             .dwBufferBytes = kBufferBytes,
             .dwReserved = 0,
             .lpwfxFormat = &format,

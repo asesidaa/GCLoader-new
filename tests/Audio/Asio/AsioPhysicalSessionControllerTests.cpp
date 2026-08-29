@@ -138,6 +138,8 @@ namespace
         const std::string_view name,
         const std::array<Step, N>& steps)
     {
+        // One controller must retain state across every step in the scenario.
+        // ReSharper disable once CppTooWideScope
         AsioPhysicalSessionController controller;
         for (std::size_t index = 0; index < steps.size(); ++index)
         {
@@ -150,7 +152,7 @@ namespace
                 controller.commit_phase() != expected.phase ||
                 controller.recovery_attempt() != expected.recovery_attempt ||
                 controller.consumed_focus_loss_generation() !=
-                    expected.consumed_loss_generation)
+                expected.consumed_loss_generation)
             {
                 std::cerr
                     << "FAIL: " << name << " step " << index

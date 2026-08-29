@@ -43,7 +43,7 @@ namespace gc::audio
 
         if (sample_position >
             std::numeric_limits<std::uint64_t>::max() -
-                output_latency_frames_)
+            output_latency_frames_)
         {
             return Fault();
         }
@@ -55,7 +55,7 @@ namespace gc::audio
             .kind = AsioClockDecisionKind::valid,
             .presented_output_frame = sample_position,
             .render_output_frame_begin =
-                sample_position + output_latency_frames_,
+            sample_position + output_latency_frames_,
         };
     }
 } // namespace gc::audio

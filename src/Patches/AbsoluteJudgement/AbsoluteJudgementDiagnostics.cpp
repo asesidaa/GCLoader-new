@@ -1782,7 +1782,8 @@ namespace gc::absolute_judgement
             const auto size = (std::min)(
                 static_cast<std::size_t>(result.size), emergency.size() - 1);
             emergency[size] = '\0';
-            PLOG_FATAL << std::string_view(emergency.data(), size);
+            PLOG_FATAL // NOLINT(bugprone-lambda-function-name)
+                << std::string_view(emergency.data(), size);
             gc::session_log::FlushActiveProcessLog();
             RaiseFailFastException(nullptr, nullptr, 0);
             std::abort();

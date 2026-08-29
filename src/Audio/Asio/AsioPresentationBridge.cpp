@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <cstddef>
 #include <limits>
 #include <new>
 #include <utility>
@@ -30,8 +29,8 @@ namespace gc::audio
         {
             if (result == nullptr ||
                 right >
-                    (std::numeric_limits<std::uint64_t>::max)() -
-                        left)
+                (std::numeric_limits<std::uint64_t>::max)() -
+                left)
             {
                 return false;
             }
@@ -46,9 +45,9 @@ namespace gc::audio
         {
             if (result == nullptr ||
                 (left != 0 &&
-                 right >
-                     (std::numeric_limits<std::uint64_t>::max)() /
-                         left))
+                    right >
+                    (std::numeric_limits<std::uint64_t>::max)() /
+                    left))
             {
                 return false;
             }
@@ -63,23 +62,23 @@ namespace gc::audio
         {
             std::uint64_t four_periods{};
             if (!CheckedMultiply(
-                    config.period_frames, 4, &four_periods))
+                config.period_frames, 4, &four_periods))
             {
                 return false;
             }
             const std::uint64_t minimum_time_frames =
                 (static_cast<std::uint64_t>(config.logical_rate) *
-                     kMinimumPhaseEnvelopeMs +
-                 999) /
+                    kMinimumPhaseEnvelopeMs +
+                    999) /
                 1'000;
             const auto base =
                 (std::max)(four_periods, minimum_time_frames);
 
             std::uint64_t quantum_numerator{};
             if (!CheckedMultiply(
-                    config.logical_rate,
-                    config.timestamp_quantum_ns,
-                    &quantum_numerator))
+                config.logical_rate,
+                config.timestamp_quantum_ns,
+                &quantum_numerator))
             {
                 return false;
             }
@@ -89,7 +88,7 @@ namespace gc::audio
             std::uint64_t doubled_quantum{};
             std::uint64_t with_quantum{};
             return CheckedMultiply(
-                       quantum_frames, 2, &doubled_quantum) &&
+                    quantum_frames, 2, &doubled_quantum) &&
                 CheckedAdd(
                     base, doubled_quantum, &with_quantum) &&
                 CheckedAdd(
@@ -144,10 +143,10 @@ namespace gc::audio
     AsioPresentationBridge::AsioPresentationBridge(
         const AsioPresentationBridgeConfig& config,
         std::shared_ptr<const LogicalPresentationClock>
-            logical_clock,
+        logical_clock,
         LogicalRenderStream& logical_render_stream,
         std::unique_ptr<AsioPresentationRateMatcher>
-            rate_matcher,
+        rate_matcher,
         const std::uint64_t phase_envelope_frames) noexcept
         : config_(config),
           logical_clock_(std::move(logical_clock)),
@@ -170,10 +169,10 @@ namespace gc::audio
     AsioPresentationBridge::Create(
         const AsioPresentationBridgeConfig& config,
         std::shared_ptr<const LogicalPresentationClock>
-            logical_clock,
+        logical_clock,
         LogicalRenderStream& logical_render_stream,
         std::shared_ptr<const ma_allocation_callbacks>
-            allocation_callbacks) noexcept
+        allocation_callbacks) noexcept
     {
         if (config.physical_session_generation == 0 ||
             config.logical_rate == 0 ||
@@ -203,14 +202,15 @@ namespace gc::audio
         }
         std::uint64_t phase_envelope{};
         if (!ComputePhaseEnvelope(
-                config,
-                (*matcher_result)->input_latency_frames(),
-                &phase_envelope))
+            config,
+            (*matcher_result)->input_latency_frames(),
+            &phase_envelope))
         {
             return {};
         }
 
-        return std::unique_ptr<AsioPresentationBridge>{
+        return std::unique_ptr < AsioPresentationBridge >
+        {
             new(std::nothrow) AsioPresentationBridge(
                 config,
                 std::move(logical_clock),
@@ -277,7 +277,7 @@ namespace gc::audio
             ReleaseClaim();
             return std::unexpected(
                 AsioPresentationBridgeControlFailure::
-                    MatcherResetFailed);
+                MatcherResetFailed);
         }
 
         lease_ = lease;
@@ -380,7 +380,7 @@ namespace gc::audio
     {
         if (target_source_phase == nullptr ||
             (request.buffer_index != 0 &&
-             request.buffer_index != 1) ||
+                request.buffer_index != 1) ||
             !request.has_system_time)
         {
             LatchFault(
@@ -391,8 +391,8 @@ namespace gc::audio
             physical_clock_.Observe(request.sample_position);
         if (physical.kind != AsioClockDecisionKind::valid ||
             (has_previous_system_time_ &&
-             request.system_time_ns <
-                 previous_system_time_ns_))
+                request.system_time_ns <
+                previous_system_time_ns_))
         {
             LatchFault(
                 AsioPresentationBridgeFault::InvalidClock);
@@ -454,7 +454,7 @@ namespace gc::audio
 
         for (std::uint32_t block = 0;
              block <
-                 kMaximumPrimingRenderBlocksPerCallback &&
+             kMaximumPrimingRenderBlocksPerCallback &&
              rate_matcher_->buffered_input_frames() < *required;
              ++block)
         {
@@ -506,7 +506,7 @@ namespace gc::audio
                 logical_render_stream_.Abandon(*plan));
             LatchFault(
                 AsioPresentationBridgeFault::
-                    RenderDiscontinuity);
+                RenderDiscontinuity);
             return false;
         }
 
@@ -517,12 +517,12 @@ namespace gc::audio
             kChannels;
         if (block.mixer_result != MA_SUCCESS ||
             block.interleaved_stereo.size() !=
-                expected_samples ||
+            expected_samples ||
             block.silence_reason ==
-                AudioRenderSilenceReason::mixer_error ||
+            AudioRenderSilenceReason::mixer_error ||
             block.silence_reason ==
-                AudioRenderSilenceReason::
-                    render_contract_error)
+            AudioRenderSilenceReason::
+            render_contract_error)
         {
             LatchFault(
                 AsioPresentationBridgeFault::RenderFailure);
@@ -535,13 +535,13 @@ namespace gc::audio
         {
             if (pushed.error() ==
                 AsioPresentationRateMatcherFailure::
-                    InputOverflow)
+                InputOverflow)
             {
                 input_overflows_.fetch_add(
                     1, std::memory_order_relaxed);
                 LatchFault(
                     AsioPresentationBridgeFault::
-                        InputOverflow);
+                    InputOverflow);
             }
             else
             {
@@ -549,7 +549,7 @@ namespace gc::audio
                     1, std::memory_order_relaxed);
                 LatchFault(
                     AsioPresentationBridgeFault::
-                        ConversionFailure);
+                    ConversionFailure);
             }
             return false;
         }
@@ -557,7 +557,7 @@ namespace gc::audio
         {
             LatchFault(
                 AsioPresentationBridgeFault::
-                    RenderCommitFailure);
+                RenderCommitFailure);
             return false;
         }
 
@@ -574,13 +574,14 @@ namespace gc::audio
             rate_matcher_->buffered_input_frames();
         auto observed = input_high_water_frames_.load(
             std::memory_order_relaxed);
-        while (observed < value &&
-               !input_high_water_frames_.compare_exchange_weak(
-                   observed,
-                   value,
-                   std::memory_order_relaxed,
-                   std::memory_order_relaxed))
+        if (observed < value)
         {
+            static_cast<void>(
+                input_high_water_frames_.compare_exchange_strong(
+                    observed,
+                    value,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed));
         }
     }
 
@@ -664,13 +665,13 @@ namespace gc::audio
         const auto horizon_frames =
             static_cast<double>(config_.logical_rate) *
             kPhaseCorrectionHorizonSeconds;
-        const auto maximum_correction =
+        constexpr auto maximum_correction =
             kMaximumRateCorrectionPpm / kPpmScale;
         const auto requested = std::clamp(
             1.0 + filtered / horizon_frames,
             1.0 - maximum_correction,
             1.0 + maximum_correction);
-        const auto maximum_slew =
+        constexpr auto maximum_slew =
             kMaximumRateSlewPpmPerCallback / kPpmScale;
         const auto slewed = std::clamp(
             requested,
@@ -685,7 +686,7 @@ namespace gc::audio
                 1, std::memory_order_relaxed);
             LatchFault(
                 AsioPresentationBridgeFault::
-                    RateControlFailure);
+                RateControlFailure);
             return false;
         }
         current_rate_ratio_ = *actual;
@@ -708,7 +709,7 @@ namespace gc::audio
                 1, std::memory_order_relaxed);
             LatchFault(
                 AsioPresentationBridgeFault::
-                    PhaseEnvelopeViolation);
+                PhaseEnvelopeViolation);
             return false;
         }
         if (!ApplyRateControl(phase_error) ||
@@ -722,13 +723,13 @@ namespace gc::audio
         {
             if (converted.error() ==
                 AsioPresentationRateMatcherFailure::
-                    InputUnderflow)
+                InputUnderflow)
             {
                 input_underflows_.fetch_add(
                     1, std::memory_order_relaxed);
                 LatchFault(
                     AsioPresentationBridgeFault::
-                        InputStarvation);
+                    InputStarvation);
             }
             else
             {
@@ -736,14 +737,13 @@ namespace gc::audio
                     1, std::memory_order_relaxed);
                 LatchFault(
                     AsioPresentationBridgeFault::
-                        ConversionFailure);
+                    ConversionFailure);
             }
             return false;
         }
         if (converted->size() != output.size() ||
-            !std::all_of(
-                converted->begin(),
-                converted->end(),
+            !std::ranges::all_of(
+                *converted,
                 [](const float sample)
                 {
                     return std::isfinite(sample);
@@ -753,19 +753,18 @@ namespace gc::audio
                 1, std::memory_order_relaxed);
             LatchFault(
                 AsioPresentationBridgeFault::
-                    NonFiniteOutput);
+                NonFiniteOutput);
             return false;
         }
 
-        std::copy(
-            converted->begin(), converted->end(), output.begin());
+        std::ranges::copy(*converted, output.begin());
         source_phase_ +=
             current_rate_ratio_ * config_.period_frames;
         if (!std::isfinite(source_phase_))
         {
             LatchFault(
                 AsioPresentationBridgeFault::ArithmeticOverflow);
-            std::fill(output.begin(), output.end(), 0.0F);
+            std::ranges::fill(output, 0.0F);
             return false;
         }
 
@@ -787,7 +786,7 @@ namespace gc::audio
     {
         if (source_phase_ >
             target_source_phase +
-                kPrimingAlignmentToleranceFrames)
+            kPrimingAlignmentToleranceFrames)
         {
             return false;
         }
@@ -798,8 +797,8 @@ namespace gc::audio
                 target_source_phase - source_phase_);
         if (!std::isfinite(difference) ||
             difference >
-                static_cast<double>(
-                    (std::numeric_limits<std::uint64_t>::max)()))
+            static_cast<double>(
+                (std::numeric_limits<std::uint64_t>::max)()))
         {
             LatchFault(
                 AsioPresentationBridgeFault::ArithmeticOverflow);
@@ -811,9 +810,9 @@ namespace gc::audio
                 difference / current_rate_ratio_));
         std::uint64_t maximum_discard{};
         if (!CheckedMultiply(
-                config_.period_frames,
-                kMaximumPrimingDiscardPeriods,
-                &maximum_discard))
+            config_.period_frames,
+            kMaximumPrimingDiscardPeriods,
+            &maximum_discard))
         {
             LatchFault(
                 AsioPresentationBridgeFault::ArithmeticOverflow);
@@ -844,7 +843,7 @@ namespace gc::audio
                     1, std::memory_order_relaxed);
                 LatchFault(
                     AsioPresentationBridgeFault::
-                        ConversionFailure);
+                    ConversionFailure);
                 return false;
             }
             source_phase_ +=
@@ -869,28 +868,22 @@ namespace gc::audio
     {
         if (interleaved_stereo_output.size() !=
             static_cast<std::size_t>(config_.period_frames) *
-                kChannels)
+            kChannels)
         {
-            std::fill(
-                interleaved_stereo_output.begin(),
-                interleaved_stereo_output.end(),
-                0.0F);
+            std::ranges::fill(interleaved_stereo_output, 0.0F);
             LatchFault(
                 AsioPresentationBridgeFault::
-                    InvalidOutputBuffer);
+                InvalidOutputBuffer);
             return {
                 .state = state(),
                 .first_fault =
-                    AsioPresentationBridgeFault::
-                        InvalidOutputBuffer,
+                AsioPresentationBridgeFault::
+                InvalidOutputBuffer,
                 .output_frames = 0,
                 .audible = false,
             };
         }
-        std::fill(
-            interleaved_stereo_output.begin(),
-            interleaved_stereo_output.end(),
-            0.0F);
+        std::ranges::fill(interleaved_stereo_output, 0.0F);
 
         if (!TryAcquireClaim())
         {
@@ -899,7 +892,7 @@ namespace gc::audio
             {
                 LatchFault(
                     AsioPresentationBridgeFault::
-                        ConcurrentAccess);
+                    ConcurrentAccess);
             }
             return Result(false);
         }
@@ -909,11 +902,11 @@ namespace gc::audio
         const auto current = state();
         if (current != AsioPresentationBridgeState::Faulted &&
             current !=
-                AsioPresentationBridgeState::Quiescing)
+            AsioPresentationBridgeState::Quiescing)
         {
             double target_source_phase{};
             if (ValidateAndProjectTarget(
-                    request, &target_source_phase))
+                request, &target_source_phase))
             {
                 const auto validated_state = state();
                 if (validated_state ==
@@ -924,7 +917,7 @@ namespace gc::audio
                         interleaved_stereo_output);
                 }
                 else if (validated_state ==
-                         AsioPresentationBridgeState::Running)
+                    AsioPresentationBridgeState::Running)
                 {
                     audible = ProduceRunningPeriod(
                         target_source_phase,
@@ -936,9 +929,9 @@ namespace gc::audio
 
         if (!audible &&
             (state() ==
-                 AsioPresentationBridgeState::Priming ||
-             state() ==
-                 AsioPresentationBridgeState::Armed))
+                AsioPresentationBridgeState::Priming ||
+                state() ==
+                AsioPresentationBridgeState::Armed))
         {
             priming_callbacks_.fetch_add(
                 1, std::memory_order_relaxed);
@@ -955,9 +948,9 @@ namespace gc::audio
         return {
             .state = state(),
             .first_fault =
-                static_cast<AsioPresentationBridgeFault>(
-                    first_fault_.load(
-                        std::memory_order_acquire)),
+            static_cast<AsioPresentationBridgeFault>(
+                first_fault_.load(
+                    std::memory_order_acquire)),
             .output_frames = config_.period_frames,
             .audible = audible,
         };
@@ -969,61 +962,61 @@ namespace gc::audio
         return {
             .state = state(),
             .first_fault =
-                static_cast<AsioPresentationBridgeFault>(
-                    first_fault_.load(
-                        std::memory_order_acquire)),
+            static_cast<AsioPresentationBridgeFault>(
+                first_fault_.load(
+                    std::memory_order_acquire)),
             .physical_session_generation =
-                config_.physical_session_generation,
+            config_.physical_session_generation,
             .callbacks =
-                callbacks_.load(std::memory_order_acquire),
+            callbacks_.load(std::memory_order_acquire),
             .priming_callbacks =
-                priming_callbacks_.load(
-                    std::memory_order_acquire),
+            priming_callbacks_.load(
+                std::memory_order_acquire),
             .running_callbacks =
-                running_callbacks_.load(
-                    std::memory_order_acquire),
+            running_callbacks_.load(
+                std::memory_order_acquire),
             .handoff_logical_tail =
-                handoff_logical_tail_.load(
-                    std::memory_order_acquire),
+            handoff_logical_tail_.load(
+                std::memory_order_acquire),
             .logical_rendered_frames =
-                logical_rendered_frames_.load(
-                    std::memory_order_acquire),
+            logical_rendered_frames_.load(
+                std::memory_order_acquire),
             .input_high_water_frames =
-                input_high_water_frames_.load(
-                    std::memory_order_acquire),
+            input_high_water_frames_.load(
+                std::memory_order_acquire),
             .input_underflows =
-                input_underflows_.load(
-                    std::memory_order_acquire),
+            input_underflows_.load(
+                std::memory_order_acquire),
             .input_overflows =
-                input_overflows_.load(
-                    std::memory_order_acquire),
+            input_overflows_.load(
+                std::memory_order_acquire),
             .conversion_failures =
-                conversion_failures_.load(
-                    std::memory_order_acquire),
+            conversion_failures_.load(
+                std::memory_order_acquire),
             .phase_envelope_violations =
-                phase_envelope_violations_.load(
-                    std::memory_order_acquire),
+            phase_envelope_violations_.load(
+                std::memory_order_acquire),
             .non_finite_output_blocks =
-                non_finite_output_blocks_.load(
-                    std::memory_order_acquire),
+            non_finite_output_blocks_.load(
+                std::memory_order_acquire),
             .resampler_input_latency_frames =
-                rate_matcher_->input_latency_frames(),
+            rate_matcher_->input_latency_frames(),
             .resampler_output_latency_frames =
-                rate_matcher_->output_latency_frames(),
+            rate_matcher_->output_latency_frames(),
             .phase_envelope_frames = phase_envelope_frames_,
             .initial_phase_error_frames =
-                LoadDouble(initial_phase_error_bits_),
+            LoadDouble(initial_phase_error_bits_),
             .maximum_absolute_phase_error_frames =
-                LoadDouble(
-                    maximum_absolute_phase_error_bits_),
+            LoadDouble(
+                maximum_absolute_phase_error_bits_),
             .final_phase_error_frames =
-                LoadDouble(final_phase_error_bits_),
+            LoadDouble(final_phase_error_bits_),
             .minimum_rate_ratio_ppm =
-                LoadDouble(minimum_rate_ratio_ppm_bits_),
+            LoadDouble(minimum_rate_ratio_ppm_bits_),
             .maximum_rate_ratio_ppm =
-                LoadDouble(maximum_rate_ratio_ppm_bits_),
+            LoadDouble(maximum_rate_ratio_ppm_bits_),
             .final_rate_ratio_ppm =
-                LoadDouble(final_rate_ratio_ppm_bits_),
+            LoadDouble(final_rate_ratio_ppm_bits_),
         };
     }
 

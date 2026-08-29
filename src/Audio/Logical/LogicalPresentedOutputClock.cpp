@@ -40,11 +40,11 @@ namespace gc::audio
     {
         auto previous = last_returned_.load(std::memory_order_relaxed);
         while (previous < frame &&
-               !last_returned_.compare_exchange_weak(
-                   previous,
-                   frame,
-                   std::memory_order_release,
-                   std::memory_order_relaxed))
+            !last_returned_.compare_exchange_weak(
+                previous,
+                frame,
+                std::memory_order_release,
+                std::memory_order_relaxed))
         {
         }
         return previous < frame ? frame : previous;

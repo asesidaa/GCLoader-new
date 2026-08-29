@@ -55,7 +55,7 @@ namespace gc::audio
     }
 
     std::unique_ptr<AsioForegroundMonitor> AsioForegroundMonitor::Start(
-        const HWND game_window,
+        HWND game_window,
         AsioFailure* failure) noexcept
     {
         if (failure != nullptr)
@@ -180,7 +180,7 @@ namespace gc::audio
     void AsioForegroundMonitor::CloseEvents() noexcept
     {
         const HANDLE events[]{ready_event_, change_event_, shutdown_event_};
-        for (const HANDLE event : events)
+        for (const auto event : events)
         {
             if (event != nullptr)
             {
@@ -199,7 +199,7 @@ namespace gc::audio
         thread_id_.store(GetCurrentThreadId(), std::memory_order_release);
         callback_owner_ = this;
 
-        const HWINEVENTHOOK hook = SetWinEventHook(
+        const auto hook = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
             nullptr,
@@ -311,7 +311,7 @@ namespace gc::audio
 
     bool AsioForegroundMonitor::QueryForegroundWindow() const noexcept
     {
-        const HWND foreground = GetForegroundWindow();
+        const auto foreground = GetForegroundWindow();
         if (foreground == nullptr)
         {
             return false;

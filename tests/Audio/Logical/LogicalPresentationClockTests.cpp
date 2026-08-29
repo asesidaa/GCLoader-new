@@ -49,8 +49,8 @@ namespace
             actual->denominator() != denominator)
         {
             std::cerr << "FAIL: " << message << " (got "
-                      << actual->numerator() << '/' << actual->denominator()
-                      << ")\n";
+                << actual->numerator() << '/' << actual->denominator()
+                << ")\n";
             ++failures;
         }
     }
@@ -177,7 +177,7 @@ namespace
             return;
         }
 
-        const AbsoluteHostTime event{
+        constexpr AbsoluteHostTime event{
             .qpc_ticks = 10'010'000,
             .multimedia_time_ms = 1'001,
         };

@@ -4,13 +4,11 @@
 #include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <Windows.h>
-#include <mmreg.h>
+#include <mmreg.h> // IWYU pragma: keep
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -60,8 +58,9 @@ namespace
         std::optional<std::uint64_t>
         CurrentOutputFrame() noexcept override
         {
-            return invalidated_ ? std::nullopt
-                                : std::optional<std::uint64_t>{0};
+            return invalidated_
+                       ? std::nullopt
+                       : std::optional<std::uint64_t>{0};
         }
 
         void Invalidate() noexcept override
@@ -86,7 +85,7 @@ namespace
         };
         NormalizedSourceFormat normalized{};
         Expect(SUCCEEDED(gc::audio::NormalizeSourceFormat(
-                   &wave, &normalized)),
+            &wave, &normalized)),
                "production format normalization succeeds");
         return normalized;
     }
@@ -99,7 +98,7 @@ namespace
             std::make_shared<AudioSnapshot>(byte_length, kBlockAlign);
         gc::audio::AudioLockRegions regions{};
         Expect(SUCCEEDED(snapshot->Lock(
-                   0, byte_length, 0, &regions)),
+            0, byte_length, 0, &regions)),
                "production snapshot lock succeeds");
         if (regions.first)
         {
@@ -110,10 +109,10 @@ namespace
             std::memset(regions.second, 0x10, regions.second_bytes);
         }
         Expect(SUCCEEDED(snapshot->Unlock(
-                   regions.first,
-                   regions.first_bytes,
-                   regions.second,
-                   regions.second_bytes)),
+            regions.first,
+            regions.first_bytes,
+            regions.second,
+            regions.second_bytes)),
                "production snapshot publication succeeds");
         return snapshot;
     }
@@ -224,7 +223,7 @@ namespace
         };
         const auto concurrent = stream->BeginRender(forged_bridge);
         Expect(!concurrent &&
-                   concurrent.error() == LogicalRenderFailure::InvalidLease,
+               concurrent.error() == LogicalRenderFailure::InvalidLease,
                "a second owner cannot plan under the pump lease");
 
         const auto abandoned = stream->BeginRender(pump);
@@ -265,7 +264,7 @@ namespace
                "bridge acquires the exact committed tail");
         const auto stale_pump = stream->BeginRender(pump);
         Expect(!stale_pump &&
-                   stale_pump.error() == LogicalRenderFailure::InvalidLease,
+               stale_pump.error() == LogicalRenderFailure::InvalidLease,
                "pump lease is invalid immediately after transfer");
 
         const auto bridge_plan = stream->BeginRender(bridge);
@@ -291,7 +290,7 @@ namespace
                "pump reacquires the exact committed tail");
         const auto stale_bridge = stream->BeginRender(bridge);
         Expect(!stale_bridge &&
-                   stale_bridge.error() == LogicalRenderFailure::InvalidLease,
+               stale_bridge.error() == LogicalRenderFailure::InvalidLease,
                "bridge lease is invalid immediately after transfer");
 
         const auto final_plan = stream->BeginRender(pump);
@@ -316,7 +315,7 @@ namespace
         if (count == 1)
         {
             Expect(epochs[0].timeline_generation ==
-                       kTimelineGeneration,
+                   kTimelineGeneration,
                    "playback epoch keeps the logical timeline");
             Expect(epochs[0].playback_generation == 1,
                    "playback generation remains unchanged");
@@ -325,7 +324,7 @@ namespace
             Expect(epochs[0].output_origin == 0,
                    "ownership transfer does not rebase output origin");
             Expect(epochs[0].mapped_output_tail ==
-                       stream->committed_tail(),
+                   stream->committed_tail(),
                    "history tail equals the committed logical tail");
         }
     }

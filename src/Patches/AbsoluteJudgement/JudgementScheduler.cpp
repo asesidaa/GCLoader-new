@@ -310,8 +310,8 @@ namespace gc::absolute_judgement
                           : AbsoluteJudgementFatalPredicate::TimelineProviderIdentityChanged,
                       AbsoluteJudgementFatalReason::TimelineGenerationChanged,
                       {
-                           clock_resolver_.anchor().timeline_generation, timeline_info.timeline_generation,
-                           expected_provider, actual_provider
+                          clock_resolver_.anchor().timeline_generation, timeline_info.timeline_generation,
+                          expected_provider, actual_provider
                       });
             }
             if (!stage_.active())

@@ -5,14 +5,14 @@
 #include "Audio/Wasapi/WasapiAudioTypes.h"
 
 #include <Windows.h>
-#include <mmreg.h>
+#include <mmreg.h> // IWYU pragma: keep
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
+#include <cstring> // IWYU pragma: keep
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -105,7 +105,7 @@ namespace
         };
         NormalizedSourceFormat normalized{};
         Expect(SUCCEEDED(gc::audio::NormalizeSourceFormat(
-                   &wave, &normalized)),
+            &wave, &normalized)),
                "production source format normalization succeeds");
         return normalized;
     }
@@ -124,14 +124,14 @@ namespace
         samples[static_cast<std::size_t>(kImpulseFrame * channels)] =
             (std::numeric_limits<std::int16_t>::max)();
         samples[static_cast<std::size_t>(
-            kImpulseFrame * channels + 1)] =
+                kImpulseFrame * channels + 1)] =
             (std::numeric_limits<std::int16_t>::max)();
 
         auto snapshot =
             std::make_shared<AudioSnapshot>(byte_length, block_align);
         gc::audio::AudioLockRegions regions{};
         Expect(SUCCEEDED(snapshot->Lock(
-                   0, byte_length, 0, &regions)),
+            0, byte_length, 0, &regions)),
                "impulse snapshot lock succeeds");
         const auto bytes = std::as_bytes(std::span{samples});
         if (regions.first != nullptr)
@@ -147,10 +147,10 @@ namespace
                 regions.second_bytes);
         }
         Expect(SUCCEEDED(snapshot->Unlock(
-                   regions.first,
-                   regions.first_bytes,
-                   regions.second,
-                   regions.second_bytes)),
+            regions.first,
+            regions.first_bytes,
+            regions.second,
+            regions.second_bytes)),
                "impulse snapshot publication succeeds");
         return snapshot;
     }
@@ -162,7 +162,7 @@ namespace
         const long double physical_rate =
             static_cast<long double>(rate) *
             (1.0L + static_cast<long double>(oscillator_error_ppm) /
-                        1'000'000.0L);
+                1'000'000.0L);
         return static_cast<std::uint64_t>(std::ceil(
             static_cast<long double>(kSimulationSeconds) *
             physical_rate /
@@ -177,12 +177,12 @@ namespace
         const long double physical_rate =
             static_cast<long double>(rate) *
             (1.0L + static_cast<long double>(oscillator_error_ppm) /
-                        1'000'000.0L);
+                1'000'000.0L);
         const long double milliseconds =
             static_cast<long double>(sample_position) *
             1'000.0L / physical_rate;
         return static_cast<std::uint64_t>(
-                   std::floor(milliseconds)) *
+                std::floor(milliseconds)) *
             kTimestampQuantumNs;
     }
 
@@ -194,8 +194,8 @@ namespace
             {
                 .qpc_ticks = 0,
                 .multimedia_time_ms =
-                    static_cast<std::uint32_t>(
-                        kFixedInputTimestampMs),
+                static_cast<std::uint32_t>(
+                    kFixedInputTimestampMs),
             },
             ExactClockResolveIntent::FinalizedTimestamp);
         Expect(resolved.status == ExactClockStatus::Resolved,
@@ -259,6 +259,8 @@ namespace
         }
 
         std::shared_ptr<AudioCursorTimeline> history;
+        // The optional voice must remain alive for the full bridge simulation.
+        // ReSharper disable once CppTooWideScope
         std::unique_ptr<gc::audio::MixerVoice> voice;
         if (include_impulse)
         {
@@ -311,7 +313,7 @@ namespace
                 .driver_rate = logical_rate,
                 .period_frames = kPeriodFrames,
                 .driver_output_latency_frames =
-                    kDriverOutputLatencyFrames,
+                kDriverOutputLatencyFrames,
                 .timestamp_quantum_ns = kTimestampQuantumNs,
             },
             logical_clock,
@@ -334,7 +336,7 @@ namespace
 
         ScenarioResult scenario{
             .fixed_input_time =
-                ResolveFixedInputTime(*logical_clock, logical_rate),
+            ResolveFixedInputTime(*logical_clock, logical_rate),
         };
         std::array<float, kPeriodFrames * 2> output{};
         bool running_committed = false;
@@ -362,15 +364,14 @@ namespace
             Expect(observed.has_value(),
                    "logical clock observation remains continuous");
 
-            std::fill(
-                output.begin(),
-                output.end(),
+            std::ranges::fill(
+                output,
                 (std::numeric_limits<float>::quiet_NaN)());
             const auto tail_before = stream->committed_tail();
             const auto processed = bridge->Process(
                 AsioRenderRequest{
                     .buffer_index =
-                        static_cast<long>(callback & 1U),
+                    static_cast<long>(callback & 1U),
                     .direct_process = ASIOFalse,
                     .has_system_time = true,
                     .sample_position = sample_position,
@@ -382,7 +383,7 @@ namespace
             Expect(tail_after >= tail_before,
                    "logical render tail never moves backwards");
             Expect((tail_after - tail_before) %
-                       kPeriodFrames ==
+                   kPeriodFrames ==
                    0,
                    "each callback commits only complete logical blocks");
             inferred_rendered_frames +=
@@ -401,9 +402,8 @@ namespace
                 ++audible_callbacks;
             }
 
-            Expect(std::all_of(
-                       output.begin(),
-                       output.end(),
+            Expect(std::ranges::all_of(
+                       output,
                        [](const float sample)
                        {
                            return std::isfinite(sample);
@@ -439,10 +439,10 @@ namespace
         Expect(snapshot.running_callbacks == audible_callbacks,
                "running callback diagnostics match observed output");
         Expect(snapshot.logical_rendered_frames ==
-                   inferred_rendered_frames,
+               inferred_rendered_frames,
                "bridge diagnostics equal independently observed tail movement");
         Expect(stream->committed_tail() ==
-                   inferred_rendered_frames,
+               inferred_rendered_frames,
                "all logical render origins are contiguous from zero");
         Expect(snapshot.input_underflows == 0,
                "final-output FIFO never underflows");
@@ -453,15 +453,15 @@ namespace
         Expect(snapshot.phase_envelope_violations == 0,
                "running phase never leaves production policy");
         Expect(snapshot.maximum_absolute_phase_error_frames <=
-                   snapshot.phase_envelope_frames,
+               static_cast<double>(snapshot.phase_envelope_frames),
                "observed phase remains inside the independent envelope");
         Expect(std::abs(snapshot.final_rate_ratio_ppm) <=
-                   gc::audio::kMaximumRateCorrectionPpm,
+               gc::audio::kMaximumRateCorrectionPpm,
                "final rate correction stays inside production policy");
         Expect(snapshot.minimum_rate_ratio_ppm >=
-                   -gc::audio::kMaximumRateCorrectionPpm &&
-                   snapshot.maximum_rate_ratio_ppm <=
-                       gc::audio::kMaximumRateCorrectionPpm,
+               -gc::audio::kMaximumRateCorrectionPpm &&
+               snapshot.maximum_rate_ratio_ppm <=
+               gc::audio::kMaximumRateCorrectionPpm,
                "all rate corrections stay inside production policy");
         Expect(
             oscillator_error_ppm > 0
@@ -480,7 +480,7 @@ namespace
             constexpr auto expected_impulse_output_frame =
                 kImpulseFrame - kDriverOutputLatencyFrames;
             Expect(scenario.impulse_output_frame ==
-                       expected_impulse_output_frame,
+                   expected_impulse_output_frame,
                    "driver latency and resampler group delay are compensated exactly once");
         }
 
@@ -496,9 +496,8 @@ namespace
             RunScenario(48'000, -kDriftPpm, false),
         };
 
-        Expect(std::all_of(
-                   scenarios.begin(),
-                   scenarios.end(),
+        Expect(std::ranges::all_of(
+                   scenarios,
                    [](const ScenarioResult& scenario)
                    {
                        return scenario.fixed_input_time.valid;
@@ -512,9 +511,9 @@ namespace
         {
             Expect(
                 scenario.fixed_input_time.numerator ==
-                        scenarios.front().fixed_input_time.numerator &&
-                    scenario.fixed_input_time.denominator ==
-                        scenarios.front().fixed_input_time.denominator,
+                scenarios.front().fixed_input_time.numerator &&
+                scenario.fixed_input_time.denominator ==
+                scenarios.front().fixed_input_time.denominator,
                 "fixed captured input is bit-identical across physical clocks");
         }
     }

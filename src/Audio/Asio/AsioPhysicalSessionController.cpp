@@ -1,7 +1,5 @@
 #include "Audio/Asio/AsioPhysicalSessionController.h"
 
-#include <cstddef>
-
 namespace gc::audio
 {
     namespace
@@ -67,7 +65,7 @@ namespace gc::audio
 
         const bool observed_loss =
             foreground.loss_generation >
-                consumed_focus_loss_generation_ ||
+            consumed_focus_loss_generation_ ||
             !foreground.is_foreground;
         desired_foreground_ = foreground.is_foreground;
         if (foreground.loss_generation >
@@ -141,7 +139,7 @@ namespace gc::audio
     {
         if (!attempt_in_progress_ ||
             (state_ != AsioLifecycleState::Starting &&
-             state_ != AsioLifecycleState::Recovering) ||
+                state_ != AsioLifecycleState::Recovering) ||
             commit_phase_ != AsioPhysicalCommitPhase::None)
         {
             return ProtocolFailure();
@@ -190,7 +188,7 @@ namespace gc::audio
     {
         if (!attempt_in_progress_ ||
             commit_phase_ !=
-                AsioPhysicalCommitPhase::RenderLeaseTransferred)
+            AsioPhysicalCommitPhase::RenderLeaseTransferred)
         {
             return ProtocolFailure();
         }
@@ -211,7 +209,7 @@ namespace gc::audio
     {
         if (!attempt_in_progress_ ||
             (state_ != AsioLifecycleState::Starting &&
-             state_ != AsioLifecycleState::Recovering) ||
+                state_ != AsioLifecycleState::Recovering) ||
             commit_phase_ == AsioPhysicalCommitPhase::Running)
         {
             return ProtocolFailure();
@@ -324,7 +322,7 @@ namespace gc::audio
 
     std::uint64_t
     AsioPhysicalSessionController::consumed_focus_loss_generation()
-        const noexcept
+    const noexcept
     {
         return consumed_focus_loss_generation_;
     }

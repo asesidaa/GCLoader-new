@@ -80,7 +80,8 @@ namespace gc::absolute_judgement
         [[nodiscard]] const JudgementStageClockAnchor& anchor() const noexcept;
 
         [[nodiscard]] JudgementClockResult TryBind(const gc::audio::GameplayAudioCursorObservation& selected,
-                                                    const std::shared_ptr<const gc::audio::ExactJudgementTimeline>& timeline,
+                                                   const std::shared_ptr<const gc::audio::ExactJudgementTimeline>&
+                                                   timeline,
                                                    std::span<gc::audio::ExactPlaybackEpoch> scratch) noexcept;
 
         [[nodiscard]] JudgementClockResult Resolve(const gc::timing::AbsoluteHostTime& timestamp,

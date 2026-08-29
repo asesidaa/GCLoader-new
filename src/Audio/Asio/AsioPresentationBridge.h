@@ -20,10 +20,10 @@ namespace gc::audio
     inline constexpr double kMaximumRateSlewPpmPerCallback = 25.0;
     inline constexpr std::uint32_t kPhaseFilterCallbacks = 32;
     inline constexpr std::uint32_t
-        kPhaseCorrectionHorizonSeconds = 2;
+    kPhaseCorrectionHorizonSeconds = 2;
     inline constexpr std::uint32_t kMinimumPhaseEnvelopeMs = 20;
     inline constexpr std::uint32_t
-        kMaximumPrimingRenderBlocksPerCallback = 8;
+    kMaximumPrimingRenderBlocksPerCallback = 8;
 
     enum class AsioPresentationBridgeState : std::uint8_t
     {
@@ -77,9 +77,11 @@ namespace gc::audio
     struct AsioPresentationProcessResult final
     {
         AsioPresentationBridgeState state{
-            AsioPresentationBridgeState::Faulted};
+            AsioPresentationBridgeState::Faulted
+        };
         AsioPresentationBridgeFault first_fault{
-            AsioPresentationBridgeFault::InvalidConfiguration};
+            AsioPresentationBridgeFault::InvalidConfiguration
+        };
         std::uint32_t output_frames{};
         bool audible{};
     };
@@ -87,9 +89,11 @@ namespace gc::audio
     struct AsioPresentationBridgeSnapshot final
     {
         AsioPresentationBridgeState state{
-            AsioPresentationBridgeState::Faulted};
+            AsioPresentationBridgeState::Faulted
+        };
         AsioPresentationBridgeFault first_fault{
-            AsioPresentationBridgeFault::InvalidConfiguration};
+            AsioPresentationBridgeFault::InvalidConfiguration
+        };
         std::uint64_t physical_session_generation{};
         std::uint64_t callbacks{};
         std::uint64_t priming_callbacks{};
@@ -120,10 +124,10 @@ namespace gc::audio
         Create(
             const AsioPresentationBridgeConfig& config,
             std::shared_ptr<const LogicalPresentationClock>
-                logical_clock,
+            logical_clock,
             LogicalRenderStream& logical_render_stream,
             std::shared_ptr<const ma_allocation_callbacks>
-                allocation_callbacks = {}) noexcept;
+            allocation_callbacks = {}) noexcept;
 
         [[nodiscard]]
         std::expected<void, AsioPresentationBridgeControlFailure>
@@ -147,10 +151,10 @@ namespace gc::audio
         AsioPresentationBridge(
             const AsioPresentationBridgeConfig& config,
             std::shared_ptr<const LogicalPresentationClock>
-                logical_clock,
+            logical_clock,
             LogicalRenderStream& logical_render_stream,
             std::unique_ptr<AsioPresentationRateMatcher>
-                rate_matcher,
+            rate_matcher,
             std::uint64_t phase_envelope_frames) noexcept;
 
         [[nodiscard]] bool TryAcquireClaim() noexcept;
@@ -187,10 +191,12 @@ namespace gc::audio
         std::atomic_bool process_claim_{};
         std::atomic_uint8_t state_{
             static_cast<std::uint8_t>(
-                AsioPresentationBridgeState::Priming)};
+                AsioPresentationBridgeState::Priming)
+        };
         std::atomic_uint8_t first_fault_{
             static_cast<std::uint8_t>(
-                AsioPresentationBridgeFault::None)};
+                AsioPresentationBridgeFault::None)
+        };
 
         std::optional<LogicalRenderLease> lease_;
         std::uint64_t previous_system_time_ns_{};
@@ -198,7 +204,7 @@ namespace gc::audio
         double source_phase_{};
         double current_rate_ratio_{1.0};
         std::array<double, kPhaseFilterCallbacks>
-            phase_filter_{};
+        phase_filter_{};
         std::uint32_t phase_filter_count_{};
         std::uint32_t phase_filter_index_{};
         double phase_filter_sum_{};

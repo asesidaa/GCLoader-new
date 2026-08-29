@@ -46,7 +46,7 @@ namespace
         const std::string_view message)
     {
         Expect(actual.numerator() == numerator &&
-                   actual.denominator() == denominator,
+               actual.denominator() == denominator,
                message);
     }
 
@@ -123,7 +123,7 @@ namespace
         Expect(anchor.logical_output_rate == kLogicalRate,
                "anchor stores the logical output rate");
 
-        const AbsoluteHostTime captured{
+        constexpr AbsoluteHostTime captured{
             .qpc_ticks = 2,
             .multimedia_time_ms = 1'150,
         };
@@ -166,19 +166,19 @@ namespace
         Expect(repeated.status == JudgementClockStatus::Resolved,
                "captured input remains resolvable");
         Expect(repeated.output_frame.has_value() &&
-                   repeated.judgement_seconds.has_value(),
+               repeated.judgement_seconds.has_value(),
                "repeated exact values are present");
         if (repeated.output_frame && repeated.judgement_seconds)
         {
             Expect(repeated.output_frame->numerator() ==
-                       first.output_frame->numerator() &&
-                       repeated.output_frame->denominator() ==
-                       first.output_frame->denominator(),
+                   first.output_frame->numerator() &&
+                   repeated.output_frame->denominator() ==
+                   first.output_frame->denominator(),
                    "logical output coordinate is bit-identical");
             Expect(repeated.judgement_seconds->numerator() ==
-                       first.judgement_seconds->numerator() &&
-                       repeated.judgement_seconds->denominator() ==
-                       first.judgement_seconds->denominator(),
+                   first.judgement_seconds->numerator() &&
+                   repeated.judgement_seconds->denominator() ==
+                   first.judgement_seconds->denominator(),
                    "judgement coordinate is bit-identical");
         }
     }
