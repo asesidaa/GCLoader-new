@@ -3,6 +3,7 @@
 
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
+#include "Audio/Asio/AsioPhysicalSessionController.h"
 #include "Audio/Asio/AsioTypes.h"
 #include "Audio/DirectSound/DirectSoundFacade.h"
 
@@ -28,22 +29,42 @@ namespace gc::audio
         std::uint64_t latency_change_requests{};
         std::uint64_t buffer_size_change_requests{};
         std::uint64_t sample_rate_change_requests{};
-        std::uint64_t sample_position_discontinuities{};
-        std::uint64_t render_gap_frames{};
         std::uint64_t foreground_losses{};
         std::uint64_t consumed_focus_loss_generation{};
+        std::uint64_t logical_timeline_generation{};
+        std::uint32_t logical_sample_rate{};
+        std::uint64_t logical_current_frame{};
+        std::uint64_t logical_render_tail{};
         std::uint64_t physical_session_generation{};
+        std::uint32_t physical_sample_rate{};
+        std::uint32_t physical_period_frames{};
+        std::uint32_t physical_output_latency_frames{};
+        AsioLifecycleState lifecycle_state{AsioLifecycleState::Starting};
         std::uint64_t session_releases{};
         std::uint64_t recovery_attempts{};
         std::uint64_t recovery_failures{};
         std::uint64_t session_recoveries{};
-        std::uint64_t submitted_tail_publications{};
-        std::uint64_t submitted_output_tail{};
-        std::uint64_t total_logically_advanced_frames{};
-        std::uint64_t detached_discarded_frames{};
-        std::uint64_t priming_discarded_frames{};
-        std::uint64_t driver_timeline_residual_samples{};
-        std::uint64_t maximum_absolute_driver_timeline_residual_ns{};
+        std::uint64_t sequential_pump_rendered_frames{};
+        std::uint64_t bridge_callbacks{};
+        std::uint64_t bridge_priming_callbacks{};
+        std::uint64_t bridge_running_callbacks{};
+        std::uint64_t bridge_handoff_logical_tail{};
+        std::uint64_t bridge_logical_rendered_frames{};
+        double bridge_initial_phase_error_frames{};
+        double bridge_maximum_absolute_phase_error_frames{};
+        double bridge_final_phase_error_frames{};
+        double bridge_initial_phase_error_ns{};
+        double bridge_maximum_absolute_phase_error_ns{};
+        double bridge_final_phase_error_ns{};
+        double bridge_minimum_rate_ratio_ppm{};
+        double bridge_maximum_rate_ratio_ppm{};
+        double bridge_final_rate_ratio_ppm{};
+        std::uint64_t bridge_input_high_water_frames{};
+        std::uint64_t bridge_input_underflows{};
+        std::uint64_t bridge_input_overflows{};
+        std::uint64_t bridge_conversion_failures{};
+        std::uint64_t bridge_phase_envelope_violations{};
+        std::uint64_t bridge_non_finite_output_blocks{};
         std::uint64_t expected_period_ns{};
         std::uint64_t callback_interval_samples{};
         std::uint64_t total_callback_interval_ticks{};
@@ -74,11 +95,11 @@ namespace gc::audio
         std::uint64_t non_finite_output_blocks{};
         float maximum_absolute_output_sample{};
         std::uint64_t qpc_frequency{};
-        std::uint64_t exact_resolved_queries{};
-        std::uint64_t exact_pending_queries{};
-        std::uint64_t exact_temporarily_unavailable_queries{};
-        std::uint64_t exact_history_lost_queries{};
-        std::uint64_t exact_discontinuous_queries{};
+        std::uint64_t judgement_timeline_resolved_queries{};
+        std::uint64_t judgement_timeline_pending_queries{};
+        std::uint64_t judgement_timeline_temporarily_unavailable_queries{};
+        std::uint64_t judgement_timeline_history_lost_queries{};
+        std::uint64_t judgement_timeline_discontinuous_queries{};
         std::uint64_t pending_cursor_queries{};
         std::uint64_t unmapped_cursor_failures{};
         MixerDiagnosticsSnapshot mixer{};
@@ -109,7 +130,7 @@ namespace gc::audio
         std::uint64_t timeline_generation{};
         std::uint32_t sample_rate{};
         std::uint32_t period_frames{};
-        std::uint32_t output_latency_frames{};
+        std::uint32_t timestamp_quantum_ns{};
         bool alternate_backend_selected{};
     };
 

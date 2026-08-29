@@ -197,6 +197,21 @@ namespace gc::audio
             return "unknown";
         }
 
+        const char* asio_lifecycle_state_name(
+            const AsioLifecycleState state) noexcept
+        {
+            switch (state)
+            {
+            case AsioLifecycleState::Starting: return "starting";
+            case AsioLifecycleState::Running: return "running";
+            case AsioLifecycleState::Suspended: return "suspended";
+            case AsioLifecycleState::Recovering: return "recovering";
+            case AsioLifecycleState::Fatal: return "fatal";
+            case AsioLifecycleState::Stopping: return "stopping";
+            }
+            return "unknown";
+        }
+
         const char* mixer_render_failure_source_name(
             MixerRenderFailureSource source) noexcept
         {
@@ -646,8 +661,8 @@ namespace gc::audio
                 << " asio_input_latency_frames=" << report.input_latency_frames
                 << " asio_output_latency_frames=" << report.output_latency_frames
                 << " logical_period_frames=" << logical.period_frames
-                << " logical_output_latency_frames="
-                << logical.output_latency_frames
+                << " logical_timestamp_quantum_ns="
+                << logical.timestamp_quantum_ns
                 << " logical_origin_raw_ms=" << logical.origin_raw_ms
                 << " logical_origin_unwrapped_ms="
                 << logical.origin_unwrapped_ms
@@ -655,8 +670,9 @@ namespace gc::audio
                 << logical.origin_presented_frame
                 << " logical_timeline_generation="
                 << logical.timeline_generation
-                << " exact_domain=asio_multimedia_ms"
-                << " exact_timestamp_quantum_ms=1"
+                << " judgement_timeline_domain=logical_multimedia_ms"
+                << " judgement_timeline_timestamp_quantum_ns="
+                << logical.timestamp_quantum_ns
                 << " asio_time_info_mode=preferred_with_legacy_fallback"
                 << " asio_overload_notifications="
                 << (report.overload_reporting_supported ? "true" : "false")
@@ -697,33 +713,67 @@ namespace gc::audio
                 << counters.buffer_size_change_requests
                 << " sample_rate_change_requests="
                 << counters.sample_rate_change_requests
-                << " sample_position_discontinuities="
-                << counters.sample_position_discontinuities
-                << " render_gap_frames=" << counters.render_gap_frames
                 << " foreground_losses=" << counters.foreground_losses
                 << " consumed_focus_loss_generation="
                 << counters.consumed_focus_loss_generation
+                << " logical_timeline_generation="
+                << counters.logical_timeline_generation
+                << " logical_sample_rate=" << counters.logical_sample_rate
+                << " logical_current_frame=" << counters.logical_current_frame
+                << " logical_render_tail=" << counters.logical_render_tail
                 << " physical_session_generation="
                 << counters.physical_session_generation
+                << " physical_sample_rate=" << counters.physical_sample_rate
+                << " physical_period_frames=" << counters.physical_period_frames
+                << " physical_output_latency_frames="
+                << counters.physical_output_latency_frames
+                << " lifecycle_state="
+                << asio_lifecycle_state_name(counters.lifecycle_state)
                 << " session_releases=" << counters.session_releases
                 << " recovery_attempts=" << counters.recovery_attempts
                 << " recovery_failures=" << counters.recovery_failures
                 << " session_recoveries=" << counters.session_recoveries
-                << " submitted_tail_publications="
-                << counters.submitted_tail_publications
-                << " submitted_output_tail="
-                << counters.submitted_output_tail
-                << " total_logically_advanced_frames="
-                << counters.total_logically_advanced_frames
-                << " detached_discarded_frames="
-                << counters.detached_discarded_frames
-                << " priming_discarded_frames="
-                << counters.priming_discarded_frames
-                << " driver_timeline_residual_samples="
-                << counters.driver_timeline_residual_samples
-                << " maximum_absolute_driver_timeline_residual_ns="
-                << counters.maximum_absolute_driver_timeline_residual_ns
-                << " driver_timeline_residual_diagnostic_only=true"
+                << " sequential_pump_rendered_frames="
+                << counters.sequential_pump_rendered_frames
+                << " bridge_callbacks=" << counters.bridge_callbacks
+                << " bridge_priming_callbacks="
+                << counters.bridge_priming_callbacks
+                << " bridge_running_callbacks="
+                << counters.bridge_running_callbacks
+                << " bridge_handoff_logical_tail="
+                << counters.bridge_handoff_logical_tail
+                << " bridge_logical_rendered_frames="
+                << counters.bridge_logical_rendered_frames
+                << " bridge_initial_phase_error_frames="
+                << counters.bridge_initial_phase_error_frames
+                << " bridge_maximum_absolute_phase_error_frames="
+                << counters.bridge_maximum_absolute_phase_error_frames
+                << " bridge_final_phase_error_frames="
+                << counters.bridge_final_phase_error_frames
+                << " bridge_initial_phase_error_ns="
+                << counters.bridge_initial_phase_error_ns
+                << " bridge_maximum_absolute_phase_error_ns="
+                << counters.bridge_maximum_absolute_phase_error_ns
+                << " bridge_final_phase_error_ns="
+                << counters.bridge_final_phase_error_ns
+                << " bridge_minimum_rate_ratio_ppm="
+                << counters.bridge_minimum_rate_ratio_ppm
+                << " bridge_maximum_rate_ratio_ppm="
+                << counters.bridge_maximum_rate_ratio_ppm
+                << " bridge_final_rate_ratio_ppm="
+                << counters.bridge_final_rate_ratio_ppm
+                << " bridge_input_high_water_frames="
+                << counters.bridge_input_high_water_frames
+                << " bridge_input_underflows="
+                << counters.bridge_input_underflows
+                << " bridge_input_overflows="
+                << counters.bridge_input_overflows
+                << " bridge_conversion_failures="
+                << counters.bridge_conversion_failures
+                << " bridge_phase_envelope_violations="
+                << counters.bridge_phase_envelope_violations
+                << " bridge_non_finite_output_blocks="
+                << counters.bridge_non_finite_output_blocks
                 << " asio_expected_callback_us="
                 << static_cast<double>(counters.expected_period_ns) / 1'000.0
                 << " callback_interval_samples="
@@ -797,14 +847,16 @@ namespace gc::audio
                 << " unmapped_cursor_failures="
                 << counters.unmapped_cursor_failures;
             append_mixer_diagnostics(stream, counters.mixer);
-            stream << " exact_resolved_queries=" << counters.exact_resolved_queries
-                << " exact_pending_queries=" << counters.exact_pending_queries
-                << " exact_temporarily_unavailable_queries="
-                << counters.exact_temporarily_unavailable_queries
-                << " exact_history_lost_queries="
-                << counters.exact_history_lost_queries
-                << " exact_discontinuous_queries="
-                << counters.exact_discontinuous_queries;
+            stream << " judgement_timeline_resolved_queries="
+                << counters.judgement_timeline_resolved_queries
+                << " judgement_timeline_pending_queries="
+                << counters.judgement_timeline_pending_queries
+                << " judgement_timeline_temporarily_unavailable_queries="
+                << counters.judgement_timeline_temporarily_unavailable_queries
+                << " judgement_timeline_history_lost_queries="
+                << counters.judgement_timeline_history_lost_queries
+                << " judgement_timeline_discontinuous_queries="
+                << counters.judgement_timeline_discontinuous_queries;
             return stream.str();
         }
 

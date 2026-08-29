@@ -398,6 +398,105 @@ namespace gc::audio
                 }
             }
 
+            void MergeBridgeSnapshot(
+                AsioPresentationBridgeSnapshot& total,
+                bool& has_total,
+                const AsioPresentationBridgeSnapshot& session) noexcept
+            {
+                if (!has_total)
+                {
+                    total = session;
+                    has_total = true;
+                    return;
+                }
+
+                const auto add = [](std::uint64_t& destination,
+                                    const std::uint64_t value) noexcept
+                {
+                    const auto remaining =
+                        (std::numeric_limits<std::uint64_t>::max)() -
+                        destination;
+                    destination = value > remaining
+                                      ? (std::numeric_limits<
+                                            std::uint64_t>::max)()
+                                      : destination + value;
+                };
+                const auto previous_running_callbacks =
+                    total.running_callbacks;
+
+                total.state = session.state;
+                if (total.first_fault ==
+                        AsioPresentationBridgeFault::None &&
+                    session.first_fault !=
+                        AsioPresentationBridgeFault::None)
+                {
+                    total.first_fault = session.first_fault;
+                }
+                total.physical_session_generation =
+                    session.physical_session_generation;
+                add(total.callbacks, session.callbacks);
+                add(total.priming_callbacks,
+                    session.priming_callbacks);
+                add(total.running_callbacks,
+                    session.running_callbacks);
+                if (session.handoff_logical_tail != 0)
+                {
+                    total.handoff_logical_tail =
+                        session.handoff_logical_tail;
+                }
+                add(total.logical_rendered_frames,
+                    session.logical_rendered_frames);
+                total.input_high_water_frames = (std::max)(
+                    total.input_high_water_frames,
+                    session.input_high_water_frames);
+                add(total.input_underflows,
+                    session.input_underflows);
+                add(total.input_overflows,
+                    session.input_overflows);
+                add(total.conversion_failures,
+                    session.conversion_failures);
+                add(total.phase_envelope_violations,
+                    session.phase_envelope_violations);
+                add(total.non_finite_output_blocks,
+                    session.non_finite_output_blocks);
+                total.resampler_input_latency_frames =
+                    session.resampler_input_latency_frames;
+                total.resampler_output_latency_frames =
+                    session.resampler_output_latency_frames;
+                total.phase_envelope_frames =
+                    session.phase_envelope_frames;
+
+                if (session.running_callbacks != 0)
+                {
+                    if (previous_running_callbacks == 0)
+                    {
+                        total.initial_phase_error_frames =
+                            session.initial_phase_error_frames;
+                        total.minimum_rate_ratio_ppm =
+                            session.minimum_rate_ratio_ppm;
+                        total.maximum_rate_ratio_ppm =
+                            session.maximum_rate_ratio_ppm;
+                    }
+                    else
+                    {
+                        total.minimum_rate_ratio_ppm = (std::min)(
+                            total.minimum_rate_ratio_ppm,
+                            session.minimum_rate_ratio_ppm);
+                        total.maximum_rate_ratio_ppm = (std::max)(
+                            total.maximum_rate_ratio_ppm,
+                            session.maximum_rate_ratio_ppm);
+                    }
+                    total.maximum_absolute_phase_error_frames =
+                        (std::max)(
+                            total.maximum_absolute_phase_error_frames,
+                            session.maximum_absolute_phase_error_frames);
+                    total.final_phase_error_frames =
+                        session.final_phase_error_frames;
+                    total.final_rate_ratio_ppm =
+                        session.final_rate_ratio_ppm;
+                }
+            }
+
             void UpdateMaximumFloatBits(
                 std::atomic_uint32_t& destination,
                 float value) noexcept
@@ -913,8 +1012,8 @@ namespace gc::audio
                         .timeline_generation = logical_timeline_generation_,
                         .sample_rate = logical_contract_.sample_rate,
                         .period_frames = logical_contract_.period_frames,
-                        .output_latency_frames =
-                        logical_contract_.output_latency_frames,
+                        .timestamp_quantum_ns =
+                            logical_clock_->info().timestamp_quantum_ns,
                         .alternate_backend_selected = false,
                     });
                 const auto startup_focus = foreground_monitor_->snapshot();
@@ -1376,8 +1475,6 @@ namespace gc::audio
                             "ASIO Start requires a prepared physical session"));
                     }
 
-                    physical_silent_priming_callbacks_.store(
-                        0, std::memory_order_relaxed);
                     physical_stability_proof_callbacks_.store(
                         0, std::memory_order_relaxed);
                     pending_bridge_lease_.reset();
@@ -1909,8 +2006,10 @@ namespace gc::audio
                     event == AsioSessionLifecycleEvent::session_recovered)
                 {
                     record.silent_priming_callbacks =
-                        physical_silent_priming_callbacks_.load(
-                            std::memory_order_relaxed);
+                        presentation_bridge_ != nullptr
+                            ? presentation_bridge_->Snapshot().
+                                priming_callbacks
+                            : 0;
                 }
                 observer_->SessionLifecycleChanged(record, failure);
             }
@@ -2809,6 +2908,13 @@ namespace gc::audio
                         completed_callback_snapshot_,
                         callback_runtime_->Snapshot());
                 }
+                if (presentation_bridge_ != nullptr)
+                {
+                    MergeBridgeSnapshot(
+                        completed_bridge_snapshot_,
+                        has_completed_bridge_snapshot_,
+                        presentation_bridge_->Snapshot());
+                }
                 std::optional<LogicalRenderLease> bridge_lease =
                     pending_bridge_lease_;
                 pending_bridge_lease_.reset();
@@ -2936,6 +3042,22 @@ namespace gc::audio
                 {
                     final_exact_clock_counters_ = logical_clock_->counters();
                     has_final_exact_clock_counters_ = true;
+                    final_logical_timeline_generation_ =
+                        logical_clock_->info().timeline_generation;
+                    const auto final_frame =
+                        logical_clock_->WholeFrameAt(
+                            actions_.time_get_time_ms(
+                                actions_.context));
+                    if (final_frame)
+                    {
+                        final_logical_current_frame_ =
+                            *final_frame;
+                    }
+                    if (logical_render_stream_ != nullptr)
+                    {
+                        final_logical_render_tail_ =
+                            logical_render_stream_->committed_tail();
+                    }
                     logical_clock_->Invalidate();
                     if (exact_clock_registered_)
                     {
@@ -3094,7 +3216,7 @@ namespace gc::audio
                             "ASIO logical pump commit failed");
                     }
                     SaturatingAddCounter(
-                        detached_discarded_frames_,
+                        sequential_pump_rendered_frames_,
                         request_.buffer_frames);
                 }
                 return std::nullopt;
@@ -3181,12 +3303,6 @@ namespace gc::audio
                         proof_callbacks,
                         std::memory_order_release);
                 }
-                if (!processed.audible)
-                {
-                    SaturatingIncrementCounter(
-                        physical_silent_priming_callbacks_);
-                }
-
                 const auto index = static_cast<std::size_t>(request.buffer_index);
                 const auto conversion = ConvertFloatStereoToAsio(
                     physical_float_output_,
@@ -3327,18 +3443,65 @@ namespace gc::audio
                 auto callback = completed_callback_snapshot_;
                 if (callback_runtime_ != nullptr)
                 {
-                    MergeCallbackSnapshot(callback, callback_runtime_->Snapshot());
+                    MergeCallbackSnapshot(
+                        callback,
+                        callback_runtime_->Snapshot());
                 }
-                const auto exact = logical_clock_ != nullptr
-                                       ? logical_clock_->counters()
-                                       : has_final_exact_clock_counters_
-                                       ? final_exact_clock_counters_
-                                       : ExactJudgementTimelineCounters{};
+
+                auto bridge = completed_bridge_snapshot_;
+                auto has_bridge = has_completed_bridge_snapshot_;
+                if (presentation_bridge_ != nullptr)
+                {
+                    MergeBridgeSnapshot(
+                        bridge,
+                        has_bridge,
+                        presentation_bridge_->Snapshot());
+                }
+
+                const auto timeline = logical_clock_ != nullptr
+                                          ? logical_clock_->counters()
+                                          : has_final_exact_clock_counters_
+                                          ? final_exact_clock_counters_
+                                          : ExactJudgementTimelineCounters{};
                 const auto render = render_diagnostics_.Snapshot();
-                const auto logical_render_tail =
-                    logical_render_stream_ != nullptr
-                        ? logical_render_stream_->committed_tail()
-                        : 0;
+                auto logical_timeline_generation =
+                    final_logical_timeline_generation_;
+                auto logical_current_frame =
+                    final_logical_current_frame_;
+                auto logical_render_tail =
+                    final_logical_render_tail_;
+                if (logical_clock_ != nullptr)
+                {
+                    logical_timeline_generation =
+                        logical_clock_->info().
+                            timeline_generation;
+                    const auto current_frame =
+                        logical_clock_->WholeFrameAt(
+                            actions_.time_get_time_ms(
+                                actions_.context));
+                    if (current_frame)
+                    {
+                        logical_current_frame =
+                            *current_frame;
+                    }
+                }
+                if (logical_render_stream_ != nullptr)
+                {
+                    logical_render_tail =
+                        logical_render_stream_->
+                            committed_tail();
+                }
+
+                const auto phase_frames_to_nanoseconds =
+                    [this](const double frames) noexcept
+                    {
+                        return logical_output_sample_rate_ == 0
+                                   ? 0.0
+                                   : frames * 1'000'000'000.0 /
+                                   static_cast<double>(
+                                       logical_output_sample_rate_);
+                    };
+
                 return {
                     .callbacks = callback.callbacks,
                     .time_info_callbacks = callback.time_info_callbacks,
@@ -3354,111 +3517,221 @@ namespace gc::audio
                     .overload_messages = callback.overload_messages,
                     .reset_requests = callback.reset_requests,
                     .resync_requests = callback.resync_requests,
-                    .latency_change_requests = callback.latency_change_requests,
+                    .latency_change_requests =
+                        callback.latency_change_requests,
                     .buffer_size_change_requests =
-                    callback.buffer_size_change_requests,
+                        callback.buffer_size_change_requests,
                     .sample_rate_change_requests =
-                    callback.sample_rate_change_requests,
-                    .sample_position_discontinuities =
-                    sample_position_discontinuities_.load(
-                        std::memory_order_relaxed),
-                    .render_gap_frames =
-                    render_gap_frames_.load(std::memory_order_relaxed),
+                        callback.sample_rate_change_requests,
                     .foreground_losses =
-                    foreground_losses_.load(std::memory_order_relaxed),
+                        foreground_losses_.load(
+                            std::memory_order_relaxed),
                     .consumed_focus_loss_generation =
-                    consumed_focus_loss_generation_.load(
-                        std::memory_order_relaxed),
+                        consumed_focus_loss_generation_.load(
+                            std::memory_order_relaxed),
+                    .logical_timeline_generation =
+                        logical_timeline_generation,
+                    .logical_sample_rate =
+                        logical_output_sample_rate_,
+                    .logical_current_frame =
+                        logical_current_frame,
+                    .logical_render_tail =
+                        logical_render_tail,
                     .physical_session_generation =
-                    active_physical_session_generation_.load(
-                        std::memory_order_relaxed),
+                        physical_session_generation_,
+                    .physical_sample_rate =
+                        physical_contract_established_
+                            ? logical_contract_.sample_rate
+                            : 0,
+                    .physical_period_frames =
+                        physical_contract_established_
+                            ? logical_contract_.period_frames
+                            : 0,
+                    .physical_output_latency_frames =
+                        physical_contract_established_
+                            ? logical_contract_.
+                                output_latency_frames
+                            : 0,
+                    .lifecycle_state =
+                        lifecycle_controller_.state(),
                     .session_releases =
-                    session_releases_.load(std::memory_order_relaxed),
+                        session_releases_.load(
+                            std::memory_order_relaxed),
                     .recovery_attempts =
-                    recovery_attempts_.load(std::memory_order_relaxed),
+                        recovery_attempts_.load(
+                            std::memory_order_relaxed),
                     .recovery_failures =
-                    recovery_failures_.load(std::memory_order_relaxed),
+                        recovery_failures_.load(
+                            std::memory_order_relaxed),
                     .session_recoveries =
-                    session_recoveries_.load(std::memory_order_relaxed),
-                    .submitted_tail_publications = 0,
-                    .submitted_output_tail =
-                    logical_render_tail,
-                    .total_logically_advanced_frames =
-                    logical_render_tail,
-                    .detached_discarded_frames =
-                    detached_discarded_frames_.load(
-                        std::memory_order_relaxed),
-                    .priming_discarded_frames =
-                    priming_discarded_frames_.load(
-                        std::memory_order_relaxed),
-                    .driver_timeline_residual_samples =
-                    driver_timeline_residual_samples_.load(
-                        std::memory_order_relaxed),
-                    .maximum_absolute_driver_timeline_residual_ns =
-                    maximum_absolute_driver_timeline_residual_ns_.load(
-                        std::memory_order_relaxed),
+                        session_recoveries_.load(
+                            std::memory_order_relaxed),
+                    .sequential_pump_rendered_frames =
+                        sequential_pump_rendered_frames_.load(
+                            std::memory_order_relaxed),
+                    .bridge_callbacks =
+                        has_bridge ? bridge.callbacks : 0,
+                    .bridge_priming_callbacks =
+                        has_bridge
+                            ? bridge.priming_callbacks
+                            : 0,
+                    .bridge_running_callbacks =
+                        has_bridge
+                            ? bridge.running_callbacks
+                            : 0,
+                    .bridge_handoff_logical_tail =
+                        has_bridge
+                            ? bridge.handoff_logical_tail
+                            : 0,
+                    .bridge_logical_rendered_frames =
+                        has_bridge
+                            ? bridge.logical_rendered_frames
+                            : 0,
+                    .bridge_initial_phase_error_frames =
+                        has_bridge
+                            ? bridge.initial_phase_error_frames
+                            : 0.0,
+                    .bridge_maximum_absolute_phase_error_frames =
+                        has_bridge
+                            ? bridge.
+                                maximum_absolute_phase_error_frames
+                            : 0.0,
+                    .bridge_final_phase_error_frames =
+                        has_bridge
+                            ? bridge.final_phase_error_frames
+                            : 0.0,
+                    .bridge_initial_phase_error_ns =
+                        has_bridge
+                            ? phase_frames_to_nanoseconds(
+                                bridge.initial_phase_error_frames)
+                            : 0.0,
+                    .bridge_maximum_absolute_phase_error_ns =
+                        has_bridge
+                            ? phase_frames_to_nanoseconds(
+                                bridge.
+                                    maximum_absolute_phase_error_frames)
+                            : 0.0,
+                    .bridge_final_phase_error_ns =
+                        has_bridge
+                            ? phase_frames_to_nanoseconds(
+                                bridge.final_phase_error_frames)
+                            : 0.0,
+                    .bridge_minimum_rate_ratio_ppm =
+                        has_bridge
+                            ? bridge.minimum_rate_ratio_ppm
+                            : 0.0,
+                    .bridge_maximum_rate_ratio_ppm =
+                        has_bridge
+                            ? bridge.maximum_rate_ratio_ppm
+                            : 0.0,
+                    .bridge_final_rate_ratio_ppm =
+                        has_bridge
+                            ? bridge.final_rate_ratio_ppm
+                            : 0.0,
+                    .bridge_input_high_water_frames =
+                        has_bridge
+                            ? bridge.input_high_water_frames
+                            : 0,
+                    .bridge_input_underflows =
+                        has_bridge
+                            ? bridge.input_underflows
+                            : 0,
+                    .bridge_input_overflows =
+                        has_bridge
+                            ? bridge.input_overflows
+                            : 0,
+                    .bridge_conversion_failures =
+                        has_bridge
+                            ? bridge.conversion_failures
+                            : 0,
+                    .bridge_phase_envelope_violations =
+                        has_bridge
+                            ? bridge.phase_envelope_violations
+                            : 0,
+                    .bridge_non_finite_output_blocks =
+                        has_bridge
+                            ? bridge.non_finite_output_blocks
+                            : 0,
                     .expected_period_ns = callback.expected_period_ns,
                     .callback_interval_samples =
-                    callback.callback_interval_samples,
+                        callback.callback_interval_samples,
                     .total_callback_interval_ticks =
-                    callback.total_callback_interval_ticks,
+                        callback.total_callback_interval_ticks,
                     .maximum_callback_interval_ticks =
-                    callback.maximum_callback_interval_ticks,
+                        callback.maximum_callback_interval_ticks,
                     .early_callback_intervals =
-                    callback.early_callback_intervals,
-                    .late_callback_intervals = callback.late_callback_intervals,
+                        callback.early_callback_intervals,
+                    .late_callback_intervals =
+                        callback.late_callback_intervals,
                     .severe_callback_intervals =
-                    callback.severe_callback_intervals,
+                        callback.severe_callback_intervals,
                     .timed_callback_work_samples =
-                    callback.timed_callback_work_samples,
-                    .total_callback_ticks = callback.total_callback_ticks,
-                    .maximum_callback_ticks = callback.maximum_callback_ticks,
+                        callback.timed_callback_work_samples,
+                    .total_callback_ticks =
+                        callback.total_callback_ticks,
+                    .maximum_callback_ticks =
+                        callback.maximum_callback_ticks,
                     .timed_render_work_samples =
-                    callback.timed_render_work_samples,
-                    .total_render_ticks = callback.total_render_ticks,
-                    .maximum_render_ticks = callback.maximum_render_ticks,
-                    .driver_interval_samples = callback.driver_interval_samples,
+                        callback.timed_render_work_samples,
+                    .total_render_ticks =
+                        callback.total_render_ticks,
+                    .maximum_render_ticks =
+                        callback.maximum_render_ticks,
+                    .driver_interval_samples =
+                        callback.driver_interval_samples,
                     .maximum_driver_period_error_ns =
-                    callback.maximum_driver_period_error_ns,
+                        callback.maximum_driver_period_error_ns,
                     .maximum_host_driver_interval_skew_ns =
-                    callback.maximum_host_driver_interval_skew_ns,
+                        callback.maximum_host_driver_interval_skew_ns,
                     .buffer_alternation_violations =
-                    callback.buffer_alternation_violations,
+                        callback.buffer_alternation_violations,
                     .no_active_voice_silence_blocks =
-                    render.no_active_voice_silence_blocks,
-                    .active_short_read_blocks = render.active_short_read_blocks,
-                    .mixer_error_blocks = render.mixer_error_blocks,
+                        render.no_active_voice_silence_blocks,
+                    .active_short_read_blocks =
+                        render.active_short_read_blocks,
+                    .mixer_error_blocks =
+                        render.mixer_error_blocks,
                     .render_contract_error_blocks =
-                    render.render_contract_error_blocks,
+                        render.render_contract_error_blocks,
                     .short_read_missing_frames =
-                    render.short_read_missing_frames,
-                    .first_mixer_error = render.first_mixer_error,
-                    .clipped_output_blocks = render.clipped_output_blocks,
-                    .clipped_output_samples = render.clipped_output_samples,
+                        render.short_read_missing_frames,
+                    .first_mixer_error =
+                        render.first_mixer_error,
+                    .clipped_output_blocks =
+                        render.clipped_output_blocks,
+                    .clipped_output_samples =
+                        render.clipped_output_samples,
                     .zero_output_blocks_with_active_voice =
-                    render.zero_output_blocks_with_active_voice,
+                        render.zero_output_blocks_with_active_voice,
                     .zero_output_blocks_without_active_voice =
-                    render.zero_output_blocks_without_active_voice,
+                        render.zero_output_blocks_without_active_voice,
                     .non_finite_output_blocks =
-                    render.non_finite_output_blocks,
+                        render.non_finite_output_blocks,
                     .maximum_absolute_output_sample =
-                    render.maximum_absolute_output_sample,
+                        render.maximum_absolute_output_sample,
                     .qpc_frequency = callback.qpc_frequency,
-                    .exact_resolved_queries = exact.resolved_queries,
-                    .exact_pending_queries = exact.pending_queries,
-                    .exact_temporarily_unavailable_queries =
-                    exact.temporarily_unavailable_queries,
-                    .exact_history_lost_queries = exact.history_lost_queries,
-                    .exact_discontinuous_queries = exact.discontinuous_queries,
+                    .judgement_timeline_resolved_queries =
+                        timeline.resolved_queries,
+                    .judgement_timeline_pending_queries =
+                        timeline.pending_queries,
+                    .judgement_timeline_temporarily_unavailable_queries =
+                        timeline.temporarily_unavailable_queries,
+                    .judgement_timeline_history_lost_queries =
+                        timeline.history_lost_queries,
+                    .judgement_timeline_discontinuous_queries =
+                        timeline.discontinuous_queries,
                     .pending_cursor_queries =
-                    pending_cursor_queries_.load(std::memory_order_relaxed),
+                        pending_cursor_queries_.load(
+                            std::memory_order_relaxed),
                     .unmapped_cursor_failures =
-                    unmapped_cursor_failures_.load(std::memory_order_relaxed),
+                        unmapped_cursor_failures_.load(
+                            std::memory_order_relaxed),
                     .mixer = render_core_ != nullptr
                                  ? render_core_->diagnostics()
                                  : MixerDiagnosticsSnapshot{},
                 };
             }
+
 
             HWND game_window_{};
             AsioStreamRequest request_;
@@ -3498,6 +3771,9 @@ namespace gc::audio
             std::shared_ptr<LogicalPresentationClock> logical_clock_;
             ExactJudgementTimelineCounters final_exact_clock_counters_{};
             bool has_final_exact_clock_counters_{};
+            std::uint64_t final_logical_timeline_generation_{};
+            std::uint64_t final_logical_current_frame_{};
+            std::uint64_t final_logical_render_tail_{};
             bool exact_clock_registered_{};
             std::uint64_t logical_timeline_generation_{};
             std::uint64_t physical_session_generation_{};
@@ -3507,22 +3783,19 @@ namespace gc::audio
             std::array<ASIOSampleType, 2> channel_types_{};
             std::array<std::array<std::span<std::byte>, 2>, 2> driver_buffers_{};
             AsioCallbackRuntimeSnapshot completed_callback_snapshot_{};
+            AsioPresentationBridgeSnapshot completed_bridge_snapshot_{};
+            bool has_completed_bridge_snapshot_{};
 
             std::atomic_uint32_t endpoint_buffer_frames_{};
             std::atomic_uint32_t output_sample_rate_{};
             AsioRenderDiagnostics render_diagnostics_;
-            std::atomic_uint64_t sample_position_discontinuities_{};
-            std::atomic_uint64_t render_gap_frames_{};
             std::atomic_uint64_t foreground_losses_{};
             std::atomic_uint64_t consumed_focus_loss_generation_{};
             std::atomic_uint64_t session_releases_{};
             std::atomic_uint64_t recovery_attempts_{};
             std::atomic_uint64_t recovery_failures_{};
             std::atomic_uint64_t session_recoveries_{};
-            std::atomic_uint64_t detached_discarded_frames_{};
-            std::atomic_uint64_t priming_discarded_frames_{};
-            std::atomic_uint64_t driver_timeline_residual_samples_{};
-            std::atomic_uint64_t maximum_absolute_driver_timeline_residual_ns_{};
+            std::atomic_uint64_t sequential_pump_rendered_frames_{};
             std::atomic_uint64_t pending_cursor_queries_{};
             std::atomic_uint64_t unmapped_cursor_failures_{};
             std::atomic_bool first_fault_claimed_{};
@@ -3530,7 +3803,6 @@ namespace gc::audio
             std::atomic<std::uint8_t> first_fault_domain_{};
             std::atomic<std::int64_t> first_fault_result_{};
             std::atomic_uint64_t active_physical_session_generation_{};
-            std::atomic_uint64_t physical_silent_priming_callbacks_{};
             std::atomic_uint32_t physical_stability_proof_callbacks_{};
             std::uint32_t logical_output_sample_rate_{};
             bool physical_contract_established_{};
