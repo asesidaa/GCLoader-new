@@ -3,11 +3,12 @@ add_subdirectory(Asio)
 add_library(gc_audio STATIC
         AudioBackendController.cpp
         ExactJudgementTimeline.cpp
-        Asio/ExactAsioClock.cpp
         Asio/AsioLogicalRenderSequencer.cpp
         Asio/AsioOutputBackend.cpp
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
+        Logical/LogicalPresentationClock.cpp
+        Logical/LogicalPresentedOutputClock.cpp
         Mixer/AudioCursorTimeline.cpp
         Mixer/AudioRenderCore.cpp
         Mixer/AudioSnapshot.cpp

@@ -7,12 +7,12 @@
 #include "Audio/Asio/AsioClock.h"
 #include "Audio/Asio/AsioForegroundMonitor.h"
 #include "Audio/Asio/AsioLogicalRenderSequencer.h"
-#include "Audio/Asio/AsioLogicalTimeline.h"
 #include "Audio/Asio/AsioSubmittedOutputTail.h"
-#include "Audio/Asio/ExactAsioClock.h"
 #include "Audio/Asio/AsioSampleConverter.h"
 #include "Audio/Asio/AsioSession.h"
 #include "Audio/ExactJudgementTimeline.h"
+#include "Audio/Logical/LogicalPresentationClock.h"
+#include "Audio/Logical/LogicalPresentedOutputClock.h"
 #include "Audio/Mixer/AudioRenderCore.h"
 
 #include <Windows.h>
@@ -665,10 +665,10 @@ namespace gc::audio
                     const auto buffer_instance_id = timeline != nullptr
                                                         ? timeline->exact_buffer_instance_id()
                                                         : 0;
-                    const auto endpoint_generation = exact_clock_ != nullptr
-                                                         ? exact_clock_->info().timeline_generation
+                    const auto endpoint_generation = logical_clock_ != nullptr
+                                                         ? logical_clock_->info().timeline_generation
                                                          : 0;
-                    if (exact_clock_ == nullptr || timeline == nullptr ||
+                    if (logical_clock_ == nullptr || timeline == nullptr ||
                         buffer_instance_id == 0 || endpoint_generation == 0 ||
                         !timeline->ConfigureExactPlaybackHistory(
                             buffer_instance_id, endpoint_generation))
@@ -890,10 +890,10 @@ namespace gc::audio
                 observer_->StartupSucceeded(
                     session_->report(),
                     {
-                        .origin_raw_ms = logical_timeline_->origin_raw_ms(),
+                        .origin_raw_ms = logical_clock_->origin_raw_ms(),
                         .origin_unwrapped_ms = 0,
                         .origin_presented_frame = 0,
-                        .endpoint_generation = exact_endpoint_generation_,
+                        .endpoint_generation = logical_timeline_generation_,
                         .sample_rate = logical_contract_.sample_rate,
                         .period_frames = logical_contract_.period_frames,
                         .output_latency_frames =
@@ -1129,8 +1129,9 @@ namespace gc::audio
                         if (logical_output_sample_rate_ != 0 ||
                             render_core_ != nullptr ||
                             logical_render_sequencer_ != nullptr ||
-                            logical_timeline_ != nullptr ||
-                            submitted_tail_ != nullptr)
+                            logical_clock_ != nullptr ||
+                            submitted_tail_ != nullptr ||
+                            logical_timeline_generation_ != 0)
                         {
                             return std::unexpected(FatalPreparationFailure(
                                 Failure(
@@ -1138,29 +1139,54 @@ namespace gc::audio
                                     "ASIO logical rendering may be initialized only once")));
                         }
                         logical_output_sample_rate_ = session_sample_rate;
-                        logical_timeline_ = AsioLogicalTimeline::Create(
+                        std::uint64_t qpc_frequency{};
+                        const auto& clock_actions =
+                            actions_.callback_runtime_actions;
+                        if (clock_actions.query_performance_frequency == nullptr ||
+                            !clock_actions.query_performance_frequency(
+                                clock_actions.context, &qpc_frequency) ||
+                            qpc_frequency == 0 ||
+                            qpc_frequency > static_cast<std::uint64_t>(
+                                (std::numeric_limits<std::int64_t>::max)()))
+                        {
+                            return std::unexpected(FatalPreparationFailure(
+                                Failure(
+                                    AsioFailureStage::startup_clock,
+                                    "ASIO logical clock QPC frequency is invalid")));
+                        }
+                        const auto timeline_generation =
+                            detail::NextExactJudgementTimelineGeneration();
+                        if (timeline_generation == 0)
+                        {
+                            return std::unexpected(FatalPreparationFailure(
+                                Failure(
+                                    AsioFailureStage::startup_clock,
+                                    "ASIO logical timeline generation is invalid")));
+                        }
+                        logical_clock_ = LogicalPresentationClock::Create(
+                            timeline_generation,
                             actions_.time_get_time_ms(actions_.context),
-                            logical_output_sample_rate_);
+                            logical_output_sample_rate_,
+                            static_cast<std::int64_t>(qpc_frequency));
                         submitted_tail_ =
                             std::make_shared<AsioSubmittedOutputTail>();
-                        if (logical_timeline_ == nullptr ||
+                        if (logical_clock_ == nullptr ||
                             submitted_tail_ == nullptr)
                         {
                             return std::unexpected(FatalPreparationFailure(
                                 Failure(
                                     AsioFailureStage::render_core,
-                                    "Could not allocate the persistent ASIO logical timeline")));
+                                    "Could not allocate the persistent ASIO logical clock")));
                         }
+                        logical_timeline_generation_ = timeline_generation;
 
                         auto clock =
-                            std::make_unique<AsioPresentedClockPublication>(
-                                AsioClockNowActions{
+                            std::make_unique<LogicalPresentedOutputClock>(
+                                LogicalPresentedOutputClockActions{
                                     actions_.context,
                                     actions_.time_get_time_ms,
                                 },
-                                logical_timeline_,
-                                submitted_tail_);
-                        presented_clock_ = clock.get();
+                                logical_clock_);
                         ma_result mixer_result = MA_ERROR;
                         render_core_ = AudioRenderCore::Create(
                             request_.buffer_frames,
@@ -1170,7 +1196,6 @@ namespace gc::audio
                             &mixer_result);
                         if (render_core_ == nullptr)
                         {
-                            presented_clock_ = nullptr;
                             return std::unexpected(FatalPreparationFailure(
                                 Failure(
                                     AsioFailureStage::render_core,
@@ -1178,12 +1203,23 @@ namespace gc::audio
                                     AsioResultDomain::none,
                                     mixer_result)));
                         }
+                        if (enable_absolute_time_judgement_ &&
+                            !detail::RegisterExactJudgementTimeline(
+                                logical_clock_))
+                        {
+                            return std::unexpected(FatalPreparationFailure(
+                                Failure(
+                                    AsioFailureStage::startup_clock,
+                                    "Could not register the ASIO logical judgement timeline")));
+                        }
+                        exact_clock_registered_ =
+                            enable_absolute_time_judgement_;
                     }
                     else if (session_sample_rate !=
                         logical_output_sample_rate_ ||
                         render_core_ == nullptr ||
                         logical_render_sequencer_ == nullptr ||
-                        logical_timeline_ == nullptr ||
+                        logical_clock_ == nullptr ||
                         submitted_tail_ == nullptr)
                     {
                         return std::unexpected(FatalPreparationFailure(Failure(
@@ -1375,40 +1411,6 @@ namespace gc::audio
                 logical_render_sequencer_ =
                     std::make_unique<AsioLogicalRenderSequencer>(
                         logical_contract_.period_frames);
-                if (enable_absolute_time_judgement_)
-                {
-                    const auto callback = callback_runtime_->Snapshot();
-                    const auto endpoint_generation =
-                        detail::NextExactJudgementTimelineGeneration();
-                    if (endpoint_generation == 0 || callback.qpc_frequency == 0 ||
-                        callback.qpc_frequency > static_cast<std::uint64_t>(
-                            (std::numeric_limits<std::int64_t>::max)()))
-                    {
-                        return std::unexpected(Failure(
-                            AsioFailureStage::startup_clock,
-                            "ASIO exact clock generation or QPC frequency is invalid"));
-                    }
-                    exact_clock_ = ExactAsioClock::Create(
-                        endpoint_generation,
-                        logical_timeline_,
-                        static_cast<std::int64_t>(callback.qpc_frequency),
-                        request_.buffer_frames,
-                        logical_output_latency_frames_);
-                    if (exact_clock_ == nullptr)
-                    {
-                        return std::unexpected(Failure(
-                            AsioFailureStage::startup_clock,
-                            "Could not allocate the ASIO logical judgement clock"));
-                    }
-                    exact_endpoint_generation_ = endpoint_generation;
-                    if (!detail::RegisterExactJudgementTimeline(exact_clock_))
-                    {
-                        return std::unexpected(Failure(
-                            AsioFailureStage::startup_clock,
-                            "Could not register the ASIO exact clock provider"));
-                    }
-                    exact_clock_registered_ = true;
-                }
                 physical_contract_established_ = true;
                 return {};
             }
@@ -1738,14 +1740,14 @@ namespace gc::audio
                     if (state != LifecycleState::fatal &&
                         state != LifecycleState::stopping)
                     {
-                        if (logical_timeline_ == nullptr)
+                        if (logical_clock_ == nullptr)
                         {
                             fail(Failure(
                                 AsioFailureStage::runtime_clock,
                                 "ASIO logical timeline is unavailable"));
                         }
                         else if (const auto advanced =
-                                logical_timeline_->AdvanceNow(
+                                logical_clock_->ObserveNow(
                                     actions_.time_get_time_ms(
                                         actions_.context));
                             !advanced)
@@ -2618,19 +2620,19 @@ namespace gc::audio
                 {
                     render_core_->InvalidatePresentationClock();
                 }
-                if (exact_clock_ != nullptr)
+                if (logical_clock_ != nullptr)
                 {
-                    final_exact_clock_counters_ = exact_clock_->counters();
+                    final_exact_clock_counters_ = logical_clock_->counters();
                     has_final_exact_clock_counters_ = true;
-                    exact_clock_->Invalidate();
+                    logical_clock_->Invalidate();
                     if (exact_clock_registered_)
                     {
                         detail::UnregisterExactJudgementTimeline(
-                            exact_endpoint_generation_);
+                            logical_timeline_generation_);
                     }
                     exact_clock_registered_ = false;
-                    exact_endpoint_generation_ = 0;
-                    exact_clock_.reset();
+                    logical_timeline_generation_ = 0;
+                    logical_clock_.reset();
                 }
                 if (submitted_tail_ != nullptr)
                 {
@@ -2639,7 +2641,6 @@ namespace gc::audio
                         final_submitted_tail_snapshot_.stable;
                     submitted_tail_->Invalidate();
                 }
-                presented_clock_ = nullptr;
                 foreground_monitor_.reset();
                 if (auto timer_failure = ReleaseTimerPeriod(); timer_failure)
                 {
@@ -2719,7 +2720,7 @@ namespace gc::audio
             {
                 // This clock advances an already-confirmed background interval; it is
                 // never used to infer whether the game owns the foreground.
-                if (logical_timeline_ == nullptr)
+                if (logical_clock_ == nullptr)
                 {
                     return Failure(
                         AsioFailureStage::runtime_clock,
@@ -2727,7 +2728,7 @@ namespace gc::audio
                 }
                 const auto now_ms =
                     actions_.time_get_time_ms(actions_.context);
-                if (const auto advanced = logical_timeline_->AdvanceNow(now_ms);
+                if (const auto advanced = logical_clock_->ObserveNow(now_ms);
                     !advanced)
                 {
                     return Failure(
@@ -2736,12 +2737,12 @@ namespace gc::audio
                             "ASIO detached timeline advance failed: {}",
                             static_cast<unsigned>(advanced.error())));
                 }
-                const auto projected = logical_timeline_->WholePresentedFrameAt(
+                const auto projected = logical_clock_->WholeFrameAt(
                     now_ms);
                 if (!projected)
                 {
                     if (projected.error() ==
-                        AsioLogicalTimelineFailure::SnapshotUnavailable)
+                        LogicalPresentationClockFailure::SnapshotUnavailable)
                     {
                         return std::nullopt;
                     }
@@ -2795,13 +2796,6 @@ namespace gc::audio
                         AsioFailureStage::runtime_clock,
                         "ASIO submitted-output tail rejected a committed detached render");
                 }
-                const auto presented_output_frame =
-                    plan->timeline.output_frame_begin -
-                    logical_output_latency_frames_;
-                presented_clock_->PublishLogicalAnchor(
-                    presented_output_frame,
-                    rendered->submitted_output_tail,
-                    now_ms);
                 SaturatingAddCounter(
                     detached_discarded_frames_,
                     plan->timeline.discontinuity_frames +
@@ -2836,31 +2830,6 @@ namespace gc::audio
                 return static_cast<AsioFailureStage>(
                         first_fault_stage_.load(std::memory_order_acquire)) !=
                     AsioFailureStage::none;
-            }
-
-            bool PublishPhysicalClockAnchor(
-                const AsioRenderRequest& request,
-                const AsioLogicalRenderPlan& plan,
-                const std::uint64_t physical_session_generation) noexcept
-            {
-                if (!request.has_system_time || request.system_time_ns == 0 ||
-                    presented_clock_ == nullptr ||
-                    plan.timeline.output_frame_begin <
-                    logical_output_latency_frames_ ||
-                    physical_session_generation == 0)
-                {
-                    LatchRuntimeFault(AsioFailureStage::runtime_clock);
-                    return false;
-                }
-
-                const auto presented_output_frame =
-                    plan.timeline.output_frame_begin -
-                    logical_output_latency_frames_;
-                presented_clock_->PublishPhysicalAnchor(
-                    presented_output_frame,
-                    plan.submitted_output_tail,
-                    request.system_time_ns);
-                return true;
             }
 
             // ReSharper disable once CppOverrideWithDifferentVisibility
@@ -2904,7 +2873,7 @@ namespace gc::audio
                         (void)CallOutputReady();
                         return;
                     }
-                    if (logical_timeline_ == nullptr)
+                    if (logical_clock_ == nullptr)
                     {
                         ClearAsioBlock(request.buffer_index);
                         LatchRuntimeFault(AsioFailureStage::runtime_clock);
@@ -2912,13 +2881,13 @@ namespace gc::audio
                     }
 
                     const auto projected =
-                        logical_timeline_->WholePresentedFrameAtSystemTime(
+                        logical_clock_->WholeFrameAtSystemTime(
                             request.system_time_ns);
                     if (!projected)
                     {
                         ClearAsioBlock(request.buffer_index);
                         if (projected.error() ==
-                            AsioLogicalTimelineFailure::SnapshotUnavailable)
+                            LogicalPresentationClockFailure::SnapshotUnavailable)
                         {
                             (void)CallOutputReady();
                             return;
@@ -3039,13 +3008,6 @@ namespace gc::audio
                         LatchRuntimeFault(AsioFailureStage::runtime_clock);
                         return;
                     }
-                    if (!PublishPhysicalClockAnchor(
-                        request,
-                        *logical_plan,
-                        physical_session_generation))
-                    {
-                        return;
-                    }
                     SaturatingAddCounter(
                         render_gap_frames_,
                         logical_plan->timeline.discontinuity_frames);
@@ -3085,14 +3047,6 @@ namespace gc::audio
                 {
                     ClearAsioBlock(request.buffer_index);
                     LatchRuntimeFault(AsioFailureStage::runtime_clock);
-                    return;
-                }
-                if (!PublishPhysicalClockAnchor(
-                    request,
-                    *logical_plan,
-                    physical_session_generation))
-                {
-                    ClearAsioBlock(request.buffer_index);
                     return;
                 }
                 SaturatingAddCounter(
@@ -3158,7 +3112,7 @@ namespace gc::audio
                 const AsioRenderRequest& request,
                 const AsioLogicalRenderPlan& plan) noexcept
             {
-                if (!request.has_system_time || logical_timeline_ == nullptr ||
+                if (!request.has_system_time || logical_clock_ == nullptr ||
                     logical_output_sample_rate_ == 0 ||
                     plan.timeline.output_frame_begin <
                     logical_output_latency_frames_)
@@ -3175,7 +3129,7 @@ namespace gc::audio
                 }
 
                 const auto projected =
-                    logical_timeline_->ProjectSystemTimeNanoseconds(
+                    logical_clock_->ProjectSystemTimeNanoseconds(
                         request.system_time_ns);
                 if (!projected)
                 {
@@ -3291,8 +3245,8 @@ namespace gc::audio
                 {
                     MergeCallbackSnapshot(callback, callback_runtime_->Snapshot());
                 }
-                const auto exact = exact_clock_ != nullptr
-                                       ? exact_clock_->counters()
+                const auto exact = logical_clock_ != nullptr
+                                       ? logical_clock_->counters()
                                        : has_final_exact_clock_counters_
                                        ? final_exact_clock_counters_
                                        : ExactJudgementTimelineCounters{};
@@ -3458,16 +3412,14 @@ namespace gc::audio
             std::unique_ptr<AsioSession> session_;
             std::unique_ptr<AsioCallbackRuntime> callback_runtime_;
             std::unique_ptr<AudioRenderCore> render_core_;
-            std::shared_ptr<ExactAsioClock> exact_clock_;
             ExactJudgementTimelineCounters final_exact_clock_counters_{};
             bool has_final_exact_clock_counters_{};
             bool exact_clock_registered_{};
-            std::uint64_t exact_endpoint_generation_{};
-            AsioPresentedClockPublication* presented_clock_{};
+            std::uint64_t logical_timeline_generation_{};
             AsioClockTracker clock_tracker_;
             std::unique_ptr<AsioLogicalRenderSequencer>
             logical_render_sequencer_;
-            std::shared_ptr<AsioLogicalTimeline> logical_timeline_;
+            std::shared_ptr<LogicalPresentationClock> logical_clock_;
             std::shared_ptr<AsioSubmittedOutputTail> submitted_tail_;
             AsioSubmittedOutputTailSnapshot final_submitted_tail_snapshot_{};
             bool has_final_submitted_tail_snapshot_{};

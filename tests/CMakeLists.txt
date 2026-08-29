@@ -1,25 +1,25 @@
-add_executable(gc_asio_logical_timeline_tests
-        Audio/Asio/AsioLogicalTimelineTests.cpp
+add_executable(gc_logical_presentation_clock_tests
+        Audio/Logical/LogicalPresentationClockTests.cpp
 )
-target_link_libraries(gc_asio_logical_timeline_tests PRIVATE
-        gc_asio
-)
-
-add_test(
-        NAME AsioLogicalTimeline
-        COMMAND gc_asio_logical_timeline_tests
-)
-
-add_executable(gc_exact_asio_clock_tests
-        Audio/Asio/ExactAsioClockTests.cpp
-)
-target_link_libraries(gc_exact_asio_clock_tests PRIVATE
+target_link_libraries(gc_logical_presentation_clock_tests PRIVATE
         gc_audio
 )
 
 add_test(
-        NAME ExactAsioClock
-        COMMAND gc_exact_asio_clock_tests
+        NAME LogicalPresentationClock
+        COMMAND gc_logical_presentation_clock_tests
+)
+
+add_executable(gc_logical_presented_output_clock_tests
+        Audio/Logical/LogicalPresentedOutputClockTests.cpp
+)
+target_link_libraries(gc_logical_presented_output_clock_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME LogicalPresentedOutputClock
+        COMMAND gc_logical_presented_output_clock_tests
 )
 
 add_executable(gc_exact_wasapi_clock_compatibility_tests
