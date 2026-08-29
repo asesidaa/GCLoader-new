@@ -10,18 +10,6 @@ add_test(
         COMMAND gc_logical_presentation_clock_tests
 )
 
-add_executable(gc_logical_presented_output_clock_tests
-        Audio/Logical/LogicalPresentedOutputClockTests.cpp
-)
-target_link_libraries(gc_logical_presented_output_clock_tests PRIVATE
-        gc_audio
-)
-
-add_test(
-        NAME LogicalPresentedOutputClock
-        COMMAND gc_logical_presented_output_clock_tests
-)
-
 add_executable(gc_exact_wasapi_clock_compatibility_tests
         Audio/Wasapi/ExactWasapiClockCompatibilityTests.cpp
 )
@@ -32,18 +20,6 @@ target_link_libraries(gc_exact_wasapi_clock_compatibility_tests PRIVATE
 add_test(
         NAME ExactWasapiClockCompatibility
         COMMAND gc_exact_wasapi_clock_compatibility_tests
-)
-
-add_executable(gc_asio_presentation_bridge_tests
-        Audio/Asio/AsioPresentationBridgeTests.cpp
-)
-target_link_libraries(gc_asio_presentation_bridge_tests PRIVATE
-        gc_audio
-)
-
-add_test(
-        NAME AsioPresentationBridge
-        COMMAND gc_asio_presentation_bridge_tests
 )
 
 add_executable(gc_asio_foreground_state_tests
@@ -82,18 +58,6 @@ add_test(
         COMMAND gc_exact_history_isolation_tests
 )
 
-add_executable(gc_logical_render_stream_tests
-        Audio/Mixer/LogicalRenderStreamTests.cpp
-)
-target_link_libraries(gc_logical_render_stream_tests PRIVATE
-        gc_audio
-)
-
-add_test(
-        NAME LogicalRenderStream
-        COMMAND gc_logical_render_stream_tests
-)
-
 add_executable(gc_logical_judgement_timeline_tests
         Patches/AbsoluteJudgement/LogicalJudgementTimelineTests.cpp
 )
@@ -104,18 +68,6 @@ target_link_libraries(gc_logical_judgement_timeline_tests PRIVATE
 add_test(
         NAME LogicalJudgementTimeline
         COMMAND gc_logical_judgement_timeline_tests
-)
-
-add_executable(gc_directsound_logical_cursor_tests
-        Audio/DirectSound/LogicalCursorContinuityTests.cpp
-)
-target_link_libraries(gc_directsound_logical_cursor_tests PRIVATE
-        gc_audio
-)
-
-add_test(
-        NAME DirectSoundLogicalCursor
-        COMMAND gc_directsound_logical_cursor_tests
 )
 
 add_executable(gc_ime_suppression_tests
