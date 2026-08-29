@@ -10,6 +10,7 @@ add_library(gc_audio STATIC
         Logical/LogicalPresentationClock.cpp
         Logical/LogicalPresentedOutputClock.cpp
         Mixer/AudioCursorTimeline.cpp
+        Mixer/LogicalRenderStream.cpp
         Mixer/AudioRenderCore.cpp
         Mixer/AudioSnapshot.cpp
         Mixer/MiniaudioMixer.cpp

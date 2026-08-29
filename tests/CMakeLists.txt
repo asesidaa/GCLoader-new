@@ -70,6 +70,18 @@ add_test(
         COMMAND gc_exact_history_isolation_tests
 )
 
+add_executable(gc_logical_render_stream_tests
+        Audio/Mixer/LogicalRenderStreamTests.cpp
+)
+target_link_libraries(gc_logical_render_stream_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME LogicalRenderStream
+        COMMAND gc_logical_render_stream_tests
+)
+
 add_executable(gc_logical_judgement_timeline_tests
         Patches/AbsoluteJudgement/LogicalJudgementTimelineTests.cpp
 )
