@@ -46,6 +46,18 @@ add_test(
         COMMAND gc_asio_logical_render_sequencer_tests
 )
 
+add_executable(gc_asio_presentation_bridge_tests
+        Audio/Asio/AsioPresentationBridgeTests.cpp
+)
+target_link_libraries(gc_asio_presentation_bridge_tests PRIVATE
+        gc_audio
+)
+
+add_test(
+        NAME AsioPresentationBridge
+        COMMAND gc_asio_presentation_bridge_tests
+)
+
 add_executable(gc_asio_foreground_state_tests
         Audio/Asio/AsioForegroundStateTests.cpp
 )

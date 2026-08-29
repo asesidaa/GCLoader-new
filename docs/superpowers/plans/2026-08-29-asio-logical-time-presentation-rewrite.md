@@ -766,8 +766,12 @@ config.linear.lpfOrder = 0;
 ```
 
 The initial logical and driver nominal rates are the same frozen integral
-driver rate. Runtime correction uses
-`ma_resampler_set_rate_ratio()`; it is never applied to per-voice converters.
+driver rate. The vendored miniaudio generic
+`ma_resampler_set_rate_ratio()` truncates its ratio to a denominator of
+1,000, which cannot represent the required sub-1,000-ppm corrections. Runtime
+correction therefore uses the same public `ma_resampler` through
+`ma_resampler_set_rate()` with a denominator of 1,000,000. It is never
+applied to per-voice converters.
 Read `ma_resampler_get_input_latency()` and
 `ma_resampler_get_output_latency()` once during construction.
 
@@ -1181,7 +1185,7 @@ These are review commands, not tests:
 ```powershell
 rg -n "Asio(Render|Clock|Session|Callback|Submitted|sample_position|system_time|physical_session)" src/Patches/AbsoluteJudgement src/Audio/Mixer/AudioCursorTimeline.*
 rg -n "Wasapi|DirectSoundSettings|alternate_backend" src/Audio/Asio src/Audio/AudioBackendController.cpp
-rg -n "ma_resampler_set_rate_ratio|ma_resampler_process_pcm_frames" src/Audio/Asio
+rg -n "ma_resampler_set_rate|ma_resampler_process_pcm_frames" src/Audio/Asio
 ```
 
 Expected:
