@@ -9,14 +9,21 @@
 
 #include <plog/Log.h>
 
+#include <array>
+#include <atomic>
 #include <bit>
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace gc::audio
 {
@@ -45,6 +52,14 @@ namespace gc::audio
             probe_output_ready,
             start_driver,
             log_format,
+            create_startup_event,
+            create_shutdown_event,
+            start_owner_thread,
+            wait_for_startup,
+            initialize_com,
+            signal_startup,
+            validate_service_view,
+            allocate_live_session,
         };
 
         enum class CallbackOperation : std::uint64_t
@@ -80,7 +95,16 @@ namespace gc::audio
             stop = 1,
             dispose_buffers,
             exit,
-            clear_callback_target,
+            signal_shutdown,
+            join_owner,
+            close_startup_event,
+            close_shutdown_event,
+        };
+
+        enum class OwnershipOperation : std::uint64_t
+        {
+            message_wait = 1,
+            unexpected_wait_result,
         };
 
         template <typename Value>
@@ -127,6 +151,26 @@ namespace gc::audio
                 operand2);
         }
 
+        [[noreturn]] void ShutdownFatal(
+            const ShutdownOperation operation,
+            const std::uint64_t operand1 = 0) noexcept
+        {
+            FailAudioContract(
+                AudioContractFatalReason::AsioShutdownFailure,
+                static_cast<std::uint64_t>(operation),
+                operand1);
+        }
+
+        [[noreturn]] void OwnershipFatal(
+            const OwnershipOperation operation,
+            const std::uint64_t operand1 = 0) noexcept
+        {
+            FailAudioContract(
+                AudioContractFatalReason::AsioOwnershipFailure,
+                static_cast<std::uint64_t>(operation),
+                operand1);
+        }
+
         [[nodiscard]] std::size_t ConversionBytesOrFatal(
             const std::uint32_t frame_count,
             const ASIOSampleType sample_type) noexcept
@@ -145,56 +189,530 @@ namespace gc::audio
             return static_cast<std::size_t>(frame_count) *
                 *bytes_per_sample;
         }
+
+        struct FrozenFormat final
+        {
+            std::uint32_t sample_rate{};
+            std::uint32_t frame_count{};
+            std::array<std::uint32_t, 2> channels{};
+            std::array<ASIOSampleType, 2> sample_types{};
+        };
+
+        struct LiveAsioSession final
+        {
+            [[nodiscard]] std::span<const float> RenderPcm(
+                std::uint32_t frame_count) noexcept;
+            void FillBuffer(long buffer_index) noexcept;
+
+            std::unique_ptr<IAsioDriver> driver;
+            std::array<ASIOBufferInfo, 2> buffers{};
+            FrozenFormat format{};
+            std::unique_ptr<AudioRenderCore> render_core;
+            std::array<std::vector<std::byte>, 2> conversion_storage;
+            bool output_ready_supported{};
+        };
+
+        std::atomic<LiveAsioSession*> callback_target{};
+        std::atomic_flag callback_active = ATOMIC_FLAG_INIT;
+
+        [[nodiscard]] LiveAsioSession* CallbackTarget() noexcept
+        {
+            auto* const target =
+                callback_target.load(std::memory_order_acquire);
+            if (target == nullptr)
+            {
+                CallbackFatal(CallbackOperation::missing_target);
+            }
+            return target;
+        }
+
+        void BufferSwitch(
+            long buffer_index,
+            ASIOBool direct_process) noexcept;
+        void SampleRateDidChange(ASIOSampleRate sample_rate) noexcept;
+        long AsioMessage(
+            long selector,
+            long value,
+            void* message,
+            double* optional) noexcept;
+        ASIOTime* BufferSwitchTimeInfo(
+            ASIOTime* time_info,
+            long buffer_index,
+            ASIOBool direct_process) noexcept;
+
+        constexpr ASIOCallbacks callbacks{
+            .bufferSwitch = &BufferSwitch,
+            .sampleRateDidChange = &SampleRateDidChange,
+            .asioMessage = &AsioMessage,
+            .bufferSwitchTimeInfo = &BufferSwitchTimeInfo,
+        };
+
+        // Rendering advances decoder and mixer state owned by the core.
+        // ReSharper disable once CppMemberFunctionMayBeConst
+        // NOLINTNEXTLINE(readability-make-member-function-const)
+        std::span<const float> LiveAsioSession::RenderPcm(
+            const std::uint32_t frame_count) noexcept
+        {
+            if (render_core == nullptr)
+            {
+                CallbackFatal(CallbackOperation::render_failure);
+            }
+            const AudioRenderBlock block =
+                render_core->RenderSequential(frame_count);
+            if (block.mixer_result != MA_SUCCESS ||
+                block.silence_reason == AudioRenderSilenceReason::mixer_error ||
+                block.silence_reason ==
+                AudioRenderSilenceReason::render_contract_error)
+            {
+                CallbackFatal(
+                    CallbackOperation::render_failure,
+                    Bits(block.mixer_result),
+                    static_cast<std::uint64_t>(block.silence_reason));
+            }
+            if (block.frames_read != frame_count ||
+                block.silence_reason ==
+                AudioRenderSilenceReason::active_short_read)
+            {
+                CallbackFatal(
+                    CallbackOperation::render_short_read,
+                    block.frames_read,
+                    frame_count);
+            }
+            const auto expected_samples =
+                static_cast<std::size_t>(frame_count) * 2;
+            if (block.interleaved_stereo.size() != expected_samples)
+            {
+                CallbackFatal(
+                    CallbackOperation::render_shape,
+                    block.interleaved_stereo.size(),
+                    expected_samples);
+            }
+            for (const float sample : block.interleaved_stereo)
+            {
+                if (!std::isfinite(sample))
+                {
+                    CallbackFatal(CallbackOperation::non_finite_pcm);
+                }
+            }
+            return block.interleaved_stereo;
+        }
+
+        void LiveAsioSession::FillBuffer(const long buffer_index) noexcept
+        {
+            if (buffer_index < 0 || buffer_index > 1)
+            {
+                CallbackFatal(
+                    CallbackOperation::invalid_buffer_index,
+                    Bits(buffer_index));
+            }
+
+            const auto pcm = RenderPcm(format.frame_count);
+            const std::array<std::span<std::byte>, 2> destinations{
+                std::span<std::byte>{conversion_storage[0]},
+                std::span<std::byte>{conversion_storage[1]},
+            };
+            const auto converted = ConvertFloatStereoToAsio(
+                pcm,
+                format.sample_types,
+                destinations);
+            if (!converted.converted || converted.stats.non_finite)
+            {
+                CallbackFatal(
+                    CallbackOperation::conversion_failure,
+                    converted.stats.non_finite ? 1 : 0);
+            }
+
+            for (std::size_t channel{}; channel < buffers.size(); ++channel)
+            {
+                void* const driver_buffer =
+                    buffers[channel].buffers[
+                        static_cast<std::size_t>(buffer_index)];
+                if (driver_buffer == nullptr)
+                {
+                    CallbackFatal(
+                        CallbackOperation::invalid_driver_buffer,
+                        channel,
+                        static_cast<std::uint64_t>(buffer_index));
+                }
+                std::memcpy(
+                    driver_buffer,
+                    conversion_storage[channel].data(),
+                    conversion_storage[channel].size());
+            }
+
+            if (output_ready_supported)
+            {
+                const ASIOError ready_result = driver->OutputReady();
+                if (ready_result != ASE_OK)
+                {
+                    CallbackFatal(
+                        CallbackOperation::output_ready,
+                        Bits(ready_result));
+                }
+            }
+        }
+
+        void BufferSwitch(
+            const long buffer_index,
+            const ASIOBool direct_process) noexcept
+        {
+            static_cast<void>(direct_process);
+            auto* const target = CallbackTarget();
+            if (callback_active.test_and_set(std::memory_order_acquire))
+            {
+                CallbackFatal(CallbackOperation::concurrent_callback);
+            }
+            target->FillBuffer(buffer_index);
+            callback_active.clear(std::memory_order_release);
+        }
+
+        void SampleRateDidChange(
+            const ASIOSampleRate sample_rate) noexcept
+        {
+            FailAudioContract(
+                AudioContractFatalReason::AsioRuntimeNotification,
+                static_cast<std::uint64_t>(
+                    RuntimeNotification::sample_rate_changed),
+                std::bit_cast<std::uint64_t>(sample_rate));
+        }
+
+        long AsioMessage(
+            const long selector,
+            const long value,
+            void*,
+            double*) noexcept
+        {
+            if (selector == kAsioSelectorSupported)
+            {
+                switch (value)
+                {
+                case kAsioEngineVersion:
+                case kAsioResetRequest:
+                case kAsioResyncRequest:
+                case kAsioLatenciesChanged:
+                case kAsioOverload:
+                case kAsioSupportsTimeInfo:
+                case kAsioSupportsTimeCode:
+                    return 1;
+                default:
+                    return 0;
+                }
+            }
+
+            switch (selector)
+            {
+            case kAsioEngineVersion:
+                return 2;
+            case kAsioSupportsTimeInfo:
+                return 1;
+            case kAsioSupportsTimeCode:
+                return 0;
+            case kAsioResetRequest:
+                FailAudioContract(
+                    AudioContractFatalReason::AsioRuntimeNotification,
+                    static_cast<std::uint64_t>(
+                        RuntimeNotification::reset));
+            case kAsioBufferSizeChange:
+                FailAudioContract(
+                    AudioContractFatalReason::AsioRuntimeNotification,
+                    static_cast<std::uint64_t>(
+                        RuntimeNotification::buffer_size_changed),
+                    Bits(value));
+            case kAsioResyncRequest:
+                FailAudioContract(
+                    AudioContractFatalReason::AsioRuntimeNotification,
+                    static_cast<std::uint64_t>(
+                        RuntimeNotification::resync));
+            case kAsioLatenciesChanged:
+                FailAudioContract(
+                    AudioContractFatalReason::AsioRuntimeNotification,
+                    static_cast<std::uint64_t>(
+                        RuntimeNotification::latencies_changed));
+            case kAsioOverload:
+                FailAudioContract(
+                    AudioContractFatalReason::AsioRuntimeNotification,
+                    static_cast<std::uint64_t>(
+                        RuntimeNotification::overload));
+            default:
+                return 0;
+            }
+        }
+
+        // The ASIO SDK fixes this callback parameter to mutable ASIOTime*.
+        // ReSharper disable once CppParameterMayBeConstPtrOrRef
+        ASIOTime* BufferSwitchTimeInfo(
+            ASIOTime* time_info,
+            const long buffer_index,
+            const ASIOBool direct_process) noexcept
+        {
+            static_cast<void>(direct_process);
+            auto* const target = CallbackTarget();
+            if (callback_active.test_and_set(std::memory_order_acquire))
+            {
+                CallbackFatal(CallbackOperation::concurrent_callback);
+            }
+            if (time_info == nullptr)
+            {
+                CallbackFatal(CallbackOperation::invalid_time_info);
+            }
+
+            const auto flags = time_info->timeInfo.flags;
+            if ((flags & (kSampleRateChanged | kClockSourceChanged)) != 0)
+            {
+                CallbackFatal(
+                    CallbackOperation::changed_time_info,
+                    flags);
+            }
+            if ((flags & kSampleRateValid) != 0 &&
+                (!std::isfinite(time_info->timeInfo.sampleRate) ||
+                    time_info->timeInfo.sampleRate !=
+                    static_cast<double>(target->format.sample_rate)))
+            {
+                CallbackFatal(
+                    CallbackOperation::invalid_sample_rate,
+                    std::bit_cast<std::uint64_t>(
+                        time_info->timeInfo.sampleRate),
+                    target->format.sample_rate);
+            }
+            if ((flags & kSpeedValid) != 0 &&
+                (!std::isfinite(time_info->timeInfo.speed) ||
+                    time_info->timeInfo.speed != 1.0))
+            {
+                CallbackFatal(
+                    CallbackOperation::invalid_speed,
+                    std::bit_cast<std::uint64_t>(
+                        time_info->timeInfo.speed));
+            }
+
+            target->FillBuffer(buffer_index);
+            callback_active.clear(std::memory_order_release);
+            return nullptr;
+        }
     } // namespace
-
-    const ASIOCallbacks AsioOutputBackend::callbacks_{
-        .bufferSwitch = &AsioOutputBackend::BufferSwitch,
-        .sampleRateDidChange = &AsioOutputBackend::SampleRateDidChange,
-        .asioMessage = &AsioOutputBackend::AsioMessage,
-        .bufferSwitchTimeInfo = &AsioOutputBackend::BufferSwitchTimeInfo,
-    };
-
-    std::atomic<AsioOutputBackend*> AsioOutputBackend::callback_target_{};
-    std::atomic_flag AsioOutputBackend::callback_active_ = ATOMIC_FLAG_INIT;
 
     std::unique_ptr<AsioOutputBackend> AsioOutputBackend::Start(
         HWND game_window,
         const AsioStreamRequest& request,
-        IAsioRegistrySource& registry,
-        IAsioDriverFactory& factory,
-        std::shared_ptr<const ma_allocation_callbacks> allocation_callbacks) noexcept
+        std::unique_ptr<IAsioRegistrySource> registry,
+        std::unique_ptr<IAsioDriverFactory> driver_factory,
+        std::shared_ptr<const ma_allocation_callbacks>
+        allocation_callbacks) noexcept
     {
         auto* const backend = new(std::nothrow) AsioOutputBackend;
         if (backend == nullptr)
         {
             StartupFatal(StartupOperation::allocate_backend);
         }
+        if (registry == nullptr)
+        {
+            StartupFatal(StartupOperation::resolve_driver);
+        }
+        if (driver_factory == nullptr)
+        {
+            StartupFatal(StartupOperation::create_driver);
+        }
 
-        auto registration = ResolveAsioDriver(registry, request.driver_name);
+        backend->startup_complete_ =
+            CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (backend->startup_complete_ == nullptr)
+        {
+            StartupFatal(
+                StartupOperation::create_startup_event,
+                GetLastError());
+        }
+
+        backend->shutdown_requested_ =
+            CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (backend->shutdown_requested_ == nullptr)
+        {
+            StartupFatal(
+                StartupOperation::create_shutdown_event,
+                GetLastError());
+        }
+
+        try
+        {
+            backend->owner_thread_ = std::thread{
+                &AsioOutputBackend::OwnerThreadMain,
+                game_window,
+                request,
+                std::move(registry),
+                std::move(driver_factory),
+                std::move(allocation_callbacks),
+                backend->startup_complete_,
+                backend->shutdown_requested_,
+                &backend->services_,
+            };
+        }
+        catch (...)
+        {
+            StartupFatal(StartupOperation::start_owner_thread);
+        }
+
+        const DWORD wait_result =
+            WaitForSingleObject(backend->startup_complete_, INFINITE);
+        if (wait_result != WAIT_OBJECT_0)
+        {
+            const DWORD error =
+                wait_result == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+            StartupFatal(
+                StartupOperation::wait_for_startup,
+                wait_result,
+                error);
+        }
+        if (backend->services_.render_core == nullptr ||
+            backend->services_.endpoint_buffer_frames == 0 ||
+            backend->services_.output_sample_rate == 0)
+        {
+            StartupFatal(StartupOperation::validate_service_view);
+        }
+
+        return std::unique_ptr<AsioOutputBackend>{backend};
+    }
+
+    AsioOutputBackend::~AsioOutputBackend()
+    {
+        if (SetEvent(shutdown_requested_) == FALSE)
+        {
+            ShutdownFatal(
+                ShutdownOperation::signal_shutdown,
+                GetLastError());
+        }
+        if (!owner_thread_.joinable())
+        {
+            ShutdownFatal(ShutdownOperation::join_owner);
+        }
+        try
+        {
+            owner_thread_.join();
+        }
+        catch (...)
+        {
+            ShutdownFatal(ShutdownOperation::join_owner);
+        }
+
+        if (CloseHandle(startup_complete_) == FALSE)
+        {
+            ShutdownFatal(
+                ShutdownOperation::close_startup_event,
+                GetLastError());
+        }
+        if (CloseHandle(shutdown_requested_) == FALSE)
+        {
+            ShutdownFatal(
+                ShutdownOperation::close_shutdown_event,
+                GetLastError());
+        }
+    }
+
+    std::unique_ptr<MixerVoice> AsioOutputBackend::CreateVoice(
+        const NormalizedSourceFormat& format,
+        std::shared_ptr<AudioSnapshot> snapshot,
+        std::shared_ptr<AudioCursorTimeline>,
+        const VoiceUsage usage,
+        ma_result* const result) noexcept
+    {
+        return services_.render_core->CreateVoice(
+            format,
+            std::move(snapshot),
+            nullptr,
+            usage,
+            result);
+    }
+
+    std::optional<std::uint64_t>
+    AsioOutputBackend::CurrentOutputFrame() noexcept
+    {
+        return std::nullopt;
+    }
+
+    std::uint32_t AsioOutputBackend::endpoint_buffer_frames() const noexcept
+    {
+        return services_.endpoint_buffer_frames;
+    }
+
+    std::uint32_t AsioOutputBackend::output_sample_rate() const noexcept
+    {
+        return services_.output_sample_rate;
+    }
+
+    void AsioOutputBackend::CountPendingCursorQuery() noexcept
+    {
+    }
+
+    void AsioOutputBackend::CountUnmappedCursorFailure() noexcept
+    {
+    }
+
+    void AsioOutputBackend::OwnerThreadMain(
+        HWND game_window,
+        // The owner entry intentionally takes permanent ownership of this copy.
+        AsioStreamRequest request, // NOLINT(performance-unnecessary-value-param)
+        std::unique_ptr<IAsioRegistrySource> registry,
+        std::unique_ptr<IAsioDriverFactory> driver_factory,
+        std::shared_ptr<const ma_allocation_callbacks> allocation_callbacks,
+        HANDLE startup_complete,
+        HANDLE shutdown_requested,
+        PublishedServices* published_services) noexcept
+    {
+        const HRESULT com_result = CoInitializeEx(
+            nullptr,
+            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        if (com_result != S_OK && com_result != S_FALSE)
+        {
+            StartupFatal(
+                StartupOperation::initialize_com,
+                Bits(com_result));
+        }
+
+        MSG queued_message{};
+        static_cast<void>(PeekMessageW(
+            &queued_message,
+            nullptr,
+            0,
+            0,
+            PM_NOREMOVE));
+
+        auto* const raw_session = new(std::nothrow) LiveAsioSession;
+        if (raw_session == nullptr)
+        {
+            StartupFatal(StartupOperation::allocate_live_session);
+        }
+        std::unique_ptr<LiveAsioSession> session{raw_session};
+
+        auto registration =
+            ResolveAsioDriver(*registry, request.driver_name);
         if (!registration)
         {
-            StartupFatal(StartupOperation::resolve_driver, registration.error());
+            StartupFatal(
+                StartupOperation::resolve_driver,
+                registration.error());
         }
 
-        auto created = factory.Create(registration->clsid);
+        auto created = driver_factory->Create(registration->clsid);
         if (!created)
         {
-            StartupFatal(StartupOperation::create_driver, created.error());
+            StartupFatal(
+                StartupOperation::create_driver,
+                created.error());
         }
-        backend->driver_ = std::move(*created);
+        session->driver = std::move(*created);
+        registry.reset();
+        driver_factory.reset();
 
-        if (backend->driver_->Init(game_window) != ASIOTrue)
+        if (session->driver->Init(game_window) != ASIOTrue)
         {
             StartupFatal(StartupOperation::initialize_driver);
         }
 
         char reported_name[32]{};
-        backend->driver_->GetDriverName(reported_name);
-        const long driver_version = backend->driver_->GetDriverVersion();
+        session->driver->GetDriverName(reported_name);
+        const long driver_version =
+            session->driver->GetDriverVersion();
 
         ASIOSampleRate reported_rate{};
         const ASIOError rate_result =
-            backend->driver_->GetSampleRate(&reported_rate);
+            session->driver->GetSampleRate(&reported_rate);
         if (rate_result != ASE_OK)
         {
             StartupFatal(
@@ -204,11 +722,13 @@ namespace gc::audio
         if (!std::isfinite(reported_rate) || reported_rate <= 0.0 ||
             std::trunc(reported_rate) != reported_rate ||
             reported_rate >
-            static_cast<double>((std::numeric_limits<std::uint32_t>::max)()))
+            static_cast<double>(
+                (std::numeric_limits<std::uint32_t>::max)()))
         {
             StartupFatal(StartupOperation::validate_sample_rate);
         }
-        const auto sample_rate = static_cast<std::uint32_t>(reported_rate);
+        const auto sample_rate =
+            static_cast<std::uint32_t>(reported_rate);
         if (!IsSupportedOutputSampleRate(sample_rate))
         {
             StartupFatal(
@@ -217,11 +737,12 @@ namespace gc::audio
         }
 
         AsioBufferLimits limits{};
-        const ASIOError buffer_result = backend->driver_->GetBufferSize(
-            &limits.minimum,
-            &limits.maximum,
-            &limits.preferred,
-            &limits.granularity);
+        const ASIOError buffer_result =
+            session->driver->GetBufferSize(
+                &limits.minimum,
+                &limits.maximum,
+                &limits.preferred,
+                &limits.granularity);
         if (buffer_result != ASE_OK)
         {
             StartupFatal(
@@ -234,15 +755,17 @@ namespace gc::audio
         {
             StartupFatal(
                 StartupOperation::validate_buffer_size,
-                static_cast<std::uint64_t>(buffer_validation.error()),
+                static_cast<std::uint64_t>(
+                    buffer_validation.error()),
                 request.buffer_frames);
         }
 
         long input_channels{};
         long output_channels{};
-        const ASIOError channels_result = backend->driver_->GetChannels(
-            &input_channels,
-            &output_channels);
+        const ASIOError channels_result =
+            session->driver->GetChannels(
+                &input_channels,
+                &output_channels);
         if (channels_result != ASE_OK)
         {
             StartupFatal(
@@ -250,11 +773,14 @@ namespace gc::audio
                 Bits(channels_result));
         }
         const std::uint64_t selected_last =
-            static_cast<std::uint64_t>(request.output_base_channel) + 1;
+            static_cast<std::uint64_t>(
+                request.output_base_channel) + 1;
         if (input_channels < 0 || output_channels < 2 ||
-            selected_last >= static_cast<std::uint64_t>(output_channels) ||
+            selected_last >=
+            static_cast<std::uint64_t>(output_channels) ||
             selected_last >
-            static_cast<std::uint64_t>((std::numeric_limits<long>::max)()))
+            static_cast<std::uint64_t>(
+                (std::numeric_limits<long>::max)()))
         {
             StartupFatal(
                 StartupOperation::validate_channel_pair,
@@ -262,38 +788,39 @@ namespace gc::audio
                 Bits(output_channels));
         }
 
-        backend->format_.sample_rate = sample_rate;
-        backend->format_.frame_count = request.buffer_frames;
-        backend->format_.channels = {
+        session->format.sample_rate = sample_rate;
+        session->format.frame_count = request.buffer_frames;
+        session->format.channels = {
             request.output_base_channel,
             request.output_base_channel + 1,
         };
-        for (std::size_t channel{}; channel < backend->buffers_.size(); ++channel)
+        for (std::size_t channel{};
+             channel < session->buffers.size();
+             ++channel)
         {
-            backend->buffers_[channel] = {
+            session->buffers[channel] = {
                 .isInput = ASIOFalse,
-                .channelNum = static_cast<long>(backend->format_.channels[channel]),
+                .channelNum = static_cast<long>(
+                    session->format.channels[channel]),
                 .buffers = {},
             };
         }
 
-        AsioOutputBackend* expected_target{};
-        if (!callback_target_.compare_exchange_strong(
-            expected_target,
-            backend,
-            std::memory_order_release,
-            std::memory_order_relaxed))
+        if (auto* const existing_target =
+                callback_target.load(std::memory_order_acquire);
+            existing_target != nullptr)
         {
             StartupFatal(
                 StartupOperation::publish_callback_target,
-                reinterpret_cast<std::uintptr_t>(expected_target));
+                reinterpret_cast<std::uintptr_t>(existing_target));
         }
 
-        const ASIOError create_result = backend->driver_->CreateBuffers(
-            backend->buffers_.data(),
-            static_cast<long>(backend->buffers_.size()),
-            static_cast<long>(request.buffer_frames),
-            &callbacks_);
+        const ASIOError create_result =
+            session->driver->CreateBuffers(
+                session->buffers.data(),
+                static_cast<long>(session->buffers.size()),
+                static_cast<long>(request.buffer_frames),
+                &callbacks);
         if (create_result != ASE_OK)
         {
             StartupFatal(
@@ -301,14 +828,17 @@ namespace gc::audio
                 Bits(create_result));
         }
 
-        for (std::size_t channel{}; channel < backend->buffers_.size(); ++channel)
+        for (std::size_t channel{};
+             channel < session->buffers.size();
+             ++channel)
         {
             ASIOChannelInfo info{
-                .channel = static_cast<long>(backend->format_.channels[channel]),
+                .channel = static_cast<long>(
+                    session->format.channels[channel]),
                 .isInput = ASIOFalse,
             };
             const ASIOError info_result =
-                backend->driver_->GetChannelInfo(&info);
+                session->driver->GetChannelInfo(&info);
             if (info_result != ASE_OK)
             {
                 StartupFatal(
@@ -324,17 +854,18 @@ namespace gc::audio
                     channel,
                     Bits(info.type));
             }
-            backend->format_.sample_types[channel] = info.type;
+            session->format.sample_types[channel] = info.type;
         }
 
         ma_result render_result = MA_ERROR;
-        backend->render_core_ = AudioRenderCore::Create(
+        session->render_core = AudioRenderCore::Create(
             request.buffer_frames,
             sample_rate,
             std::move(allocation_callbacks),
             nullptr,
             &render_result);
-        if (backend->render_core_ == nullptr || render_result != MA_SUCCESS)
+        if (session->render_core == nullptr ||
+            render_result != MA_SUCCESS)
         {
             StartupFatal(
                 StartupOperation::create_render_core,
@@ -344,26 +875,31 @@ namespace gc::audio
         try
         {
             for (std::size_t channel{};
-                 channel < backend->conversion_storage_.size();
+                 channel < session->conversion_storage.size();
                  ++channel)
             {
-                backend->conversion_storage_[channel].resize(
+                session->conversion_storage[channel].resize(
                     ConversionBytesOrFatal(
                         request.buffer_frames,
-                        backend->format_.sample_types[channel]));
+                        session->format.sample_types[channel]));
             }
         }
         catch (...)
         {
-            StartupFatal(StartupOperation::allocate_conversion_storage);
+            StartupFatal(
+                StartupOperation::allocate_conversion_storage);
         }
 
-        for (std::size_t channel{}; channel < backend->buffers_.size(); ++channel)
+        for (std::size_t channel{};
+             channel < session->buffers.size();
+             ++channel)
         {
-            const auto byte_count = backend->conversion_storage_[channel].size();
+            const auto byte_count =
+                session->conversion_storage[channel].size();
             for (std::size_t half{}; half < 2; ++half)
             {
-                void* const raw_buffer = backend->buffers_[channel].buffers[half];
+                void* const raw_buffer =
+                    session->buffers[channel].buffers[half];
                 if (raw_buffer == nullptr)
                 {
                     StartupFatal(
@@ -372,8 +908,11 @@ namespace gc::audio
                         half);
                 }
                 if (!ClearAsioChannel(
-                    backend->format_.sample_types[channel],
-                    {static_cast<std::byte*>(raw_buffer), byte_count},
+                    session->format.sample_types[channel],
+                    {
+                        static_cast<std::byte*>(raw_buffer),
+                        byte_count,
+                    },
                     request.buffer_frames))
                 {
                     StartupFatal(
@@ -384,14 +923,15 @@ namespace gc::audio
             }
         }
 
-        const ASIOError ready_result = backend->driver_->OutputReady();
+        const ASIOError ready_result =
+            session->driver->OutputReady();
         if (ready_result == ASE_OK)
         {
-            backend->output_ready_supported_ = true;
+            session->output_ready_supported = true;
         }
         else if (ready_result == ASE_NotPresent)
         {
-            backend->output_ready_supported_ = false;
+            session->output_ready_supported = false;
         }
         else
         {
@@ -400,7 +940,19 @@ namespace gc::audio
                 Bits(ready_result));
         }
 
-        const ASIOError start_result = backend->driver_->Start();
+        LiveAsioSession* expected_target{};
+        if (!callback_target.compare_exchange_strong(
+            expected_target,
+            session.get(),
+            std::memory_order_release,
+            std::memory_order_relaxed))
+        {
+            StartupFatal(
+                StartupOperation::publish_callback_target,
+                reinterpret_cast<std::uintptr_t>(expected_target));
+        }
+
+        const ASIOError start_result = session->driver->Start();
         if (start_result != ASE_OK)
         {
             StartupFatal(
@@ -411,346 +963,111 @@ namespace gc::audio
         try
         {
             PLOG_INFO
-                << "ASIO session started: configured='" << request.driver_name
-                << "', reported='"
+                << "ASIO session started: configured='"
+                << request.driver_name << "', reported='"
                 << AsioDisplayTextToUtf8(std::span{reported_name})
                 << "', version=" << driver_version
                 << ", rate=" << sample_rate
                 << ", frames=" << request.buffer_frames
                 << ", outputs=" << request.output_base_channel << '-'
                 << request.output_base_channel + 1
-                << ", types=" << static_cast<long>(backend->format_.sample_types[0])
-                << '/' << static_cast<long>(backend->format_.sample_types[1])
+                << ", types="
+                << session->format.sample_types[0]
+                << '/'
+                << session->format.sample_types[1]
                 << ", outputReady="
-                << (backend->output_ready_supported_ ? "yes" : "no");
+                << (session->output_ready_supported ? "yes" : "no");
         }
         catch (...)
         {
             StartupFatal(StartupOperation::log_format);
         }
 
-        return std::unique_ptr<AsioOutputBackend>{backend};
-    }
+        if (published_services == nullptr)
+        {
+            StartupFatal(
+                StartupOperation::validate_service_view);
+        }
+        *published_services = {
+            .render_core = session->render_core.get(),
+            .endpoint_buffer_frames = request.buffer_frames,
+            .output_sample_rate = sample_rate,
+        };
+        if (SetEvent(startup_complete) == FALSE)
+        {
+            StartupFatal(
+                StartupOperation::signal_startup,
+                GetLastError());
+        }
+        published_services = nullptr;
 
-    AsioOutputBackend::~AsioOutputBackend()
-    {
-        const ASIOError stop_result = driver_->Stop();
+        for (;;)
+        {
+            const HANDLE handles[]{shutdown_requested};
+            const DWORD wait_result =
+                MsgWaitForMultipleObjectsEx(
+                    1,
+                    handles,
+                    INFINITE,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE);
+            if (wait_result == WAIT_OBJECT_0)
+            {
+                break;
+            }
+            if (wait_result == WAIT_OBJECT_0 + 1)
+            {
+                MSG message{};
+                while (PeekMessageW(
+                    &message,
+                    nullptr,
+                    0,
+                    0,
+                    PM_REMOVE) != FALSE)
+                {
+                    static_cast<void>(TranslateMessage(&message));
+                    static_cast<void>(DispatchMessageW(&message));
+                }
+                continue;
+            }
+            if (wait_result == WAIT_FAILED)
+            {
+                OwnershipFatal(
+                    OwnershipOperation::message_wait,
+                    GetLastError());
+            }
+            OwnershipFatal(
+                OwnershipOperation::unexpected_wait_result,
+                wait_result);
+        }
+
+        const ASIOError stop_result = session->driver->Stop();
         if (stop_result != ASE_OK)
         {
-            FailAudioContract(
-                AudioContractFatalReason::AsioShutdownFailure,
-                static_cast<std::uint64_t>(ShutdownOperation::stop),
+            ShutdownFatal(
+                ShutdownOperation::stop,
                 Bits(stop_result));
         }
 
-        const ASIOError dispose_result = driver_->DisposeBuffers();
+        const ASIOError dispose_result =
+            session->driver->DisposeBuffers();
         if (dispose_result != ASE_OK)
         {
-            FailAudioContract(
-                AudioContractFatalReason::AsioShutdownFailure,
-                static_cast<std::uint64_t>(ShutdownOperation::dispose_buffers),
+            ShutdownFatal(
+                ShutdownOperation::dispose_buffers,
                 Bits(dispose_result));
         }
 
-        const ASIOError exit_result = driver_->Exit();
+        const ASIOError exit_result = session->driver->Exit();
         if (exit_result != ASE_OK)
         {
-            FailAudioContract(
-                AudioContractFatalReason::AsioShutdownFailure,
-                static_cast<std::uint64_t>(ShutdownOperation::exit),
+            ShutdownFatal(
+                ShutdownOperation::exit,
                 Bits(exit_result));
         }
 
-        AsioOutputBackend* expected_target = this;
-        if (!callback_target_.compare_exchange_strong(
-            expected_target,
-            nullptr,
-            std::memory_order_release,
-            std::memory_order_relaxed))
-        {
-            FailAudioContract(
-                AudioContractFatalReason::AsioOwnershipFailure,
-                static_cast<std::uint64_t>(ShutdownOperation::clear_callback_target),
-                reinterpret_cast<std::uintptr_t>(expected_target));
-        }
-    }
-
-    std::unique_ptr<MixerVoice> AsioOutputBackend::CreateVoice(
-        const NormalizedSourceFormat& format,
-        std::shared_ptr<AudioSnapshot> snapshot,
-        std::shared_ptr<AudioCursorTimeline>,
-        const VoiceUsage usage,
-        ma_result* const result) noexcept
-    {
-        return render_core_->CreateVoice(
-            format,
-            std::move(snapshot),
-            nullptr,
-            usage,
-            result);
-    }
-
-    std::optional<std::uint64_t> AsioOutputBackend::CurrentOutputFrame() noexcept
-    {
-        return std::nullopt;
-    }
-
-    std::uint32_t AsioOutputBackend::endpoint_buffer_frames() const noexcept
-    {
-        return format_.frame_count;
-    }
-
-    std::uint32_t AsioOutputBackend::output_sample_rate() const noexcept
-    {
-        return format_.sample_rate;
-    }
-
-    void AsioOutputBackend::CountPendingCursorQuery() noexcept
-    {
-    }
-
-    void AsioOutputBackend::CountUnmappedCursorFailure() noexcept
-    {
-    }
-
-    // Rendering advances decoder and mixer state owned by the core.
-    // ReSharper disable once CppMemberFunctionMayBeConst
-    std::span<const float> AsioOutputBackend::RenderPcm(
-        const std::uint32_t frame_count) noexcept
-    {
-        if (render_core_ == nullptr)
-        {
-            CallbackFatal(CallbackOperation::render_failure);
-        }
-        const AudioRenderBlock block = render_core_->RenderSequential(frame_count);
-        if (block.mixer_result != MA_SUCCESS ||
-            block.silence_reason == AudioRenderSilenceReason::mixer_error ||
-            block.silence_reason == AudioRenderSilenceReason::render_contract_error)
-        {
-            CallbackFatal(
-                CallbackOperation::render_failure,
-                Bits(block.mixer_result),
-                static_cast<std::uint64_t>(block.silence_reason));
-        }
-        if (block.frames_read != frame_count ||
-            block.silence_reason == AudioRenderSilenceReason::active_short_read)
-        {
-            CallbackFatal(
-                CallbackOperation::render_short_read,
-                block.frames_read,
-                frame_count);
-        }
-        const auto expected_samples =
-            static_cast<std::size_t>(frame_count) * 2;
-        if (block.interleaved_stereo.size() != expected_samples)
-        {
-            CallbackFatal(
-                CallbackOperation::render_shape,
-                block.interleaved_stereo.size(),
-                expected_samples);
-        }
-        for (const float sample : block.interleaved_stereo)
-        {
-            if (!std::isfinite(sample))
-            {
-                CallbackFatal(CallbackOperation::non_finite_pcm);
-            }
-        }
-        return block.interleaved_stereo;
-    }
-
-    void AsioOutputBackend::FillBuffer(const long buffer_index) noexcept
-    {
-        if (buffer_index < 0 || buffer_index > 1)
-        {
-            CallbackFatal(
-                CallbackOperation::invalid_buffer_index,
-                Bits(buffer_index));
-        }
-
-        const auto pcm = RenderPcm(format_.frame_count);
-        const std::array<std::span<std::byte>, 2> destinations{
-            std::span<std::byte>{conversion_storage_[0]},
-            std::span<std::byte>{conversion_storage_[1]},
-        };
-        const auto converted = ConvertFloatStereoToAsio(
-            pcm,
-            format_.sample_types,
-            destinations);
-        if (!converted.converted || converted.stats.non_finite)
-        {
-            CallbackFatal(
-                CallbackOperation::conversion_failure,
-                converted.stats.non_finite ? 1 : 0);
-        }
-
-        for (std::size_t channel{}; channel < buffers_.size(); ++channel)
-        {
-            void* const driver_buffer =
-                buffers_[channel].buffers[static_cast<std::size_t>(buffer_index)];
-            if (driver_buffer == nullptr)
-            {
-                CallbackFatal(
-                    CallbackOperation::invalid_driver_buffer,
-                    channel,
-                    static_cast<std::uint64_t>(buffer_index));
-            }
-            std::memcpy(
-                driver_buffer,
-                conversion_storage_[channel].data(),
-                conversion_storage_[channel].size());
-        }
-
-        if (output_ready_supported_)
-        {
-            const ASIOError ready_result = driver_->OutputReady();
-            if (ready_result != ASE_OK)
-            {
-                CallbackFatal(
-                    CallbackOperation::output_ready,
-                    Bits(ready_result));
-            }
-        }
-    }
-
-    AsioOutputBackend* AsioOutputBackend::CallbackTarget() noexcept
-    {
-        auto* const target = callback_target_.load(std::memory_order_acquire);
-        if (target == nullptr)
-        {
-            CallbackFatal(CallbackOperation::missing_target);
-        }
-        return target;
-    }
-
-    void AsioOutputBackend::BufferSwitch(
-        const long buffer_index,
-        ASIOBool) noexcept
-    {
-        if (callback_active_.test_and_set(std::memory_order_acquire))
-        {
-            CallbackFatal(CallbackOperation::concurrent_callback);
-        }
-        CallbackTarget()->FillBuffer(buffer_index);
-        callback_active_.clear(std::memory_order_release);
-    }
-
-    void AsioOutputBackend::SampleRateDidChange(
-        const ASIOSampleRate sample_rate) noexcept
-    {
-        auto* const target = CallbackTarget();
-        FailAudioContract(
-            AudioContractFatalReason::AsioRuntimeNotification,
-            static_cast<std::uint64_t>(RuntimeNotification::sample_rate_changed),
-            target->format_.sample_rate,
-            std::bit_cast<std::uint64_t>(sample_rate));
-    }
-
-    long AsioOutputBackend::AsioMessage(
-        const long selector,
-        const long value,
-        void*,
-        double*) noexcept
-    {
-        (void)CallbackTarget();
-
-        if (selector == kAsioSelectorSupported)
-        {
-            switch (value)
-            {
-            case kAsioEngineVersion:
-            case kAsioResetRequest:
-            case kAsioResyncRequest:
-            case kAsioLatenciesChanged:
-            case kAsioOverload:
-            case kAsioSupportsTimeInfo:
-            case kAsioSupportsTimeCode:
-                return 1;
-            default:
-                return 0;
-            }
-        }
-
-        switch (selector)
-        {
-        case kAsioEngineVersion:
-            return 2;
-        case kAsioSupportsTimeInfo:
-            return 1;
-        case kAsioSupportsTimeCode:
-            return 0;
-        case kAsioResetRequest:
-            FailAudioContract(
-                AudioContractFatalReason::AsioRuntimeNotification,
-                static_cast<std::uint64_t>(RuntimeNotification::reset));
-        case kAsioBufferSizeChange:
-            FailAudioContract(
-                AudioContractFatalReason::AsioRuntimeNotification,
-                static_cast<std::uint64_t>(RuntimeNotification::buffer_size_changed),
-                Bits(value));
-        case kAsioResyncRequest:
-            FailAudioContract(
-                AudioContractFatalReason::AsioRuntimeNotification,
-                static_cast<std::uint64_t>(RuntimeNotification::resync));
-        case kAsioLatenciesChanged:
-            FailAudioContract(
-                AudioContractFatalReason::AsioRuntimeNotification,
-                static_cast<std::uint64_t>(RuntimeNotification::latencies_changed));
-        case kAsioOverload:
-            FailAudioContract(
-                AudioContractFatalReason::AsioRuntimeNotification,
-                static_cast<std::uint64_t>(RuntimeNotification::overload));
-        default:
-            return 0;
-        }
-    }
-
-    // The ASIO SDK fixes this callback parameter to mutable ASIOTime*.
-    // ReSharper disable once CppParameterMayBeConstPtrOrRef
-    ASIOTime* AsioOutputBackend::BufferSwitchTimeInfo(
-        ASIOTime* time_info,
-        const long buffer_index,
-        const ASIOBool direct_process) noexcept
-    {
-        static_cast<void>(direct_process);
-        if (callback_active_.test_and_set(std::memory_order_acquire))
-        {
-            CallbackFatal(CallbackOperation::concurrent_callback);
-        }
-        auto* const target = CallbackTarget();
-        if (time_info == nullptr)
-        {
-            CallbackFatal(CallbackOperation::invalid_time_info);
-        }
-
-        const auto flags = time_info->timeInfo.flags;
-        if ((flags & (kSampleRateChanged | kClockSourceChanged)) != 0)
-        {
-            CallbackFatal(
-                CallbackOperation::changed_time_info,
-                flags);
-        }
-        if ((flags & kSampleRateValid) != 0 &&
-            (!std::isfinite(time_info->timeInfo.sampleRate) ||
-                time_info->timeInfo.sampleRate !=
-                static_cast<double>(target->format_.sample_rate)))
-        {
-            CallbackFatal(
-                CallbackOperation::invalid_sample_rate,
-                std::bit_cast<std::uint64_t>(time_info->timeInfo.sampleRate),
-                target->format_.sample_rate);
-        }
-        if ((flags & kSpeedValid) != 0 &&
-            (!std::isfinite(time_info->timeInfo.speed) ||
-                time_info->timeInfo.speed != 1.0))
-        {
-            CallbackFatal(
-                CallbackOperation::invalid_speed,
-                std::bit_cast<std::uint64_t>(time_info->timeInfo.speed));
-        }
-
-        target->FillBuffer(buffer_index);
-        callback_active_.clear(std::memory_order_release);
-        return nullptr;
+        callback_target.store(nullptr, std::memory_order_release);
+        session.reset();
+        CoUninitialize();
     }
 } // namespace gc::audio

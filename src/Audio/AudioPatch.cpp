@@ -771,13 +771,15 @@ namespace gc::audio
                 return AsioOutputBackend::Start(
                     game_window,
                     request,
-                    registry_,
-                    driver_factory_);
+                    std::move(registry_),
+                    std::move(driver_factory_));
             }
 
         private:
-            ProductionAsioRegistrySource registry_;
-            ProductionAsioDriverFactory driver_factory_;
+            std::unique_ptr<IAsioRegistrySource> registry_ =
+                std::make_unique<ProductionAsioRegistrySource>();
+            std::unique_ptr<IAsioDriverFactory> driver_factory_ =
+                std::make_unique<ProductionAsioDriverFactory>();
         };
 
         class ProductionAudioBackendControllerReporter final

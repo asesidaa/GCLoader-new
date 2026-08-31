@@ -9,14 +9,10 @@
 
 #include <Windows.h>
 
-#include <array>
-#include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <span>
-#include <vector>
+#include <thread>
 
 namespace gc::audio
 {
@@ -26,8 +22,8 @@ namespace gc::audio
         static std::unique_ptr<AsioOutputBackend> Start(
             HWND game_window,
             const AsioStreamRequest&,
-            IAsioRegistrySource&,
-            IAsioDriverFactory&,
+            std::unique_ptr<IAsioRegistrySource>,
+            std::unique_ptr<IAsioDriverFactory>,
             std::shared_ptr<const ma_allocation_callbacks> = {}) noexcept;
 
         ~AsioOutputBackend() override;
@@ -49,44 +45,28 @@ namespace gc::audio
         void CountUnmappedCursorFailure() noexcept override;
 
     private:
-        struct FrozenFormat final
+        struct PublishedServices final
         {
-            std::uint32_t sample_rate{};
-            std::uint32_t frame_count{};
-            std::array<std::uint32_t, 2> channels{};
-            std::array<ASIOSampleType, 2> sample_types{};
+            AudioRenderCore* render_core{};
+            std::uint32_t endpoint_buffer_frames{};
+            std::uint32_t output_sample_rate{};
         };
 
         AsioOutputBackend() = default;
 
-        [[nodiscard]] std::span<const float> RenderPcm(
-            std::uint32_t frame_count) noexcept;
-        void FillBuffer(long buffer_index) noexcept;
+        static void OwnerThreadMain(
+            HWND game_window,
+            AsioStreamRequest request,
+            std::unique_ptr<IAsioRegistrySource> registry,
+            std::unique_ptr<IAsioDriverFactory> driver_factory,
+            std::shared_ptr<const ma_allocation_callbacks> allocation_callbacks,
+            HANDLE startup_complete,
+            HANDLE shutdown_requested,
+            PublishedServices* published_services) noexcept;
 
-        [[nodiscard]] static AsioOutputBackend* CallbackTarget() noexcept;
-        static void BufferSwitch(
-            long buffer_index,
-            ASIOBool direct_process) noexcept;
-        static void SampleRateDidChange(ASIOSampleRate sample_rate) noexcept;
-        static long AsioMessage(
-            long selector,
-            long value,
-            void* message,
-            double* optional) noexcept;
-        static ASIOTime* BufferSwitchTimeInfo(
-            ASIOTime* time_info,
-            long buffer_index,
-            ASIOBool direct_process) noexcept;
-
-        static const ASIOCallbacks callbacks_;
-        static std::atomic<AsioOutputBackend*> callback_target_;
-        static std::atomic_flag callback_active_;
-
-        std::unique_ptr<IAsioDriver> driver_;
-        std::array<ASIOBufferInfo, 2> buffers_{};
-        FrozenFormat format_{};
-        std::unique_ptr<AudioRenderCore> render_core_;
-        std::array<std::vector<std::byte>, 2> conversion_storage_;
-        bool output_ready_supported_{};
+        std::thread owner_thread_;
+        HANDLE startup_complete_{};
+        HANDLE shutdown_requested_{};
+        PublishedServices services_{};
     };
 } // namespace gc::audio

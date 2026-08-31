@@ -36,4 +36,5 @@ target_link_libraries(gc_audio PUBLIC
         uuid
         avrt
         propsys
+        user32
 )
