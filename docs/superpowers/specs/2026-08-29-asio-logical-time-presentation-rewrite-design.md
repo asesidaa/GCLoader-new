@@ -693,12 +693,16 @@ agent to close, stop, restart, or otherwise control any process.
 ## 8. Review gate
 
 Freeze this specification and the non-normative failure ledger as one exact
-tree. Create two fresh independent reviewers after the tree is frozen; do not
-reuse reviewers from any rejected tree. Give both the exact tree hash and the
-same complete latest task rules and decisions. Both inspect that same tree and
-must report zero findings. Every finding is recorded before correction. Any
-correction creates a new tree and restarts both reviews with newly created
-reviewers.
+tree. The full rewrite receives two independent reviewers with the exact tree
+hash and the same complete latest task rules and decisions. Both inspect that
+same tree and must report zero findings. Every finding is recorded before
+correction.
+
+A correction within the same rewrite creates a new exact tree and is sent back
+to those same two reviewers as follow-up work. Do not create replacement
+reviewers for an iterative correction. New reviewers are used only after the
+entire specification or implementation plan is fully rewritten into a new
+design, or when the user explicitly directs replacement.
 
 Only after two zero-finding reviews and explicit user approval may an
 implementation plan or source implementation begin.

@@ -4113,3 +4113,17 @@ edits.
   synchronous `RenderPcm` path and may advance the mixer before startup-complete
   is signalled. Do not add a priming mode, readiness branch, or audio-start
   barrier.
+
+### S-403: The review gate replaced reviewers after every small correction
+
+- **Mistake:** The first frozen rewrite required newly created reviewers after
+  every finding and correction. That contradicted the user's explicit rule to
+  reuse reviewers unless the full specification or plan had been rewritten,
+  wasted reviewer work, and made each small correction unnecessarily slow. The
+  orchestrator then followed that stale written rule instead of the user's
+  controlling instruction after S-402.
+- **Prevention:** Keep the same two independent reviewers throughout iterative
+  corrections to one rewrite and send each new exact tree as follow-up work.
+  Replace them only after a full design/specification/plan rewrite or explicit
+  user direction. A local document never overrides the user's later workflow
+  instruction.
