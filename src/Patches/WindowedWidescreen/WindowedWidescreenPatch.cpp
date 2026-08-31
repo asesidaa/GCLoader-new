@@ -1018,6 +1018,224 @@ namespace gc::windowed_widescreen
             return *result;
         }
 
+        [[nodiscard]] bool ReadCurrentSpace(
+            void* context,
+            RenderSpace& space) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            if (runtime == nullptr)
+            {
+                return false;
+            }
+            const auto current = runtime->compositor.CurrentSpace();
+            if (!current)
+            {
+                return false;
+            }
+            space = *current;
+            return true;
+        }
+
+        [[nodiscard]] float* CallPrimaryProjectionOriginal(
+            void* context,
+            float* destination,
+            const int unused,
+            const float scale) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            auto* hook = runtime == nullptr
+                ? nullptr
+                : FindHook(
+                    *runtime,
+                    WidescreenContractSite::primary_projection);
+            return hook == nullptr
+                ? nullptr
+                : hook->inline_hook.ccall<float*>(
+                    destination,
+                    unused,
+                    scale);
+        }
+
+        [[nodiscard]] float* CallOrientedProjectionOriginal(
+            void* context,
+            float* destination,
+            float* camera,
+            const float scale) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            auto* hook = runtime == nullptr
+                ? nullptr
+                : FindHook(
+                    *runtime,
+                    WidescreenContractSite::oriented_projection);
+            return hook == nullptr
+                ? nullptr
+                : hook->inline_hook.ccall<float*>(
+                    destination,
+                    camera,
+                    scale);
+        }
+
+        [[nodiscard]] ProjectionHookActions ProductionProjectionActions(
+            WindowedWidescreenRuntime& runtime) noexcept
+        {
+            return ProjectionHookActions{
+                .context = &runtime,
+                .current_space = &ReadCurrentSpace,
+                .call_primary_original = &CallPrimaryProjectionOriginal,
+                .call_oriented_original = &CallOrientedProjectionOriginal,
+            };
+        }
+
+        float* __cdecl PrimaryProjectionDetour(
+            float* const destination,
+            const int unused,
+            const float scale) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr)
+            {
+                return nullptr;
+            }
+            if (runtime->publication_state != RuntimePublicationState::active)
+            {
+                return CallPrimaryProjectionOriginal(
+                    runtime,
+                    destination,
+                    unused,
+                    scale);
+            }
+            const auto result = RunPrimaryProjectionHook(
+                destination,
+                unused,
+                scale,
+                runtime->resolution.output_size().height,
+                ProductionProjectionActions(*runtime));
+            if (!result)
+            {
+                PublishRenderRuntimeFatal(*runtime, result.error());
+            }
+            return *result;
+        }
+
+        float* __cdecl OrientedProjectionDetour(
+            float* const destination,
+            float* const camera,
+            const float scale) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr)
+            {
+                return nullptr;
+            }
+            if (runtime->publication_state != RuntimePublicationState::active)
+            {
+                return CallOrientedProjectionOriginal(
+                    runtime,
+                    destination,
+                    camera,
+                    scale);
+            }
+            const auto result = RunOrientedProjectionHook(
+                destination,
+                camera,
+                scale,
+                runtime->resolution.output_size().height,
+                ProductionProjectionActions(*runtime));
+            if (!result)
+            {
+                PublishRenderRuntimeFatal(*runtime, result.error());
+            }
+            return *result;
+        }
+
+        void ClipGateMid(safetyhook::Context& context) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr ||
+                runtime->publication_state != RuntimePublicationState::active)
+            {
+                return;
+            }
+            const auto* continuation = FindProductionContract(
+                WidescreenContractSite::clip_continuation);
+            if (continuation == nullptr)
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage =
+                            WindowedWidescreenOperationStage::clip_policy,
+                    });
+            }
+            auto instruction_pointer = context.eip;
+            const auto result = ApplyClipGateHook(
+                runtime->settings.clip_policy(),
+                runtime->image_base,
+                continuation->rva,
+                instruction_pointer);
+            if (!result)
+            {
+                PublishRenderRuntimeFatal(*runtime, result.error());
+            }
+            context.eip = instruction_pointer;
+        }
+
+        [[nodiscard]] std::uintptr_t CallMousePollOriginal(
+            void* context,
+            const std::uintptr_t owner,
+            std::uint32_t* output) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            auto* hook = runtime == nullptr
+                ? nullptr
+                : FindHook(
+                    *runtime,
+                    WidescreenContractSite::mouse_debug_poll);
+            return hook == nullptr
+                ? 0
+                : reinterpret_cast<std::uintptr_t>(
+                    hook->inline_hook.thiscall<POINT*>(
+                        reinterpret_cast<void*>(owner),
+                        output));
+        }
+
+        POINT* __fastcall MouseDebugPollDetour(
+            void* const owner,
+            void*,
+            std::uint32_t* const output) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr)
+            {
+                return nullptr;
+            }
+            if (runtime->publication_state != RuntimePublicationState::active)
+            {
+                return reinterpret_cast<POINT*>(CallMousePollOriginal(
+                    runtime,
+                    reinterpret_cast<std::uintptr_t>(owner),
+                    output));
+            }
+            const auto result = RunMouseDebugPollHook(
+                reinterpret_cast<std::uintptr_t>(owner),
+                output,
+                runtime->resolution,
+                MousePollHookActions{
+                    .context = runtime,
+                    .call_original = &CallMousePollOriginal,
+                });
+            if (!result)
+            {
+                PublishRenderRuntimeFatal(*runtime, result.error());
+            }
+            return reinterpret_cast<POINT*>(*result);
+        }
+
         int __cdecl ConfigApplyDetour(const int config) noexcept
         {
             auto* runtime =
@@ -1403,6 +1621,161 @@ namespace gc::windowed_widescreen
         return actions.call_original(actions.context, &explicit_viewport);
     }
 
+    std::expected<float*, WindowedWidescreenError>
+    RunPrimaryProjectionHook(
+        float* const destination,
+        const int unused,
+        const float scale,
+        const std::uint32_t output_height,
+        const ProjectionHookActions& actions) noexcept
+    {
+        if (actions.context == nullptr || actions.current_space == nullptr ||
+            actions.call_primary_original == nullptr)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::invalid_actions,
+            });
+        }
+
+        RenderSpace space{};
+        if (!actions.current_space(actions.context, space) ||
+            space == RenderSpace::compositor)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::projection,
+            });
+        }
+
+        const auto transformed = TransformProjectionScale(
+            scale,
+            space == RenderSpace::physical_3d
+                ? output_height
+                : kNativeHeight);
+        if (!transformed)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::projection,
+                .projection_error = transformed.error(),
+            });
+        }
+        const auto forwarded_scale = space == RenderSpace::physical_3d
+            ? *transformed
+            : scale;
+        return actions.call_primary_original(
+            actions.context,
+            destination,
+            unused,
+            forwarded_scale);
+    }
+
+    std::expected<float*, WindowedWidescreenError>
+    RunOrientedProjectionHook(
+        float* const destination,
+        float* const camera,
+        const float scale,
+        const std::uint32_t output_height,
+        const ProjectionHookActions& actions) noexcept
+    {
+        if (actions.context == nullptr || actions.current_space == nullptr ||
+            actions.call_oriented_original == nullptr)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::invalid_actions,
+            });
+        }
+
+        RenderSpace space{};
+        if (!actions.current_space(actions.context, space) ||
+            space == RenderSpace::compositor)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::projection,
+            });
+        }
+
+        const auto transformed = TransformProjectionScale(
+            scale,
+            space == RenderSpace::physical_3d
+                ? output_height
+                : kNativeHeight);
+        if (!transformed)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::projection,
+                .projection_error = transformed.error(),
+            });
+        }
+        const auto forwarded_scale = space == RenderSpace::physical_3d
+            ? *transformed
+            : scale;
+        return actions.call_oriented_original(
+            actions.context,
+            destination,
+            camera,
+            forwarded_scale);
+    }
+
+    std::expected<void, WindowedWidescreenError> ApplyClipGateHook(
+        const StageClipPolicy policy,
+        const std::uintptr_t image_base,
+        const std::uint32_t live_continuation_rva,
+        std::uint32_t& instruction_pointer) noexcept
+    {
+        if (SelectClipGateAction(policy) ==
+            ClipGateAction::continue_authored)
+        {
+            return {};
+        }
+        if (image_base >
+            std::numeric_limits<std::uint32_t>::max() -
+                live_continuation_rva)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::clip_policy,
+            });
+        }
+        instruction_pointer = static_cast<std::uint32_t>(
+            image_base + live_continuation_rva);
+        return {};
+    }
+
+    std::expected<std::uintptr_t, WindowedWidescreenError>
+    RunMouseDebugPollHook(
+        const std::uintptr_t owner,
+        std::uint32_t* const output,
+        const ResolutionModel& resolution,
+        const MousePollHookActions& actions) noexcept
+    {
+        if (actions.context == nullptr || actions.call_original == nullptr ||
+            output == nullptr)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::invalid_actions,
+            });
+        }
+
+        const auto native_result = actions.call_original(
+            actions.context,
+            owner,
+            output);
+        if (output[kMouseValidWord] != 1)
+        {
+            return native_result;
+        }
+
+        const auto mapped = resolution.ClientToNative(
+            static_cast<std::int32_t>(output[kMouseXWord]),
+            static_cast<std::int32_t>(output[kMouseYWord]));
+        if (!mapped)
+        {
+            output[kMouseValidWord] = 0;
+            return native_result;
+        }
+        output[kMouseXWord] = static_cast<std::uint32_t>(mapped->x);
+        output[kMouseYWord] = static_cast<std::uint32_t>(mapped->y);
+        return native_result;
+    }
+
     std::expected<void, WindowedWidescreenError>
     WindowedWidescreenPatchInit(
         const WindowedWidescreenSettings settings) noexcept
@@ -1535,6 +1908,15 @@ namespace gc::windowed_widescreen
                     WidescreenContractSite::viewport_reset,
                     reinterpret_cast<void*>(&ViewportResetDetour)},
                 WidescreenHookRequest{
+                    WidescreenContractSite::primary_projection,
+                    reinterpret_cast<void*>(&PrimaryProjectionDetour)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::oriented_projection,
+                    reinterpret_cast<void*>(&OrientedProjectionDetour)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::mouse_debug_poll,
+                    reinterpret_cast<void*>(&MouseDebugPollDetour)},
+                WidescreenHookRequest{
                     WidescreenContractSite::gameplay_native,
                     reinterpret_cast<void*>(&GameplayNativeMid)},
                 WidescreenHookRequest{
@@ -1543,6 +1925,9 @@ namespace gc::windowed_widescreen
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_return_native,
                     reinterpret_cast<void*>(&GameplayReturnNativeMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::clip_gate,
+                    reinterpret_cast<void*>(&ClipGateMid)},
             };
             const auto installed = InstallWindowedWidescreenHooks(
                 image_base,

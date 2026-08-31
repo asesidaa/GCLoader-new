@@ -4,6 +4,7 @@
 #include "Patches/WindowedWidescreen/D3D9CompositorDevice.h"
 #include "Patches/WindowedWidescreen/NativeWindowPolicy.h"
 #include "Patches/WindowedWidescreen/PassClassifier.h"
+#include "Patches/WindowedWidescreen/ProjectionPolicy.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 
@@ -30,6 +31,7 @@ namespace gc::windowed_widescreen
         dimension_query,
         viewport,
         projection,
+        clip_policy,
         mouse_mapping,
         reset_pre,
         reset_post,
@@ -45,6 +47,7 @@ namespace gc::windowed_widescreen
             resource_error;
         std::optional<WidescreenInstallError> install_error;
         std::optional<CompositorError> compositor_error;
+        std::optional<ProjectionError> projection_error;
         D3D9CompositorFailure d3d_failure{};
     };
 
@@ -164,6 +167,53 @@ namespace gc::windowed_widescreen
     RunViewportResetHook(
         const NativeViewport* viewport,
         const ViewportResetHookActions& actions) noexcept;
+
+    struct ProjectionHookActions
+    {
+        void* context{};
+        bool (*current_space)(void*, RenderSpace&) noexcept{};
+        float* (*call_primary_original)(
+            void*, float*, int, float) noexcept{};
+        float* (*call_oriented_original)(
+            void*, float*, float*, float) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<float*, WindowedWidescreenError>
+    RunPrimaryProjectionHook(
+        float* destination,
+        int unused,
+        float scale,
+        std::uint32_t output_height,
+        const ProjectionHookActions& actions) noexcept;
+
+    [[nodiscard]] std::expected<float*, WindowedWidescreenError>
+    RunOrientedProjectionHook(
+        float* destination,
+        float* camera,
+        float scale,
+        std::uint32_t output_height,
+        const ProjectionHookActions& actions) noexcept;
+
+    [[nodiscard]] std::expected<void, WindowedWidescreenError>
+    ApplyClipGateHook(
+        StageClipPolicy policy,
+        std::uintptr_t image_base,
+        std::uint32_t live_continuation_rva,
+        std::uint32_t& instruction_pointer) noexcept;
+
+    struct MousePollHookActions
+    {
+        void* context{};
+        std::uintptr_t (*call_original)(
+            void*, std::uintptr_t, std::uint32_t*) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<std::uintptr_t, WindowedWidescreenError>
+    RunMouseDebugPollHook(
+        std::uintptr_t owner,
+        std::uint32_t* output,
+        const ResolutionModel& resolution,
+        const MousePollHookActions& actions) noexcept;
 
     [[nodiscard]] std::expected<void, WindowedWidescreenError>
     WindowedWidescreenPatchInit(

@@ -1674,6 +1674,226 @@ namespace
                     DeviceCall::draw_scene_to_backbuffer) == 1,
             "frame end closes native space then performs one final copy");
     }
+
+    struct FakeProjectionActions
+    {
+        gc::windowed_widescreen::RenderSpace space{
+            gc::windowed_widescreen::RenderSpace::physical_3d};
+        std::size_t primary_calls{};
+        std::size_t oriented_calls{};
+        float* destination{};
+        float* camera{};
+        int unused{};
+        float scale{};
+
+        static bool CurrentSpace(
+            void* context,
+            gc::windowed_widescreen::RenderSpace& output) noexcept
+        {
+            output = static_cast<FakeProjectionActions*>(context)->space;
+            return true;
+        }
+
+        static float* Primary(
+            void* context,
+            float* destination,
+            const int unused,
+            const float scale) noexcept
+        {
+            auto* self = static_cast<FakeProjectionActions*>(context);
+            ++self->primary_calls;
+            self->destination = destination;
+            self->unused = unused;
+            self->scale = scale;
+            return destination;
+        }
+
+        static float* Oriented(
+            void* context,
+            float* destination,
+            float* camera,
+            const float scale) noexcept
+        {
+            auto* self = static_cast<FakeProjectionActions*>(context);
+            ++self->oriented_calls;
+            self->destination = destination;
+            self->camera = camera;
+            self->scale = scale;
+            return destination;
+        }
+
+        [[nodiscard]] gc::windowed_widescreen::ProjectionHookActions
+        Actions() noexcept
+        {
+            return {
+                .context = this,
+                .current_space = &CurrentSpace,
+                .call_primary_original = &Primary,
+                .call_oriented_original = &Oriented,
+            };
+        }
+    };
+
+    struct FakeMouseActions
+    {
+        std::array<std::uint32_t, 7> sample{};
+        std::uintptr_t return_value{0x12345678};
+        std::size_t calls{};
+
+        static std::uintptr_t Original(
+            void* context,
+            std::uintptr_t,
+            std::uint32_t* output) noexcept
+        {
+            auto* self = static_cast<FakeMouseActions*>(context);
+            ++self->calls;
+            std::copy(self->sample.begin(), self->sample.end(), output);
+            return self->return_value;
+        }
+    };
+
+    void ProjectionClipAndMouseWrappersPreserveNativeContracts()
+    {
+        using namespace gc::windowed_widescreen;
+        float destination[16]{};
+        float camera[16]{};
+
+        {
+            FakeProjectionActions fake;
+            fake.space = RenderSpace::native_2d;
+            const auto result = RunPrimaryProjectionHook(
+                destination,
+                37,
+                1.25F,
+                1440,
+                fake.Actions());
+            Expect(
+                result.has_value() && *result == destination &&
+                    fake.destination == destination && fake.unused == 37 &&
+                    fake.scale == 1.25F && fake.primary_calls == 1,
+                "native projection forwards every argument unchanged");
+        }
+
+        {
+            FakeProjectionActions fake;
+            const auto result = RunPrimaryProjectionHook(
+                destination,
+                41,
+                1.0F,
+                1280,
+                fake.Actions());
+            Expect(
+                result.has_value() && fake.scale == 1.0F,
+                "physical projection at native height is bit-preserving");
+
+            const auto transformed = RunOrientedProjectionHook(
+                destination,
+                camera,
+                1.0F,
+                1440,
+                fake.Actions());
+            const auto expected = TransformProjectionScale(1.0F, 1440);
+            Expect(
+                transformed.has_value() && *transformed == destination &&
+                    fake.destination == destination && fake.camera == camera &&
+                    expected.has_value() && fake.scale == *expected &&
+                    fake.oriented_calls == 1,
+                "height-expanded oriented projection changes only CTune scale");
+
+            const auto invalid = RunPrimaryProjectionHook(
+                destination,
+                0,
+                std::numeric_limits<float>::infinity(),
+                1440,
+                fake.Actions());
+            Expect(
+                !invalid &&
+                    invalid.error().stage ==
+                        WindowedWidescreenOperationStage::projection &&
+                    fake.primary_calls == 1,
+                "invalid physical projection never calls native builder");
+        }
+
+        {
+            std::uint32_t instruction_pointer = 0x006441CA;
+            const auto authored = ApplyClipGateHook(
+                StageClipPolicy::authored,
+                0x00400000,
+                0x0024422F,
+                instruction_pointer);
+            Expect(
+                authored.has_value() &&
+                    instruction_pointer == 0x006441CA,
+                "authored clip policy leaves EIP unchanged");
+            const auto live = ApplyClipGateHook(
+                StageClipPolicy::live_frustum,
+                0x00400000,
+                0x0024422F,
+                instruction_pointer);
+            Expect(
+                live.has_value() &&
+                    instruction_pointer == 0x0064422F,
+                "live-frustum clip policy redirects to guarded continuation");
+        }
+
+        const auto resolution = ResolutionModel::Create(1920, 1280);
+        Expect(resolution.has_value(), "mouse test resolution is valid");
+        if (!resolution)
+        {
+            return;
+        }
+
+        {
+            FakeMouseActions fake;
+            fake.sample = {600, 1279, 0xA2, 0xA3, 0xA4, 0xA5, 1};
+            std::array<std::uint32_t, 7> output{};
+            const auto result = RunMouseDebugPollHook(
+                0x11110000,
+                output.data(),
+                *resolution,
+                MousePollHookActions{
+                    .context = &fake,
+                    .call_original = &FakeMouseActions::Original,
+                });
+            Expect(
+                result.has_value() && *result == fake.return_value &&
+                    output[0] == 0 && output[1] == 1279 && output[2] == 0xA2 &&
+                    output[3] == 0xA3 && output[4] == 0xA4 &&
+                    output[5] == 0xA5 && output[6] == 1,
+                "valid mouse sample maps into native canvas only");
+        }
+
+        {
+            FakeMouseActions fake;
+            fake.sample = {1320, 17, 2, 3, 4, 5, 1};
+            std::array<std::uint32_t, 7> output{};
+            const auto result = RunMouseDebugPollHook(
+                0x11110000,
+                output.data(),
+                *resolution,
+                MousePollHookActions{
+                    .context = &fake,
+                    .call_original = &FakeMouseActions::Original,
+                });
+            Expect(
+                result.has_value() && output[0] == 1320 && output[1] == 17 &&
+                    output[2] == 2 && output[5] == 5 && output[6] == 0,
+                "one-past native canvas invalidates without rewriting coordinates");
+
+            fake.sample = {700, 20, 12, 13, 14, 15, 0};
+            const auto invalid_original = RunMouseDebugPollHook(
+                0x11110000,
+                output.data(),
+                *resolution,
+                MousePollHookActions{
+                    .context = &fake,
+                    .call_original = &FakeMouseActions::Original,
+                });
+            Expect(
+                invalid_original.has_value() && output == fake.sample,
+                "invalid original mouse sample remains byte-for-byte unchanged");
+        }
+    }
 } // namespace
 
 int main()
@@ -1696,5 +1916,6 @@ int main()
     HookTransactionRejectsInvalidActionsAndCapacity();
     BaseHookWrappersPreserveNativeOrderingAndResults();
     RenderHookWrappersRouteSpacesDimensionsAndViewport();
+    ProjectionClipAndMouseWrappersPreserveNativeContracts();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

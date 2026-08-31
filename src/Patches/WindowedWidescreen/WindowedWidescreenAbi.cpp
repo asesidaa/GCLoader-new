@@ -209,6 +209,8 @@ namespace gc::windowed_widescreen
             WidescreenFunctionAbi{
                 WidescreenContractSite::gameplay_return_native,
                 WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{WidescreenContractSite::clip_gate,
+                WidescreenCallingConvention::mid_context, 1},
         };
     } // namespace
 
