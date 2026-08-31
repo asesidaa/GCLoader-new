@@ -1,4 +1,5 @@
 #include "Patches/WindowedWidescreen/NativeCanvasCompositor.h"
+#include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/RendererDeviceLoss/RendererResourceLifecycle.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
@@ -759,6 +760,138 @@ namespace
         }
     }
 
+    struct FakeResetHookPairActions
+    {
+        struct Event
+        {
+            bool reset{};
+            bool enable{};
+            gc::renderer_device_loss::RendererResetHookSite site{};
+
+            bool operator==(const Event&) const = default;
+        };
+
+        std::vector<Event> events;
+        std::optional<gc::renderer_device_loss::RendererResetHookSite>
+            fail_create;
+        std::optional<gc::renderer_device_loss::RendererResetHookSite>
+            fail_enable;
+
+        static bool Create(
+            void* context,
+            const gc::renderer_device_loss::RendererResetHookSite site,
+            std::uintptr_t) noexcept
+        {
+            auto* self = static_cast<FakeResetHookPairActions*>(context);
+            self->events.push_back({.site = site});
+            return !self->fail_create.has_value() ||
+                *self->fail_create != site;
+        }
+
+        static bool Enable(
+            void* context,
+            const gc::renderer_device_loss::RendererResetHookSite site) noexcept
+        {
+            auto* self = static_cast<FakeResetHookPairActions*>(context);
+            self->events.push_back({.enable = true, .site = site});
+            return !self->fail_enable.has_value() ||
+                *self->fail_enable != site;
+        }
+
+        static void Reset(
+            void* context,
+            const gc::renderer_device_loss::RendererResetHookSite site) noexcept
+        {
+            static_cast<FakeResetHookPairActions*>(context)->events.push_back(
+                {.reset = true, .site = site});
+        }
+
+        [[nodiscard]] gc::renderer_device_loss::RendererResetHookPairActions
+        Actions() noexcept
+        {
+            return {
+                .context = this,
+                .create_disabled = &Create,
+                .enable = &Enable,
+                .reset = &Reset,
+            };
+        }
+    };
+
+    void RendererResetHookPairIsCompoundAndResetIdempotent()
+    {
+        using namespace gc::renderer_device_loss;
+        RendererResetHookPair pair;
+        FakeResetHookPairActions fake;
+        Expect(
+            pair.PrepareDisabled(0x0045B28B, 0x0045B474, fake.Actions())
+                .has_value() &&
+                pair.state() == RendererResetHookPairState::disabled,
+            "reset pair prepares both callbacks disabled");
+        Expect(
+            pair.Enable().has_value() &&
+                pair.state() == RendererResetHookPairState::active,
+            "reset pair enables as one compound operation");
+        pair.Reset();
+        const auto events_after_first_reset = fake.events.size();
+        pair.Reset();
+        Expect(
+            fake.events == std::vector<FakeResetHookPairActions::Event>{
+                {.site = RendererResetHookSite::pre_reset},
+                {.site = RendererResetHookSite::post_reset},
+                {.enable = true, .site = RendererResetHookSite::pre_reset},
+                {.enable = true, .site = RendererResetHookSite::post_reset},
+                {.reset = true, .site = RendererResetHookSite::post_reset},
+                {.reset = true, .site = RendererResetHookSite::pre_reset},
+            } &&
+                fake.events.size() == events_after_first_reset &&
+                pair.state() == RendererResetHookPairState::empty,
+            "reset pair resets post then pre and repeated reset is a no-op");
+
+        for (const auto failing_site : {
+                 RendererResetHookSite::pre_reset,
+                 RendererResetHookSite::post_reset})
+        {
+            RendererResetHookPair failing_pair;
+            FakeResetHookPairActions failing;
+            failing.fail_create = failing_site;
+            const auto result = failing_pair.PrepareDisabled(
+                0x0045B28B,
+                0x0045B474,
+                failing.Actions());
+            Expect(
+                !result && result.error().site == failing_site &&
+                    result.error().stage ==
+                        RendererResetHookPairStage::create_disabled &&
+                    failing_pair.state() ==
+                        RendererResetHookPairState::empty,
+                "failure at either reset-hook create removes the whole pair");
+        }
+
+        for (const auto failing_site : {
+                 RendererResetHookSite::pre_reset,
+                 RendererResetHookSite::post_reset})
+        {
+            RendererResetHookPair failing_pair;
+            FakeResetHookPairActions failing;
+            Expect(
+                failing_pair.PrepareDisabled(
+                    0x0045B28B,
+                    0x0045B474,
+                    failing.Actions()).has_value(),
+                "enable-failure reset pair prepares");
+            failing.fail_enable = failing_site;
+            const auto result = failing_pair.Enable();
+            Expect(
+                !result && result.error().site == failing_site &&
+                    result.error().stage ==
+                        RendererResetHookPairStage::enable &&
+                    failing_pair.state() ==
+                        RendererResetHookPairState::empty,
+                "failure at either reset-hook enable removes the whole pair");
+        }
+    }
+
     enum class InstallEventKind
     {
         read,
@@ -1161,6 +1294,131 @@ namespace
         }
     }
 
+    struct FullSyntheticInstallFixture
+    {
+        static constexpr std::uintptr_t image_base = 0x00400000;
+
+        std::vector<gc::windowed_widescreen::WidescreenHookRequest>
+            requests;
+        FakeInstallEnvironment environment;
+
+        FullSyntheticInstallFixture()
+        {
+            using namespace gc::windowed_widescreen;
+            for (const auto& contract : WindowedWidescreenByteContracts())
+            {
+                environment.memory.push_back({
+                    .address = image_base + contract.rva,
+                    .bytes = std::vector<std::byte>{
+                        contract.pattern.view().begin(),
+                        contract.pattern.view().end(),
+                    },
+                });
+                if (contract.hook_kind != WidescreenHookKind::read_only)
+                {
+                    requests.push_back(WidescreenHookRequest{
+                        .site = contract.site,
+                        .callback = reinterpret_cast<void*>(
+                            0x1000 + requests.size() * 4),
+                    });
+                }
+            }
+            for (const auto& contract :
+                 WindowedWidescreenPointerContracts())
+            {
+                environment.AddPointer(
+                    image_base + contract.pointer_rva,
+                    static_cast<std::uint32_t>(
+                        image_base + contract.target_rva));
+            }
+        }
+
+        [[nodiscard]] gc::windowed_widescreen::WidescreenContractManifest
+        Manifest() const noexcept
+        {
+            return {
+                .byte_contracts = gc::windowed_widescreen::
+                    WindowedWidescreenByteContracts(),
+                .pointer_contracts = gc::windowed_widescreen::
+                    WindowedWidescreenPointerContracts(),
+            };
+        }
+    };
+
+    void FullHookPlanRollsBackAtEveryLogicalIndex()
+    {
+        using namespace gc::windowed_widescreen;
+        FullSyntheticInstallFixture sample;
+        Expect(
+            sample.requests.size() == 23 &&
+                std::ranges::any_of(
+                    sample.requests,
+                    [](const WidescreenHookRequest request)
+                    {
+                        return request.site ==
+                            WidescreenContractSite::reset_pre;
+                    }) &&
+                std::ranges::any_of(
+                    sample.requests,
+                    [](const WidescreenHookRequest request)
+                    {
+                        return request.site ==
+                            WidescreenContractSite::reset_post;
+                    }),
+            "full hook plan includes every hook contract and reset pair");
+
+        for (std::size_t failure = 0;
+             failure < sample.requests.size();
+             ++failure)
+        {
+            FullSyntheticInstallFixture fixture;
+            fixture.environment.fail_create_index = failure;
+            const auto result = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !result &&
+                    result.error().stage ==
+                        WidescreenInstallStage::hook_create &&
+                    result.error().index == failure &&
+                    result.error().rollback_attempted &&
+                    result.error().rollback_complete &&
+                    !fixture.environment.owner_published,
+                "every full-plan create failure rolls back completely");
+        }
+
+        for (std::size_t failure = 0;
+             failure < sample.requests.size();
+             ++failure)
+        {
+            FullSyntheticInstallFixture fixture;
+            fixture.environment.fail_enable_index = failure;
+            const auto result = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            const auto reset_count = static_cast<std::size_t>(std::count_if(
+                fixture.environment.events.begin(),
+                fixture.environment.events.end(),
+                [](const InstallEvent event)
+                {
+                    return event.kind == InstallEventKind::reset;
+                }));
+            Expect(
+                !result &&
+                    result.error().stage ==
+                        WidescreenInstallStage::hook_enable &&
+                    result.error().index == failure &&
+                    result.error().rollback_complete &&
+                    reset_count == sample.requests.size() &&
+                    !fixture.environment.owner_published,
+                "every full-plan enable failure removes all widescreen hooks");
+        }
+    }
+
     void HookRollbackReportsVerificationAndPublicationFailures()
     {
         using namespace gc::windowed_widescreen;
@@ -1458,6 +1716,41 @@ namespace
                     },
                 "final copy precedes native frame end and presentation");
         }
+    }
+
+    void DisabledInitializationGatePerformsNoEnabledAction()
+    {
+        using namespace gc::windowed_widescreen;
+        struct FakeGate
+        {
+            std::size_t calls{};
+
+            static bool Initialize(void* context) noexcept
+            {
+                ++static_cast<FakeGate*>(context)->calls;
+                return true;
+            }
+        } fake;
+
+        const auto disabled = RunWindowedWidescreenInitializationGate(
+            false,
+            WindowedWidescreenInitializationGateActions{
+                .context = &fake,
+                .initialize_enabled = &FakeGate::Initialize,
+            });
+        Expect(
+            disabled.has_value() && fake.calls == 0,
+            "disabled initialization performs no module monitor lifecycle or hook action");
+
+        const auto enabled = RunWindowedWidescreenInitializationGate(
+            true,
+            WindowedWidescreenInitializationGateActions{
+                .context = &fake,
+                .initialize_enabled = &FakeGate::Initialize,
+            });
+        Expect(
+            enabled.has_value() && fake.calls == 1,
+            "enabled initialization crosses the action gate exactly once");
     }
 
     struct FakeRenderHookActions
@@ -1909,12 +2202,15 @@ int main()
     RendererResourceLifecycleRetainsRecoverableFailureState();
     RendererResourceLifecycleRejectsInvalidParticipation();
     PartialResourceCreationNeverPublishesOrLeaks();
+    RendererResetHookPairIsCompoundAndResetIdempotent();
     HookTransactionPreflightsEverythingBeforeCreation();
     HookTransactionRejectsBasePointerAndAddressErrorsEarly();
     HookCreationAndEnableFailuresRollbackInReverse();
+    FullHookPlanRollsBackAtEveryLogicalIndex();
     HookRollbackReportsVerificationAndPublicationFailures();
     HookTransactionRejectsInvalidActionsAndCapacity();
     BaseHookWrappersPreserveNativeOrderingAndResults();
+    DisabledInitializationGatePerformsNoEnabledAction();
     RenderHookWrappersRouteSpacesDimensionsAndViewport();
     ProjectionClipAndMouseWrappersPreserveNativeContracts();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

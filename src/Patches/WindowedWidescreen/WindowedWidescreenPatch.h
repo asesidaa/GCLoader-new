@@ -46,6 +46,8 @@ namespace gc::windowed_widescreen
         std::optional<renderer_device_loss::RendererResourceError>
             resource_error;
         std::optional<WidescreenInstallError> install_error;
+        std::optional<renderer_device_loss::RendererResetHookPairError>
+            reset_hook_error;
         std::optional<CompositorError> compositor_error;
         std::optional<ProjectionError> projection_error;
         D3D9CompositorFailure d3d_failure{};
@@ -214,6 +216,17 @@ namespace gc::windowed_widescreen
         std::uint32_t* output,
         const ResolutionModel& resolution,
         const MousePollHookActions& actions) noexcept;
+
+    struct WindowedWidescreenInitializationGateActions
+    {
+        void* context{};
+        bool (*initialize_enabled)(void*) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<void, WindowedWidescreenError>
+    RunWindowedWidescreenInitializationGate(
+        bool enabled,
+        const WindowedWidescreenInitializationGateActions& actions) noexcept;
 
     [[nodiscard]] std::expected<void, WindowedWidescreenError>
     WindowedWidescreenPatchInit(

@@ -12,6 +12,79 @@
 
 namespace gc::renderer_device_loss {
 
+enum class RendererResetHookSite : std::uint8_t {
+    pre_reset,
+    post_reset,
+};
+
+enum class RendererResetHookPairState : std::uint8_t {
+    empty,
+    disabled,
+    active,
+};
+
+enum class RendererResetHookPairStage : std::uint8_t {
+    invalid_actions,
+    invalid_state,
+    create_disabled,
+    enable,
+};
+
+struct RendererResetHookPairError {
+    RendererResetHookPairStage stage{
+        RendererResetHookPairStage::invalid_actions};
+    RendererResetHookSite site{RendererResetHookSite::pre_reset};
+};
+
+struct RendererResetHookPairActions {
+    void* context{};
+    bool (*create_disabled)(
+        void*, RendererResetHookSite, std::uintptr_t) noexcept{};
+    bool (*enable)(void*, RendererResetHookSite) noexcept{};
+    void (*reset)(void*, RendererResetHookSite) noexcept{};
+};
+
+class RendererResetHookPair final {
+public:
+    RendererResetHookPair() = default;
+    ~RendererResetHookPair();
+
+    RendererResetHookPair(const RendererResetHookPair&) = delete;
+    RendererResetHookPair& operator=(const RendererResetHookPair&) = delete;
+
+    [[nodiscard]] std::expected<void, RendererResetHookPairError>
+    PrepareDisabled(
+        std::uintptr_t pre_reset_address,
+        std::uintptr_t post_reset_address,
+        RendererResetHookPairActions actions) noexcept;
+
+    [[nodiscard]] std::expected<void, RendererResetHookPairError>
+    Enable() noexcept;
+
+    void Reset() noexcept;
+
+    [[nodiscard]] RendererResetHookPairState state() const noexcept {
+        return state_;
+    }
+
+private:
+    RendererResetHookPairActions actions_{};
+    RendererResetHookPairState state_{RendererResetHookPairState::empty};
+    bool pre_attempted_{};
+    bool post_attempted_{};
+};
+
+enum class RendererResetLifecycleStage : std::uint8_t {
+    before_reset,
+    after_reset,
+};
+
+struct RendererResetFailureActions {
+    void* context{};
+    void (*failure)(
+        void*, RendererResetLifecycleStage, RendererResourceError) noexcept{};
+};
+
 inline constexpr std::uintptr_t kPreferredImageBase = 0x00400000U;
 inline constexpr std::uint32_t kDeviceLostTailRva = 0x000E67D8U;
 inline constexpr std::uint32_t kVertexBufferResultRva = 0x000E79F7U;
@@ -266,6 +339,20 @@ InstallRendererDeviceLossPatch(
     const RendererInstallActions& actions) noexcept;
 
 [[nodiscard]] bool RendererDeviceLossPatchInit() noexcept;
+
+[[nodiscard]] std::expected<void, RendererResetHookPairError>
+RendererDeviceLossPrepareResetHooksDisabled(
+    std::uintptr_t pre_reset_address,
+    std::uintptr_t post_reset_address,
+    RendererResetFailureActions failure_actions) noexcept;
+
+[[nodiscard]] std::expected<void, RendererResetHookPairError>
+RendererDeviceLossEnableResetHooks() noexcept;
+
+void RendererDeviceLossResetHooks() noexcept;
+
+[[nodiscard]] RendererResetHookPairState
+RendererDeviceLossResetHookPairState() noexcept;
 
 [[nodiscard]] std::expected<void, RendererResourceError>
 RendererDeviceLossAttachResource(

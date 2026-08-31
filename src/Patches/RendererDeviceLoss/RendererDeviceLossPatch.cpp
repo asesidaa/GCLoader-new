@@ -15,6 +15,105 @@
 
 namespace gc::renderer_device_loss {
 
+RendererResetHookPair::~RendererResetHookPair() {
+    Reset();
+}
+
+std::expected<void, RendererResetHookPairError>
+RendererResetHookPair::PrepareDisabled(
+    const std::uintptr_t pre_reset_address,
+    const std::uintptr_t post_reset_address,
+    const RendererResetHookPairActions actions) noexcept {
+    if (actions.context == nullptr || actions.create_disabled == nullptr ||
+        actions.enable == nullptr || actions.reset == nullptr ||
+        pre_reset_address == 0 || post_reset_address == 0) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_actions,
+        });
+    }
+    if (state_ != RendererResetHookPairState::empty) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_state,
+        });
+    }
+
+    actions_ = actions;
+    pre_attempted_ = true;
+    if (!actions_.create_disabled(
+            actions_.context,
+            RendererResetHookSite::pre_reset,
+            pre_reset_address)) {
+        Reset();
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::create_disabled,
+            .site = RendererResetHookSite::pre_reset,
+        });
+    }
+
+    post_attempted_ = true;
+    if (!actions_.create_disabled(
+            actions_.context,
+            RendererResetHookSite::post_reset,
+            post_reset_address)) {
+        Reset();
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::create_disabled,
+            .site = RendererResetHookSite::post_reset,
+        });
+    }
+
+    state_ = RendererResetHookPairState::disabled;
+    return {};
+}
+
+std::expected<void, RendererResetHookPairError>
+RendererResetHookPair::Enable() noexcept {
+    if (state_ != RendererResetHookPairState::disabled) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_state,
+        });
+    }
+    if (!actions_.enable(
+            actions_.context,
+            RendererResetHookSite::pre_reset)) {
+        Reset();
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::enable,
+            .site = RendererResetHookSite::pre_reset,
+        });
+    }
+    if (!actions_.enable(
+            actions_.context,
+            RendererResetHookSite::post_reset)) {
+        Reset();
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::enable,
+            .site = RendererResetHookSite::post_reset,
+        });
+    }
+    state_ = RendererResetHookPairState::active;
+    return {};
+}
+
+void RendererResetHookPair::Reset() noexcept {
+    if (actions_.reset != nullptr) {
+        if (post_attempted_) {
+            actions_.reset(
+                actions_.context,
+                RendererResetHookSite::post_reset);
+        }
+        if (pre_attempted_) {
+            actions_.reset(
+                actions_.context,
+                RendererResetHookSite::pre_reset);
+        }
+    }
+    actions_ = {};
+    pre_attempted_ = false;
+    post_attempted_ = false;
+    state_ = RendererResetHookPairState::empty;
+}
+
 namespace {
 
 struct RendererDeviceLossRuntime {
@@ -25,9 +124,113 @@ struct RendererDeviceLossRuntime {
     safetyhook::MidHook direct_lock_result_hook{};
     safetyhook::MidHook buffered_unlock_result_hook{};
     RendererResourceLifecycle resource_lifecycle{};
+    safetyhook::MidHook widescreen_pre_reset_hook{};
+    safetyhook::MidHook widescreen_post_reset_hook{};
+    RendererResetHookPair widescreen_reset_pair{};
+    RendererResetFailureActions widescreen_reset_failure{};
 };
 
 std::unique_ptr<RendererDeviceLossRuntime> g_runtime_owner;
+
+void NotifyWidescreenResetFailure(
+    const RendererResetLifecycleStage stage,
+    const RendererResourceError error) noexcept {
+    if (!g_runtime_owner) {
+        return;
+    }
+    const auto actions = g_runtime_owner->widescreen_reset_failure;
+    if (actions.context != nullptr && actions.failure != nullptr) {
+        actions.failure(actions.context, stage, error);
+    }
+}
+
+void OnWidescreenBeforeReset(safetyhook::Context&) noexcept {
+    if (!g_runtime_owner) {
+        return;
+    }
+    const auto released =
+        g_runtime_owner->resource_lifecycle.BeforeReset();
+    if (!released) {
+        NotifyWidescreenResetFailure(
+            RendererResetLifecycleStage::before_reset,
+            released.error());
+    }
+}
+
+void OnWidescreenAfterReset(safetyhook::Context& context) noexcept {
+    if (!g_runtime_owner) {
+        return;
+    }
+    const auto recreated =
+        g_runtime_owner->resource_lifecycle.AfterReset(context.esi);
+    if (!recreated) {
+        NotifyWidescreenResetFailure(
+            RendererResetLifecycleStage::after_reset,
+            recreated.error());
+    }
+}
+
+bool CreateWidescreenResetHookDisabled(
+    void* opaque,
+    const RendererResetHookSite site,
+    const std::uintptr_t address) noexcept {
+    if (opaque == nullptr || address == 0) {
+        return false;
+    }
+    auto& runtime = *static_cast<RendererDeviceLossRuntime*>(opaque);
+    try {
+        const auto callback = site == RendererResetHookSite::pre_reset
+            ? &OnWidescreenBeforeReset
+            : &OnWidescreenAfterReset;
+        auto created = safetyhook::MidHook::create(
+            reinterpret_cast<void*>(address),
+            callback,
+            safetyhook::MidHook::StartDisabled);
+        if (!created) {
+            return false;
+        }
+        auto& destination = site == RendererResetHookSite::pre_reset
+            ? runtime.widescreen_pre_reset_hook
+            : runtime.widescreen_post_reset_hook;
+        destination = std::move(*created);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool EnableWidescreenResetHook(
+    void* opaque,
+    const RendererResetHookSite site) noexcept {
+    if (opaque == nullptr) {
+        return false;
+    }
+    auto& runtime = *static_cast<RendererDeviceLossRuntime*>(opaque);
+    try {
+        auto& hook = site == RendererResetHookSite::pre_reset
+            ? runtime.widescreen_pre_reset_hook
+            : runtime.widescreen_post_reset_hook;
+        return hook.enable().has_value();
+    } catch (...) {
+        return false;
+    }
+}
+
+void ResetWidescreenResetHook(
+    void* opaque,
+    const RendererResetHookSite site) noexcept {
+    if (opaque == nullptr) {
+        return;
+    }
+    auto& runtime = *static_cast<RendererDeviceLossRuntime*>(opaque);
+    try {
+        auto& hook = site == RendererResetHookSite::pre_reset
+            ? runtime.widescreen_pre_reset_hook
+            : runtime.widescreen_post_reset_hook;
+        hook.reset();
+    } catch (...) {
+    }
+}
 
 bool ProductionRead(
     void*,
@@ -689,6 +892,77 @@ void RendererDeviceLossDetachResource() noexcept {
     if (g_runtime_owner) {
         g_runtime_owner->resource_lifecycle.Detach();
     }
+}
+
+std::expected<void, RendererResetHookPairError>
+RendererDeviceLossPrepareResetHooksDisabled(
+    const std::uintptr_t pre_reset_address,
+    const std::uintptr_t post_reset_address,
+    const RendererResetFailureActions failure_actions) noexcept {
+    if (!g_runtime_owner) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_state,
+        });
+    }
+    if (failure_actions.context == nullptr ||
+        failure_actions.failure == nullptr) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_actions,
+        });
+    }
+
+    auto& runtime = *g_runtime_owner;
+    if (runtime.widescreen_reset_pair.state() !=
+        RendererResetHookPairState::empty) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_state,
+        });
+    }
+    runtime.widescreen_reset_failure = failure_actions;
+    const auto prepared = runtime.widescreen_reset_pair.PrepareDisabled(
+        pre_reset_address,
+        post_reset_address,
+        RendererResetHookPairActions{
+            .context = &runtime,
+            .create_disabled = &CreateWidescreenResetHookDisabled,
+            .enable = &EnableWidescreenResetHook,
+            .reset = &ResetWidescreenResetHook,
+        });
+    if (!prepared) {
+        runtime.widescreen_reset_failure = {};
+    }
+    return prepared;
+}
+
+std::expected<void, RendererResetHookPairError>
+RendererDeviceLossEnableResetHooks() noexcept {
+    if (!g_runtime_owner) {
+        return std::unexpected(RendererResetHookPairError{
+            .stage = RendererResetHookPairStage::invalid_state,
+        });
+    }
+    const auto enabled =
+        g_runtime_owner->widescreen_reset_pair.Enable();
+    if (!enabled && g_runtime_owner->widescreen_reset_pair.state() ==
+                        RendererResetHookPairState::empty) {
+        g_runtime_owner->widescreen_reset_failure = {};
+    }
+    return enabled;
+}
+
+void RendererDeviceLossResetHooks() noexcept {
+    if (!g_runtime_owner) {
+        return;
+    }
+    g_runtime_owner->widescreen_reset_pair.Reset();
+    g_runtime_owner->widescreen_reset_failure = {};
+}
+
+RendererResetHookPairState
+RendererDeviceLossResetHookPairState() noexcept {
+    return g_runtime_owner
+        ? g_runtime_owner->widescreen_reset_pair.state()
+        : RendererResetHookPairState::empty;
 }
 
 std::expected<void, RendererResourceError>

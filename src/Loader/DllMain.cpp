@@ -23,6 +23,7 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenPatch.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
 #include "Nesys/NesysServicePatch.h"
 #include "Nesys/NesysServiceProcess.h"
@@ -329,6 +330,83 @@ namespace
             "GCLoader game hook setup failed",
             L"GCLoader could not install the required game hooks. Check the "
             L"loader log for details.",
+            title,
+            exit_code);
+    }
+
+    void PublishWindowedWidescreenInitializationFatal(
+        const gc::windowed_widescreen::WindowedWidescreenError& error) noexcept
+    {
+        static std::atomic_bool published{false};
+        constexpr DWORD exit_code = 28;
+        constexpr std::wstring_view title =
+            L"GCLoader windowed widescreen setup error";
+
+        try
+        {
+            std::ostringstream log;
+            std::wostringstream modal;
+            log << "Windowed widescreen initialization failed"
+                << " stage=" << static_cast<unsigned>(error.stage)
+                << " install_stage="
+                << (error.install_error
+                    ? static_cast<unsigned>(error.install_error->stage)
+                    : 0U)
+                << " site="
+                << (error.install_error
+                    ? static_cast<unsigned>(error.install_error->site)
+                    : 0U)
+                << " index="
+                << (error.install_error ? error.install_error->index : 0U)
+                << " rollback_attempted="
+                << (error.install_error &&
+                    error.install_error->rollback_attempted)
+                << " rollback_complete="
+                << (!error.install_error ||
+                    error.install_error->rollback_complete)
+                << " resource_error="
+                << (error.resource_error
+                    ? static_cast<unsigned>(*error.resource_error)
+                    : 0U)
+                << " reset_stage="
+                << (error.reset_hook_error
+                    ? static_cast<unsigned>(error.reset_hook_error->stage)
+                    : 0U)
+                << " reset_site="
+                << (error.reset_hook_error
+                    ? static_cast<unsigned>(error.reset_hook_error->site)
+                    : 0U)
+                << " d3d_stage="
+                << static_cast<unsigned>(error.d3d_failure.stage)
+                << " hresult=" << error.d3d_failure.result;
+
+            modal
+                << L"GCLoader could not safely enable the fixed windowed "
+                L"widescreen renderer.\n\n"
+                << L"Stage: " << static_cast<unsigned>(error.stage) << L"\n"
+                << L"Contract site: "
+                << (error.install_error
+                    ? static_cast<unsigned>(error.install_error->site)
+                    : 0U)
+                << L"\n\nNo widescreen hook owner was published. Check the "
+                L"loader log for the precise contract or capability failure.";
+            gc::system_path::PublishStartupFatal(
+                published,
+                log.str(),
+                modal.str(),
+                title,
+                exit_code);
+            return;
+        }
+        catch (...)
+        {
+        }
+
+        gc::system_path::PublishStartupFatal(
+            published,
+            "Windowed widescreen initialization failed",
+            L"GCLoader could not safely enable the fixed windowed widescreen "
+            L"renderer. Check the loader log for details.",
             title,
             exit_code);
     }
@@ -654,6 +732,35 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
             PLOG_DEBUG
                 << "Renderer device-loss retry initialization complete!";
+
+            try
+            {
+                auto widescreen_settings = settings.windowed_widescreen();
+                const auto widescreen = gc::windowed_widescreen::
+                    WindowedWidescreenPatchInit(
+                        std::move(widescreen_settings));
+                if (!widescreen)
+                {
+                    PublishWindowedWidescreenInitializationFatal(
+                        widescreen.error());
+                    return FALSE;
+                }
+            }
+            catch (const std::exception& error)
+            {
+                PLOG_ERROR
+                    << "WindowedWidescreen configuration copy failed: "
+                    << error.what();
+                return FALSE;
+            }
+            catch (...)
+            {
+                PLOG_ERROR
+                    << "WindowedWidescreen configuration copy failed";
+                return FALSE;
+            }
+            PLOG_DEBUG
+                << "Windowed widescreen initialization complete!";
 
             try
             {

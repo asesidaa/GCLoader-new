@@ -103,6 +103,8 @@ namespace gc::windowed_widescreen
             std::optional<renderer_device_loss::RendererResourceError>
                 last_resource_error;
             std::optional<CompositorError> last_compositor_error;
+            std::optional<renderer_device_loss::RendererResetHookPairError>
+                last_reset_hook_error;
             bool pending_batches_reported{};
         };
 
@@ -308,6 +310,66 @@ namespace gc::windowed_widescreen
                 return false;
             }
             auto& runtime = **context->candidate_owner;
+
+            if (site == WidescreenContractSite::reset_pre)
+            {
+                const auto* post_contract = FindProductionContract(
+                    WidescreenContractSite::reset_post);
+                if (post_contract == nullptr)
+                {
+                    return false;
+                }
+                const auto prepared = renderer_device_loss::
+                    RendererDeviceLossPrepareResetHooksDisabled(
+                        address,
+                        runtime.image_base + post_contract->rva,
+                        renderer_device_loss::RendererResetFailureActions{
+                            .context = &runtime,
+                            .failure = +[](
+                                void* opaque_runtime,
+                                const renderer_device_loss::
+                                    RendererResetLifecycleStage stage,
+                                const renderer_device_loss::
+                                    RendererResourceError error) noexcept
+                            {
+                                auto* failed_runtime = static_cast<
+                                    WindowedWidescreenRuntime*>(
+                                        opaque_runtime);
+                                if (failed_runtime == nullptr)
+                                {
+                                    return;
+                                }
+                                PublishRuntimeFatal(
+                                    WindowedWidescreenError{
+                                        .stage = stage ==
+                                                renderer_device_loss::
+                                                    RendererResetLifecycleStage::
+                                                        before_reset
+                                            ? WindowedWidescreenOperationStage::
+                                                reset_pre
+                                            : WindowedWidescreenOperationStage::
+                                                reset_post,
+                                        .resource_error = error,
+                                        .d3d_failure = failed_runtime->device.
+                                            last_failure(),
+                                    });
+                            },
+                        });
+                if (!prepared)
+                {
+                    runtime.last_reset_hook_error = prepared.error();
+                    return false;
+                }
+                return true;
+            }
+            if (site == WidescreenContractSite::reset_post)
+            {
+                return renderer_device_loss::
+                    RendererDeviceLossResetHookPairState() ==
+                    renderer_device_loss::
+                        RendererResetHookPairState::disabled;
+            }
+
             if (runtime.hook_count >= runtime.hooks.size())
             {
                 return false;
@@ -365,6 +427,25 @@ namespace gc::windowed_widescreen
             {
                 return false;
             }
+            if (site == WidescreenContractSite::reset_pre)
+            {
+                const auto enabled = renderer_device_loss::
+                    RendererDeviceLossEnableResetHooks();
+                if (!enabled)
+                {
+                    (*context->candidate_owner)->last_reset_hook_error =
+                        enabled.error();
+                    return false;
+                }
+                return true;
+            }
+            if (site == WidescreenContractSite::reset_post)
+            {
+                return renderer_device_loss::
+                    RendererDeviceLossResetHookPairState() ==
+                    renderer_device_loss::
+                        RendererResetHookPairState::active;
+            }
             auto* hook = FindHook(**context->candidate_owner, site);
             if (hook == nullptr)
             {
@@ -390,6 +471,12 @@ namespace gc::windowed_widescreen
             if (context == nullptr || context->candidate_owner == nullptr ||
                 !*context->candidate_owner)
             {
+                return;
+            }
+            if (site == WidescreenContractSite::reset_pre ||
+                site == WidescreenContractSite::reset_post)
+            {
+                renderer_device_loss::RendererDeviceLossResetHooks();
                 return;
             }
             if (auto* hook = FindHook(**context->candidate_owner, site))
@@ -865,6 +952,10 @@ namespace gc::windowed_widescreen
         void GameplayReturnNativeMid(safetyhook::Context&) noexcept
         {
             RequestGameplayPass(GameplayPass::orthographic_effects);
+        }
+
+        void RendererOwnedResetHookSentinel(safetyhook::Context&) noexcept
+        {
         }
 
         template <typename Value>
@@ -1777,6 +1868,31 @@ namespace gc::windowed_widescreen
     }
 
     std::expected<void, WindowedWidescreenError>
+    RunWindowedWidescreenInitializationGate(
+        const bool enabled,
+        const WindowedWidescreenInitializationGateActions& actions) noexcept
+    {
+        if (!enabled)
+        {
+            return {};
+        }
+        if (actions.context == nullptr ||
+            actions.initialize_enabled == nullptr)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::invalid_actions,
+            });
+        }
+        if (!actions.initialize_enabled(actions.context))
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::hook_install,
+            });
+        }
+        return {};
+    }
+
+    std::expected<void, WindowedWidescreenError>
     WindowedWidescreenPatchInit(
         const WindowedWidescreenSettings settings) noexcept
     {
@@ -1819,7 +1935,22 @@ namespace gc::windowed_widescreen
                 : std::expected<void, WindowedWidescreenError>{};
         };
 
-        if (!settings.enabled())
+        bool enabled_initialization{};
+        const auto gate = RunWindowedWidescreenInitializationGate(
+            settings.enabled(),
+            WindowedWidescreenInitializationGateActions{
+                .context = &enabled_initialization,
+                .initialize_enabled = +[](void* context) noexcept
+                {
+                    *static_cast<bool*>(context) = true;
+                    return true;
+                },
+            });
+        if (!gate)
+        {
+            return finish(gate.error());
+        }
+        if (!enabled_initialization)
         {
             return finish(std::nullopt);
         }
@@ -1928,6 +2059,12 @@ namespace gc::windowed_widescreen
                 WidescreenHookRequest{
                     WidescreenContractSite::clip_gate,
                     reinterpret_cast<void*>(&ClipGateMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::reset_pre,
+                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::reset_post,
+                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)},
             };
             const auto installed = InstallWindowedWidescreenHooks(
                 image_base,
@@ -1961,8 +2098,26 @@ namespace gc::windowed_widescreen
                 if (candidate)
                 {
                     error.resource_error = candidate->last_resource_error;
+                    error.reset_hook_error =
+                        candidate->last_reset_hook_error;
                 }
                 return finish(error);
+            }
+            try
+            {
+                const auto native = resolution->native_rect();
+                PLOG_INFO
+                    << "WindowedWidescreen: transaction committed"
+                    << " output=" << resolution->output_size().width << 'x'
+                    << resolution->output_size().height
+                    << " native_rect=" << native.left << ',' << native.top
+                    << ',' << native.right << ',' << native.bottom
+                    << " clip_policy="
+                    << StageClipPolicyName(settings.clip_policy())
+                    << " hook_count=" << requests.size();
+            }
+            catch (...)
+            {
             }
             return finish(std::nullopt);
         }
