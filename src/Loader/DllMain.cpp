@@ -708,7 +708,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
             if (!gc::framerate::FrameratePatchInit(
                 settings.framerate(),
-                gc::audio::IsAudioHookCommitted()))
+                settings.audio().backend()))
             {
                 PLOG_ERROR
                     << "FrameratePatch: fail-closed DLL attach";

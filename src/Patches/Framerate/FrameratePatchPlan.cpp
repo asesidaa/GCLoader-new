@@ -346,6 +346,7 @@ FramerateHookPlan BuildFramerateHookPlan(
                     contract.id != FramerateHookId::GameplaySongClock);
             break;
         case GameplayAudioClockPlan::WasapiSharedSongClock:
+        case GameplayAudioClockPlan::AsioQpcSongClock:
             selected =
                 contract.id == FramerateHookId::OuterFrame ||
                 contract.id == FramerateHookId::GameplaySongClock ||

@@ -1,4 +1,5 @@
 #include "Patches/AbsoluteJudgement/JudgementClockResolver.h"
+#include "Audio/AudioContractFatal.h"
 
 #include <limits>
 
@@ -79,7 +80,7 @@ namespace gc::absolute_judgement
     }
 
     JudgementClockResult JudgementClockResolver::TryBind(
-        const gc::audio::GameplayAudioCursorObservation& selected,
+        const gc::audio::GameplayAudioCursorObservation& observation,
         const std::shared_ptr<const gc::audio::ExactJudgementTimeline>& timeline,
         const std::span<ExactPlaybackEpoch> scratch) noexcept
     {
@@ -93,6 +94,13 @@ namespace gc::absolute_judgement
                 .status = JudgementClockStatus::UnsupportedContinuity,
                 .failure = JudgementClockFailure::InvalidStageBinding,
             };
+        }
+        const auto* selected =
+            std::get_if<gc::audio::PresentedOutputCursorObservation>(
+                &observation.payload);
+        if (selected == nullptr)
+        {
+            return {.status = JudgementClockStatus::Pending};
         }
         if (!timeline)
         {
@@ -124,12 +132,12 @@ namespace gc::absolute_judgement
         {
             binding_.pending_timeline = timeline;
         }
-        if (selected.state != gc::audio::GameplayAudioCursorState::Exact || !selected.exact_history ||
-            selected.buffer_instance_id == 0 || selected.timeline_generation == 0 || selected.playback_generation == 0)
+        if (selected->state != gc::audio::GameplayAudioCursorState::Exact || !selected->exact_history ||
+            selected->buffer_instance_id == 0 || selected->timeline_generation == 0 || selected->playback_generation == 0)
         {
             return {.status = JudgementClockStatus::Pending};
         }
-        if (timeline_generation != selected.timeline_generation)
+        if (timeline_generation != selected->timeline_generation)
         {
             return {
                 .status = JudgementClockStatus::UnsupportedContinuity,
@@ -138,13 +146,13 @@ namespace gc::absolute_judgement
         }
         if (binding_.pending_history)
         {
-            if (binding_.pending_buffer_instance_id != selected.buffer_instance_id ||
-                binding_.pending_timeline_generation != selected.timeline_generation ||
-                binding_.pending_history.get() != selected.exact_history.get())
+            if (binding_.pending_buffer_instance_id != selected->buffer_instance_id ||
+                binding_.pending_timeline_generation != selected->timeline_generation ||
+                binding_.pending_history.get() != selected->exact_history.get())
             {
                 return {
                     .status = JudgementClockStatus::UnsupportedContinuity,
-                    .failure = binding_.pending_timeline_generation != selected.timeline_generation
+                    .failure = binding_.pending_timeline_generation != selected->timeline_generation
                                    ? JudgementClockFailure::PlaybackHistoryTimelineChangedBeforeAnchor
                                    : JudgementClockFailure::PlaybackHistoryObjectChangedBeforeAnchor,
                 };
@@ -152,9 +160,9 @@ namespace gc::absolute_judgement
         }
         else
         {
-            binding_.pending_buffer_instance_id = selected.buffer_instance_id;
-            binding_.pending_timeline_generation = selected.timeline_generation;
-            binding_.pending_history = selected.exact_history;
+            binding_.pending_buffer_instance_id = selected->buffer_instance_id;
+            binding_.pending_timeline_generation = selected->timeline_generation;
+            binding_.pending_history = selected->exact_history;
         }
 
         if (!binding_.pending_history->HasExactPlaybackHistory() ||
@@ -229,10 +237,10 @@ namespace gc::absolute_judgement
         for (std::size_t index = 0; index < count; ++index)
         {
             const auto& epoch = scratch[index];
-            if (epoch.buffer_instance_id != selected.buffer_instance_id ||
-                epoch.timeline_generation != selected.timeline_generation ||
+            if (epoch.buffer_instance_id != selected->buffer_instance_id ||
+                epoch.timeline_generation != selected->timeline_generation ||
                 epoch.origin != ExactPlaybackOrigin::Play || epoch.playback_generation == 0 ||
-                epoch.playback_generation > selected.playback_generation)
+                epoch.playback_generation > selected->playback_generation)
             {
                 continue;
             }
@@ -366,5 +374,63 @@ namespace gc::absolute_judgement
             .provider_anchor_sequence = timeline.provider_anchor_sequence,
             .provider_position = timeline.provider_position,
         };
+    }
+
+    CheckedRational JudgementClockResolver::ResolveLogicalQpcOrFatal(
+        const gc::audio::LogicalQpcPlayAnchor& play_anchor,
+        const std::int32_t stage_game_time_offset_ms,
+        const std::int64_t query_qpc) noexcept
+    {
+        if (play_anchor.play_order == 0 || play_anchor.play_qpc < 0 ||
+            query_qpc < 0 || play_anchor.source_sample_rate == 0 ||
+            play_anchor.qpc_frequency <= 0 ||
+            play_anchor.source_frame.Compare(CheckedRational::Whole(0)) < 0)
+        {
+            gc::audio::FailAudioContract(
+                gc::audio::AudioContractFatalReason::
+                LogicalStageClockUnavailable,
+                play_anchor.play_order,
+                static_cast<std::uint64_t>(play_anchor.play_qpc),
+                static_cast<std::uint64_t>(query_qpc),
+                play_anchor.source_sample_rate);
+        }
+
+        const auto source_seconds = play_anchor.source_frame.Multiply(
+            1, play_anchor.source_sample_rate);
+        const auto qpc_seconds = CheckedRational::Create(
+            query_qpc - play_anchor.play_qpc,
+            static_cast<std::uint64_t>(play_anchor.qpc_frequency));
+        const auto game_offset_seconds =
+            CheckedRational::Whole(stage_game_time_offset_ms)
+                .Multiply(1, 1000);
+        if (!source_seconds || !qpc_seconds || !game_offset_seconds)
+        {
+            gc::audio::FailAudioContract(
+                gc::audio::AudioContractFatalReason::
+                LogicalStageClockArithmeticFailure,
+                source_seconds.has_value() ? 0u : 1u,
+                qpc_seconds.has_value() ? 0u : 1u,
+                game_offset_seconds.has_value() ? 0u : 1u);
+        }
+
+        const auto song_seconds = source_seconds->Add(*qpc_seconds);
+        const auto judgement_seconds = song_seconds
+                                           ? song_seconds->Add(
+                                                 *game_offset_seconds)
+                                           : std::expected<
+                                                 CheckedRational,
+                                                 gc::timing::RationalError>(
+                                                 std::unexpected(
+                                                     gc::timing::RationalError::
+                                                     Overflow));
+        if (!song_seconds || !judgement_seconds)
+        {
+            gc::audio::FailAudioContract(
+                gc::audio::AudioContractFatalReason::
+                LogicalStageClockArithmeticFailure,
+                song_seconds.has_value() ? 0u : 1u,
+                judgement_seconds.has_value() ? 0u : 1u);
+        }
+        return *judgement_seconds;
     }
 } // namespace gc::absolute_judgement

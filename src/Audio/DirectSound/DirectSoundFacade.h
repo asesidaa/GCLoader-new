@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Audio/DirectSound/GameplayAudioCursorObservation.h"
+#include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Audio/Mixer/MiniaudioMixer.h"
 
 #include <atomic>
@@ -9,6 +11,11 @@
 #include <optional>
 
 namespace gc::audio {
+
+enum class AudioCursorModel : std::uint8_t {
+    PresentedOutput,
+    LogicalQpc,
+};
 
 class IAudioEngineController;
 
@@ -107,7 +114,7 @@ private:
 class SecondarySoundBuffer final : public IDirectSoundBuffer8 {
 public:
     static HRESULT Create(
-        IAudioEngineServices&,
+        IAudioEngineController&,
         const DSBUFFERDESC&,
         SecondarySoundBuffer**) noexcept;
 
@@ -144,8 +151,26 @@ public:
         REFGUID, DWORD, REFGUID, LPVOID*) noexcept override;
 
 private:
+    struct LogicalQpcControlState
+    {
+        std::int64_t control_qpc{};
+        gc::timing::CheckedRational source_frame{
+            gc::timing::CheckedRational::Whole(0)};
+        bool playing{};
+        bool looping{};
+    };
+
+    struct LogicalQpcProjection
+    {
+        gc::timing::CheckedRational source_frame{
+            gc::timing::CheckedRational::Whole(0)};
+        bool playing{};
+        bool looping{};
+        bool at_end{};
+    };
+
     SecondarySoundBuffer(
-        IAudioEngineServices&,
+        IAudioEngineController&,
         DWORD,
         DWORD,
         const NormalizedSourceFormat&,
@@ -154,9 +179,20 @@ private:
         std::uint64_t buffer_instance_id) noexcept;
     ~SecondarySoundBuffer();
 
-    std::uint64_t ResolveCurrentSourceFrameLocked() noexcept;
+    [[nodiscard]] static std::int64_t CaptureLogicalQpcOrFatal() noexcept;
+    [[nodiscard]] LogicalQpcProjection ProjectLogicalQpcState(
+        const LogicalQpcControlState&,
+        std::int64_t query_qpc) const noexcept;
+    [[nodiscard]] LogicalQpcProjection ResolveLogicalQpcQueryLocked()
+        const noexcept;
+    [[nodiscard]] static std::uint64_t FloorLogicalSourceFrameOrFatal(
+        const gc::timing::CheckedRational&) noexcept;
+    void PublishLogicalQpcObservationLocked(bool playing) const noexcept;
+    std::uint64_t ResolvePresentedSourceFrameLocked() noexcept;
+    std::uint64_t ResolveLogicalSourceFrameLocked() const noexcept;
 
-    IAudioEngineServices& engine_;
+    IAudioEngineController& engine_;
+    const AudioCursorModel cursor_model_;
     const DWORD flags_;
     const DWORD buffer_bytes_;
     const NormalizedSourceFormat format_;
@@ -167,6 +203,9 @@ private:
     std::atomic_ulong references_{1};
     std::atomic_long volume_{DSBVOLUME_MAX};
     const std::uint64_t buffer_instance_id_{};
+    std::int64_t logical_qpc_frequency_{};
+    LogicalQpcControlState logical_control_{};
+    std::optional<LogicalQpcPlayAnchor> logical_play_anchor_;
     std::uint64_t playback_generation_{};
     ExactPlaybackOrigin playback_origin_{ExactPlaybackOrigin::Play};
     std::uint64_t last_reported_source_frame_{};

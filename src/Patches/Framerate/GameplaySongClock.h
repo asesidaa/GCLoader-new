@@ -54,6 +54,13 @@ public:
         std::int32_t game_time_offset_ms,
         const SongClockObservation& observation) noexcept;
 
+    [[nodiscard]] std::expected<
+        GameplaySongClockDecision,
+        GameplaySongClockError>
+    AdvanceToDesiredTick(
+        std::uint32_t current_tick,
+        std::int64_t desired_tick) const noexcept;
+
 private:
     std::uint32_t rate_numerator_{};
     std::uint32_t rate_denominator_{};

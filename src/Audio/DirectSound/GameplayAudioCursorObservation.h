@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Audio/Mixer/AudioCursorTimeline.h"
+#include "Timing/CheckedRational.h"
 
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <variant>
 
 namespace gc::audio
 {
@@ -15,9 +17,8 @@ namespace gc::audio
         Inactive,
     };
 
-    struct GameplayAudioCursorObservation
+    struct PresentedOutputCursorObservation
     {
-        std::uint64_t query_serial{};
         GameplayAudioCursorState state{};
         std::uint64_t source_frame_unwrapped{};
         std::uint32_t source_sample_rate{};
@@ -27,6 +28,32 @@ namespace gc::audio
         ExactPlaybackOrigin origin{};
         std::uint64_t output_frame{};
         std::shared_ptr<AudioCursorTimeline> exact_history;
+    };
+
+    struct LogicalQpcPlayAnchor
+    {
+        std::uint64_t play_order{};
+        std::int64_t play_qpc{};
+        gc::timing::CheckedRational source_frame{
+            gc::timing::CheckedRational::Whole(0)};
+        std::uint32_t source_sample_rate{};
+        std::int64_t qpc_frequency{};
+    };
+
+    struct LogicalQpcCursorObservation
+    {
+        bool playing{};
+        std::optional<LogicalQpcPlayAnchor> current_play;
+    };
+
+    using GameplayAudioCursorPayload = std::variant<
+        PresentedOutputCursorObservation,
+        LogicalQpcCursorObservation>;
+
+    struct GameplayAudioCursorObservation
+    {
+        std::uint64_t query_serial{};
+        GameplayAudioCursorPayload payload;
     };
 
     class ScopedGameplayAudioCursorQuery final
@@ -54,4 +81,7 @@ namespace gc::audio
 
     void PublishGameplayAudioCursorObservation(
         GameplayAudioCursorObservation observation) noexcept;
+
+    [[nodiscard]] std::uint64_t SnapshotLogicalPlayOrder() noexcept;
+    [[nodiscard]] std::uint64_t ClaimNextLogicalPlayOrder() noexcept;
 } // namespace gc::audio

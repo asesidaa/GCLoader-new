@@ -1,4 +1,5 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
+#include "Audio/AudioContractFatal.h"
 
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Audio/ExactJudgementTimeline.h"
@@ -270,10 +271,16 @@ namespace gc::absolute_judgement
         public:
             void Initialize(
                 const std::uintptr_t executable_base,
-                const gc::audio::ExactJudgementTimelineDomain expected_domain) noexcept
+                const gc::audio::AudioBackend audio_backend,
+                const bool absolute_judgement_enabled,
+                const std::optional<gc::audio::ExactJudgementTimelineDomain>
+                expected_domain) noexcept
             {
                 executable_base_ = executable_base;
+                audio_backend_ = audio_backend;
                 expected_domain_ = expected_domain;
+                scheduler_.Configure(
+                    audio_backend, absolute_judgement_enabled);
             }
 
             // This small timestamp is forwarded and consumed by value.
@@ -341,6 +348,16 @@ namespace gc::absolute_judgement
                 return scheduler_.stage_generation();
             }
 
+            [[nodiscard]] gc::timing::CheckedRational
+            ResolveAsioGameplayTimeForTune(
+                const gc::audio::GameplayAudioCursorObservation&
+                observation) noexcept
+            {
+                scheduler_.OfferAsioGameplayObservation(observation);
+                const auto query_qpc = CapturePerformanceCounterOrFatal();
+                return scheduler_.ResolveAsioQpcOrFatal(query_qpc);
+            }
+
             [[noreturn]] void Fail(
                 const AbsoluteJudgementFatalPredicate predicate,
                 const AbsoluteJudgementFatalReason category,
@@ -386,14 +403,11 @@ namespace gc::absolute_judgement
                 const auto qpc_result = QueryPerformanceCounter(&qpc);
                 if (!qpc_result || qpc.QuadPart <= 0)
                 {
-                    Fail(
-                        AbsoluteJudgementFatalPredicate::
-                        QueryPerformanceCounterFailed,
-                        AbsoluteJudgementFatalReason::ClockDiscontinuous,
-                        {
-                            qpc_result ? 1u : 0u,
-                            static_cast<std::uint64_t>(qpc.QuadPart)
-                        });
+                    gc::audio::FailAudioContract(
+                        gc::audio::AudioContractFatalReason::
+                        QueryPerformanceCounterUnavailable,
+                        qpc_result ? 1u : 0u,
+                        static_cast<std::uint64_t>(qpc.QuadPart));
                 }
                 return qpc.QuadPart;
             }
@@ -413,25 +427,42 @@ namespace gc::absolute_judgement
                 const auto dispatch_entry_qpc = observe_outer_timing
                                                     ? CapturePerformanceCounterOrFatal()
                                                     : 0;
-                auto timeline = gc::audio::AcquireExactJudgementTimeline();
-                if (!timeline)
+                std::shared_ptr<const gc::audio::ExactJudgementTimeline>
+                    timeline;
+                if (audio_backend_ == gc::audio::AudioBackend::wasapi_exclusive)
                 {
-                    Fail(
-                        AbsoluteJudgementFatalPredicate::ExactTimelineProviderMissing,
-                        AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable,
-                        {static_cast<std::uint64_t>(expected_domain_)});
-                }
-                const auto timeline_info = timeline->info();
-                if (timeline_info.domain != expected_domain_)
-                {
-                    Fail(
-                        AbsoluteJudgementFatalPredicate::
-                        ExactTimelineProviderDomainMismatch,
-                        AbsoluteJudgementFatalReason::TimelineCapabilityUnavailable,
-                        {
-                            static_cast<std::uint64_t>(expected_domain_),
-                            static_cast<std::uint64_t>(timeline_info.domain)
-                        });
+                    if (!expected_domain_)
+                    {
+                        Fail(
+                            AbsoluteJudgementFatalPredicate::
+                            ExactTimelineProviderMissing,
+                            AbsoluteJudgementFatalReason::
+                            TimelineCapabilityUnavailable);
+                    }
+                    timeline = gc::audio::AcquireExactJudgementTimeline();
+                    if (!timeline)
+                    {
+                        Fail(
+                            AbsoluteJudgementFatalPredicate::
+                            ExactTimelineProviderMissing,
+                            AbsoluteJudgementFatalReason::
+                            TimelineCapabilityUnavailable,
+                            {static_cast<std::uint64_t>(*expected_domain_)});
+                    }
+                    const auto timeline_info = timeline->info();
+                    if (timeline_info.domain != *expected_domain_)
+                    {
+                        Fail(
+                            AbsoluteJudgementFatalPredicate::
+                            ExactTimelineProviderDomainMismatch,
+                            AbsoluteJudgementFatalReason::
+                            TimelineCapabilityUnavailable,
+                            {
+                                static_cast<std::uint64_t>(*expected_domain_),
+                                static_cast<std::uint64_t>(
+                                    timeline_info.domain)
+                            });
+                    }
                 }
 
                 const auto native = ResolveNativeIdentityOrFatal(context);
@@ -947,7 +978,10 @@ namespace gc::absolute_judgement
 
             std::uintptr_t executable_base_{};
             std::uintptr_t native_manager_{};
-            gc::audio::ExactJudgementTimelineDomain expected_domain_{};
+            gc::audio::AudioBackend audio_backend_{
+                gc::audio::AudioBackend::wasapi_exclusive};
+            std::optional<gc::audio::ExactJudgementTimelineDomain>
+                expected_domain_;
             JudgementScheduler scheduler_;
         };
 
@@ -960,9 +994,16 @@ namespace gc::absolute_judgement
 
     void InitializeAbsoluteJudgementRuntime(
         const std::uintptr_t executable_base,
-        const gc::audio::ExactJudgementTimelineDomain expected_domain) noexcept
+        const gc::audio::AudioBackend audio_backend,
+        const bool absolute_judgement_enabled,
+        const std::optional<gc::audio::ExactJudgementTimelineDomain>
+        expected_domain) noexcept
     {
-        Runtime().Initialize(executable_base, expected_domain);
+        Runtime().Initialize(
+            executable_base,
+            audio_backend,
+            absolute_judgement_enabled,
+            expected_domain);
     }
 
     void BeginAbsoluteJudgementSemanticStage(
@@ -998,6 +1039,12 @@ namespace gc::absolute_judgement
     std::uint64_t AbsoluteJudgementStageGeneration() noexcept
     {
         return Runtime().stage_generation();
+    }
+
+    gc::timing::CheckedRational ResolveAsioGameplayTimeForTune(
+        const gc::audio::GameplayAudioCursorObservation& observation) noexcept
+    {
+        return Runtime().ResolveAsioGameplayTimeForTune(observation);
     }
 
     [[noreturn]] void FailAbsoluteJudgementQueryInvariant(

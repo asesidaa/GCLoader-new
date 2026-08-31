@@ -808,9 +808,6 @@ namespace gc::config
                         document.experimental()
                                 .asio_output_base_channel()),
                 };
-                clock_domain =
-                    audio::ExactJudgementTimelineDomain::
-                    LogicalMultimediaMilliseconds;
             }
 
             std::optional<nesys_service::RegistryOverrideValues>

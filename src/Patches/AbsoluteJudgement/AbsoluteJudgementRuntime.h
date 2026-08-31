@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Audio/AudioSettings.h"
+#include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Audio/ExactJudgementTimeline.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 #include "Patches/AbsoluteJudgement/JudgementScope.h"
@@ -14,7 +16,10 @@ namespace gc::absolute_judgement
 {
     void InitializeAbsoluteJudgementRuntime(
         std::uintptr_t executable_base,
-        gc::audio::ExactJudgementTimelineDomain expected_domain) noexcept;
+        gc::audio::AudioBackend audio_backend,
+        bool absolute_judgement_enabled,
+        std::optional<gc::audio::ExactJudgementTimelineDomain>
+        expected_domain) noexcept;
 
     void BeginAbsoluteJudgementSemanticStage(
         std::uintptr_t tune_manager) noexcept;
@@ -25,6 +30,9 @@ namespace gc::absolute_judgement
     void EndAbsoluteJudgementSemanticStageForTestMode() noexcept;
     [[nodiscard]] bool AbsoluteJudgementSemanticStageOpen() noexcept;
     [[nodiscard]] std::uint64_t AbsoluteJudgementStageGeneration() noexcept;
+    [[nodiscard]] gc::timing::CheckedRational
+    ResolveAsioGameplayTimeForTune(
+        const gc::audio::GameplayAudioCursorObservation&) noexcept;
 
     [[noreturn]] void FailAbsoluteJudgementQueryInvariant(
         JudgementQueryInvariant invariant,

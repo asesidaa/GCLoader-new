@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Audio/AudioSettings.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Patches/Framerate/FramerateSettings.h"
 #include "Patches/Framerate/GameplaySongClock.h"
@@ -16,7 +17,7 @@ namespace gc::framerate
         FramerateHookId id) noexcept;
     [[nodiscard]] bool FrameratePatchInit(
         FramerateSettings settings,
-        bool authoritative_audio_clock_available);
+        audio::AudioBackend audio_backend);
 
     namespace detail
     {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Audio/AudioSettings.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 #include "Patches/AbsoluteJudgement/JudgementClockResolver.h"
 #include "Patches/AbsoluteJudgement/JudgementHistory.h"
@@ -38,6 +39,9 @@ namespace gc::absolute_judgement
     class JudgementScheduler final
     {
     public:
+        void Configure(
+            gc::audio::AudioBackend audio_backend,
+            bool absolute_judgement_enabled) noexcept;
         void BeginSemanticStage(
             std::uintptr_t tune_manager,
             const gc::timing::AbsoluteHostTime& stage_entry_time,
@@ -54,6 +58,10 @@ namespace gc::absolute_judgement
         [[nodiscard]] const JudgementHistory& history() const noexcept;
         [[nodiscard]] std::optional<std::int64_t>
         committed_boundary_index() const noexcept;
+        void OfferAsioGameplayObservation(
+            const gc::audio::GameplayAudioCursorObservation&) noexcept;
+        [[nodiscard]] gc::timing::CheckedRational ResolveAsioQpcOrFatal(
+            std::int64_t query_qpc) const noexcept;
 
         void PrepareOuterCall(const AbsoluteJudgementOuterProbe&);
         std::optional<ScheduledJudgementScope> NextScope() noexcept;
@@ -177,5 +185,8 @@ namespace gc::absolute_judgement
         std::optional<std::uint64_t> last_provider_position_;
         std::int64_t outer_now_qpc_{};
         std::int64_t last_qpc_{};
+        gc::audio::AudioBackend audio_backend_{
+            gc::audio::AudioBackend::wasapi_exclusive};
+        bool absolute_judgement_enabled_{};
     };
 } // namespace gc::absolute_judgement

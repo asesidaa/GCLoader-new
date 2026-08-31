@@ -240,9 +240,29 @@ GameplaySongClock::Observe(
         return std::unexpected(desired.error());
     }
 
+    auto decision = AdvanceToDesiredTick(current_tick, *desired);
+    if (!decision) {
+        return std::unexpected(decision.error());
+    }
+
+    if (observation.kind == SongClockObservationKind::ExactSourceFrame) {
+        has_exact_epoch_ = true;
+        exact_buffer_instance_id_ = observation.buffer_instance_id;
+        exact_playback_generation_ = observation.playback_generation;
+        last_exact_source_frame_ = observation.position;
+    }
+
+    decision->new_playback_epoch = new_playback_epoch;
+    return *decision;
+}
+
+std::expected<GameplaySongClockDecision, GameplaySongClockError>
+GameplaySongClock::AdvanceToDesiredTick(
+    std::uint32_t current_tick,
+    std::int64_t desired_tick) const noexcept {
     std::int64_t delta{};
     if (!CheckedAdd(
-            desired.value(),
+            desired_tick,
             -static_cast<std::int64_t>(current_tick),
             delta)) {
         return std::unexpected(GameplaySongClockError::ArithmeticOverflow);
@@ -269,19 +289,12 @@ GameplaySongClock::Observe(
             GameplaySongClockError::DestinationOverflow);
     }
 
-    if (observation.kind == SongClockObservationKind::ExactSourceFrame) {
-        has_exact_epoch_ = true;
-        exact_buffer_instance_id_ = observation.buffer_instance_id;
-        exact_playback_generation_ = observation.playback_generation;
-        last_exact_source_frame_ = observation.position;
-    }
-
     return GameplaySongClockDecision{
-        .desired_tick = desired.value(),
+        .desired_tick = desired_tick,
         .delta_ticks = delta,
         .step = step,
         .remaining_backlog = remaining_backlog,
-        .new_playback_epoch = new_playback_epoch,
+        .new_playback_epoch = false,
     };
 }
 

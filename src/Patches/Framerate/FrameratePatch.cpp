@@ -1,6 +1,8 @@
 #include "Patches/Framerate/FrameratePatch.h"
 
+#include "Audio/AudioContractFatal.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
 #include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateDiagnostics.h"
@@ -32,13 +34,26 @@ namespace gc::framerate
 {
     namespace detail
     {
+        [[nodiscard]] bool UsesSharedGameplaySongClock(
+            const GameplayAudioClockPlan plan) noexcept
+        {
+            return plan == GameplayAudioClockPlan::WasapiSharedSongClock ||
+                plan == GameplayAudioClockPlan::AsioQpcSongClock;
+        }
+
         GameplaySongClockInputSelection SelectGameplaySongClockInput(
             int group_cursor_ms,
             const std::optional<audio::GameplayAudioCursorObservation>&
             cursor_observation) noexcept
         {
-            if (cursor_observation.has_value() &&
-                cursor_observation->state ==
+            const auto* presented = cursor_observation.has_value()
+                                        ? std::get_if<
+                                              audio::
+                                              PresentedOutputCursorObservation>(
+                                              &cursor_observation->payload)
+                                        : nullptr;
+            if (presented != nullptr &&
+                presented->state ==
                 audio::GameplayAudioCursorState::Inactive)
             {
                 return {
@@ -48,8 +63,8 @@ namespace gc::framerate
 
             if (group_cursor_ms >= 0)
             {
-                if (cursor_observation.has_value() &&
-                    cursor_observation->state ==
+                if (presented != nullptr &&
+                    presented->state ==
                     audio::GameplayAudioCursorState::Exact)
                 {
                     return {
@@ -58,15 +73,15 @@ namespace gc::framerate
                             .kind =
                             SongClockObservationKind::ExactSourceFrame,
                             .position =
-                            cursor_observation->source_frame_unwrapped,
+                            presented->source_frame_unwrapped,
                             .source_sample_rate =
-                            cursor_observation->source_sample_rate,
+                            presented->source_sample_rate,
                             .buffer_instance_id =
-                            cursor_observation->buffer_instance_id,
+                            presented->buffer_instance_id,
                             .playback_generation =
-                            cursor_observation->playback_generation,
+                            presented->playback_generation,
                         },
-                        .output_frame = cursor_observation->output_frame,
+                        .output_frame = presented->output_frame,
                     };
                 }
                 return {
@@ -126,8 +141,7 @@ namespace gc::framerate
             std::int32_t phase,
             std::uint32_t authored_period) noexcept
         {
-            if (audio_clock_plan ==
-                GameplayAudioClockPlan::WasapiSharedSongClock)
+            if (UsesSharedGameplaySongClock(audio_clock_plan))
             {
                 return CrossesAuthored60Cadence(
                     profile,
@@ -147,8 +161,7 @@ namespace gc::framerate
             std::uint32_t current_tick,
             std::uint32_t step) noexcept
         {
-            if (audio_clock_plan ==
-                GameplayAudioClockPlan::WasapiSharedSongClock)
+            if (UsesSharedGameplaySongClock(audio_clock_plan))
             {
                 return CountCrossedAuthored60Ticks(
                     profile, current_tick, step);
@@ -1238,8 +1251,8 @@ namespace gc::framerate
             std::uint32_t frame{};
             std::uint32_t step{1};
             const bool readable =
-                g_runtime->audio_clock_plan ==
-                GameplayAudioClockPlan::WasapiSharedSongClock
+                detail::UsesSharedGameplaySongClock(
+                    g_runtime->audio_clock_plan)
                     ? ReadTuneFrameAndStep(
                         context, -0x32C, frame, step)
                     : ReadTuneFrame(context, -0x32C, frame);
@@ -1639,8 +1652,8 @@ namespace gc::framerate
         {
             context.eip += 5;
 
-            if (g_runtime->audio_clock_plan !=
-                GameplayAudioClockPlan::WasapiSharedSongClock ||
+            if (!detail::UsesSharedGameplaySongClock(
+                    g_runtime->audio_clock_plan) ||
                 !g_runtime->gameplay_song_clock.has_value())
             {
                 FatalRuntimeConversion("shared song-clock runtime ownership");
@@ -1675,6 +1688,61 @@ namespace gc::framerate
                         sound_manager, kGameplaySoundGroup);
                 }
                 cursor_observation = cursor_query.Consume();
+            }
+
+            if (g_runtime->audio_clock_plan ==
+                GameplayAudioClockPlan::AsioQpcSongClock)
+            {
+                if (group_cursor_ms < 0 || !cursor_observation.has_value())
+                {
+                    gc::audio::FailAudioContract(
+                        gc::audio::AudioContractFatalReason::
+                        LogicalStageClockUnavailable,
+                        static_cast<std::uint64_t>(
+                            static_cast<std::uint32_t>(group_cursor_ms)),
+                        cursor_observation.has_value() ? 1u : 0u,
+                        current_tick);
+                }
+                const auto judgement_seconds =
+                    gc::absolute_judgement::
+                    ResolveAsioGameplayTimeForTune(*cursor_observation);
+                const auto scaled = judgement_seconds.Multiply(
+                    g_runtime->profile.target_fps(), 1);
+                const auto desired_tick = scaled
+                                              ? scaled->Floor()
+                                              : std::expected<
+                                                    std::int64_t,
+                                                    gc::timing::RationalError>(
+                                                    std::unexpected(
+                                                        gc::timing::
+                                                        RationalError::Overflow));
+                if (!scaled || !desired_tick)
+                {
+                    gc::audio::FailAudioContract(
+                        gc::audio::AudioContractFatalReason::
+                        LogicalStageClockArithmeticFailure,
+                        scaled.has_value() ? 0u : 1u,
+                        desired_tick.has_value() ? 0u : 1u,
+                        g_runtime->profile.target_fps());
+                }
+                const auto decision =
+                    g_runtime->gameplay_song_clock->AdvanceToDesiredTick(
+                        current_tick, *desired_tick);
+                if (!decision)
+                {
+                    gc::audio::FailAudioContract(
+                        gc::audio::AudioContractFatalReason::
+                        LogicalStageClockArithmeticFailure,
+                        static_cast<std::uint64_t>(decision.error()),
+                        static_cast<std::uint64_t>(*desired_tick),
+                        current_tick);
+                }
+                if (!WriteU32Safe(
+                    tune + kTuneStepOffset, decision->step))
+                {
+                    FatalRuntimeConversion("ASIO QPC song-clock step write");
+                }
+                return;
             }
 
             const auto get_config = reinterpret_cast<GetConfig>(
@@ -1736,9 +1804,8 @@ namespace gc::framerate
         {
             std::uint32_t frame{};
             std::uint32_t step{1};
-            const bool shared_clock =
-                g_runtime->audio_clock_plan ==
-                GameplayAudioClockPlan::WasapiSharedSongClock;
+            const bool shared_clock = detail::UsesSharedGameplaySongClock(
+                g_runtime->audio_clock_plan);
             const bool readable = shared_clock
                                       ? ReadTuneFrameAndStep(
                                           context, -0x2B4, frame, step)
@@ -2283,7 +2350,7 @@ namespace gc::framerate
 
     bool FrameratePatchInit(
         FramerateSettings settings,
-        bool authoritative_audio_clock_available)
+        const audio::AudioBackend audio_backend)
     {
         static std::atomic_bool initialized{false};
         bool expected = false;
@@ -2323,14 +2390,15 @@ namespace gc::framerate
         }
 
         const auto audio_clock_plan =
-            !authoritative_audio_clock_available
-                ? GameplayAudioClockPlan::OriginalWatchdog
-                : profile_result->gameplay_validated()
-                ? GameplayAudioClockPlan::WasapiSharedSongClock
-                : GameplayAudioClockPlan::WasapiLegacyResync;
+            audio_backend == audio::AudioBackend::asio
+                ? GameplayAudioClockPlan::AsioQpcSongClock
+                : audio_backend == audio::AudioBackend::wasapi_exclusive
+                ? profile_result->gameplay_validated()
+                      ? GameplayAudioClockPlan::WasapiSharedSongClock
+                      : GameplayAudioClockPlan::WasapiLegacyResync
+                : GameplayAudioClockPlan::OriginalWatchdog;
         std::optional<GameplaySongClock> gameplay_song_clock;
-        if (audio_clock_plan ==
-            GameplayAudioClockPlan::WasapiSharedSongClock)
+        if (detail::UsesSharedGameplaySongClock(audio_clock_plan))
         {
             auto clock_result = GameplaySongClock::Create(target, 1);
             if (!clock_result)

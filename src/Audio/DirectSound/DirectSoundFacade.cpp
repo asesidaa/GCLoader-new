@@ -1,4 +1,5 @@
 #include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/AudioContractFatal.h"
 #include "Audio/AudioBackendController.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
@@ -99,7 +100,7 @@ namespace gc::audio
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::QueryInterface(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::QueryInterface(
         REFIID interface_id,
         void** result) noexcept
     {
@@ -119,12 +120,12 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::QueryInterface(
         return S_OK;
     }
 
-ULONG STDMETHODCALLTYPE PrimarySoundBuffer::AddRef() noexcept
+    ULONG STDMETHODCALLTYPE PrimarySoundBuffer::AddRef() noexcept
     {
         return references_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
-ULONG STDMETHODCALLTYPE PrimarySoundBuffer::Release() noexcept
+    ULONG STDMETHODCALLTYPE PrimarySoundBuffer::Release() noexcept
     {
         const auto remaining =
             references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
@@ -135,7 +136,7 @@ ULONG STDMETHODCALLTYPE PrimarySoundBuffer::Release() noexcept
         return remaining;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCaps(LPDSBCAPS caps) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCaps(LPDSBCAPS caps) noexcept
     {
         if (caps == nullptr || caps->dwSize != sizeof(DSBCAPS))
         {
@@ -151,7 +152,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCaps(LPDSBCAPS caps) noexcept
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCurrentPosition(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCurrentPosition(
         LPDWORD play_cursor,
         LPDWORD write_cursor) noexcept
     {
@@ -170,7 +171,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetCurrentPosition(
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFormat(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFormat(
         LPWAVEFORMATEX destination,
         DWORD allocated,
         LPDWORD written) noexcept
@@ -194,22 +195,22 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFormat(
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetVolume(LPLONG) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetVolume(LPLONG) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetPan(LPLONG) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetPan(LPLONG) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFrequency(LPDWORD) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetFrequency(LPDWORD) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetStatus(LPDWORD status) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetStatus(LPDWORD status) noexcept
     {
         if (status == nullptr)
         {
@@ -219,14 +220,14 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetStatus(LPDWORD status) noexcept
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Initialize(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Initialize(
         LPDIRECTSOUND,
         LPCDSBUFFERDESC) noexcept
     {
         return DSERR_ALREADYINITIALIZED;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Lock(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Lock(
         DWORD,
         DWORD,
         LPVOID*,
@@ -238,17 +239,17 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Lock(
         return DSERR_INVALIDCALL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Play(DWORD, DWORD, DWORD) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Play(DWORD, DWORD, DWORD) noexcept
     {
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetCurrentPosition(DWORD) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetCurrentPosition(DWORD) noexcept
     {
         return DSERR_INVALIDCALL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFormat(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFormat(
         LPCWAVEFORMATEX format) noexcept
     {
         if (format == nullptr)
@@ -258,27 +259,27 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFormat(
         return IsExactGamePrimaryFormat(*format) ? DS_OK : DSERR_BADFORMAT;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetVolume(LONG) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetVolume(LONG) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetPan(LONG) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetPan(LONG) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFrequency(DWORD) noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFrequency(DWORD) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Stop() noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Stop() noexcept
     {
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Unlock(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Unlock(
         LPVOID,
         DWORD,
         LPVOID,
@@ -287,12 +288,12 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Unlock(
         return DSERR_INVALIDCALL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Restore() noexcept
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::Restore() noexcept
     {
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFX(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFX(
         DWORD,
         LPDSEFFECTDESC,
         LPDWORD) noexcept
@@ -300,7 +301,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::SetFX(
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::AcquireResources(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::AcquireResources(
         DWORD,
         DWORD,
         LPDWORD) noexcept
@@ -308,7 +309,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::AcquireResources(
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetObjectInPath(
+    HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetObjectInPath(
         REFGUID,
         DWORD,
         REFGUID,
@@ -323,7 +324,7 @@ HRESULT STDMETHODCALLTYPE PrimarySoundBuffer::GetObjectInPath(
     {
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::QueryInterface(
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::QueryInterface(
         REFIID interface_id,
         void** result) noexcept
     {
@@ -343,12 +344,12 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::QueryInterface(
         return S_OK;
     }
 
-ULONG STDMETHODCALLTYPE DirectSoundDevice::AddRef() noexcept
+    ULONG STDMETHODCALLTYPE DirectSoundDevice::AddRef() noexcept
     {
         return references_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
-ULONG STDMETHODCALLTYPE DirectSoundDevice::Release() noexcept
+    ULONG STDMETHODCALLTYPE DirectSoundDevice::Release() noexcept
     {
         const auto remaining =
             references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
@@ -359,7 +360,7 @@ ULONG STDMETHODCALLTYPE DirectSoundDevice::Release() noexcept
         return remaining;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::CreateSoundBuffer(
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::CreateSoundBuffer(
         LPCDSBUFFERDESC descriptor,
         LPDIRECTSOUNDBUFFER* result,
         LPUNKNOWN outer) noexcept
@@ -414,19 +415,19 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::CreateSoundBuffer(
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetCaps(LPDSCAPS) noexcept
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetCaps(LPDSCAPS) noexcept
     {
         return DSERR_UNSUPPORTED;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::DuplicateSoundBuffer(
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::DuplicateSoundBuffer(
         LPDIRECTSOUNDBUFFER,
         LPDIRECTSOUNDBUFFER*) noexcept
     {
         return DSERR_UNSUPPORTED;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetCooperativeLevel(
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetCooperativeLevel(
         HWND window,
         DWORD level) noexcept
     {
@@ -450,33 +451,33 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetCooperativeLevel(
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::Compact() noexcept
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::Compact() noexcept
     {
         return DSERR_UNSUPPORTED;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetSpeakerConfig(LPDWORD) noexcept
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::GetSpeakerConfig(LPDWORD) noexcept
     {
         return DSERR_UNSUPPORTED;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetSpeakerConfig(DWORD) noexcept
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::SetSpeakerConfig(DWORD) noexcept
     {
         return DSERR_UNSUPPORTED;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::Initialize(LPCGUID) noexcept
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::Initialize(LPCGUID) noexcept
     {
         return DSERR_ALREADYINITIALIZED;
     }
 
-HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexcept
+    HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexcept
     {
         return DSERR_UNSUPPORTED;
     }
 
     SecondarySoundBuffer::SecondarySoundBuffer(
-        IAudioEngineServices& engine,
+        IAudioEngineController& engine,
         DWORD flags,
         DWORD buffer_bytes,
         const NormalizedSourceFormat& format,
@@ -484,6 +485,7 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexce
         std::shared_ptr<AudioCursorTimeline> timeline,
         std::uint64_t buffer_instance_id) noexcept
         : engine_(engine),
+          cursor_model_(engine.cursor_model()),
           flags_(flags),
           buffer_bytes_(buffer_bytes),
           format_(format),
@@ -491,6 +493,20 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexce
           timeline_(std::move(timeline)),
           buffer_instance_id_(buffer_instance_id)
     {
+        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        {
+            LARGE_INTEGER frequency{};
+            if (!QueryPerformanceFrequency(&frequency) ||
+                frequency.QuadPart <= 0)
+            {
+                FailAudioContract(
+                    AudioContractFatalReason::
+                    QueryPerformanceFrequencyUnavailable,
+                    static_cast<std::uint64_t>(frequency.QuadPart));
+            }
+            logical_qpc_frequency_ = frequency.QuadPart;
+            logical_control_.control_qpc = CaptureLogicalQpcOrFatal();
+        }
     }
 
     SecondarySoundBuffer::~SecondarySoundBuffer()
@@ -513,7 +529,7 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexce
     }
 
     HRESULT SecondarySoundBuffer::Create(
-        IAudioEngineServices& engine,
+        IAudioEngineController& engine,
         const DSBUFFERDESC& descriptor,
         SecondarySoundBuffer** result) noexcept
     {
@@ -606,7 +622,7 @@ HRESULT STDMETHODCALLTYPE DirectSoundDevice::VerifyCertification(LPDWORD) noexce
         }
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::QueryInterface(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::QueryInterface(
         REFIID interface_id,
         void** result) noexcept
     {
@@ -626,12 +642,12 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::QueryInterface(
         return S_OK;
     }
 
-ULONG STDMETHODCALLTYPE SecondarySoundBuffer::AddRef() noexcept
+    ULONG STDMETHODCALLTYPE SecondarySoundBuffer::AddRef() noexcept
     {
         return references_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
-ULONG STDMETHODCALLTYPE SecondarySoundBuffer::Release() noexcept
+    ULONG STDMETHODCALLTYPE SecondarySoundBuffer::Release() noexcept
     {
         const auto remaining =
             references_.fetch_sub(1, std::memory_order_acq_rel) - 1;
@@ -642,7 +658,7 @@ ULONG STDMETHODCALLTYPE SecondarySoundBuffer::Release() noexcept
         return remaining;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
         LPDSBCAPS caps) noexcept
     {
         if (caps == nullptr || caps->dwSize != sizeof(DSBCAPS))
@@ -659,8 +675,183 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
         return DS_OK;
     }
 
+    std::int64_t SecondarySoundBuffer::CaptureLogicalQpcOrFatal() noexcept
+    {
+        LARGE_INTEGER counter{};
+        if (!QueryPerformanceCounter(&counter) || counter.QuadPart < 0)
+        {
+            FailAudioContract(
+                AudioContractFatalReason::QueryPerformanceCounterUnavailable,
+                static_cast<std::uint64_t>(counter.QuadPart));
+        }
+        return counter.QuadPart;
+    }
+
+    SecondarySoundBuffer::LogicalQpcProjection
+    SecondarySoundBuffer::ProjectLogicalQpcState(
+        const LogicalQpcControlState& state,
+        std::int64_t query_qpc) const noexcept
+    {
+        const auto source_length = buffer_bytes_ / format_.block_align;
+        if (logical_qpc_frequency_ <= 0 || format_.sample_rate == 0 ||
+            source_length == 0 || state.control_qpc < 0 || query_qpc < 0 ||
+            query_qpc < state.control_qpc ||
+            state.source_frame.Compare(
+                gc::timing::CheckedRational::Whole(0)) < 0)
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorStateInvalid,
+                static_cast<std::uint64_t>(state.control_qpc),
+                static_cast<std::uint64_t>(query_qpc),
+                source_length,
+                format_.sample_rate);
+        }
+
+        auto projection = LogicalQpcProjection{
+            .source_frame = state.source_frame,
+            .playing = state.playing,
+            .looping = state.looping,
+            .at_end = state.source_frame.Compare(
+                gc::timing::CheckedRational::Whole(
+                    static_cast<std::int64_t>(source_length))) >= 0,
+        };
+        if (!state.playing)
+        {
+            return projection;
+        }
+
+        const auto elapsed = gc::timing::CheckedRational::Create(
+            query_qpc - state.control_qpc,
+            static_cast<std::uint64_t>(logical_qpc_frequency_));
+        if (!elapsed.has_value())
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                static_cast<std::uint64_t>(elapsed.error()));
+        }
+        const auto elapsed_frames = elapsed->Multiply(
+            static_cast<std::int64_t>(format_.sample_rate), 1);
+        if (!elapsed_frames.has_value())
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                static_cast<std::uint64_t>(elapsed_frames.error()));
+        }
+        const auto advanced = state.source_frame.Add(*elapsed_frames);
+        if (!advanced.has_value())
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                static_cast<std::uint64_t>(advanced.error()));
+        }
+
+        const auto source_end = gc::timing::CheckedRational::Whole(
+            static_cast<std::int64_t>(source_length));
+        if (!state.looping)
+        {
+            if (advanced->Compare(source_end) >= 0)
+            {
+                projection.source_frame = source_end;
+                projection.playing = false;
+                projection.at_end = true;
+            }
+            else
+            {
+                projection.source_frame = *advanced;
+                projection.at_end = false;
+            }
+            return projection;
+        }
+
+        const auto cycle_position = advanced->Multiply(1, source_length);
+        if (!cycle_position.has_value())
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                static_cast<std::uint64_t>(cycle_position.error()));
+        }
+        const auto completed_cycles = cycle_position->Floor();
+        if (!completed_cycles.has_value() || *completed_cycles < 0)
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                completed_cycles.has_value()
+                    ? static_cast<std::uint64_t>(*completed_cycles)
+                    : static_cast<std::uint64_t>(completed_cycles.error()));
+        }
+        const auto completed_frames =
+            gc::timing::CheckedRational::Whole(*completed_cycles)
+            .Multiply(static_cast<std::int64_t>(source_length), 1);
+        if (!completed_frames.has_value())
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                static_cast<std::uint64_t>(completed_frames.error()));
+        }
+        const auto wrapped = advanced->Subtract(*completed_frames);
+        if (!wrapped.has_value() || wrapped->Compare(source_end) >= 0)
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                wrapped.has_value()
+                    ? static_cast<std::uint64_t>(wrapped->numerator())
+                    : static_cast<std::uint64_t>(wrapped.error()),
+                wrapped.has_value() ? wrapped->denominator() : 0);
+        }
+
+        projection.source_frame = *wrapped;
+        projection.playing = true;
+        projection.looping = true;
+        projection.at_end = false;
+        return projection;
+    }
+
+    SecondarySoundBuffer::LogicalQpcProjection
+    SecondarySoundBuffer::ResolveLogicalQpcQueryLocked() const noexcept
+    {
+        const auto state = logical_control_;
+        const auto query_qpc = CaptureLogicalQpcOrFatal();
+        return ProjectLogicalQpcState(state, query_qpc);
+    }
+
+    std::uint64_t SecondarySoundBuffer::FloorLogicalSourceFrameOrFatal(
+        const gc::timing::CheckedRational& source_frame) noexcept
+    {
+        const auto integral = source_frame.Floor();
+        if (!integral.has_value() || *integral < 0)
+        {
+            FailAudioContract(
+                AudioContractFatalReason::LogicalCursorArithmeticFailure,
+                integral.has_value()
+                    ? static_cast<std::uint64_t>(*integral)
+                    : static_cast<std::uint64_t>(integral.error()));
+        }
+        return static_cast<std::uint64_t>(*integral);
+    }
+
+    void SecondarySoundBuffer::PublishLogicalQpcObservationLocked(
+        bool playing) const noexcept
+    {
+        PublishGameplayAudioCursorObservation({
+            .payload = LogicalQpcCursorObservation{
+                .playing = playing,
+                .current_play = logical_play_anchor_,
+            },
+        });
+    }
+
     std::uint64_t
-    SecondarySoundBuffer::ResolveCurrentSourceFrameLocked() noexcept
+    SecondarySoundBuffer::ResolveLogicalSourceFrameLocked() const noexcept
+    {
+        const auto projection = ResolveLogicalQpcQueryLocked();
+        PublishLogicalQpcObservationLocked(projection.playing);
+        const auto source_length = buffer_bytes_ / format_.block_align;
+        return FloorLogicalSourceFrameOrFatal(projection.source_frame) %
+            source_length;
+    }
+
+    std::uint64_t
+    SecondarySoundBuffer::ResolvePresentedSourceFrameLocked() noexcept
     {
         const auto last = last_reported_source_frame_;
         const auto has_exact_history = timeline_->HasExactPlaybackHistory();
@@ -670,17 +861,19 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
             std::uint64_t source_frame_unwrapped) noexcept
         {
             PublishGameplayAudioCursorObservation({
-                .state = state,
-                .source_frame_unwrapped = source_frame_unwrapped,
-                .source_sample_rate = format_.sample_rate,
-                .buffer_instance_id = buffer_instance_id_,
-                .timeline_generation = has_exact_history
-                                           ? timeline_->exact_timeline_generation()
-                                           : 0,
-                .playback_generation = playback_generation_,
-                .origin = playback_origin_,
-                .output_frame = output_frame,
-                .exact_history = has_exact_history ? timeline_ : nullptr,
+                .payload = PresentedOutputCursorObservation{
+                    .state = state,
+                    .source_frame_unwrapped = source_frame_unwrapped,
+                    .source_sample_rate = format_.sample_rate,
+                    .buffer_instance_id = buffer_instance_id_,
+                    .timeline_generation = has_exact_history
+                                               ? timeline_->exact_timeline_generation()
+                                               : 0,
+                    .playback_generation = playback_generation_,
+                    .origin = playback_origin_,
+                    .output_frame = output_frame,
+                    .exact_history = has_exact_history ? timeline_ : nullptr,
+                },
             });
         };
         const auto mixing = voice_->playing();
@@ -752,7 +945,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCaps(
         return resolution.source_frame;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
         LPDWORD play_cursor,
         LPDWORD write_cursor) noexcept
     {
@@ -761,7 +954,10 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
             return DSERR_INVALIDPARAM;
         }
         std::lock_guard control_lock(control_mutex_);
-        const auto source_frame = ResolveCurrentSourceFrameLocked();
+        const auto source_frame =
+            cursor_model_ == AudioCursorModel::LogicalQpc
+                ? ResolveLogicalSourceFrameLocked()
+                : ResolvePresentedSourceFrameLocked();
         if (play_cursor != nullptr)
         {
             *play_cursor = static_cast<DWORD>(
@@ -769,19 +965,22 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetCurrentPosition(
         }
         if (write_cursor != nullptr)
         {
-            const auto write_frame = ProjectWriteCursorFrame(
-                source_frame,
-                engine_.endpoint_buffer_frames(),
-                engine_.output_sample_rate(),
-                format_.sample_rate,
-                buffer_bytes_ / format_.block_align);
+            const auto write_frame =
+                cursor_model_ == AudioCursorModel::LogicalQpc
+                    ? source_frame
+                    : ProjectWriteCursorFrame(
+                        source_frame,
+                        engine_.endpoint_buffer_frames(),
+                        engine_.output_sample_rate(),
+                        format_.sample_rate,
+                        buffer_bytes_ / format_.block_align);
             *write_cursor = static_cast<DWORD>(
                 SourceFrameToByte(write_frame, format_.block_align));
         }
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFormat(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFormat(
         LPWAVEFORMATEX destination,
         DWORD allocated,
         LPDWORD written) noexcept
@@ -805,7 +1004,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFormat(
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetVolume(LPLONG volume) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetVolume(LPLONG volume) noexcept
     {
         if (volume == nullptr)
         {
@@ -815,17 +1014,17 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetVolume(LPLONG volume) noexcep
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetPan(LPLONG) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetPan(LPLONG) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFrequency(LPDWORD) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetFrequency(LPDWORD) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) noexcept
     {
         if (status == nullptr)
         {
@@ -833,6 +1032,21 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) noexce
         }
         std::lock_guard control_lock(control_mutex_);
         *status = 0;
+        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        {
+            const auto projection = ResolveLogicalQpcQueryLocked();
+            PublishLogicalQpcObservationLocked(projection.playing);
+            if (projection.playing)
+            {
+                *status |= DSBSTATUS_PLAYING;
+                if (projection.looping)
+                {
+                    *status |= DSBSTATUS_LOOPING;
+                }
+            }
+            return DS_OK;
+        }
+
         auto audible = voice_->playing();
         if (!audible)
         {
@@ -861,14 +1075,14 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetStatus(LPDWORD status) noexce
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Initialize(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Initialize(
         LPDIRECTSOUND,
         LPCDSBUFFERDESC) noexcept
     {
         return DSERR_ALREADYINITIALIZED;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Lock(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Lock(
         DWORD offset,
         DWORD byte_count,
         LPVOID* first,
@@ -928,7 +1142,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Lock(
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
         DWORD reserved,
         DWORD priority,
         DWORD flags) noexcept
@@ -938,9 +1152,61 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
         {
             return DSERR_INVALIDPARAM;
         }
+        const auto logical_control_qpc =
+            cursor_model_ == AudioCursorModel::LogicalQpc
+                ? CaptureLogicalQpcOrFatal()
+                : 0;
         std::lock_guard control_lock(control_mutex_);
         const auto generation = NextPlaybackGeneration(
             playback_generation_, timeline_->HasExactPlaybackHistory());
+
+        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        {
+            const auto projection =
+                ProjectLogicalQpcState(logical_control_, logical_control_qpc);
+            const auto anchor = projection.at_end
+                                    ? gc::timing::CheckedRational::Whole(0)
+                                    : projection.source_frame;
+            const auto looping = (flags & DSBPLAY_LOOPING) != 0;
+            const auto play_order = ClaimNextLogicalPlayOrder();
+
+            logical_control_ = {
+                .control_qpc = logical_control_qpc,
+                .source_frame = anchor,
+                .playing = true,
+                .looping = looping,
+            };
+            logical_play_anchor_ = LogicalQpcPlayAnchor{
+                .play_order = play_order,
+                .play_qpc = logical_control_qpc,
+                .source_frame = anchor,
+                .source_sample_rate = format_.sample_rate,
+                .qpc_frequency = logical_qpc_frequency_,
+            };
+
+            const auto result = voice_->Play(looping, generation);
+            if (FAILED(result))
+            {
+                FailAudioContract(
+                    AudioContractFatalReason::LogicalCursorControlRejected,
+                    static_cast<std::uint32_t>(result),
+                    play_order,
+                    generation);
+            }
+
+            playback_generation_ = generation;
+            playback_origin_ = ExactPlaybackOrigin::Play;
+            last_reported_source_frame_ =
+                FloorLogicalSourceFrameOrFatal(anchor) %
+                (buffer_bytes_ / format_.block_align);
+            if (timeline_->HasExactPlaybackHistory() &&
+                !timeline_->ExpectExactPlaybackGeneration(generation))
+            {
+                ExactInvariantFatal();
+            }
+            return DS_OK;
+        }
+
         const auto anchor = voice_->at_end()
                                 ? std::uint64_t{0}
                                 : last_reported_source_frame_;
@@ -961,7 +1227,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Play(
         return result;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
         DWORD position) noexcept
     {
         if (format_.block_align == 0 || position >= buffer_bytes_ ||
@@ -969,10 +1235,47 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
         {
             return DSERR_INVALIDPARAM;
         }
+        const auto logical_control_qpc =
+            cursor_model_ == AudioCursorModel::LogicalQpc
+                ? CaptureLogicalQpcOrFatal()
+                : 0;
         std::lock_guard control_lock(control_mutex_);
         const auto source_frame = position / format_.block_align;
         const auto generation = NextPlaybackGeneration(
             playback_generation_, timeline_->HasExactPlaybackHistory());
+
+        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        {
+            const auto projection =
+                ProjectLogicalQpcState(logical_control_, logical_control_qpc);
+            logical_control_ = {
+                .control_qpc = logical_control_qpc,
+                .source_frame = gc::timing::CheckedRational::Whole(
+                    source_frame),
+                .playing = projection.playing,
+                .looping = projection.looping,
+            };
+            const auto result = voice_->Seek(source_frame, generation);
+            if (FAILED(result))
+            {
+                FailAudioContract(
+                    AudioContractFatalReason::LogicalCursorControlRejected,
+                    static_cast<std::uint32_t>(result),
+                    source_frame,
+                    generation);
+            }
+
+            playback_generation_ = generation;
+            playback_origin_ = ExactPlaybackOrigin::Seek;
+            last_reported_source_frame_ = source_frame;
+            if (timeline_->HasExactPlaybackHistory() &&
+                !timeline_->ExpectExactPlaybackGeneration(generation))
+            {
+                ExactInvariantFatal();
+            }
+            return DS_OK;
+        }
+
         const auto result = voice_->Seek(source_frame, generation);
         if (SUCCEEDED(result))
         {
@@ -988,13 +1291,13 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetCurrentPosition(
         return result;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFormat(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFormat(
         LPCWAVEFORMATEX) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetVolume(LONG volume) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetVolume(LONG volume) noexcept
     {
         if (volume < DSBVOLUME_MIN || volume > DSBVOLUME_MAX)
         {
@@ -1005,25 +1308,46 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetVolume(LONG volume) noexcept
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetPan(LONG) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetPan(LONG) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFrequency(DWORD) noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFrequency(DWORD) noexcept
     {
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Stop() noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Stop() noexcept
     {
+        const auto logical_control_qpc =
+            cursor_model_ == AudioCursorModel::LogicalQpc
+                ? CaptureLogicalQpcOrFatal()
+                : 0;
         std::lock_guard control_lock(control_mutex_);
-        ResolveCurrentSourceFrameLocked();
+        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        {
+            const auto projection =
+                ProjectLogicalQpcState(logical_control_, logical_control_qpc);
+            logical_control_ = {
+                .control_qpc = logical_control_qpc,
+                .source_frame = projection.source_frame,
+                .playing = false,
+                .looping = false,
+            };
+            last_reported_source_frame_ =
+                FloorLogicalSourceFrameOrFatal(projection.source_frame) %
+                (buffer_bytes_ / format_.block_align);
+            voice_->Stop();
+            return DS_OK;
+        }
+
+        ResolvePresentedSourceFrameLocked();
         voice_->Stop();
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Unlock(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Unlock(
         LPVOID first,
         DWORD first_bytes,
         LPVOID second,
@@ -1036,13 +1360,13 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Unlock(
             second_bytes);
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() noexcept
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() noexcept
     {
         snapshot_->ReclaimRetired();
         return DS_OK;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFX(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFX(
         DWORD,
         LPDSEFFECTDESC,
         LPDWORD) noexcept
@@ -1050,7 +1374,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::SetFX(
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::AcquireResources(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::AcquireResources(
         DWORD,
         DWORD,
         LPDWORD) noexcept
@@ -1058,7 +1382,7 @@ HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::AcquireResources(
         return DSERR_CONTROLUNAVAIL;
     }
 
-HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetObjectInPath(
+    HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::GetObjectInPath(
         REFGUID,
         DWORD,
         REFGUID,

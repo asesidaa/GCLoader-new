@@ -15,7 +15,8 @@ namespace gc::absolute_judgement
         const gc::timing::AbsoluteHostTime& stage_entry_time,
         const std::int32_t game_time_offset_ms,
         const std::int32_t hold_safe_frame,
-        const std::int32_t slide_hold_safe_frame) noexcept
+        const std::int32_t slide_hold_safe_frame,
+        const bool input_transport_required) noexcept
     {
         if (open_)
         {
@@ -23,6 +24,7 @@ namespace gc::absolute_judgement
         }
 
         Reset();
+        logical_play_order_cutoff_ = gc::audio::SnapshotLogicalPlayOrder();
         const auto generation = g_next_stage_generation.fetch_add(
             1, std::memory_order_relaxed);
         if (generation == 0 ||
@@ -40,6 +42,10 @@ namespace gc::absolute_judgement
         if (tune_manager == 0)
         {
             return std::unexpected(JudgementStageError::TuneManagerMissing);
+        }
+        if (!input_transport_required)
+        {
+            return {};
         }
         if (!gc::input::CaptureGameplayTransitionCutoff(
             stage_entry_time, &cutoff_) || cutoff_.transport_epoch == 0)
@@ -180,6 +186,26 @@ namespace gc::absolute_judgement
         }
     }
 
+    void JudgementStage::ActivateLogicalClock() noexcept
+    {
+        if (open_ && bound_ && logical_play_anchor_.has_value())
+        {
+            active_ = true;
+        }
+    }
+
+    void JudgementStage::OfferLogicalQpcObservation(
+        const gc::audio::LogicalQpcCursorObservation& observation) noexcept
+    {
+        if (!open_ || logical_play_anchor_.has_value() ||
+            !observation.playing || !observation.current_play.has_value() ||
+            observation.current_play->play_order <= logical_play_order_cutoff_)
+        {
+            return;
+        }
+        logical_play_anchor_ = observation.current_play;
+    }
+
     void JudgementStage::Reset() noexcept
     {
         native_ = {};
@@ -188,6 +214,8 @@ namespace gc::absolute_judgement
         generation_ = 0;
         tune_manager_ = 0;
         timeline_generation_ = 0;
+        logical_play_order_cutoff_ = 0;
+        logical_play_anchor_.reset();
         entry_game_time_offset_ms_ = 0;
         entry_hold_safe_frame_ = 0;
         entry_slide_hold_safe_frame_ = 0;
@@ -235,6 +263,27 @@ namespace gc::absolute_judgement
     std::uint64_t JudgementStage::timeline_generation() const noexcept
     {
         return timeline_generation_;
+    }
+
+    bool JudgementStage::logical_clock_bound() const noexcept
+    {
+        return logical_play_anchor_.has_value();
+    }
+
+    const gc::audio::LogicalQpcPlayAnchor&
+    JudgementStage::logical_play_anchor() const noexcept
+    {
+        return *logical_play_anchor_;
+    }
+
+    std::int32_t JudgementStage::entry_game_time_offset_ms() const noexcept
+    {
+        return entry_game_time_offset_ms_;
+    }
+
+    std::uint64_t JudgementStage::logical_play_order_cutoff() const noexcept
+    {
+        return logical_play_order_cutoff_;
     }
 
     const gc::input::GameplayTransitionStatus&

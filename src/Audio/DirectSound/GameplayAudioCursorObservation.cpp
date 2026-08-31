@@ -1,5 +1,7 @@
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
+#include "Audio/AudioContractFatal.h"
 
+#include <atomic>
 #include <limits>
 
 namespace gc::audio {
@@ -13,6 +15,7 @@ struct GameplayCursorQueryState {
 };
 
 thread_local GameplayCursorQueryState g_query_state;
+std::atomic_uint64_t g_logical_play_order{};
 
 std::uint64_t NextSerial() noexcept {
     if (g_query_state.next_serial ==
@@ -82,6 +85,21 @@ void PublishGameplayAudioCursorObservation(
 
     observation.query_serial = g_query_state.active_serial;
     g_query_state.publication = observation;
+}
+
+std::uint64_t SnapshotLogicalPlayOrder() noexcept {
+    return g_logical_play_order.load(std::memory_order_seq_cst);
+}
+
+std::uint64_t ClaimNextLogicalPlayOrder() noexcept {
+    const auto previous =
+        g_logical_play_order.fetch_add(1, std::memory_order_seq_cst);
+    if (previous == std::numeric_limits<std::uint64_t>::max()) {
+        FailAudioContract(
+            AudioContractFatalReason::LogicalPlayOrderExhausted,
+            previous);
+    }
+    return previous + 1;
 }
 
 } // namespace gc::audio

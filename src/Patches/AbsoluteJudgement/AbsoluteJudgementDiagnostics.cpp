@@ -1,13 +1,11 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 
-#include "Logging/SessionLog.h"
+#include "Audio/AudioContractFatal.h"
 
 #include <plog/Log.h>
 
 #include <algorithm>
 #include <array>
-// ReSharper disable once CppUnusedIncludeDirective
-#include <cstdlib>
 #include <format>
 #include <iterator>
 #include <limits>
@@ -1762,33 +1760,6 @@ namespace gc::absolute_judgement
                 std::memory_order_acquire);
         diagnostics.recognition_stopped_.store(true, std::memory_order_release);
 
-        const auto terminate_after_log = []() noexcept -> void
-        {
-            SetLastError(ERROR_SUCCESS);
-            const auto terminated = TerminateProcess(GetCurrentProcess(), 0xA7);
-            const auto last_error = GetLastError();
-            std::array<char, 512> emergency{};
-            const auto result = std::format_to_n(
-                emergency.data(),
-                emergency.size() - 1,
-                "AbsoluteJudgement: emergency-fatal predicate_id={}"
-                " predicate=TerminateProcessReturned"
-                " expression=TerminateProcess_returned_to_caller"
-                " return_value={} last_error={}",
-                static_cast<unsigned>(
-                    AbsoluteJudgementFatalPredicate::TerminateProcessReturned),
-                terminated,
-                last_error);
-            const auto size = (std::min)(
-                static_cast<std::size_t>(result.size), emergency.size() - 1);
-            emergency[size] = '\0';
-            PLOG_FATAL // NOLINT(bugprone-lambda-function-name)
-                << std::string_view(emergency.data(), size);
-            gc::session_log::FlushActiveProcessLog();
-            RaiseFailFastException(nullptr, nullptr, 0);
-            std::abort();
-        };
-
         if (!first)
         {
             std::array<char, 768> emergency{};
@@ -1809,9 +1780,12 @@ namespace gc::absolute_judgement
                 static_cast<std::size_t>(result.size), emergency.size() - 1);
             emergency[size] = '\0';
             PLOG_FATAL << std::string_view(emergency.data(), size);
-            gc::session_log::FlushActiveProcessLog();
-            terminate_after_log();
-            std::abort();
+            gc::audio::FailAudioContract(
+                gc::audio::AudioContractFatalReason::AbsoluteJudgementContractFailure,
+                static_cast<std::uint64_t>(record.predicate),
+                record.stage_generation,
+                static_cast<std::uint64_t>(record.category),
+                record.operand_count > 0 ? record.operands[0] : 0);
         }
 
         const auto counters = diagnostics.SnapshotCounters();
@@ -1913,26 +1887,11 @@ namespace gc::absolute_judgement
             PLOG_FATAL << "AbsoluteJudgement: fatal_record_truncated=1";
         }
 
-        gc::session_log::FlushActiveProcessLog();
-        std::array<wchar_t, 512> dialog{};
-        const auto dialog_result = std::format_to_n(
-            dialog.data(),
-            dialog.size() - 1,
-            L"GCLoader stopped absolute-time judgement because a proven "
-            L"contract failed.\n\nPredicate ID: {}\nStage generation: {}\n\n"
-            L"Keep loader-log.txt; it contains the exact predicate, operands, "
-            L"and runtime snapshot.",
-            static_cast<unsigned>(record.predicate),
-            record.stage_generation);
-        const auto dialog_size = (std::min)(
-            static_cast<std::size_t>(dialog_result.size), dialog.size() - 1);
-        dialog[dialog_size] = L'\0';
-        MessageBoxW(
-            nullptr,
-            dialog.data(),
-            L"GCLoader absolute-time judgement fatal error",
-            MB_OK | MB_ICONERROR | MB_SYSTEMMODAL | MB_SETFOREGROUND);
-        terminate_after_log();
-        std::abort();
+        gc::audio::FailAudioContract(
+            gc::audio::AudioContractFatalReason::AbsoluteJudgementContractFailure,
+            static_cast<std::uint64_t>(record.predicate),
+            record.stage_generation,
+            static_cast<std::uint64_t>(record.category),
+            record.operand_count > 0 ? record.operands[0] : 0);
     }
 } // namespace gc::absolute_judgement

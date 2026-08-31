@@ -88,6 +88,7 @@ enum class GameplayAudioClockPlan : std::uint8_t {
     OriginalWatchdog,
     WasapiLegacyResync,
     WasapiSharedSongClock,
+    AsioQpcSongClock,
 };
 
 struct FramerateHookContract {

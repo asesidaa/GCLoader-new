@@ -86,6 +86,13 @@ namespace gc::audio
         return DSERR_NODRIVER;
     }
 
+    AudioCursorModel AudioBackendController::cursor_model() const noexcept
+    {
+        return config_.requested_backend == AudioBackend::asio
+                   ? AudioCursorModel::LogicalQpc
+                   : AudioCursorModel::PresentedOutput;
+    }
+
     std::unique_ptr<MixerVoice> AudioBackendController::CreateVoice(
         const NormalizedSourceFormat& format,
         std::shared_ptr<AudioSnapshot> snapshot,

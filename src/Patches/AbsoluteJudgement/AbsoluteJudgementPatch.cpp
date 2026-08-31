@@ -333,9 +333,14 @@ namespace gc::absolute_judgement
         }
 
         [[nodiscard]] std::optional<InstallFailure> InstallHooks(
-            const std::uintptr_t executable_base)
+            const std::uintptr_t executable_base,
+            const bool install_judgement_hooks)
         {
-            for (const auto& contract : kSiteContracts)
+            const std::span<const NativeSiteContract> contracts =
+                install_judgement_hooks
+                    ? std::span<const NativeSiteContract>{kSiteContracts}
+                    : std::span<const NativeSiteContract>{kSiteContracts}.first(3);
+            for (const auto& contract : contracts)
             {
                 std::uintptr_t address{};
                 if (!AddAddress(executable_base, contract.rva, &address) ||
@@ -391,6 +396,31 @@ namespace gc::absolute_judgement
                 };
             }
             pending.semantic_stage_exit = std::move(*created_semantic_stage_exit);
+
+            if (!install_judgement_hooks)
+            {
+                g_active_hooks = &pending;
+                if (!EnableHook(pending.semantic_stage_exit))
+                {
+                    return InstallFailure{
+                        InstallStage::Enable, NativeSite::SemanticStageExit
+                    };
+                }
+                if (!EnableHook(pending.gameplay_initialization))
+                {
+                    return InstallFailure{
+                        InstallStage::Enable,
+                        NativeSite::GameplayInitialization
+                    };
+                }
+                if (!EnableHook(pending.semantic_stage_entry))
+                {
+                    return InstallFailure{
+                        InstallStage::Enable, NativeSite::SemanticStageEntry
+                    };
+                }
+                return std::nullopt;
+            }
 
             auto created_loop_guard = safetyhook::MidHook::create(
                 reinterpret_cast<void*>(executable_base + kLoopGuardRva),
@@ -745,8 +775,10 @@ namespace gc::absolute_judgement
         const auto input_rate_hz = settings.input_rate_hz();
         const auto backend = settings.audio_backend();
         const bool audio_hook_committed = gc::audio::IsAudioHookCommitted();
+        const bool lifecycle_hooks_required =
+            enabled || backend == gc::audio::AudioBackend::asio;
         JudgementDiagnostics().SetStartupTargetFps(target_fps);
-        if (!enabled)
+        if (!lifecycle_hooks_required)
         {
             JudgementDiagnostics().LogStartup({
                 .enabled = false,
@@ -767,7 +799,8 @@ namespace gc::absolute_judgement
         }
 
         const auto expected_domain = settings.expected_clock_domain();
-        if (!expected_domain.has_value())
+        if (enabled && backend == gc::audio::AudioBackend::wasapi_exclusive &&
+            !expected_domain.has_value())
         {
             PublishStartupFatal(
                 AbsoluteJudgementFatalPredicate::
@@ -776,7 +809,7 @@ namespace gc::absolute_judgement
                     "stage=capability configured_backend={}",
                     static_cast<std::uint32_t>(backend)));
         }
-        if (input_rate_hz != 1000)
+        if (enabled && input_rate_hz != 1000)
         {
             PublishStartupFatal(
                 AbsoluteJudgementFatalPredicate::InputTransportRateNot1000,
@@ -798,23 +831,31 @@ namespace gc::absolute_judgement
                 AbsoluteJudgementFatalPredicate::GameImageAddressInvalid,
                 "stage=executable_base module_handle=0");
         }
-        InitializeAbsoluteJudgementRuntime(executable_base, *expected_domain);
-        if (const auto installation = InstallHooks(executable_base); installation)
+        InitializeAbsoluteJudgementRuntime(
+            executable_base, backend, enabled, expected_domain);
+        if (const auto installation = InstallHooks(executable_base, enabled);
+            installation)
         {
             PublishInstallFailure(*installation);
         }
-        const bool timing_grade_diagnostic_hook =
+        const bool timing_grade_diagnostic_hook = enabled &&
             InstallTimingGradeDiagnosticHook(executable_base);
 
         JudgementDiagnostics().LogStartup({
-            .enabled = true,
+            .enabled = enabled,
             .target_fps = target_fps,
             .input_rate_hz = input_rate_hz,
             .backend = gc::audio::AudioBackendName(backend),
             .audio_hook_committed = audio_hook_committed,
-            .installed_site_count = kSiteContracts.size(),
+            .installed_site_count = enabled ? kSiteContracts.size() : 3,
             .timing_grade_diagnostic_hook =
             timing_grade_diagnostic_hook,
         });
+        if (!enabled && target_fps != 60)
+        {
+            PLOG_WARNING
+                << "AbsoluteJudgement: stock judgement at non-60 target FPS "
+                   "has no FPS-independent judgement guarantee";
+        }
     }
 } // namespace gc::absolute_judgement

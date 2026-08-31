@@ -20,6 +20,7 @@ namespace gc::audio
     {
     public:
         virtual HRESULT StartForWindow(HWND game_window) noexcept = 0;
+        [[nodiscard]] virtual AudioCursorModel cursor_model() const noexcept = 0;
     };
 
     class IAudioBackendControllerFactory
@@ -89,6 +90,7 @@ namespace gc::audio
             IAudioBackendControllerReporter&) noexcept;
 
         HRESULT StartForWindow(HWND game_window) noexcept override;
+        [[nodiscard]] AudioCursorModel cursor_model() const noexcept override;
 
         std::unique_ptr<MixerVoice> CreateVoice(
             const NormalizedSourceFormat&,

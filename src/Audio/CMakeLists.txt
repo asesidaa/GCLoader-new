@@ -1,6 +1,7 @@
 add_subdirectory(Asio)
 
 add_library(gc_audio STATIC
+        AudioContractFatal.cpp
         AudioBackendController.cpp
         ExactJudgementTimeline.cpp
         Asio/AsioPresentationBridge.cpp

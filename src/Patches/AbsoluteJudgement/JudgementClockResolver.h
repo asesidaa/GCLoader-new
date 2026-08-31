@@ -87,6 +87,12 @@ namespace gc::absolute_judgement
         [[nodiscard]] JudgementClockResult Resolve(const gc::timing::AbsoluteHostTime& timestamp,
                                                    gc::audio::ExactClockResolveIntent intent) const noexcept;
 
+        [[nodiscard]] static gc::timing::CheckedRational
+        ResolveLogicalQpcOrFatal(
+            const gc::audio::LogicalQpcPlayAnchor& play_anchor,
+            std::int32_t stage_game_time_offset_ms,
+            std::int64_t query_qpc) noexcept;
+
     private:
         JudgementClockBinding binding_{};
     };
