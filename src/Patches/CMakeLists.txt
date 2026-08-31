@@ -22,7 +22,9 @@ add_library(gc_runtime_patches STATIC
         Framerate/FramerateProfile.cpp
         Framerate/FrameratePatchTransaction.cpp
         RendererDeviceLoss/RendererDeviceLossPatch.cpp
+        RendererDeviceLoss/RendererResourceLifecycle.cpp
         Countdown/CountdownTimerFreeze.cpp
+        WindowedWidescreen/D3D9CompositorDevice.cpp
         WindowedWidescreen/NativeWindowPolicy.cpp
         WindowedWidescreen/NativeCanvasCompositor.cpp
         WindowedWidescreen/PassClassifier.cpp

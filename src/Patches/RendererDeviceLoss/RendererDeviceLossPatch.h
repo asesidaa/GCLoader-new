@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Patches/RendererDeviceLoss/RendererResourceLifecycle.h"
+
 #include <safetyhook.hpp>
 
 #include <array>
@@ -264,5 +266,20 @@ InstallRendererDeviceLossPatch(
     const RendererInstallActions& actions) noexcept;
 
 [[nodiscard]] bool RendererDeviceLossPatchInit() noexcept;
+
+[[nodiscard]] std::expected<void, RendererResourceError>
+RendererDeviceLossAttachResource(
+    RendererResourceParticipant participant) noexcept;
+
+void RendererDeviceLossDetachResource() noexcept;
+
+[[nodiscard]] std::expected<void, RendererResourceError>
+RendererDeviceLossOnDeviceCreated(std::uintptr_t renderer_owner) noexcept;
+
+[[nodiscard]] std::expected<void, RendererResourceError>
+RendererDeviceLossBeforeReset() noexcept;
+
+[[nodiscard]] std::expected<void, RendererResourceError>
+RendererDeviceLossAfterReset(std::uintptr_t renderer_owner) noexcept;
 
 } // namespace gc::renderer_device_loss

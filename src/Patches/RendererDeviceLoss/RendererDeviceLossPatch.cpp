@@ -24,6 +24,7 @@ struct RendererDeviceLossRuntime {
     safetyhook::MidHook vertex_buffer_lock_guard_hook{};
     safetyhook::MidHook direct_lock_result_hook{};
     safetyhook::MidHook buffered_unlock_result_hook{};
+    RendererResourceLifecycle resource_lifecycle{};
 };
 
 std::unique_ptr<RendererDeviceLossRuntime> g_runtime_owner;
@@ -673,6 +674,47 @@ bool RendererDeviceLossPatchInit() noexcept {
         stored_result.store(false, std::memory_order_release);
         return false;
     }
+}
+
+std::expected<void, RendererResourceError>
+RendererDeviceLossAttachResource(
+    const RendererResourceParticipant participant) noexcept {
+    if (!g_runtime_owner) {
+        return std::unexpected(RendererResourceError::runtime_unavailable);
+    }
+    return g_runtime_owner->resource_lifecycle.Attach(participant);
+}
+
+void RendererDeviceLossDetachResource() noexcept {
+    if (g_runtime_owner) {
+        g_runtime_owner->resource_lifecycle.Detach();
+    }
+}
+
+std::expected<void, RendererResourceError>
+RendererDeviceLossOnDeviceCreated(
+    const std::uintptr_t renderer_owner) noexcept {
+    if (!g_runtime_owner) {
+        return std::unexpected(RendererResourceError::runtime_unavailable);
+    }
+    return g_runtime_owner->resource_lifecycle.OnDeviceCreated(renderer_owner);
+}
+
+std::expected<void, RendererResourceError>
+RendererDeviceLossBeforeReset() noexcept {
+    if (!g_runtime_owner) {
+        return std::unexpected(RendererResourceError::runtime_unavailable);
+    }
+    return g_runtime_owner->resource_lifecycle.BeforeReset();
+}
+
+std::expected<void, RendererResourceError>
+RendererDeviceLossAfterReset(
+    const std::uintptr_t renderer_owner) noexcept {
+    if (!g_runtime_owner) {
+        return std::unexpected(RendererResourceError::runtime_unavailable);
+    }
+    return g_runtime_owner->resource_lifecycle.AfterReset(renderer_owner);
 }
 
 } // namespace gc::renderer_device_loss

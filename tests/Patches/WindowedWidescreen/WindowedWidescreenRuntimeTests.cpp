@@ -1,4 +1,5 @@
 #include "Patches/WindowedWidescreen/NativeCanvasCompositor.h"
+#include "Patches/RendererDeviceLoss/RendererResourceLifecycle.h"
 
 #include <array>
 #include <cstdlib>
@@ -522,6 +523,233 @@ namespace
                 !compositor.frame_active() && device.calls.empty(),
             "missing action rejects before frame or device mutation");
     }
+
+    struct FakeRendererResource
+    {
+        std::size_t create_count{};
+        std::size_t release_count{};
+        std::uintptr_t last_renderer_owner{};
+        bool create_succeeds{true};
+
+        static bool Create(
+            void* context,
+            const std::uintptr_t renderer_owner) noexcept
+        {
+            auto* self = static_cast<FakeRendererResource*>(context);
+            ++self->create_count;
+            self->last_renderer_owner = renderer_owner;
+            return self->create_succeeds;
+        }
+
+        static void Release(void* context) noexcept
+        {
+            ++static_cast<FakeRendererResource*>(context)->release_count;
+        }
+
+        [[nodiscard]] gc::renderer_device_loss::RendererResourceParticipant
+        Participant() noexcept
+        {
+            return {
+                .context = this,
+                .create = &Create,
+                .release = &Release,
+            };
+        }
+    };
+
+    void RendererResourceLifecycleReleasesAndRecreatesExactlyOnce()
+    {
+        using namespace gc::renderer_device_loss;
+        RendererResourceLifecycle lifecycle;
+        FakeRendererResource resource;
+
+        Expect(
+            lifecycle.state() == RendererResourceState::disabled,
+            "resource lifecycle starts disabled");
+        Expect(
+            lifecycle.Attach(resource.Participant()).has_value() &&
+                lifecycle.state() == RendererResourceState::awaiting_device,
+            "attach waits for the renderer-owned device");
+        Expect(
+            lifecycle.OnDeviceCreated(0x12340000).has_value() &&
+                lifecycle.state() == RendererResourceState::active &&
+                resource.create_count == 1 &&
+                resource.last_renderer_owner == 0x12340000,
+            "device-created activates one participant once");
+
+        Expect(
+            lifecycle.BeforeReset().has_value() &&
+                lifecycle.state() == RendererResourceState::awaiting_reset &&
+                resource.release_count == 1,
+            "pre-reset releases all owned references once");
+        Expect(
+            lifecycle.BeforeReset().has_value() &&
+                resource.release_count == 1,
+            "repeated pre-reset after native Reset failure is idempotent");
+        Expect(
+            lifecycle.AfterReset(0x12340000).has_value() &&
+                lifecycle.state() == RendererResourceState::active &&
+                resource.create_count == 2,
+            "successful post-reset recreates exactly once");
+
+        lifecycle.Detach();
+        Expect(
+            lifecycle.state() == RendererResourceState::disabled &&
+                resource.release_count == 2,
+            "detach releases active resources and disables lifecycle");
+        lifecycle.Detach();
+        Expect(
+            resource.release_count == 2,
+            "repeated detach is release-idempotent");
+    }
+
+    void RendererResourceLifecycleRetainsRecoverableFailureState()
+    {
+        using namespace gc::renderer_device_loss;
+        RendererResourceLifecycle lifecycle;
+        FakeRendererResource resource;
+        Expect(
+            lifecycle.Attach(resource.Participant()).has_value(),
+            "failure lifecycle attaches");
+
+        const auto invalid_pre = lifecycle.BeforeReset();
+        Expect(
+            !invalid_pre &&
+                invalid_pre.error() == RendererResourceError::invalid_order,
+            "pre-reset before device creation is rejected");
+
+        resource.create_succeeds = false;
+        const auto create_failure = lifecycle.OnDeviceCreated(0x12340000);
+        Expect(
+            !create_failure &&
+                create_failure.error() ==
+                    RendererResourceError::create_failed &&
+                lifecycle.state() == RendererResourceState::awaiting_device &&
+                resource.create_count == 1 && resource.release_count == 0,
+            "initial create failure never publishes active state");
+
+        resource.create_succeeds = true;
+        Expect(
+            lifecycle.OnDeviceCreated(0x12340000).has_value(),
+            "initial create may be retried while awaiting device");
+        Expect(lifecycle.BeforeReset().has_value(), "retry setup releases");
+
+        resource.create_succeeds = false;
+        const auto recreate_failure = lifecycle.AfterReset(0x12340000);
+        Expect(
+            !recreate_failure &&
+                recreate_failure.error() ==
+                    RendererResourceError::create_failed &&
+                lifecycle.state() == RendererResourceState::awaiting_reset &&
+                resource.release_count == 1,
+            "failed recreation remains released and awaiting reset");
+        Expect(
+            lifecycle.BeforeReset().has_value() &&
+                resource.release_count == 1,
+            "pre-reset after recreate failure performs no second release");
+
+        resource.create_succeeds = true;
+        Expect(
+            lifecycle.AfterReset(0x12340000).has_value() &&
+                lifecycle.state() == RendererResourceState::active,
+            "later post-reset recreation can recover once");
+    }
+
+    void RendererResourceLifecycleRejectsInvalidParticipation()
+    {
+        using namespace gc::renderer_device_loss;
+        RendererResourceLifecycle lifecycle;
+        const auto missing = lifecycle.Attach({});
+        Expect(
+            !missing &&
+                missing.error() ==
+                    RendererResourceError::invalid_participant,
+            "missing participant actions are rejected");
+
+        FakeRendererResource resource;
+        Expect(
+            lifecycle.Attach(resource.Participant()).has_value(),
+            "valid participant attaches once");
+        const auto duplicate = lifecycle.Attach(resource.Participant());
+        Expect(
+            !duplicate &&
+                duplicate.error() == RendererResourceError::invalid_order,
+            "second participant is rejected");
+        const auto invalid_post = lifecycle.AfterReset(0x12340000);
+        Expect(
+            !invalid_post &&
+                invalid_post.error() == RendererResourceError::invalid_order,
+            "post-reset before active release is rejected");
+    }
+
+    struct FakeOwnedReferenceSet
+    {
+        static constexpr std::size_t reference_count = 7;
+
+        std::size_t fail_at{reference_count};
+        std::size_t live_references{};
+        std::size_t cleanup_count{};
+
+        static bool Create(void* context, std::uintptr_t) noexcept
+        {
+            auto* self = static_cast<FakeOwnedReferenceSet*>(context);
+            self->live_references = 0;
+            for (std::size_t index = 0; index < reference_count; ++index)
+            {
+                ++self->live_references;
+                if (index == self->fail_at)
+                {
+                    self->live_references = 0;
+                    ++self->cleanup_count;
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        static void Release(void* context) noexcept
+        {
+            auto* self = static_cast<FakeOwnedReferenceSet*>(context);
+            self->live_references = 0;
+            ++self->cleanup_count;
+        }
+
+        [[nodiscard]] gc::renderer_device_loss::RendererResourceParticipant
+        Participant() noexcept
+        {
+            return {
+                .context = this,
+                .create = &Create,
+                .release = &Release,
+            };
+        }
+    };
+
+    void PartialResourceCreationNeverPublishesOrLeaks()
+    {
+        using namespace gc::renderer_device_loss;
+        for (std::size_t fail_at = 0;
+             fail_at < FakeOwnedReferenceSet::reference_count;
+             ++fail_at)
+        {
+            RendererResourceLifecycle lifecycle;
+            FakeOwnedReferenceSet resources{.fail_at = fail_at};
+            Expect(
+                lifecycle.Attach(resources.Participant()).has_value(),
+                "partial resource participant attaches");
+            const auto created = lifecycle.OnDeviceCreated(0x12340000);
+            Expect(
+                !created &&
+                    created.error() == RendererResourceError::create_failed &&
+                    lifecycle.state() ==
+                        RendererResourceState::awaiting_device,
+                "failure at each allocation does not publish active state");
+            Expect(
+                resources.live_references == 0 &&
+                    resources.cleanup_count == 1,
+                "partial allocation failure releases every owned reference");
+        }
+    }
 } // namespace
 
 int main()
@@ -533,5 +761,9 @@ int main()
     PendingBatchesAndFailedRecoveryAreFatalState();
     RuntimeRejectsInvalidFrameAndThreadCalls();
     MissingDeviceActionRejectsBeforeFrameMutation();
+    RendererResourceLifecycleReleasesAndRecreatesExactlyOnce();
+    RendererResourceLifecycleRetainsRecoverableFailureState();
+    RendererResourceLifecycleRejectsInvalidParticipation();
+    PartialResourceCreationNeverPublishesOrLeaks();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
