@@ -47,14 +47,23 @@ namespace gc::audio
             return buffer_ms_;
         }
 
+        [[nodiscard]] bool exact_history_required() const noexcept
+        {
+            return exact_history_required_;
+        }
+
     private:
-        explicit WasapiExclusiveSettings(std::uint32_t buffer_ms) noexcept
-            : buffer_ms_(buffer_ms)
+        WasapiExclusiveSettings(
+            std::uint32_t buffer_ms,
+            bool exact_history_required) noexcept
+            : buffer_ms_(buffer_ms),
+              exact_history_required_(exact_history_required)
         {
         }
 
         friend class gc::config::ConfigCompiler;
         std::uint32_t buffer_ms_{};
+        bool exact_history_required_{};
     };
 
     class AsioSettings final
@@ -110,25 +119,17 @@ namespace gc::audio
             return selection_;
         }
 
-        [[nodiscard]] bool exact_clock_required() const noexcept
-        {
-            return exact_clock_required_;
-        }
-
     private:
         AudioSettings(
             AudioBackend backend,
-            AudioBackendSettings selection,
-            bool exact_clock_required)
+            AudioBackendSettings selection)
             : backend_(backend),
-              selection_(std::move(selection)),
-              exact_clock_required_(exact_clock_required)
+              selection_(std::move(selection))
         {
         }
 
         friend class gc::config::ConfigCompiler;
         AudioBackend backend_{};
         AudioBackendSettings selection_;
-        bool exact_clock_required_{};
     };
 } // namespace gc::audio

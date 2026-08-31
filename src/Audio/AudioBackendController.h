@@ -45,8 +45,7 @@ namespace gc::audio
         virtual ~IAsioOutputBackendFactory() = default;
         virtual std::unique_ptr<IAudioEngineServices> Start(
             HWND game_window,
-            const AsioStreamRequest&,
-            AsioFailure*) noexcept = 0;
+            const AsioStreamRequest&) noexcept = 0;
     };
 
     enum class ActiveAudioBackend : std::uint8_t
@@ -67,7 +66,6 @@ namespace gc::audio
     struct AudioBackendStartupFailure
     {
         AudioBackend requested_backend{AudioBackend::directsound};
-        std::optional<AsioFailure> asio_failure;
         AudioStartupFailure wasapi_failure;
     };
 
@@ -113,7 +111,6 @@ namespace gc::audio
             not_started,
             starting,
             active_wasapi,
-            active_asio,
             failed,
         };
 

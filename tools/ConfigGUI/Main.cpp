@@ -1216,7 +1216,19 @@ namespace
             dirty = true;
         }
         ImGui::SameLine();
-        ImGui::Text("%.3f ms at 48 kHz", buffer_frames / 48.0);
+        if (const auto& report = audio_editor.capability_report();
+            report && report->sample_rate > 0.0)
+        {
+            ImGui::Text(
+                "%.3f ms at %.0f Hz",
+                static_cast<double>(buffer_frames) * 1'000.0 /
+                report->sample_rate,
+                report->sample_rate);
+        }
+        else
+        {
+            ImGui::TextDisabled("Inspect to calculate duration");
+        }
         if (buffer_frames == 0)
         {
             ImGui::TextDisabled(
@@ -1310,8 +1322,9 @@ namespace
             "Inspection: %s",
             AsioInspectionStateName(inspection_state));
         ImGui::TextWrapped(
-            "Inspection never starts audio. It may briefly claim the device and "
-            "set 48 kHz, then restores the original sample rate before returning.");
+            "Inspection reads the driver's current format. Validation briefly "
+            "creates the selected buffers, but never starts audio or changes the "
+            "sample rate.");
 
         if (!audio_editor.inspection_error().empty())
         {
@@ -1337,6 +1350,21 @@ namespace
                 "Reported driver: %s (version %ld)",
                 report->reported_driver_name.c_str(),
                 report->driver_version);
+            ImGui::Text("Current sample rate: %.0f Hz", report->sample_rate);
+            if (report->sample_rate > 0.0)
+            {
+                ImGui::Text(
+                    "Configured buffer: %u frames (%.3f ms)",
+                    report->effective_buffer_frames,
+                    static_cast<double>(report->effective_buffer_frames) *
+                    1'000.0 / report->sample_rate);
+            }
+            else
+            {
+                ImGui::Text(
+                    "Configured buffer: %u frames",
+                    report->effective_buffer_frames);
+            }
             ImGui::Text(
                 "Buffer frames: minimum %ld, maximum %ld, preferred %ld",
                 limits.minimum,
@@ -1348,11 +1376,6 @@ namespace
                 "Granularity %ld: %s",
                 limits.granularity,
                 granularity.c_str());
-            ImGui::Text(
-                "Output latency: %u frames (%.3f ms at 48 kHz)",
-                report->output_latency_frames,
-                report->output_latency_frames / 48.0);
-
             const auto& pairs = audio_editor.channel_pairs();
             const auto selected = std::ranges::find(
                 pairs,

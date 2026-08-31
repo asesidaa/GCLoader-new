@@ -4,15 +4,10 @@ add_library(gc_audio STATIC
         AudioContractFatal.cpp
         AudioBackendController.cpp
         ExactJudgementTimeline.cpp
-        Asio/AsioPresentationBridge.cpp
-        Asio/AsioPresentationRateMatcher.cpp
         Asio/AsioOutputBackend.cpp
         DirectSound/DirectSoundFacade.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
-        Logical/LogicalPresentationClock.cpp
-        Logical/LogicalPresentedOutputClock.cpp
         Mixer/AudioCursorTimeline.cpp
-        Mixer/LogicalRenderStream.cpp
         Mixer/AudioRenderCore.cpp
         Mixer/AudioSnapshot.cpp
         Mixer/MiniaudioMixer.cpp
@@ -33,6 +28,7 @@ target_link_libraries(gc_audio PUBLIC
         gc_asio
         gc_timing
         minhook
+        safetyhook::safetyhook
         miniaudio
         dsound
         dxguid

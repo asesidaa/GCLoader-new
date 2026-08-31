@@ -2,6 +2,8 @@
 
 #include "Audio/AudioBackendController.h"
 
+#include "Audio/AudioContractFatal.h"
+
 #include <dsound.h>
 
 #include <utility>
@@ -24,7 +26,28 @@ namespace gc::audio
     {
         if (game_window == nullptr)
         {
+            if (config_.requested_backend == AudioBackend::asio)
+            {
+                FailAudioContract(
+                    AudioContractFatalReason::AsioOwnershipFailure,
+                    static_cast<std::uint64_t>(DSERR_INVALIDPARAM));
+            }
             return DSERR_INVALIDPARAM;
+        }
+
+        if (config_.requested_backend == AudioBackend::asio)
+        {
+            if (engine_ != nullptr)
+            {
+                return DS_OK;
+            }
+            engine_ = asio_factory_.Start(game_window, config_.asio_request);
+            if (engine_ == nullptr)
+            {
+                FailAudioContract(
+                    AudioContractFatalReason::AsioOwnershipFailure);
+            }
+            return DS_OK;
         }
 
         {
@@ -33,7 +56,7 @@ namespace gc::audio
             {
                 condition_.wait(lock);
             }
-            if (state_ == State::active_wasapi || state_ == State::active_asio)
+            if (state_ == State::active_wasapi)
             {
                 return DS_OK;
             }
@@ -45,26 +68,6 @@ namespace gc::audio
         }
 
         std::unique_ptr<IAudioEngineServices> engine;
-        if (config_.requested_backend == AudioBackend::asio)
-        {
-            AsioFailure failure{};
-            engine = asio_factory_.Start(
-                game_window,
-                config_.asio_request,
-                &failure);
-            if (engine != nullptr)
-            {
-                PublishResult(std::move(engine), State::active_asio);
-                return DS_OK;
-            }
-            reporter_.FatalStartupFailure(AudioBackendStartupFailure{
-                .requested_backend = config_.requested_backend,
-                .asio_failure = std::move(failure),
-            });
-            PublishResult(nullptr, State::failed);
-            return DSERR_NODRIVER;
-        }
-
         AudioStartupFailure wasapi_failure{};
         if (config_.requested_backend == AudioBackend::wasapi_exclusive)
         {
@@ -154,13 +157,17 @@ namespace gc::audio
 
     ActiveAudioBackend AudioBackendController::active_backend() const noexcept
     {
+        if (config_.requested_backend == AudioBackend::asio)
+        {
+            return engine_ != nullptr
+                       ? ActiveAudioBackend::asio
+                       : ActiveAudioBackend::none;
+        }
         std::lock_guard lock(mutex_);
         switch (state_)
         {
         case State::active_wasapi:
             return ActiveAudioBackend::wasapi_exclusive;
-        case State::active_asio:
-            return ActiveAudioBackend::asio;
         case State::failed:
             return ActiveAudioBackend::failed;
         case State::not_started:
@@ -177,8 +184,12 @@ namespace gc::audio
 
     IAudioEngineServices* AudioBackendController::ActiveServices() const noexcept
     {
+        if (config_.requested_backend == AudioBackend::asio)
+        {
+            return engine_.get();
+        }
         std::lock_guard lock(mutex_);
-        return state_ == State::active_wasapi || state_ == State::active_asio
+        return state_ == State::active_wasapi
                    ? engine_.get()
                    : nullptr;
     }

@@ -184,9 +184,14 @@ namespace gc::audio
         MixerRenderResult Render(
             std::span<float> stereo,
             const MixerRenderTimeline& timeline) noexcept;
+        MixerRenderResult RenderSequential(
+            std::span<float> stereo) noexcept;
         [[nodiscard]] MixerDiagnosticsSnapshot diagnostics() const noexcept;
 
     private:
+        MixerRenderResult RenderInternal(
+            std::span<float> stereo,
+            const MixerRenderTimeline* timeline) noexcept;
         static std::unique_ptr<MiniaudioMixer> CreateWithOwner(
             std::uint32_t period_frames,
             std::uint32_t output_sample_rate,

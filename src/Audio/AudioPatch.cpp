@@ -1,5 +1,7 @@
 #include "Audio/AudioPatch.h"
 
+#include "Audio/AudioContractFatal.h"
+
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
 #include "Audio/Asio/AsioOutputBackend.h"
@@ -9,16 +11,21 @@
 
 #include "plog/Log.h"
 
+#include <safetyhook.hpp>
+
 #include <dsound.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 // ReSharper disable once CppUnusedIncludeDirective
-#include <cmath>
+#include <cstddef>
+#include <cstdint>
+// ReSharper disable once CppUnusedIncludeDirective
+#include <cstring>
 #include <cstdlib>
 #include <format>
 #include <iomanip>
-#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -34,6 +41,34 @@ namespace gc::audio
     {
         LPVOID g_original_direct_sound_create8{};
         LPVOID g_committed_target{};
+        safetyhook::MidHook g_asio_close_hook{};
+
+        constexpr std::uintptr_t kSupportedImageBase = 0x00400000U;
+        constexpr std::uintptr_t kAsioCloseRva = 0x0023C853U;
+        constexpr std::array<unsigned char, 16> kAsioCloseBytes{
+            0xFF, 0x15, 0x3C, 0xD6, 0x6A, 0x00, 0x8B, 0xE5,
+            0x5D, 0xC3, 0xCC, 0xCC, 0xCC, 0x55, 0x8B, 0xEC,
+        };
+
+        bool ReadExecutableBytes(
+            const void* source,
+            unsigned char* destination,
+            const std::size_t size) noexcept
+        {
+            if (source == nullptr || destination == nullptr || size == 0)
+            {
+                return false;
+            }
+            __try
+            {
+                std::memcpy(destination, source, size);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
 
         static_assert(std::is_nothrow_move_constructible_v<AudioStartupFailure>);
         static_assert(std::is_nothrow_move_assignable_v<AudioStartupFailure>);
@@ -47,9 +82,6 @@ namespace gc::audio
             "Please increase wasapi_exclusive_buffer_ms and restart the game.\n"
             "Set audio_backend = 'directsound' and restart to restore "
             "the original DirectSound backend.";
-        constexpr std::string_view kAsioRuntimeFailureMessage =
-            "ASIO low-latency audio failed after startup.\n"
-            "Restart the game. You may select WASAPI Exclusive in ConfigGUI.";
         constexpr std::string_view kGenericStartupFailureMessage =
             "Low-latency audio could not start.\n"
             "Correct the ASIO/WASAPI settings, or select DirectSound in ConfigGUI, "
@@ -100,116 +132,6 @@ namespace gc::audio
             case AudioFailureStage::ChronicOutputGap: return "ChronicOutputGap";
             }
             return "Unknown";
-        }
-
-        const char* asio_failure_stage_name(AsioFailureStage stage) noexcept
-        {
-            switch (stage)
-            {
-            case AsioFailureStage::none: return "none";
-            case AsioFailureStage::registry: return "registry";
-            case AsioFailureStage::clsid: return "clsid";
-            case AsioFailureStage::com: return "com";
-            case AsioFailureStage::init: return "init";
-            case AsioFailureStage::identity: return "identity";
-            case AsioFailureStage::channels: return "channels";
-            case AsioFailureStage::sample_rate: return "sample_rate";
-            case AsioFailureStage::buffer_metadata: return "buffer_metadata";
-            case AsioFailureStage::channel_info: return "channel_info";
-            case AsioFailureStage::output_ready_probe: return "output_ready_probe";
-            case AsioFailureStage::callback_prepare: return "callback_prepare";
-            case AsioFailureStage::foreground_monitor: return "foreground_monitor";
-            case AsioFailureStage::create_buffers: return "create_buffers";
-            case AsioFailureStage::latency: return "latency";
-            case AsioFailureStage::render_core: return "render_core";
-            case AsioFailureStage::start: return "start";
-            case AsioFailureStage::startup_clock: return "startup_clock";
-            case AsioFailureStage::callback: return "callback";
-            case AsioFailureStage::conversion: return "conversion";
-            case AsioFailureStage::runtime_clock: return "runtime_clock";
-            case AsioFailureStage::output_ready: return "output_ready";
-            case AsioFailureStage::stop: return "stop";
-            case AsioFailureStage::dispose: return "dispose";
-            case AsioFailureStage::restore_sample_rate: return "restore_sample_rate";
-            case AsioFailureStage::protocol: return "protocol";
-            case AsioFailureStage::process_launch: return "process_launch";
-            case AsioFailureStage::process_job: return "process_job";
-            case AsioFailureStage::probe_timeout: return "probe_timeout";
-            case AsioFailureStage::probe_crash: return "probe_crash";
-            case AsioFailureStage::control_panel: return "control_panel";
-            case AsioFailureStage::control_panel_crash: return "control_panel_crash";
-            case AsioFailureStage::multimedia_timer: return "multimedia_timer";
-            }
-            return "unknown";
-        }
-
-        const char* asio_result_domain_name(AsioResultDomain domain) noexcept
-        {
-            switch (domain)
-            {
-            case AsioResultDomain::none: return "none";
-            case AsioResultDomain::asio: return "asio";
-            case AsioResultDomain::hresult: return "hresult";
-            case AsioResultDomain::win32: return "win32";
-            case AsioResultDomain::winmm: return "winmm";
-            }
-            return "unknown";
-        }
-
-        const char* asio_sample_type_name(ASIOSampleType type) noexcept
-        {
-            switch (type)
-            {
-            case ASIOSTInt16MSB: return "Int16MSB";
-            case ASIOSTInt24MSB: return "Int24MSB";
-            case ASIOSTInt32MSB: return "Int32MSB";
-            case ASIOSTFloat32MSB: return "Float32MSB";
-            case ASIOSTFloat64MSB: return "Float64MSB";
-            case ASIOSTInt32MSB16: return "Int32MSB16";
-            case ASIOSTInt32MSB18: return "Int32MSB18";
-            case ASIOSTInt32MSB20: return "Int32MSB20";
-            case ASIOSTInt32MSB24: return "Int32MSB24";
-            case ASIOSTInt16LSB: return "Int16LSB";
-            case ASIOSTInt24LSB: return "Int24LSB";
-            case ASIOSTInt32LSB: return "Int32LSB";
-            case ASIOSTFloat32LSB: return "Float32LSB";
-            case ASIOSTFloat64LSB: return "Float64LSB";
-            case ASIOSTInt32LSB16: return "Int32LSB16";
-            case ASIOSTInt32LSB18: return "Int32LSB18";
-            case ASIOSTInt32LSB20: return "Int32LSB20";
-            case ASIOSTInt32LSB24: return "Int32LSB24";
-            case ASIOSTDSDInt8LSB1: return "DSDInt8LSB1";
-            case ASIOSTDSDInt8MSB1: return "DSDInt8MSB1";
-            case ASIOSTDSDInt8NER8: return "DSDInt8NER8";
-            default: return "Unknown";
-            }
-        }
-
-        const char* asio_physical_session_reason_name(
-            const AsioPhysicalSessionReason reason) noexcept
-        {
-            switch (reason)
-            {
-            case AsioPhysicalSessionReason::startup: return "startup";
-            case AsioPhysicalSessionReason::focus_recovery:
-                return "focus_recovery";
-            }
-            return "unknown";
-        }
-
-        const char* asio_lifecycle_state_name(
-            const AsioLifecycleState state) noexcept
-        {
-            switch (state)
-            {
-            case AsioLifecycleState::Starting: return "starting";
-            case AsioLifecycleState::Running: return "running";
-            case AsioLifecycleState::Suspended: return "suspended";
-            case AsioLifecycleState::Recovering: return "recovering";
-            case AsioLifecycleState::Fatal: return "fatal";
-            case AsioLifecycleState::Stopping: return "stopping";
-            }
-            return "unknown";
         }
 
         const char* mixer_render_failure_source_name(
@@ -594,272 +516,6 @@ namespace gc::audio
                 BufferMillisecondsToReferenceTime(configured_buffer_ms));
         }
 
-        std::string clsid_text(const CLSID& clsid)
-        {
-            wchar_t value[39]{};
-            return StringFromGUID2(clsid, value, static_cast<int>(std::size(value))) > 0
-                       ? utf8(value)
-                       : "<conversion-failed>";
-        }
-
-        std::string asio_failure_text(
-            std::string_view kind,
-            const AsioFailure& failure)
-        {
-            return std::format(
-                "{} asio_failure_stage={} asio_failure_domain={} "
-                "asio_failure_result={} asio_driver_message=\"{}\" "
-                "asio_failure_detail=\"{}\"",
-                kind,
-                asio_failure_stage_name(failure.stage),
-                asio_result_domain_name(failure.domain),
-                failure.result,
-                failure.driver_message,
-                failure.detail);
-        }
-
-        std::string asio_startup_text(
-            const AsioCapabilityReport& report,
-            const AsioLogicalBackendRecord& logical)
-        {
-            const auto base = static_cast<std::size_t>(report.selected_base_channel);
-            const auto& left = report.output_channels.at(base);
-            const auto& right = report.output_channels.at(base + 1U);
-            const double expected_callback_us =
-                std::isfinite(report.sample_rate) && report.sample_rate > 0.0
-                    ? static_cast<double>(report.effective_buffer_frames) *
-                    1'000'000.0 / report.sample_rate
-                    : 0.0;
-            std::ostringstream stream;
-            stream << "Audio startup requested_backend=asio active_backend=asio"
-                << " alternate_backend_selected="
-                << (logical.alternate_backend_selected ? "true" : "false")
-                << " asio_registry_name=\"" << report.registration.registry_name << '"'
-                << " asio_reported_name=\"" << report.reported_driver_name << '"'
-                << " asio_clsid=\"" << clsid_text(report.registration.clsid) << '"'
-                << " asio_driver_version=" << report.driver_version
-                << " sample_rate_source=driver_current"
-                << " sample_rate=" << logical.sample_rate
-                << " asio_requested_buffer_frames=" << report.effective_buffer_frames
-                << " asio_buffer_frames=" << report.effective_buffer_frames
-                << " asio_expected_callback_us=" << expected_callback_us
-                << " asio_buffer_minimum_frames=" << report.buffer_limits.minimum
-                << " asio_buffer_maximum_frames=" << report.buffer_limits.maximum
-                << " asio_buffer_preferred_frames=" << report.buffer_limits.preferred
-                << " asio_buffer_granularity=" << report.buffer_limits.granularity
-                << " asio_output_base_channel=" << report.selected_base_channel
-                << " asio_left_channel_index=" << left.index
-                << " asio_left_channel_name=\"" << left.name << '"'
-                << " asio_left_sample_type="
-                << asio_sample_type_name(left.sample_type)
-                << '(' << static_cast<long>(left.sample_type) << ')'
-                << " asio_right_channel_index=" << right.index
-                << " asio_right_channel_name=\"" << right.name << '"'
-                << " asio_right_sample_type="
-                << asio_sample_type_name(right.sample_type)
-                << '(' << static_cast<long>(right.sample_type) << ')'
-                << " asio_input_latency_frames=" << report.input_latency_frames
-                << " asio_output_latency_frames=" << report.output_latency_frames
-                << " logical_period_frames=" << logical.period_frames
-                << " logical_timestamp_quantum_ns="
-                << logical.timestamp_quantum_ns
-                << " logical_origin_raw_ms=" << logical.origin_raw_ms
-                << " logical_origin_unwrapped_ms="
-                << logical.origin_unwrapped_ms
-                << " logical_origin_presented_frame="
-                << logical.origin_presented_frame
-                << " logical_timeline_generation="
-                << logical.timeline_generation
-                << " judgement_timeline_domain=logical_multimedia_ms"
-                << " judgement_timeline_timestamp_quantum_ns="
-                << logical.timestamp_quantum_ns
-                << " asio_time_info_mode=preferred_with_legacy_fallback"
-                << " asio_overload_notifications="
-                << (report.overload_reporting_supported ? "true" : "false")
-                << " asio_output_ready="
-                << (report.output_ready_supported ? "true" : "false");
-            return stream.str();
-        }
-
-        std::string asio_counters_text(const AsioRuntimeCountersSnapshot& counters)
-        {
-            const auto ticks_to_microseconds = [&](std::uint64_t ticks)
-            {
-                return counters.qpc_frequency == 0
-                           ? 0.0
-                           : static_cast<double>(ticks) * 1'000'000.0 /
-                           static_cast<double>(counters.qpc_frequency);
-            };
-            const auto average_ticks_microseconds = [&](std::uint64_t ticks,
-                                                        std::uint64_t samples)
-            {
-                return samples == 0
-                           ? 0.0
-                           : ticks_to_microseconds(ticks) /
-                           static_cast<double>(samples);
-            };
-            std::ostringstream stream;
-            stream << "callbacks=" << counters.callbacks
-                << " time_info_callbacks=" << counters.time_info_callbacks
-                << " legacy_callbacks=" << counters.legacy_callbacks
-                << " deferred_callbacks=" << counters.deferred_callbacks
-                << " deadline_misses=" << counters.deadline_misses
-                << " silence_substitutions=" << counters.silence_substitutions
-                << " overload_messages=" << counters.overload_messages
-                << " reset_requests=" << counters.reset_requests
-                << " resync_requests=" << counters.resync_requests
-                << " latency_change_requests=" << counters.latency_change_requests
-                << " buffer_size_change_requests="
-                << counters.buffer_size_change_requests
-                << " sample_rate_change_requests="
-                << counters.sample_rate_change_requests
-                << " foreground_losses=" << counters.foreground_losses
-                << " consumed_focus_loss_generation="
-                << counters.consumed_focus_loss_generation
-                << " logical_timeline_generation="
-                << counters.logical_timeline_generation
-                << " logical_sample_rate=" << counters.logical_sample_rate
-                << " logical_current_frame=" << counters.logical_current_frame
-                << " logical_render_tail=" << counters.logical_render_tail
-                << " physical_session_generation="
-                << counters.physical_session_generation
-                << " physical_sample_rate=" << counters.physical_sample_rate
-                << " physical_period_frames=" << counters.physical_period_frames
-                << " physical_output_latency_frames="
-                << counters.physical_output_latency_frames
-                << " lifecycle_state="
-                << asio_lifecycle_state_name(counters.lifecycle_state)
-                << " session_releases=" << counters.session_releases
-                << " recovery_attempts=" << counters.recovery_attempts
-                << " recovery_failures=" << counters.recovery_failures
-                << " session_recoveries=" << counters.session_recoveries
-                << " sequential_pump_rendered_frames="
-                << counters.sequential_pump_rendered_frames
-                << " bridge_callbacks=" << counters.bridge_callbacks
-                << " bridge_priming_callbacks="
-                << counters.bridge_priming_callbacks
-                << " bridge_running_callbacks="
-                << counters.bridge_running_callbacks
-                << " bridge_handoff_logical_tail="
-                << counters.bridge_handoff_logical_tail
-                << " bridge_logical_rendered_frames="
-                << counters.bridge_logical_rendered_frames
-                << " bridge_initial_phase_error_frames="
-                << counters.bridge_initial_phase_error_frames
-                << " bridge_maximum_absolute_phase_error_frames="
-                << counters.bridge_maximum_absolute_phase_error_frames
-                << " bridge_final_phase_error_frames="
-                << counters.bridge_final_phase_error_frames
-                << " bridge_initial_phase_error_ns="
-                << counters.bridge_initial_phase_error_ns
-                << " bridge_maximum_absolute_phase_error_ns="
-                << counters.bridge_maximum_absolute_phase_error_ns
-                << " bridge_final_phase_error_ns="
-                << counters.bridge_final_phase_error_ns
-                << " bridge_minimum_rate_ratio_ppm="
-                << counters.bridge_minimum_rate_ratio_ppm
-                << " bridge_maximum_rate_ratio_ppm="
-                << counters.bridge_maximum_rate_ratio_ppm
-                << " bridge_final_rate_ratio_ppm="
-                << counters.bridge_final_rate_ratio_ppm
-                << " bridge_input_high_water_frames="
-                << counters.bridge_input_high_water_frames
-                << " bridge_input_underflows="
-                << counters.bridge_input_underflows
-                << " bridge_input_overflows="
-                << counters.bridge_input_overflows
-                << " bridge_conversion_failures="
-                << counters.bridge_conversion_failures
-                << " bridge_phase_envelope_violations="
-                << counters.bridge_phase_envelope_violations
-                << " bridge_non_finite_output_blocks="
-                << counters.bridge_non_finite_output_blocks
-                << " asio_expected_callback_us="
-                << static_cast<double>(counters.expected_period_ns) / 1'000.0
-                << " callback_interval_samples="
-                << counters.callback_interval_samples
-                << " total_callback_interval_ticks="
-                << counters.total_callback_interval_ticks
-                << " maximum_callback_interval_ticks="
-                << counters.maximum_callback_interval_ticks
-                << " average_callback_interval_us="
-                << average_ticks_microseconds(
-                    counters.total_callback_interval_ticks,
-                    counters.callback_interval_samples)
-                << " maximum_callback_interval_us="
-                << ticks_to_microseconds(counters.maximum_callback_interval_ticks)
-                << " early_callback_intervals="
-                << counters.early_callback_intervals
-                << " late_callback_intervals=" << counters.late_callback_intervals
-                << " severe_callback_intervals="
-                << counters.severe_callback_intervals
-                << " timed_callback_work_samples="
-                << counters.timed_callback_work_samples
-                << " total_callback_ticks=" << counters.total_callback_ticks
-                << " average_callback_us="
-                << average_ticks_microseconds(
-                    counters.total_callback_ticks,
-                    counters.timed_callback_work_samples)
-                << " maximum_callback_ticks=" << counters.maximum_callback_ticks
-                << " maximum_callback_us="
-                << ticks_to_microseconds(counters.maximum_callback_ticks)
-                << " timed_render_work_samples="
-                << counters.timed_render_work_samples
-                << " total_render_ticks=" << counters.total_render_ticks
-                << " average_render_us="
-                << average_ticks_microseconds(
-                    counters.total_render_ticks,
-                    counters.timed_render_work_samples)
-                << " maximum_render_ticks=" << counters.maximum_render_ticks
-                << " maximum_render_us="
-                << ticks_to_microseconds(counters.maximum_render_ticks)
-                << " qpc_frequency=" << counters.qpc_frequency
-                << " driver_interval_samples=" << counters.driver_interval_samples
-                << " maximum_driver_period_error_us="
-                << static_cast<double>(counters.maximum_driver_period_error_ns) /
-                1'000.0
-                << " maximum_host_driver_interval_skew_us="
-                << static_cast<double>(
-                    counters.maximum_host_driver_interval_skew_ns) / 1'000.0
-                << " buffer_alternation_violations="
-                << counters.buffer_alternation_violations
-                << " no_active_voice_silence_blocks="
-                << counters.no_active_voice_silence_blocks
-                << " active_short_read_blocks="
-                << counters.active_short_read_blocks
-                << " mixer_error_blocks=" << counters.mixer_error_blocks
-                << " render_contract_error_blocks="
-                << counters.render_contract_error_blocks
-                << " short_read_missing_frames="
-                << counters.short_read_missing_frames
-                << " first_mixer_error=" << counters.first_mixer_error
-                << " clipped_output_blocks=" << counters.clipped_output_blocks
-                << " clipped_output_samples=" << counters.clipped_output_samples
-                << " zero_output_blocks_with_active_voice="
-                << counters.zero_output_blocks_with_active_voice
-                << " zero_output_blocks_without_active_voice="
-                << counters.zero_output_blocks_without_active_voice
-                << " non_finite_output_blocks="
-                << counters.non_finite_output_blocks
-                << " maximum_absolute_output_sample="
-                << counters.maximum_absolute_output_sample
-                << " pending_cursor_queries=" << counters.pending_cursor_queries
-                << " unmapped_cursor_failures="
-                << counters.unmapped_cursor_failures;
-            append_mixer_diagnostics(stream, counters.mixer);
-            stream << " judgement_timeline_resolved_queries="
-                << counters.judgement_timeline_resolved_queries
-                << " judgement_timeline_pending_queries="
-                << counters.judgement_timeline_pending_queries
-                << " judgement_timeline_temporarily_unavailable_queries="
-                << counters.judgement_timeline_temporarily_unavailable_queries
-                << " judgement_timeline_history_lost_queries="
-                << counters.judgement_timeline_history_lost_queries
-                << " judgement_timeline_discontinuous_queries="
-                << counters.judgement_timeline_discontinuous_queries;
-            return stream.str();
-        }
-
         void emit_info(
             const detail::AudioPatchPlatformActions& actions,
             const char* text) noexcept
@@ -1049,150 +705,6 @@ namespace gc::audio
             std::optional<EndpointInitialization> initialization_;
         };
 
-        class ProductionAsioObserver final : public IAsioOutputObserver
-        {
-        public:
-            explicit ProductionAsioObserver(
-                const detail::AudioPatchPlatformActions& actions) noexcept
-                : actions_(actions)
-            {
-            }
-
-            void StartupSucceeded(
-                const AsioCapabilityReport& report,
-                const AsioLogicalBackendRecord& logical) noexcept override
-            {
-                try
-                {
-                    report_ = report;
-                }
-                catch (...)
-                {
-                    report_.reset();
-                }
-                detail::ReportAsioStartupSucceeded(report, logical, actions_);
-            }
-
-            void RuntimeSummary(
-                const AsioRuntimeCountersSnapshot& counters) noexcept override
-            {
-                detail::ReportAsioRuntimeSummary(counters, actions_);
-            }
-
-            void RuntimeFailed(
-                const AsioFailure& failure,
-                const AsioRuntimeCountersSnapshot& counters) noexcept override
-            {
-                detail::ReportAsioRuntimeFailure(
-                    report_ ? &*report_ : nullptr,
-                    failure,
-                    counters,
-                    actions_);
-            }
-
-            void SessionLifecycleChanged(
-                const AsioSessionLifecycleRecord& record,
-                const AsioFailure* failure) noexcept override
-            {
-                try
-                {
-                    const auto event_name = [&record]() noexcept
-                    {
-                        switch (record.event)
-                        {
-                        case AsioSessionLifecycleEvent::foreground_lost:
-                            return "foreground_lost";
-                        case AsioSessionLifecycleEvent::session_released:
-                            return "session_released";
-                        case AsioSessionLifecycleEvent::foreground_regained:
-                            return "foreground_regained";
-                        case AsioSessionLifecycleEvent::recovery_attempt_started:
-                            return "recovery_attempt_started";
-                        case AsioSessionLifecycleEvent::recovery_attempt_failed:
-                            return "recovery_attempt_failed";
-                        case AsioSessionLifecycleEvent::physical_session_started:
-                            return "physical_session_started";
-                        case AsioSessionLifecycleEvent::session_recovered:
-                            return "session_recovered";
-                        }
-                        return "unknown";
-                    }();
-                    std::ostringstream stream;
-                    stream << "ASIO session lifecycle event=" << event_name
-                        << " foreground="
-                        << (record.foreground ? "true" : "false")
-                        << " focus_loss_generation="
-                        << record.focus_loss_generation
-                        << " physical_session_generation="
-                        << record.physical_session_generation
-                        << " recovery_attempt=" << record.recovery_attempt
-                        << " retry_delay_ms=" << record.retry_delay_ms
-                        << " handoff_logical_tail="
-                        << record.handoff_logical_tail;
-                    if (record.event ==
-                        AsioSessionLifecycleEvent::physical_session_started ||
-                        record.event ==
-                        AsioSessionLifecycleEvent::session_recovered)
-                    {
-                        stream << " reason="
-                            << asio_physical_session_reason_name(record.reason)
-                            << " observed_sample_rate="
-                            << record.observed_sample_rate
-                            << " active_sample_rate=" << record.active_sample_rate
-                            << " frozen_rate_requested="
-                            << (record.frozen_rate_requested ? "true" : "false")
-                            << " sample_rate_changed="
-                            << (record.sample_rate_changed ? "true" : "false")
-                            << " silent_priming_callbacks="
-                            << record.silent_priming_callbacks;
-                    }
-                    if (record.event ==
-                        AsioSessionLifecycleEvent::session_released)
-                    {
-                        stream << " reason="
-                            << asio_physical_session_reason_name(record.reason)
-                            << " observed_sample_rate="
-                            << record.observed_sample_rate
-                            << " active_sample_rate=" << record.active_sample_rate
-                            << " frozen_rate_requested="
-                            << (record.frozen_rate_requested ? "true" : "false")
-                            << " sample_rate_changed="
-                            << (record.sample_rate_changed ? "true" : "false")
-                            << " restoration_attempted="
-                            << (record.restoration_attempted ? "true" : "false")
-                            << " restoration_succeeded="
-                            << (record.restoration_succeeded ? "true" : "false")
-                            << " callback_quiesced="
-                            << (record.callback_quiesced ? "true" : "false")
-                            << " buffers_disposed="
-                            << (record.buffers_disposed ? "true" : "false");
-                    }
-                    if (failure != nullptr)
-                    {
-                        stream << " asio_failure_stage="
-                            << asio_failure_stage_name(failure->stage)
-                            << " asio_failure_domain="
-                            << asio_result_domain_name(failure->domain)
-                            << " asio_failure_result=" << failure->result
-                            << " asio_driver_message=\""
-                            << failure->driver_message << '"'
-                            << " asio_failure_detail=\""
-                            << failure->detail << '"';
-                    }
-                    const auto text = stream.str();
-                    emit_info(actions_, text.c_str());
-                }
-                catch (...)
-                {
-                    emit_error(actions_, "ASIO lifecycle diagnostics formatting failed");
-                }
-            }
-
-        private:
-            detail::AudioPatchPlatformActions actions_{};
-            std::optional<AsioCapabilityReport> report_;
-        };
-
         class ProductionWasapiOutputBackendFactory final
             : public IWasapiOutputBackendFactory
         {
@@ -1252,50 +764,20 @@ namespace gc::audio
             : public IAsioOutputBackendFactory
         {
         public:
-            ProductionAsioOutputBackendFactory(
-                const detail::AudioPatchPlatformActions& actions,
-                const bool enable_absolute_time_judgement) noexcept
-                : actions_(actions),
-                  enable_absolute_time_judgement_(
-                      enable_absolute_time_judgement)
-            {
-            }
-
             std::unique_ptr<IAudioEngineServices> Start(
                 HWND game_window,
-                const AsioStreamRequest& request,
-                AsioFailure* failure) noexcept override
+                const AsioStreamRequest& request) noexcept override
             {
-                try
-                {
-                    auto observer = std::make_shared<ProductionAsioObserver>(actions_);
-                    return AsioOutputBackend::StartAndWait(
-                        game_window,
-                        request,
-                        std::make_unique<ProductionAsioRegistrySource>(),
-                        std::make_unique<ProductionAsioDriverFactory>(),
-                        std::move(observer),
-                        {},
-                        2'000,
-                        enable_absolute_time_judgement_,
-                        failure);
-                }
-                catch (...)
-                {
-                    if (failure != nullptr)
-                    {
-                        *failure = {
-                            .stage = AsioFailureStage::render_core,
-                            .detail = "Could not allocate ASIO runtime dependencies",
-                        };
-                    }
-                    return nullptr;
-                }
+                return AsioOutputBackend::Start(
+                    game_window,
+                    request,
+                    registry_,
+                    driver_factory_);
             }
 
         private:
-            detail::AudioPatchPlatformActions actions_{};
-            bool enable_absolute_time_judgement_{};
+            ProductionAsioRegistrySource registry_;
+            ProductionAsioDriverFactory driver_factory_;
         };
 
         class ProductionAudioBackendControllerReporter final
@@ -1314,13 +796,10 @@ namespace gc::audio
             {
                 try
                 {
-                    const auto detail = failure.asio_failure
-                                            ? asio_failure_text(
-                                                "ASIO startup fatal", *failure.asio_failure)
-                                            : failure_text(
-                                                "Audio startup fatal",
-                                                failure.wasapi_failure.attempted,
-                                                failure.wasapi_failure.failure);
+                    const auto detail = failure_text(
+                        "Audio startup fatal",
+                        failure.wasapi_failure.attempted,
+                        failure.wasapi_failure.failure);
                     const auto text = std::format(
                         "{} requested_backend={} active_backend=failed",
                         detail,
@@ -1389,16 +868,25 @@ namespace gc::audio
                 AudioBackendControllerConfig config,
                 IWasapiOutputBackendFactory& wasapi,
                 IAsioOutputBackendFactory& asio,
-                IAudioBackendControllerReporter& reporter) noexcept
+                IAudioBackendControllerReporter& reporter)
                 : config_(std::move(config)),
                   wasapi_(wasapi),
                   asio_(asio),
                   reporter_(reporter)
             {
+                if (config_.requested_backend == AudioBackend::asio)
+                {
+                    controller_ = std::make_unique<AudioBackendController>(
+                        config_, wasapi_, asio_, reporter_);
+                }
             }
 
             IAudioEngineController* GetOrCreate() noexcept override
             {
+                if (config_.requested_backend == AudioBackend::asio)
+                {
+                    return controller_.get();
+                }
                 std::lock_guard lock(mutex_);
                 if (attempted_)
                 {
@@ -1438,6 +926,17 @@ namespace gc::audio
             return 0;
         }
 
+        bool configured_wasapi_exact_history(
+            const AudioSettings& settings) noexcept
+        {
+            if (const auto* wasapi = std::get_if<WasapiExclusiveSettings>(
+                &settings.selection()))
+            {
+                return wasapi->exact_history_required();
+            }
+            return false;
+        }
+
         AudioBackendControllerConfig production_controller_config(
             const AudioSettings& settings)
         {
@@ -1463,27 +962,25 @@ namespace gc::audio
             explicit ProductionDetourState(AudioSettings startup_settings)
                 : settings(std::move(startup_settings)),
                   config(production_controller_config(settings)),
-                  enable_absolute_time_judgement(settings.exact_clock_required()),
                   diagnostics{config.requested_backend},
                   reporter(production_platform_actions(), &diagnostics),
                   wasapi(
                       production_platform_actions(),
                       diagnostics,
-                      enable_absolute_time_judgement),
-                  asio(
-                      production_platform_actions(),
-                      enable_absolute_time_judgement),
+                      configured_wasapi_exact_history(settings)),
                   factory(config, wasapi, asio, reporter)
             {
-                report_audio_buffer_handoff(
-                    production_platform_actions(),
-                    "detour_state",
-                    config.wasapi_configured_duration);
+                if (config.requested_backend == AudioBackend::wasapi_exclusive)
+                {
+                    report_audio_buffer_handoff(
+                        production_platform_actions(),
+                        "detour_state",
+                        config.wasapi_configured_duration);
+                }
             }
 
             AudioSettings settings;
             AudioBackendControllerConfig config;
-            bool enable_absolute_time_judgement{};
             ProductionDiagnosticContext diagnostics;
             ProductionAudioBackendControllerReporter reporter;
             ProductionWasapiOutputBackendFactory wasapi;
@@ -1493,14 +990,61 @@ namespace gc::audio
 
         std::atomic<ProductionDetourState*> g_production_detour_state{};
 
+        // SafetyHook's mid-hook ABI requires a mutable context reference.
+        void OnAsioOrdinaryClose(safetyhook::Context&) noexcept
+        {
+            auto* const owner = g_production_detour_state.exchange(
+                nullptr,
+                std::memory_order_acq_rel);
+            if (owner == nullptr)
+            {
+                FailAudioContract(
+                    AudioContractFatalReason::AsioOwnershipFailure,
+                    kAsioCloseRva);
+            }
+            delete owner;
+        }
+
+        bool CreateAsioOrdinaryCloseHook(
+            safetyhook::MidHook& candidate) noexcept
+        {
+            const auto module = reinterpret_cast<std::uintptr_t>(
+                GetModuleHandleW(nullptr));
+            if (module != kSupportedImageBase)
+            {
+                return false;
+            }
+
+            const auto address = module + kAsioCloseRva;
+            std::array<unsigned char, kAsioCloseBytes.size()> observed{};
+            if (!ReadExecutableBytes(
+                    reinterpret_cast<const void*>(address),
+                    observed.data(),
+                    observed.size()) ||
+                observed != kAsioCloseBytes)
+            {
+                return false;
+            }
+
+            try
+            {
+                candidate = safetyhook::create_mid(
+                    reinterpret_cast<void*>(address),
+                    OnAsioOrdinaryClose);
+                return static_cast<bool>(candidate);
+            }
+            catch (...)
+            {
+                return false;
+            }
+        }
+
         ProductionAudioBackendControllerReporter g_startup_failure_reporter{
             production_platform_actions()
         };
 
         ProductionDetourState* production_detour_state() noexcept
         {
-            // Deliberately process-lifetime: DirectSound facade release and process
-            // detach must not tear down the engine or join its endpoint threads.
             return g_production_detour_state.load(std::memory_order_acquire);
         }
 
@@ -1688,92 +1232,6 @@ namespace gc::audio
                 emit_error(actions, "WASAPI audio startup fatal formatting failed");
             }
             show_error(actions);
-            if (actions.terminate_process != nullptr)
-            {
-                try
-                {
-                    actions.terminate_process(ERROR_DEVICE_NOT_AVAILABLE);
-                }
-                catch (...)
-                {
-                }
-            }
-            if (actions.fail_fast != nullptr)
-            {
-                try { actions.fail_fast(); }
-                catch (...)
-                {
-                }
-            }
-        }
-
-        void ReportAsioStartupSucceeded(
-            const AsioCapabilityReport& report,
-            const AsioLogicalBackendRecord& logical,
-            const AudioPatchPlatformActions& actions) noexcept
-        {
-            try
-            {
-                const auto text = asio_startup_text(report, logical);
-                emit_info(actions, text.c_str());
-            }
-            catch (...)
-            {
-                emit_error(actions, "ASIO startup diagnostics formatting failed");
-            }
-        }
-
-        void ReportAsioRuntimeSummary(
-            const AsioRuntimeCountersSnapshot& counters,
-            const AudioPatchPlatformActions& actions) noexcept
-        {
-            try
-            {
-                const auto text = std::string{"ASIO audio runtime summary "} +
-                    asio_counters_text(counters);
-                emit_info(actions, text.c_str());
-            }
-            catch (...)
-            {
-                emit_error(actions, "ASIO runtime summary formatting failed");
-            }
-        }
-
-        void ReportAsioRuntimeFailure(
-            const AsioCapabilityReport* report,
-            const AsioFailure& failure,
-            const AsioRuntimeCountersSnapshot& counters,
-            const AudioPatchPlatformActions& actions) noexcept
-        {
-            try
-            {
-                std::ostringstream stream;
-                stream << asio_failure_text("ASIO audio runtime fatal", failure)
-                    << ' ' << asio_counters_text(counters);
-                if (report != nullptr)
-                {
-                    stream << " asio_registry_name=\""
-                        << report->registration.registry_name << '"'
-                        << " asio_reported_name=\""
-                        << report->reported_driver_name << '"';
-                }
-                const auto text = stream.str();
-                emit_error(actions, text.c_str());
-            }
-            catch (...)
-            {
-                emit_error(actions, "ASIO runtime failure formatting failed");
-            }
-            if (actions.show_error != nullptr)
-            {
-                try
-                {
-                    actions.show_error(kAsioRuntimeFailureMessage.data());
-                }
-                catch (...)
-                {
-                }
-            }
             if (actions.terminate_process != nullptr)
             {
                 try
@@ -2068,6 +1526,15 @@ namespace gc::audio
             const auto requested_backend = settings.backend();
             const auto configured_buffer_ms =
                 configured_wasapi_buffer_ms(settings);
+            safetyhook::MidHook pending_asio_close_hook{};
+            if (requested_backend == AudioBackend::asio &&
+                !CreateAsioOrdinaryCloseHook(pending_asio_close_hook))
+            {
+                emit_error(
+                    actions,
+                    "AudioPatch: ASIO ordinary-close seam preflight failed");
+                return false;
+            }
             std::unique_ptr<ProductionDetourState> pending_state;
             if (requested_backend != AudioBackend::directsound)
             {
@@ -2103,6 +1570,10 @@ namespace gc::audio
             }
             if (pending_state)
             {
+                if (requested_backend == AudioBackend::asio)
+                {
+                    g_asio_close_hook = std::move(pending_asio_close_hook);
+                }
                 auto* const committed_state = pending_state.release();
                 g_production_detour_state.store(
                     committed_state, std::memory_order_release);

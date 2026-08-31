@@ -12,7 +12,6 @@ namespace gc::audio
     enum class ExactJudgementTimelineDomain : std::uint8_t
     {
         WasapiQpc,
-        LogicalMultimediaMilliseconds,
     };
 
     [[nodiscard]] std::string_view ExactJudgementTimelineDomainName(ExactJudgementTimelineDomain domain) noexcept;

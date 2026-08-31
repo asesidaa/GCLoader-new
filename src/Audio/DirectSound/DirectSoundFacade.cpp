@@ -511,17 +511,13 @@ namespace gc::audio
 
     SecondarySoundBuffer::~SecondarySoundBuffer()
     {
-        if (voice_ == nullptr)
-        {
-            return;
-        }
-
         voice_.reset();
         // Pinned miniaudio authority: ma_node_uninit() first performs a full
         // detach, and miniaudio.h states that detach waits for local node
         // processing to finish. MixerVoice destruction therefore proves that the
         // sole audio writer is quiesced before Release becomes the next writer.
-        if (timeline_->HasExactPlaybackHistory() &&
+        if (cursor_model_ == AudioCursorModel::PresentedOutput &&
+            timeline_ != nullptr && timeline_->HasExactPlaybackHistory() &&
             !timeline_->CloseExactWriterAfterQuiescence())
         {
             ExactInvariantFatal();
@@ -573,7 +569,11 @@ namespace gc::audio
             auto snapshot = std::make_shared<AudioSnapshot>(
                 descriptor.dwBufferBytes,
                 format.block_align);
-            auto timeline = std::make_shared<AudioCursorTimeline>();
+            std::shared_ptr<AudioCursorTimeline> timeline;
+            if (engine.cursor_model() == AudioCursorModel::PresentedOutput)
+            {
+                timeline = std::make_shared<AudioCursorTimeline>();
+            }
             auto* buffer = new(std::nothrow) SecondarySoundBuffer(
                 engine,
                 descriptor.dwFlags,
@@ -586,8 +586,10 @@ namespace gc::audio
             {
                 return DSERR_OUTOFMEMORY;
             }
-            if (!buffer->timeline_->AssignBufferInstanceId(
-                buffer_instance_id))
+            if (buffer->cursor_model_ == AudioCursorModel::PresentedOutput &&
+                (buffer->timeline_ == nullptr ||
+                    !buffer->timeline_->AssignBufferInstanceId(
+                        buffer_instance_id)))
             {
                 delete buffer;
                 ExactInvariantFatal();
@@ -1158,7 +1160,8 @@ namespace gc::audio
                 : 0;
         std::lock_guard control_lock(control_mutex_);
         const auto generation = NextPlaybackGeneration(
-            playback_generation_, timeline_->HasExactPlaybackHistory());
+            playback_generation_,
+            timeline_ != nullptr && timeline_->HasExactPlaybackHistory());
 
         if (cursor_model_ == AudioCursorModel::LogicalQpc)
         {
@@ -1199,11 +1202,6 @@ namespace gc::audio
             last_reported_source_frame_ =
                 FloorLogicalSourceFrameOrFatal(anchor) %
                 (buffer_bytes_ / format_.block_align);
-            if (timeline_->HasExactPlaybackHistory() &&
-                !timeline_->ExpectExactPlaybackGeneration(generation))
-            {
-                ExactInvariantFatal();
-            }
             return DS_OK;
         }
 
@@ -1242,7 +1240,8 @@ namespace gc::audio
         std::lock_guard control_lock(control_mutex_);
         const auto source_frame = position / format_.block_align;
         const auto generation = NextPlaybackGeneration(
-            playback_generation_, timeline_->HasExactPlaybackHistory());
+            playback_generation_,
+            timeline_ != nullptr && timeline_->HasExactPlaybackHistory());
 
         if (cursor_model_ == AudioCursorModel::LogicalQpc)
         {
@@ -1268,11 +1267,6 @@ namespace gc::audio
             playback_generation_ = generation;
             playback_origin_ = ExactPlaybackOrigin::Seek;
             last_reported_source_frame_ = source_frame;
-            if (timeline_->HasExactPlaybackHistory() &&
-                !timeline_->ExpectExactPlaybackGeneration(generation))
-            {
-                ExactInvariantFatal();
-            }
             return DS_OK;
         }
 

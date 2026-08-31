@@ -29,8 +29,6 @@ namespace gc::audio
         {
         case ExactJudgementTimelineDomain::WasapiQpc:
             return "wasapi_qpc";
-        case ExactJudgementTimelineDomain::LogicalMultimediaMilliseconds:
-            return "logical_multimedia_ms";
         default:
             return "invalid";
         }

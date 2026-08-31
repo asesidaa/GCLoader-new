@@ -2,15 +2,19 @@
 
 #include "AudioBackendEditorModel.h"
 
+#include "Audio/SupportedOutputSampleRate.h"
 #include "Config/ConfigCompiler.h"
 
 #include <Windows.h>
 
 #include <algorithm>
+// ReSharper disable once CppUnusedIncludeDirective
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <format>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -89,20 +93,9 @@ namespace
         case sample_rate: return "sample_rate";
         case buffer_metadata: return "buffer_metadata";
         case channel_info: return "channel_info";
-        case output_ready_probe: return "output_ready_probe";
-        case callback_prepare: return "callback_prepare";
         case create_buffers: return "create_buffers";
-        case latency: return "latency";
-        case render_core: return "render_core";
-        case start: return "start";
-        case startup_clock: return "startup_clock";
-        case callback: return "callback";
-        case conversion: return "conversion";
-        case runtime_clock: return "runtime_clock";
-        case output_ready: return "output_ready";
-        case stop: return "stop";
         case dispose: return "dispose";
-        case restore_sample_rate: return "restore_sample_rate";
+        case exit: return "exit";
         case protocol: return "protocol";
         case process_launch: return "process_launch";
         case process_job: return "process_job";
@@ -110,8 +103,6 @@ namespace
         case probe_crash: return "probe_crash";
         case control_panel: return "control_panel";
         case control_panel_crash: return "control_panel_crash";
-        case multimedia_timer: return "multimedia_timer";
-        case foreground_monitor: return "foreground_monitor";
         }
         return "unknown";
     }
@@ -125,7 +116,6 @@ namespace
         case asio: return "asio";
         case hresult: return "hresult";
         case win32: return "win32";
-        case winmm: return "winmm";
         }
         return "unknown";
     }
@@ -145,6 +135,19 @@ namespace
         case ASIOSTInt32LSB24: return "Int32LSB24";
         default: return "Unsupported";
         }
+    }
+
+    bool IsSupportedInspectedSampleRate(const double sample_rate) noexcept
+    {
+        if (!std::isfinite(sample_rate) || sample_rate <= 0.0 ||
+            std::trunc(sample_rate) != sample_rate ||
+            sample_rate > static_cast<double>(
+                (std::numeric_limits<std::uint32_t>::max)()))
+        {
+            return false;
+        }
+        return gc::audio::IsSupportedOutputSampleRate(
+            static_cast<std::uint32_t>(sample_rate));
     }
 
     std::vector<AsioChannelPairChoice> BuildChannelPairs(
@@ -194,10 +197,10 @@ namespace
             return std::unexpected(
                 "ASIO helper returned a different registry driver name");
         }
-        if (report.sample_rate != 48'000.0)
+        if (!IsSupportedInspectedSampleRate(report.sample_rate))
         {
             return std::unexpected(
-                "ASIO helper did not validate exact 48 kHz output");
+                "ASIO helper returned an unsupported current sample rate");
         }
         if (report.effective_buffer_frames != requested_frames)
         {
@@ -409,12 +412,13 @@ void AudioBackendEditorModel::CompleteInspection(
     channel_pairs_ = BuildChannelPairs(report);
     report_ = report;
     auto& experimental = config_->experimental();
-    if (report.sample_rate != 48'000.0 ||
+    if (!IsSupportedInspectedSampleRate(report.sample_rate) ||
         report.effective_buffer_frames == 0)
     {
         inspection_state_ = AsioInspectionState::failed;
         inspection_error_ =
-            "Inspection did not establish exact 48 kHz and a nonzero buffer";
+            "Inspection did not establish a supported current sample rate and "
+            "a nonzero buffer";
         return;
     }
     if (experimental.asio_buffer_frames() != 0 &&

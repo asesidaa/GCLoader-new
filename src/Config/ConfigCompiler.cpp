@@ -25,15 +25,15 @@ namespace gc::config
             rfl::Maximum<framerate::kMaximumTargetFps>>;
         using InputPollValidator = rfl::Validator<
             std::uint32_t,
-            rfl::OneOf <
-            rfl::EqualTo < 125>
-        ,
-        rfl::EqualTo<250>
-        ,
-        rfl::EqualTo<500>
-        ,
-        rfl::EqualTo<1000>
-        >
+            rfl::OneOf<
+                rfl::EqualTo<125>
+                ,
+                rfl::EqualTo<250>
+                ,
+                rfl::EqualTo<500>
+                ,
+                rfl::EqualTo<1000>
+            >
         >;
         using PercentValidator =
         rfl::Validator<std::uint32_t, rfl::Maximum<100>>;
@@ -41,15 +41,15 @@ namespace gc::config
         rfl::Validator<std::uint32_t, rfl::Minimum<1>>;
         using RegistryDwordValidator = rfl::Validator<
             std::int64_t,
-            rfl::Minimum < 0>
-        ,
-        rfl::Maximum<4294967295LL>
+            rfl::Minimum<0>
+            ,
+            rfl::Maximum<4294967295LL>
         >;
         using RegistryLogLevelValidator = rfl::Validator<
             std::int64_t,
-            rfl::Minimum < 0>
-        ,
-        rfl::Maximum<3>
+            rfl::Minimum<0>
+            ,
+            rfl::Maximum<3>
         >;
 
         bool IsUtf8ContinuationByte(unsigned char value) noexcept
@@ -785,6 +785,9 @@ namespace gc::config
                         },
                     };
 
+            const bool absolute =
+                document.experimental()
+                        .enable_absolute_time_judgement();
             audio::AudioBackendSettings audio_selection =
                 audio::DirectSoundSettings{};
             std::optional<audio::ExactJudgementTimelineDomain> clock_domain;
@@ -795,6 +798,7 @@ namespace gc::config
                     static_cast<std::uint32_t>(
                         document.experimental()
                                 .wasapi_exclusive_buffer_ms()),
+                    absolute,
                 };
                 clock_domain = audio::ExactJudgementTimelineDomain::WasapiQpc;
             }
@@ -842,9 +846,6 @@ namespace gc::config
                     static_cast<unsigned char>(character));
             }
 
-            const bool absolute =
-                document.experimental()
-                        .enable_absolute_time_judgement();
             return ValidatedConfig{
                 logging::LoggingSettings{log_level},
                 input::InputSettings{
@@ -862,7 +863,6 @@ namespace gc::config
                 audio::AudioSettings{
                     audio_backend,
                     std::move(audio_selection),
-                    absolute,
                 },
                 framerate::FramerateSettings{
                     target_fps,

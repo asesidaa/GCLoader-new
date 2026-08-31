@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Audio/AudioPatch.h"
-#include "Audio/Asio/AsioOutputBackend.h"
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
 
 #include <cstdint>
@@ -61,19 +60,6 @@ namespace gc::audio::detail
     void ReportAudioStartupFailure(
         const AudioStartupFailure&,
         const AudioPatchPlatformActions&) noexcept;
-    void ReportAsioStartupSucceeded(
-        const AsioCapabilityReport&,
-        const AsioLogicalBackendRecord&,
-        const AudioPatchPlatformActions&) noexcept;
-    void ReportAsioRuntimeSummary(
-        const AsioRuntimeCountersSnapshot&,
-        const AudioPatchPlatformActions&) noexcept;
-    void ReportAsioRuntimeFailure(
-        const AsioCapabilityReport*,
-        const AsioFailure&,
-        const AsioRuntimeCountersSnapshot&,
-        const AudioPatchPlatformActions&) noexcept;
-
     std::unique_ptr<ExclusiveAudioEngine> StartProductionExclusiveAudioEngine(
         CreateWasapiApiFn,
         StartExclusiveAudioEngineFn,

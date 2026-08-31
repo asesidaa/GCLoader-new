@@ -24,6 +24,7 @@ namespace gc::audio
             std::uint64_t output_frame_begin{};
             std::uint64_t discontinuity_frames{};
             std::uint32_t frame_count{};
+            bool publishes_timeline{};
         };
 
         thread_local MixerRenderContext* current_render_context{};
@@ -638,17 +639,21 @@ namespace gc::audio
 
         void EndPlayback(
             std::uint64_t run_token,
-            std::uint64_t final_output_end) noexcept
+            std::uint64_t final_output_end,
+            bool publish_audible_drain) noexcept
         {
             if (!playback.BeginEnd(run_token))
             {
                 return;
             }
-            audible_drain.Publish({
-                final_output_end,
-                run_token,
-                epoch,
-            });
+            if (publish_audible_drain)
+            {
+                audible_drain.Publish({
+                    final_output_end,
+                    run_token,
+                    epoch,
+                });
+            }
             ma_node_set_state(&node.base, ma_node_state_stopped);
             ended.store(true, std::memory_order_seq_cst);
             mixer->VoiceStopped();
@@ -971,7 +976,10 @@ namespace gc::audio
 
             if (source_ended)
             {
-                voice.EndPlayback(playback_run, gap_begin + represented);
+                voice.EndPlayback(
+                    playback_run,
+                    gap_begin + represented,
+                    true);
                 return DiscontinuityAdvanceResult::Ended;
             }
             return DiscontinuityAdvanceResult::Continue;
@@ -1180,7 +1188,7 @@ namespace gc::audio
                 represented_output,
                 remaining_output);
             std::uint64_t final_output_end{};
-            if (published_output != 0)
+            if (published_output != 0 && render->publishes_timeline)
             {
                 const auto output_begin = render->output_frame_begin +
                     voice.render_output_offset;
@@ -1199,7 +1207,10 @@ namespace gc::audio
             voice.render_output_offset += requested;
             if (source_ended)
             {
-                voice.EndPlayback(playback_run, final_output_end);
+                voice.EndPlayback(
+                    playback_run,
+                    final_output_end,
+                    render->publishes_timeline);
             }
         }
 
@@ -1455,7 +1466,7 @@ namespace gc::audio
         {
             *result = MA_INVALID_ARGS;
         }
-        if (state_ == nullptr || snapshot == nullptr || timeline == nullptr ||
+        if (state_ == nullptr || snapshot == nullptr ||
             format.block_align == 0 || snapshot->byte_length() == 0 ||
             snapshot->byte_length() % format.block_align != 0)
         {
@@ -1470,6 +1481,7 @@ namespace gc::audio
             voice_state->snapshot = std::move(snapshot);
             voice_state->timeline = std::move(timeline);
             voice_state->exact_history_enabled =
+                voice_state->timeline != nullptr &&
                 voice_state->timeline->HasExactPlaybackHistory();
             voice_state->source_length_frames =
                 voice_state->snapshot->byte_length() / format.block_align;
@@ -1602,8 +1614,24 @@ namespace gc::audio
         std::span<float> stereo,
         const MixerRenderTimeline& timeline) noexcept
     {
+        return RenderInternal(stereo, &timeline);
+    }
+
+    MixerRenderResult MiniaudioMixer::RenderSequential(
+        std::span<float> stereo) noexcept
+    {
+        return RenderInternal(stereo, nullptr);
+    }
+
+    // Rendering advances engine and voice state owned by the mixer.
+    // ReSharper disable once CppMemberFunctionMayBeConst
+    MixerRenderResult MiniaudioMixer::RenderInternal(
+        std::span<float> stereo,
+        const MixerRenderTimeline* timeline) noexcept
+    {
         if (state_ == nullptr ||
-            timeline.output_frame_begin < timeline.discontinuity_frames ||
+            (timeline != nullptr &&
+                timeline->output_frame_begin < timeline->discontinuity_frames) ||
             stereo.size() !=
             static_cast<std::size_t>(state_->period_frames) *
             kOutputChannels)
@@ -1625,9 +1653,10 @@ namespace gc::audio
 
         MixerRenderContext context{
             state_->render_id.fetch_add(1, std::memory_order_relaxed) + 1,
-            timeline.output_frame_begin,
-            timeline.discontinuity_frames,
+            timeline != nullptr ? timeline->output_frame_begin : 0,
+            timeline != nullptr ? timeline->discontinuity_frames : 0,
             state_->period_frames,
+            timeline != nullptr,
         };
         current_render_context = &context;
         ma_uint64 frames_read{};
@@ -1645,7 +1674,13 @@ namespace gc::audio
             state_->RecordRenderFailure(MixerRenderFailureSource::EngineRead);
         }
 
-        if (frames_read < state_->period_frames)
+        if (result == MA_SUCCESS && frames_read < state_->period_frames &&
+            active_voices == 0 && timeline == nullptr)
+        {
+            std::ranges::fill(stereo, 0.0F);
+            frames_read = state_->period_frames;
+        }
+        else if (frames_read < state_->period_frames)
         {
             std::fill(
                 stereo.begin() + static_cast<std::ptrdiff_t>(
