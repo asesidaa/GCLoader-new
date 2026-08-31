@@ -1,5 +1,7 @@
 #include "Patches/WindowedWidescreen/NativeWindowPolicy.h"
+#include "Patches/WindowedWidescreen/PassClassifier.h"
 #include "Patches/WindowedWidescreen/ProjectionPolicy.h"
+#include "Patches/WindowedWidescreen/RenderSpacePolicy.h"
 #include "Patches/WindowedWidescreen/ResolutionModel.h"
 #include "Patches/WindowedWidescreen/StageClipPolicy.h"
 
@@ -264,6 +266,192 @@ namespace
                 ClipGateAction::jump_live_frustum,
             "live-frustum policy skips authored clip loading");
     }
+
+    struct ClassifierDiagnostics
+    {
+        std::size_t identity_count{};
+        std::size_t overflow_count{};
+
+        static void UnknownIdentity(
+            void* context,
+            const std::uintptr_t) noexcept
+        {
+            ++static_cast<ClassifierDiagnostics*>(context)->identity_count;
+        }
+
+        static void UnknownOverflow(void* context) noexcept
+        {
+            ++static_cast<ClassifierDiagnostics*>(context)->overflow_count;
+        }
+    };
+
+    void PassClassifierUsesOnlyVerifiedStableIdentities()
+    {
+        using namespace gc::windowed_widescreen;
+        constexpr std::uintptr_t image_base = 0x00400000;
+        ClassifierDiagnostics diagnostics;
+        PassClassifier classifier{
+            image_base,
+            PassClassifierDiagnosticSink{
+                .context = &diagnostics,
+                .unknown_identity =
+                    &ClassifierDiagnostics::UnknownIdentity,
+                .unknown_capacity_exhausted =
+                    &ClassifierDiagnostics::UnknownOverflow,
+            },
+        };
+
+        Expect(
+            classifier.ClassifyTask(image_base + 0x002F9AFC) ==
+                RenderSpace::native_2d,
+            "relocated CCommon2DTask vtable selects native space");
+        Expect(
+            classifier.ClassifyTask(image_base + 0x002FB218) ==
+                RenderSpace::physical_3d,
+            "relocated CCommon3DTask vtable selects physical space");
+        Expect(
+            PassClassifier::ClassifyGameplay(
+                GameplayPass::orthographic_background) ==
+                RenderSpace::native_2d,
+            "orthographic gameplay background is native");
+        Expect(
+            PassClassifier::ClassifyGameplay(
+                GameplayPass::perspective_track) ==
+                RenderSpace::physical_3d,
+            "perspective gameplay track is physical");
+        Expect(
+            PassClassifier::ClassifyGameplay(
+                GameplayPass::orthographic_effects) ==
+                RenderSpace::native_2d,
+            "orthographic gameplay effects are native");
+
+        constexpr std::uintptr_t unknown = 0x12345678;
+        Expect(
+            classifier.ClassifyTask(unknown) == RenderSpace::native_2d &&
+                classifier.ClassifyTask(unknown) == RenderSpace::native_2d,
+            "unknown stable identities fail closed to native space");
+        Expect(
+            diagnostics.identity_count == 1 &&
+                classifier.unknown_identity_count() == 1,
+            "one unknown identity emits only one diagnostic");
+
+        for (std::size_t index = 1;
+             index < PassClassifier::unknown_identity_capacity();
+             ++index)
+        {
+            (void)classifier.ClassifyTask(unknown + index * 4);
+        }
+        (void)classifier.ClassifyTask(0x22345678);
+        (void)classifier.ClassifyTask(0x32345678);
+        Expect(
+            classifier.unknown_identity_count() ==
+                PassClassifier::unknown_identity_capacity(),
+            "unknown identity storage is fixed-capacity");
+        Expect(
+            diagnostics.overflow_count == 1 &&
+                classifier.unknown_capacity_exhausted(),
+            "unknown table overflow emits one aggregate diagnostic");
+    }
+
+    struct FakeThreadId
+    {
+        std::uint32_t value{};
+
+        static std::uint32_t Current(void* context) noexcept
+        {
+            return static_cast<FakeThreadId*>(context)->value;
+        }
+    };
+
+    void RenderSpacePolicyOwnsFrameAndThreadState()
+    {
+        using namespace gc::windowed_widescreen;
+        FakeThreadId thread{.value = 41};
+        RenderSpacePolicy policy{
+            OutputSize{.width = 1920, .height = 1600},
+            RenderThreadIdProvider{
+                .context = &thread,
+                .current = &FakeThreadId::Current,
+            },
+        };
+
+        const auto begin = policy.BeginFrame();
+        Expect(begin.has_value(), "first frame captures the render thread");
+        Expect(
+            policy.CurrentSpace().has_value() &&
+                *policy.CurrentSpace() == RenderSpace::physical_3d,
+            "each frame begins in physical space");
+
+        const auto nested = policy.BeginFrame();
+        Expect(
+            !nested && nested.error() == RenderSpaceError::nested_frame,
+            "nested frame begin is rejected");
+
+        const auto transition = policy.PublishSpace(RenderSpace::native_2d);
+        Expect(transition.has_value(), "same-thread transition is accepted");
+        Expect(
+            policy.CurrentSpace().has_value() &&
+                *policy.CurrentSpace() == RenderSpace::native_2d,
+            "published native space becomes current");
+
+        thread.value = 42;
+        const auto wrong_thread =
+            policy.PublishSpace(RenderSpace::physical_3d);
+        Expect(
+            !wrong_thread &&
+                wrong_thread.error() == RenderSpaceError::wrong_thread,
+            "transition from a different thread is rejected");
+        const auto wrong_end = policy.EndFrame();
+        Expect(
+            !wrong_end && wrong_end.error() == RenderSpaceError::wrong_thread,
+            "frame end from a different thread is rejected");
+
+        thread.value = 41;
+        Expect(policy.EndFrame().has_value(), "owner thread closes the frame");
+        const auto outside = policy.PublishSpace(RenderSpace::physical_3d);
+        Expect(
+            !outside && outside.error() == RenderSpaceError::outside_frame,
+            "transition outside a frame is rejected");
+
+        thread.value = 42;
+        const auto later_wrong_begin = policy.BeginFrame();
+        Expect(
+            !later_wrong_begin &&
+                later_wrong_begin.error() == RenderSpaceError::wrong_thread,
+            "later frames remain owned by the first render thread");
+    }
+
+    void RenderDimensionsFollowLogicalSpace()
+    {
+        using namespace gc::windowed_widescreen;
+        const OutputSize output{.width = 1920, .height = 1600};
+
+        const auto physical =
+            SelectRenderDimensions(RenderSpace::physical_3d, output);
+        Expect(
+            physical.has_value() && physical->width == 1920 &&
+                physical->height == 1600 &&
+                physical->width_float == 1920.0F &&
+                physical->height_float == 1600.0F,
+            "physical dimensions report exact integer and float output");
+
+        const auto native =
+            SelectRenderDimensions(RenderSpace::native_2d, output);
+        Expect(
+            native.has_value() && native->width == 720 &&
+                native->height == 1280 &&
+                native->width_float == 720.0F &&
+                native->height_float == 1280.0F,
+            "native dimensions report exact integer and float canvas");
+
+        const auto compositor =
+            SelectRenderDimensions(RenderSpace::compositor, output);
+        Expect(
+            !compositor &&
+                compositor.error() ==
+                    RenderSpaceError::compositor_dimensions,
+            "loader-owned compositor cannot answer game dimensions");
+    }
 } // namespace
 
 int main()
@@ -274,5 +462,8 @@ int main()
     WindowPlacementPrefersPrimaryThenEnumerationOrder();
     WindowPlacementRejectsInvalidOrUnfittableRequests();
     ClipPolicySelectsOneStableGateAction();
+    PassClassifierUsesOnlyVerifiedStableIdentities();
+    RenderSpacePolicyOwnsFrameAndThreadState();
+    RenderDimensionsFollowLogicalSpace();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

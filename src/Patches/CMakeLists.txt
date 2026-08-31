@@ -24,7 +24,9 @@ add_library(gc_runtime_patches STATIC
         RendererDeviceLoss/RendererDeviceLossPatch.cpp
         Countdown/CountdownTimerFreeze.cpp
         WindowedWidescreen/NativeWindowPolicy.cpp
+        WindowedWidescreen/PassClassifier.cpp
         WindowedWidescreen/ProjectionPolicy.cpp
+        WindowedWidescreen/RenderSpacePolicy.cpp
         WindowedWidescreen/ResolutionModel.cpp
         WindowedWidescreen/StageClipPolicy.cpp
 )
