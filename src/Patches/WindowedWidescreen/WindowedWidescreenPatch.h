@@ -3,6 +3,7 @@
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/WindowedWidescreen/D3D9CompositorDevice.h"
 #include "Patches/WindowedWidescreen/NativeWindowPolicy.h"
+#include "Patches/WindowedWidescreen/PassClassifier.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 
@@ -26,6 +27,8 @@ namespace gc::windowed_widescreen
         frame_end,
         task_dispatch,
         render_transition,
+        dimension_query,
+        viewport,
         projection,
         mouse_mapping,
         reset_pre,
@@ -93,6 +96,74 @@ namespace gc::windowed_widescreen
         std::uintptr_t renderer_owner,
         const FrameBoundaryHookActions& actions,
         WindowedWidescreenOperationStage stage) noexcept;
+
+    struct TaskDispatchHookActions
+    {
+        void* context{};
+        bool (*read_pointer)(
+            void*, std::uintptr_t, std::uintptr_t&) noexcept{};
+        RenderSpace (*classify_task)(void*, std::uintptr_t) noexcept{};
+        bool (*request_space)(void*, RenderSpace) noexcept{};
+        int (*call_original)(void*, std::uintptr_t) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<int, WindowedWidescreenError>
+    RunTaskDispatchHook(
+        std::uintptr_t task_node,
+        const TaskDispatchHookActions& actions) noexcept;
+
+    struct RenderSpaceHookActions
+    {
+        void* context{};
+        bool (*request_space)(void*, RenderSpace) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<void, WindowedWidescreenError>
+    RunGameplaySpaceHook(
+        GameplayPass pass,
+        const RenderSpaceHookActions& actions) noexcept;
+
+    enum class RenderDimensionAxis : std::uint8_t
+    {
+        width,
+        height,
+    };
+
+    struct RenderDimensionHookActions
+    {
+        void* context{};
+        bool (*current_dimensions)(void*, RenderDimensions&) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<std::uint32_t, WindowedWidescreenError>
+    RunRenderDimensionInt(
+        RenderDimensionAxis axis,
+        const RenderDimensionHookActions& actions) noexcept;
+
+    [[nodiscard]] std::expected<float, WindowedWidescreenError>
+    RunRenderDimensionFloat(
+        RenderDimensionAxis axis,
+        const RenderDimensionHookActions& actions) noexcept;
+
+    struct NativeViewport
+    {
+        float x{};
+        float y{};
+        float width{};
+        float height{};
+    };
+
+    struct ViewportResetHookActions
+    {
+        void* context{};
+        bool (*current_dimensions)(void*, RenderDimensions&) noexcept{};
+        int (*call_original)(void*, const NativeViewport*) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<int, WindowedWidescreenError>
+    RunViewportResetHook(
+        const NativeViewport* viewport,
+        const ViewportResetHookActions& actions) noexcept;
 
     [[nodiscard]] std::expected<void, WindowedWidescreenError>
     WindowedWidescreenPatchInit(

@@ -1459,6 +1459,221 @@ namespace
                 "final copy precedes native frame end and presentation");
         }
     }
+
+    struct FakeRenderHookActions
+    {
+        gc::windowed_widescreen::NativeCanvasCompositor* compositor{};
+        gc::windowed_widescreen::PassClassifier* classifier{};
+        std::size_t original_calls{};
+        std::size_t dimension_reads{};
+        std::size_t viewport_calls{};
+        gc::windowed_widescreen::NativeViewport last_viewport{};
+        const gc::windowed_widescreen::NativeViewport*
+            last_viewport_pointer{};
+
+        static bool ReadPointer(
+            void*,
+            const std::uintptr_t address,
+            std::uintptr_t& value) noexcept
+        {
+            if (address == 0)
+            {
+                return false;
+            }
+            value = *reinterpret_cast<const std::uintptr_t*>(address);
+            return true;
+        }
+
+        static gc::windowed_widescreen::RenderSpace Classify(
+            void* context,
+            const std::uintptr_t vtable) noexcept
+        {
+            return static_cast<FakeRenderHookActions*>(context)
+                ->classifier->ClassifyTask(vtable);
+        }
+
+        static bool Request(
+            void* context,
+            const gc::windowed_widescreen::RenderSpace space) noexcept
+        {
+            return static_cast<FakeRenderHookActions*>(context)
+                ->compositor->RequestSpace(space).has_value();
+        }
+
+        static int Original(void* context, std::uintptr_t) noexcept
+        {
+            ++static_cast<FakeRenderHookActions*>(context)->original_calls;
+            return 91;
+        }
+
+        static bool Dimensions(
+            void* context,
+            gc::windowed_widescreen::RenderDimensions& dimensions) noexcept
+        {
+            auto* self = static_cast<FakeRenderHookActions*>(context);
+            ++self->dimension_reads;
+            const auto current = self->compositor->CurrentDimensions();
+            if (!current)
+            {
+                return false;
+            }
+            dimensions = *current;
+            return true;
+        }
+
+        static int ViewportOriginal(
+            void* context,
+            const gc::windowed_widescreen::NativeViewport* viewport) noexcept
+        {
+            auto* self = static_cast<FakeRenderHookActions*>(context);
+            ++self->viewport_calls;
+            self->last_viewport_pointer = viewport;
+            if (viewport != nullptr)
+            {
+                self->last_viewport = *viewport;
+            }
+            return 47;
+        }
+    };
+
+    void RenderHookWrappersRouteSpacesDimensionsAndViewport()
+    {
+        using namespace gc::windowed_widescreen;
+        constexpr std::uintptr_t image_base = 0x00400000;
+
+        FakeThreadId thread;
+        FakeDeviceActions device;
+        auto compositor = MakeCompositor(thread, device);
+        PassClassifier classifier{image_base};
+        FakeRenderHookActions fake{
+            .compositor = &compositor,
+            .classifier = &classifier,
+        };
+
+        const auto begun = compositor.BeginFrame();
+        Expect(begun.has_value(), "render wrapper integration begins frame");
+        device.calls.clear();
+
+        std::uintptr_t native_vtable = image_base + 0x002F9AFC;
+        std::uintptr_t native_task =
+            reinterpret_cast<std::uintptr_t>(&native_vtable);
+        const auto native_node =
+            reinterpret_cast<std::uintptr_t>(&native_task);
+        const TaskDispatchHookActions task_actions{
+            .context = &fake,
+            .read_pointer = &FakeRenderHookActions::ReadPointer,
+            .classify_task = &FakeRenderHookActions::Classify,
+            .request_space = &FakeRenderHookActions::Request,
+            .call_original = &FakeRenderHookActions::Original,
+        };
+        const auto first_native = RunTaskDispatchHook(
+            native_node,
+            task_actions);
+        const auto adjacent_native = RunTaskDispatchHook(
+            native_node,
+            task_actions);
+        Expect(
+            first_native.has_value() && *first_native == 91 &&
+                adjacent_native.has_value() && *adjacent_native == 91 &&
+                fake.original_calls == 2,
+            "task wrapper preserves native dispatch results");
+        Expect(
+            std::count(
+                device.calls.begin(),
+                device.calls.end(),
+                DeviceCall::draw_scene_to_native) == 1,
+            "adjacent native tasks remain one compositor segment");
+
+        const RenderSpaceHookActions space_actions{
+            .context = &fake,
+            .request_space = &FakeRenderHookActions::Request,
+        };
+        Expect(
+            RunGameplaySpaceHook(
+                GameplayPass::orthographic_background,
+                space_actions).has_value() &&
+                RunGameplaySpaceHook(
+                    GameplayPass::perspective_track,
+                    space_actions).has_value() &&
+                RunGameplaySpaceHook(
+                    GameplayPass::perspective_track,
+                    space_actions).has_value() &&
+                RunGameplaySpaceHook(
+                    GameplayPass::orthographic_effects,
+                    space_actions).has_value(),
+            "gameplay wrapper accepts native physical physical native sequence");
+        Expect(
+            std::count(
+                device.calls.begin(),
+                device.calls.end(),
+                DeviceCall::draw_native_to_scene) == 1 &&
+                std::count(
+                    device.calls.begin(),
+                    device.calls.end(),
+                    DeviceCall::draw_scene_to_native) == 2,
+            "gameplay sequence performs copies only on actual transitions");
+
+        const RenderDimensionHookActions dimension_actions{
+            .context = &fake,
+            .current_dimensions = &FakeRenderHookActions::Dimensions,
+        };
+        Expect(
+            RunRenderDimensionInt(
+                RenderDimensionAxis::width,
+                dimension_actions) == 720 &&
+                RunRenderDimensionInt(
+                    RenderDimensionAxis::height,
+                    dimension_actions) == 1280 &&
+                RunRenderDimensionFloat(
+                    RenderDimensionAxis::width,
+                    dimension_actions) == 720.0F &&
+                RunRenderDimensionFloat(
+                    RenderDimensionAxis::height,
+                    dimension_actions) == 1280.0F,
+            "all native getter variants agree exactly");
+
+        NativeViewport explicit_viewport{
+            .x = 3.0F,
+            .y = 4.0F,
+            .width = 50.0F,
+            .height = 60.0F,
+        };
+        const ViewportResetHookActions viewport_actions{
+            .context = &fake,
+            .current_dimensions = &FakeRenderHookActions::Dimensions,
+            .call_original = &FakeRenderHookActions::ViewportOriginal,
+        };
+        const auto explicit_result = RunViewportResetHook(
+            &explicit_viewport,
+            viewport_actions);
+        Expect(
+            explicit_result.has_value() && *explicit_result == 47 &&
+                fake.last_viewport_pointer == &explicit_viewport,
+            "explicit viewport passes through by identity");
+        const auto dimension_reads_before_null = fake.dimension_reads;
+        const auto null_result = RunViewportResetHook(nullptr, viewport_actions);
+        Expect(
+            null_result.has_value() && *null_result == 47 &&
+                fake.dimension_reads == dimension_reads_before_null + 1 &&
+                fake.last_viewport.x == 0.0F &&
+                fake.last_viewport.y == 0.0F &&
+                fake.last_viewport.width == 720.0F &&
+                fake.last_viewport.height == 1280.0F,
+            "null viewport becomes an explicit current-space rectangle");
+
+        const auto ended = compositor.EndFrame();
+        Expect(ended.has_value(), "render wrapper integration ends frame");
+        Expect(
+            std::count(
+                device.calls.begin(),
+                device.calls.end(),
+                DeviceCall::draw_native_to_scene) == 2 &&
+                std::count(
+                    device.calls.begin(),
+                    device.calls.end(),
+                    DeviceCall::draw_scene_to_backbuffer) == 1,
+            "frame end closes native space then performs one final copy");
+    }
 } // namespace
 
 int main()
@@ -1480,5 +1695,6 @@ int main()
     HookRollbackReportsVerificationAndPublicationFailures();
     HookTransactionRejectsInvalidActionsAndCapacity();
     BaseHookWrappersPreserveNativeOrderingAndResults();
+    RenderHookWrappersRouteSpacesDimensionsAndViewport();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
