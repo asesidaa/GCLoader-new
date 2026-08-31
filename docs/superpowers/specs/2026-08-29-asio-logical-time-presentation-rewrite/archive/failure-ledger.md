@@ -4015,3 +4015,88 @@ edits.
   `floor(J(q) * configured_target_rate)`. The existing Tune catch-up consumes
   that absolute tick. Judgement never consumes Tune ticks and remains on exact
   event `J(q)` through its separate millisecond boundary.
+
+### S-395: The entire live IASIO lifecycle was assigned to the wrong COM apartment
+
+- **Mistake:** The approved candidate prohibited a loader-owned COM thread and
+  required direct IASIO creation, use, and release on the native game loop's
+  existing MTA. This premise was not validated against the selected driver's COM
+  registration before approval or implementation. The deployed driver was
+  registered `ThreadingModel=Apartment`; runtime terminated in
+  `CoCreateInstance` with `E_NOINTERFACE` before `IASIO::init`. Because startup,
+  steady ownership, message servicing, and shutdown all depended on that MTA
+  premise, the lifecycle half of both the specification and plan was invalid,
+  not merely one factory call.
+- **Prevention:** Every selected ASIO driver uses one identical generic host
+  path. One dedicated STA initializes COM, creates and owns IASIO, pumps its
+  message queue, executes every host lifecycle call, releases IASIO, and
+  uninitializes COM. The game MTA receives no IASIO ownership. Startup completion
+  and ordinary shutdown use only two one-shot handoffs; no recovery state
+  machine is restored. Driver registration plus runtime evidence must validate
+  the thread premise before future approval.
+
+### S-396: A driver-specific threading dispatcher was proposed after the MTA failure
+
+- **Mistake:** The first reaction to the apartment failure began expanding the
+  design toward registry-driven `Apartment`/`Free`/`Both`/`Neutral` dispatch.
+  That would replace one false assumption with vendor-registration policy,
+  branches, and unsupported compatibility behavior that the task never needed.
+- **Prevention:** Use the same Steinberg-style STA host path for every selected
+  32-bit ASIO driver. Do not branch on vendor, name, CLSID, hardware, or
+  `ThreadingModel`; a direct COM or IASIO failure is Fatal, never a trigger for a
+  second apartment, manual DLL loading, retry, or fallback.
+
+### S-397: The first STA rewrite still let the owner outlive shell storage it could access
+
+- **Mistake:** The first replacement draft separated the driver lifecycle from
+  the game thread but still described the thread, live session, and published
+  services as one backend object. Beginning that object's destructor on the game
+  thread while its owner thread still used members would recreate a C++ lifetime
+  race even if every IASIO call used the correct apartment.
+- **Prevention:** Fully construct a game-facing shell before starting the owner.
+  Move the owner's inputs into its entry and give it only copied kernel-handle
+  values. The owner may fill the shell's service slot only before signalling
+  startup; afterward it never dereferences the shell. Its private live session
+  is created and destroyed inside the STA, and the shell keeps handles alive
+  until its join completes.
+
+### S-398: The first STA startup order published callbacks before their target was complete
+
+- **Mistake:** The first replacement draft installed the callback route before
+  buffer creation, channel-type discovery, mixer construction, and conversion
+  storage construction. A driver callback at that point could observe a
+  published but incomplete target.
+- **Prevention:** Supply the static callbacks to CreateBuffers while the audio
+  route remains null. Finish channel discovery, mixer/conversion construction,
+  initial silence, and the outputReady probe first. Publish the one complete
+  callback target immediately before Start; a callback entering with a null
+  target is Fatal.
+
+### S-399: Callback pseudocode and prose disagreed on the first operation
+
+- **Mistake:** After adding the null-route Fatal rule, the callback pseudocode
+  loaded the route before testing the callback-active bit while the prose still
+  called the bit the first callback operation. Both could not be literal.
+- **Prevention:** Load and validate the one callback target first. The
+  callback-active test-and-set is the first operation on that target. Keep the
+  same order in prose, pseudocode, static proof, and implementation.
+
+### S-400: The rejected implementation plan still advertised old approval
+
+- **Mistake:** After rejecting the MTA implementation, its plan still named the
+  old frozen tree as approved and remained directly executable. It also required
+  removing `user32`, contradicting the corrected STA owner's required Windows
+  message wait and pump.
+- **Prevention:** Mark the entire old plan rejected and historical immediately.
+  Do not edit it into the replacement plan. Write a new plan only after the
+  replacement specification passes its new review gate and the user explicitly
+  approves that specification.
+
+### S-401: Static proof overclaimed COM balancing on Fatal paths
+
+- **Mistake:** A static-proof bullet initially required every successful
+  `CoInitializeEx` to reach `CoUninitialize`, contradicting the controlling rule
+  that any later Fatal terminates immediately without cleanup.
+- **Prevention:** Require exact COM balancing only for a session that reaches
+  ordinary shutdown. Keep every Fatal path non-returning and cleanup-free even
+  when STA initialization had already succeeded.

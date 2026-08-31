@@ -1,5 +1,12 @@
 # ASIO Transport and Absolute Judgement Simplification Implementation Plan
 
+> **Status: REJECTED HISTORICAL PLAN. DO NOT EXECUTE.** Its game-loop MTA
+> ownership premise failed at runtime during `CoCreateInstance` with
+> `E_NOINTERFACE`, and its source result is rejected. The referenced approved
+> tree is no longer authoritative. A replacement plan may be written only after
+> the current normative specification completes its new review gate and receives
+> explicit user approval.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Execute inline on the current branch; do not create a worktree or dispatch subagents unless the user explicitly changes that instruction.
 
 **Goal:** Replace the failed ASIO recovery and clock-reconciliation implementation with one synchronous exclusive ASIO PCM session and one ASIO-independent QPC song/judgement timeline, while preserving the existing WASAPI path.

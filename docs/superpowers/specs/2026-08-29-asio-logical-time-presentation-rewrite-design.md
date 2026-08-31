@@ -1,11 +1,21 @@
 # ASIO Transport and Absolute Judgement Simplification
 
-**Status:** Review candidate. No implementation plan or source change is
-permitted until this exact specification receives two independent zero-finding
-reviews and the user approves it.
+**Status:** Replacement review candidate after runtime rejection of the prior
+thread model. No implementation plan or source change is permitted until this
+exact specification receives two independent zero-finding reviews and the user
+approves it.
 
 This is the task's only normative specification. The adjacent
 `archive/failure-ledger.md` is non-normative history.
+
+The prior candidate and its implementation are rejected. It created IASIO on
+the native game loop's existing MTA. The selected x86 driver is registered
+`ThreadingModel=Apartment`; the deployed implementation consequently terminated
+during `CoCreateInstance` with `E_NOINTERFACE` before `IASIO::init`. Steinberg's
+Windows host uses the driver CLSID as both class ID and IASIO IID, so the IID was
+not the error. The rejected path required COM to expose that apartment-owned
+custom interface to the game MTA, and that operation failed. No statement from
+the rejected thread model remains authoritative.
 
 ## 1. Controlling decision
 
@@ -16,9 +26,10 @@ This task defaults every correction to deletion.
 - Add replacement behavior only where deletion alone cannot satisfy a required
   behavior stated in this document.
 - Any unavoidable replacement is the smallest direct connection between
-  existing owners. It must not introduce another state machine, worker,
-  synchronization protocol, retry loop, clock bridge, history, generation,
-  lifecycle owner, or compatibility fallback.
+  existing owners. The one dedicated STA owner and its two one-shot handoffs in
+  section 5 are required by the Windows ASIO COM contract. They must not grow
+  into a recovery state machine, command queue, retry loop, clock bridge,
+  history, generation, or compatibility fallback.
 - A new secondary problem means the added mechanism is removed and the
   smallest way to satisfy the original required behavior is reconsidered; it
   is not a reason to omit that behavior or add another coordinating mechanism.
@@ -193,34 +204,121 @@ timer query. It is allocation-free and non-throwing after successful startup.
 
 ## 5. ASIO transport
 
-### 5.1 One session
+### 5.1 One STA-owned session
 
-Startup is one synchronous sequence:
+Every configured 32-bit ASIO driver uses the same host path. There is no driver
+name, vendor, CLSID, executable, or hardware-specific branch. The live backend
+has exactly two ownership units:
 
-1. open and initialize the configured driver;
-2. query its current sample rate, buffer capabilities, and output-channel
+- a game-facing shell owns only the dedicated thread, the two one-shot handles,
+  and the successfully published immutable service view; and
+- one private live session is created, retained, shut down, and destroyed
+  entirely inside that thread. It owns the IASIO wrapper, ASIO buffers, frozen
+  format, mixer, conversion storage, and callback target.
+
+The shell never owns IASIO and the live session never owns the shell or native
+game lifetime. The shell is fully constructed before the owner thread starts.
+The owner entry receives all moved startup inputs and copies of the two kernel
+handle values. It may write the shell's empty service-view slot only before it
+signals startup complete; after that signal it never dereferences the shell.
+The shell keeps both handles open until the owner has returned. This split
+prevents game-thread shell destruction from beginning the lifetime end of an
+object or C++ storage still used by the owner. It adds no command interface or
+state machine.
+
+The shell starts one dedicated thread. The owner entry initializes its own
+thread exactly once with `CoInitializeEx(nullptr,
+COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)`, and creates IASIO there
+through Steinberg's standard
+`CoCreateInstance(driver_clsid, nullptr, CLSCTX_INPROC_SERVER, driver_clsid,
+...)` contract. IASIO ownership is never published to the game loop or another
+host control thread.
+
+The host does not inspect or branch on `InprocServer32\ThreadingModel`, load a
+vendor DLL manually, or attempt a second apartment. Windows COM applies the
+selected driver's registration to this one STA `CoCreateInstance` call. A
+driver that requires COM marshaling must provide it through its own valid COM
+registration. Any returned COM failure is startup Fatal, not permission for a
+driver-specific workaround.
+
+The owner creates its Windows message queue before opening the driver. All
+host-initiated IASIO lifecycle calls execute on that same owner thread. The only
+exception is `outputReady` from inside a driver-owned ASIO callback, which is
+part of the SDK callback contract defined in section 5.3. The game loop's MTA
+never creates, receives, calls, stops, disposes, releases, or unmarshals IASIO.
+
+`S_OK` and `S_FALSE` are successful STA initialization results and each is
+balanced by exactly one `CoUninitialize` on ordinary shutdown. A failed
+`CoInitializeEx` result is immediate Fatal and is not balanced as though COM had
+initialized successfully.
+
+The caller observes one synchronous, unbounded startup operation. Its internal
+order is exact:
+
+1. fully construct the game-facing shell, its empty service-view slot, and its
+   two one-shot synchronization handles;
+2. move all startup inputs into the sole STA owner entry, copy the two handle
+   values into that entry, start it, and wait for its startup-complete handle;
+3. on the owner, initialize COM as STA and create the owner's message queue;
+4. allocate the private live session, resolve and create the configured driver,
+   then call `init` with the game window as the one-shot SDK system reference;
+5. query its current sample rate, buffer capabilities, and output-channel
    count;
-3. validate and freeze sample rate, exact configured frame count, and the two
+6. validate and freeze sample rate, exact configured frame count, and the two
    selected output-channel indices;
-4. install the fixed callback route and create both output buffer halves;
-5. query the two active channel descriptions, then validate and freeze their
+7. supply the fixed callbacks and create both output buffer halves while the
+   audio callback route is still null;
+8. query the two active channel descriptions, then validate and freeze their
    sample types;
-6. construct the mixer and fixed conversion storage for that frozen format;
-7. clear both halves with format-correct digital silence without calling the
-   mixer or advancing audio state;
-8. probe `outputReady` exactly once: `ASE_OK` freezes support as enabled,
-   `ASE_NotPresent` freezes it as disabled, and any other result is startup
-   Fatal;
-9. call Start; and
-10. return the live backend.
+9. construct the mixer and fixed conversion storage for that frozen format;
+10. clear both halves with format-correct digital silence without calling the
+    mixer or advancing audio state;
+11. probe `outputReady` exactly once: `ASE_OK` freezes support as enabled,
+    `ASE_NotPresent` freezes it as disabled, and any other result is startup
+    Fatal;
+12. publish the one callback target, call Start, and require `ASE_OK`;
+13. write the immutable game-facing service view, emit the bounded startup
+    record, signal startup complete exactly once, and enter the owner message
+    loop; and
+14. return the shell for the already-live session after that signal.
 
-Startup has no focus check, timeout, retry, fallback, replacement session,
-controller thread, readiness state, or post-start calibration. The actual stage
-does not begin inside ASIO startup, so startup may take as long as the driver
-requires.
+The two handles have no general protocol. `startup-complete` is signalled once
+by the owner and waited once by the starting caller. `shutdown-requested` is
+signalled once by ordinary backend destruction and consumed by the owner
+message loop. There is no command queue, request identifier, acknowledgement,
+generation, intermediate readiness state, or second start.
 
-Any startup failure is immediate non-returning Fatal. Fatal performs no partial
-startup cleanup and no backend fallback.
+After the startup wait succeeds, shell service calls can only create mixer
+voices or read the frozen frame count/sample rate. They cannot invoke IASIO,
+signal the owner, or mutate lifecycle. Publication is one-way and the service
+view remains stable until the proven ordinary-close seam, after the native game
+has destroyed its sound owner and can make no later service call.
+
+The successful startup-complete signal/wait is the only publication boundary
+for the service view. Its fields are immutable afterward and therefore need no
+per-field atomics, lock, version, or readiness flag.
+
+The published view contains exactly one `AudioRenderCore*`, the frozen frame
+count, and the frozen sample rate. `CreateVoice` forwards to that render core;
+`endpoint_buffer_frames` and `output_sample_rate` return the copied frozen
+values; `CurrentOutputFrame` remains unavailable; and the two legacy cursor
+diagnostic counters remain no-ops. No shell method dereferences the live session
+or its IASIO wrapper.
+
+After startup, the owner performs no periodic work and makes no runtime IASIO
+call. It waits indefinitely with `MsgWaitForMultipleObjectsEx` for either the
+one shutdown handle or its STA message queue. Message availability only drains
+and dispatches that queue; it cannot alter audio, focus, timing, or lifecycle
+state. Shutdown availability enters the one ordinary sequence in section 5.5.
+The wait has no timeout or polling interval. `WAIT_FAILED` or any unexpected
+result is immediate ownership Fatal; it never begins shutdown or recovery.
+
+Startup has no focus check, deadline, retry, fallback, replacement session, or
+post-start calibration. The actual stage does not begin inside ASIO startup, so
+startup may take as long as the driver requires. Event creation, thread
+creation, STA initialization, driver creation, or any later startup operation
+failure is immediate non-returning Fatal. Fatal performs no partial startup
+cleanup and no backend fallback.
 
 ### 5.2 Immutable driver format
 
@@ -238,11 +336,20 @@ shown only in frames.
 
 ### 5.3 Callback
 
+The audio callback route is one non-owning atomic pointer. It is null while
+buffers are created, stored exactly once immediately before Start, loaded once
+at audio-callback entry, and cleared exactly once after successful Exit. A null
+route at audio-callback entry is immediate Fatal. The route never transfers
+ownership and carries no generation, status, or recovery meaning; the Stop/Exit
+contract and owner-thread lifetime keep its target alive for every admitted
+callback.
+
 The bundled SDK permits callback access recursively. Both `bufferSwitch` and
 `bufferSwitchTimeInfo` are installed, and exactly one non-blocking atomic
 callback-active bit rejects recursion or simultaneous entry:
 
 ```text
+load callback target; null means Fatal
 if callback-active was already set: Fatal
 RenderPcm(frozen_frame_count)
 convert to the two frozen channel formats
@@ -252,11 +359,11 @@ clear callback-active
 return
 ```
 
-The bit is tested and set as the first callback operation, is cleared only
-immediately before normal return, and has no consumer outside the two callback
-entries. It never waits, queues, serializes after contention, orders lifecycle
-work, or protects any non-callback path. Reentry is an explicit structural
-overload and therefore immediate Fatal.
+After the one route load succeeds, the bit is the first target operation. It is
+cleared only immediately before normal return and has no consumer outside the
+two callback entries. It never waits, queues, serializes after contention,
+orders lifecycle work, or protects any non-callback path. Reentry is an explicit
+structural overload and therefore immediate Fatal.
 
 Ordinary `asioMessage` capability queries use fixed, session-independent
 answers:
@@ -301,10 +408,11 @@ An invalid buffer index, a render/conversion failure, a non-finite sample, or
 an enabled `outputReady` call returning anything other than `ASE_OK` is
 immediate Fatal.
 
-There is no worker, queue, render lock, overlap recovery or serialization,
-timing measurement, deadline, silence inference, callback history, or normal
-per-callback logging. The one callback-active bit is only a non-blocking Fatal
-detector.
+There is no callback worker, queue, render lock, overlap recovery or
+serialization, timing measurement, deadline, silence inference, callback
+history, or normal per-callback logging. The STA owner never renders or receives
+PCM and is not a callback worker. The one callback-active bit is only a
+non-blocking Fatal detector.
 
 ### 5.4 Focus and runtime faults
 
@@ -329,9 +437,10 @@ audio content, CPU load, or focus. It reacts only to an explicit SDK result or
 notification. Silent callback cessation is outside the admitted driver
 contract; no time watchdog is invented for it.
 
-From callback-route installation until callback-route clearing, each of these
-explicit observations is immediate non-returning Fatal whenever it can arrive,
-including during startup, ordinary running, or ordinary shutdown:
+From the moment callbacks are supplied to CreateBuffers until callback-route
+clearing, each of these explicit observations is immediate non-returning Fatal
+whenever it can arrive, including during startup, ordinary running, or ordinary
+shutdown:
 
 - `kAsioResetRequest`;
 - `kAsioResyncRequest`;
@@ -348,19 +457,34 @@ replacement, continuation, or fallback after such an observation.
 ### 5.5 Shutdown and Fatal
 
 Ordinary shutdown is the only cleanup path. It discards unsubmitted audio work
-and directly performs:
+and uses the second one-shot handoff. Destruction of the game-facing shell on the
+native game loop signals `shutdown-requested` exactly once and joins the STA
+owner. The private live session remains wholly alive while the shell destructor
+waits. The owner wakes and directly performs, on the same STA that created
+IASIO:
 
 ```text
 ASIOStop -> ASIODisposeBuffers -> ASIOExit -> clear callback route
+-> destroy live-session storage -> CoUninitialize -> owner thread returns
 ```
 
-No callback join, acknowledgement, generation, timeout, or teardown recovery
-is added. `ASIOStop`, `ASIODisposeBuffers`, and `ASIOExit` are each called once
-in that order and must return `ASE_OK`; the first other result enters Fatal
-immediately and no later cleanup step runs. `ASIOExit` is the one driver
-exit-and-release operation; there is no separate release call. Callback-route
-clearing occurs only after `ASIOExit` returns `ASE_OK` and is an infallible
-local assignment.
+The native game loop waits only for that owner thread to return; it never calls
+IASIO and receives no intermediate result. There is no callback join, callback
+acknowledgement, lifecycle command queue, generation, timeout, or teardown
+recovery. The owner message loop has exactly two normal outcomes: dispatch an
+STA message and continue waiting, or consume `shutdown-requested` and execute
+the sequence above.
+
+`ASIOStop`, `ASIODisposeBuffers`, and `ASIOExit` are each called once in that
+order and must return `ASE_OK`; the first other result enters Fatal immediately
+and no later cleanup step runs. Successful Stop is the driver boundary after
+which no callback may enter. `ASIOExit` is the one driver exit-and-release
+operation; there is no separate release call. Callback-route clearing occurs
+only after `ASIOExit` returns `ASE_OK` and is an infallible local assignment.
+The owner then destroys the now driver-free live session, calls
+`CoUninitialize` once, and returns. The shell destructor's join completes only
+after that return. It then closes the two synchronization handles and allows the
+native game loop to continue through its own MTA `CoUninitialize` unchanged.
 
 Every Fatal source calls one production non-returning hard-crash boundary.
 Fatal may record only directly available bounded context. It performs no Stop,
@@ -385,8 +509,8 @@ the following:
 
 Retain only the direct code required for the logical QPC behavior in section 3,
 the sequential mixer behavior in section 4, the single ASIO session in section
-5, ConfigGUI's driver-format validation, ordinary shutdown, and unchanged
-WASAPI behavior.
+5, its sole STA owner/message pump and two one-shot handoffs, ConfigGUI's
+driver-format validation, ordinary shutdown, and unchanged WASAPI behavior.
 
 Do not keep deleted mechanisms dormant behind flags or compatibility wrappers.
 
@@ -441,11 +565,37 @@ After implementation, trace the final source and demonstrate:
 - no loader focus, move/resize, or notification-audio path stops, releases,
   restarts, or replaces the ASIO session;
 - no recovery, retry, replacement, or ASIO clock-reconciliation code remains;
+- every selected driver uses the same live host path with no vendor, name,
+  CLSID, executable, or hardware-specific branch;
+- the game-facing shell owns only the STA thread, two handles, and immutable
+  published services, while the private live session and all of its storage are
+  created and destroyed inside the owner thread;
+- the owner entry receives startup inputs and handle values without retaining a
+  shell reference; it writes the service slot only before startup-complete and
+  never dereferences shell storage afterward;
+- the live driver factory is reached only after the sole owner thread has
+  successfully initialized one STA and created its message queue;
+- the callback route remains null through buffer creation, format discovery,
+  mixer/conversion construction, initial silence, and outputReady probing; it is
+  published once immediately before Start, and a null audio-callback route is
+  Fatal;
+- IASIO ownership is never published to the game loop, every host-initiated
+  IASIO lifecycle call and final release executes on the owner STA, and the game
+  loop's MTA never touches it; the only non-owner IASIO call is callback-local
+  `outputReady` under the SDK callback contract;
+- exactly one startup-complete handoff and one shutdown-request handoff exist;
+  neither has an identifier, timeout, retry, queue, state transition, or timing
+  role;
+- after startup the STA owner only dispatches its message queue or consumes the
+  one shutdown request;
 - every listed explicit runtime fault enters non-returning Fatal;
 - Fatal has no cleanup successor;
 - ordinary shutdown is exactly one successful
-  `ASIOStop -> ASIODisposeBuffers -> ASIOExit -> route clear` chain with no
-  added host synchronization protocol;
+  `ASIOStop -> ASIODisposeBuffers -> ASIOExit -> route clear -> CoUninitialize`
+  chain on the owner STA with live-session destruction before COM
+  uninitialization, followed by owner return and one game-thread join; every
+  successful STA initialization that reaches ordinary shutdown has exactly that
+  one balance, while Fatal terminates without cleanup;
 - ConfigGUI has no 48 kHz assumption; and
 - WASAPI behavior is unchanged.
 
