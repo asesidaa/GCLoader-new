@@ -3,6 +3,8 @@
 #include "Audio/AudioBackendController.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
+#include <plog/Log.h>
+
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 // ReSharper disable once CppUnusedIncludeDirective
@@ -25,6 +27,69 @@ namespace gc::audio
             DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER;
 
         std::atomic_uint64_t g_next_buffer_instance_id{1};
+        std::atomic_uint32_t g_buffer_diagnostic_events{};
+        constexpr std::uint32_t kBufferDiagnosticEventLimit = 4096;
+
+        bool ClaimBufferDiagnosticEvent() noexcept
+        {
+            return g_buffer_diagnostic_events.fetch_add(
+                    1, std::memory_order_relaxed) <
+                kBufferDiagnosticEventLimit;
+        }
+
+        void LogBufferCreate(
+            const std::uint64_t buffer_id,
+            const DWORD flags,
+            const DWORD buffer_bytes,
+            const NormalizedSourceFormat& format,
+            const VoiceUsage usage) noexcept
+        {
+            if (!ClaimBufferDiagnosticEvent())
+            {
+                return;
+            }
+            try
+            {
+                PLOG_INFO
+                    << "DirectSound buffer diagnostic: event=create, id="
+                    << buffer_id
+                    << ", flags=" << flags
+                    << ", bytes=" << buffer_bytes
+                    << ", frames=" << buffer_bytes / format.block_align
+                    << ", rate=" << format.sample_rate
+                    << ", channels=" << format.channels
+                    << ", bits=" << format.bits_per_sample
+                    << ", usage=" << static_cast<unsigned>(usage);
+            }
+            catch (...)
+            {
+            }
+        }
+
+        void LogBufferControl(
+            const char* const event,
+            const std::uint64_t buffer_id,
+            const std::uint64_t value0 = 0,
+            const std::uint64_t value1 = 0,
+            const std::uint64_t value2 = 0) noexcept
+        {
+            if (!ClaimBufferDiagnosticEvent())
+            {
+                return;
+            }
+            try
+            {
+                PLOG_INFO
+                    << "DirectSound buffer diagnostic: event=" << event
+                    << ", id=" << buffer_id
+                    << ", value0=" << value0
+                    << ", value1=" << value1
+                    << ", value2=" << value2;
+            }
+            catch (...)
+            {
+            }
+        }
 
         [[noreturn]] void ExactInvariantFatal() noexcept
         {
@@ -615,6 +680,13 @@ namespace gc::audio
                 return DSERR_OUTOFMEMORY;
             }
 
+            LogBufferCreate(
+                buffer_instance_id,
+                descriptor.dwFlags,
+                descriptor.dwBufferBytes,
+                format,
+                usage);
+
             *result = buffer;
             return DS_OK;
         }
@@ -1202,6 +1274,12 @@ namespace gc::audio
             last_reported_source_frame_ =
                 FloorLogicalSourceFrameOrFatal(anchor) %
                 (buffer_bytes_ / format_.block_align);
+            LogBufferControl(
+                "play",
+                buffer_instance_id_,
+                looping ? 1 : 0,
+                generation,
+                last_reported_source_frame_);
             return DS_OK;
         }
 
@@ -1221,6 +1299,12 @@ namespace gc::audio
             {
                 ExactInvariantFatal();
             }
+            LogBufferControl(
+                "play",
+                buffer_instance_id_,
+                (flags & DSBPLAY_LOOPING) != 0 ? 1 : 0,
+                generation,
+                anchor);
         }
         return result;
     }
@@ -1267,6 +1351,11 @@ namespace gc::audio
             playback_generation_ = generation;
             playback_origin_ = ExactPlaybackOrigin::Seek;
             last_reported_source_frame_ = source_frame;
+            LogBufferControl(
+                "seek",
+                buffer_instance_id_,
+                source_frame,
+                generation);
             return DS_OK;
         }
 
@@ -1281,6 +1370,11 @@ namespace gc::audio
             {
                 ExactInvariantFatal();
             }
+            LogBufferControl(
+                "seek",
+                buffer_instance_id_,
+                source_frame,
+                generation);
         }
         return result;
     }
@@ -1333,11 +1427,19 @@ namespace gc::audio
                 FloorLogicalSourceFrameOrFatal(projection.source_frame) %
                 (buffer_bytes_ / format_.block_align);
             voice_->Stop();
+            LogBufferControl(
+                "stop",
+                buffer_instance_id_,
+                last_reported_source_frame_);
             return DS_OK;
         }
 
         ResolvePresentedSourceFrameLocked();
         voice_->Stop();
+        LogBufferControl(
+            "stop",
+            buffer_instance_id_,
+            last_reported_source_frame_);
         return DS_OK;
     }
 
@@ -1347,11 +1449,26 @@ namespace gc::audio
         LPVOID second,
         DWORD second_bytes) noexcept
     {
-        return snapshot_->Unlock(
+        const auto result = snapshot_->Unlock(
             first,
             first_bytes,
             second,
             second_bytes);
+        if (SUCCEEDED(result))
+        {
+            const auto unlock_index = diagnostic_unlock_logs_.fetch_add(
+                1, std::memory_order_relaxed);
+            if (unlock_index < 4)
+            {
+                LogBufferControl(
+                    "unlock",
+                    buffer_instance_id_,
+                    first_bytes,
+                    second_bytes,
+                    unlock_index);
+            }
+        }
+        return result;
     }
 
     HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() noexcept

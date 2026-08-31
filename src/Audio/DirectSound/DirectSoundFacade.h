@@ -210,6 +210,7 @@ namespace gc::audio
         std::mutex control_mutex_;
         std::atomic_ulong references_{1};
         std::atomic_long volume_{DSBVOLUME_MAX};
+        std::atomic_uint32_t diagnostic_unlock_logs_{};
         const std::uint64_t buffer_instance_id_{};
         std::int64_t logical_qpc_frequency_{};
         LogicalQpcControlState logical_control_{};

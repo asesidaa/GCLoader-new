@@ -217,7 +217,7 @@ namespace gc::audio
         std::atomic_flag callback_active = ATOMIC_FLAG_INIT;
         std::atomic_uint32_t callback_mode_mask{};
         std::atomic_uint32_t callback_count{};
-        std::atomic_uint32_t long_buffer_diagnostic_count{};
+        std::atomic_uint32_t voice_diagnostic_count{};
 
         constexpr std::uint32_t kDirectProcessTrue = 1U << 0U;
         constexpr std::uint32_t kDirectProcessFalse = 1U << 1U;
@@ -650,21 +650,19 @@ namespace gc::audio
         const auto source_frames = format.block_align == 0
                                        ? 0
                                        : source_bytes / format.block_align;
-        const auto long_buffer_threshold =
-            static_cast<std::uint64_t>(format.sample_rate) * 5U;
-        if (voice != nullptr && format.sample_rate != 0 &&
-            source_frames >= long_buffer_threshold)
+        if (voice != nullptr)
         {
             const auto diagnostic_index =
-                long_buffer_diagnostic_count.fetch_add(
+                voice_diagnostic_count.fetch_add(
                     1, std::memory_order_relaxed);
-            if (diagnostic_index < 16)
+            if (diagnostic_index < 128)
             {
                 try
                 {
                     PLOG_INFO
-                        << "ASIO long-buffer diagnostic: index="
+                        << "ASIO voice diagnostic: index="
                         << diagnostic_index
+                        << ", sourceBytes=" << source_bytes
                         << ", sourceFrames=" << source_frames
                         << ", sourceRate=" << format.sample_rate
                         << ", channels=" << format.channels
@@ -1007,7 +1005,7 @@ namespace gc::audio
         LiveAsioSession* expected_target{};
         callback_mode_mask.store(0, std::memory_order_relaxed);
         callback_count.store(0, std::memory_order_relaxed);
-        long_buffer_diagnostic_count.store(0, std::memory_order_relaxed);
+        voice_diagnostic_count.store(0, std::memory_order_relaxed);
         if (!callback_target.compare_exchange_strong(
             expected_target,
             session.get(),
