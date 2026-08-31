@@ -2,6 +2,7 @@
 #include "Patches/RendererDeviceLoss/RendererResourceLifecycle.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenPatch.h"
 
 #include <algorithm>
 #include <array>
@@ -761,6 +762,7 @@ namespace
     enum class InstallEventKind
     {
         read,
+        prepare,
         create,
         enable,
         reset,
@@ -867,6 +869,13 @@ namespace
                 *self->fail_create_index != index;
         }
 
+        static bool Prepare(void* context) noexcept
+        {
+            static_cast<FakeInstallEnvironment*>(context)->events.push_back(
+                {.kind = InstallEventKind::prepare});
+            return true;
+        }
+
         static bool Enable(
             void* context,
             const gc::windowed_widescreen::WidescreenContractSite site) noexcept
@@ -915,6 +924,7 @@ namespace
             return {
                 .context = this,
                 .read = &Read,
+                .prepare_candidate = &Prepare,
                 .create_disabled = &CreateDisabled,
                 .enable = &Enable,
                 .reset = &Reset,
@@ -1025,6 +1035,7 @@ namespace
                 {.kind = InstallEventKind::read},
                 {.kind = InstallEventKind::read},
                 {.kind = InstallEventKind::read},
+                {.kind = InstallEventKind::prepare},
                 {InstallEventKind::create,
                  WidescreenContractSite::config_apply},
                 {InstallEventKind::create,
@@ -1220,7 +1231,232 @@ namespace
                 !overflow && overflow.error().stage ==
                     WidescreenInstallStage::capacity_overflow &&
                     fixture.environment.events.empty(),
-                "hook capacity overflow rejects before memory access");
+            "hook capacity overflow rejects before memory access");
+        }
+    }
+
+    enum class BaseHookCall
+    {
+        original,
+        width,
+        height,
+        resize,
+        minmax,
+        mode,
+        place_window,
+        activate_resources,
+        compositor,
+    };
+
+    struct FakeBaseHookActions
+    {
+        std::vector<BaseHookCall> calls;
+        int original_result{73};
+        std::optional<BaseHookCall> fail_call;
+
+        bool Run(const BaseHookCall call)
+        {
+            calls.push_back(call);
+            return !fail_call.has_value() || *fail_call != call;
+        }
+
+        static int Original(void* context, std::uintptr_t) noexcept
+        {
+            auto* self = static_cast<FakeBaseHookActions*>(context);
+            self->calls.push_back(BaseHookCall::original);
+            return self->original_result;
+        }
+
+        static bool GuardConfig(void*, std::uintptr_t) noexcept
+        {
+            return true;
+        }
+
+        static bool Width(
+            void* context,
+            std::uintptr_t,
+            const std::uint32_t width,
+            const int trailing) noexcept
+        {
+            return width == 1920 && trailing == 0 &&
+                static_cast<FakeBaseHookActions*>(context)->Run(
+                    BaseHookCall::width);
+        }
+
+        static bool Height(
+            void* context,
+            std::uintptr_t,
+            const std::uint32_t height,
+            const int trailing) noexcept
+        {
+            return height == 1280 && trailing == 0 &&
+                static_cast<FakeBaseHookActions*>(context)->Run(
+                    BaseHookCall::height);
+        }
+
+        static bool Resize(
+            void* context,
+            std::uintptr_t,
+            const bool enabled) noexcept
+        {
+            return !enabled &&
+                static_cast<FakeBaseHookActions*>(context)->Run(
+                    BaseHookCall::resize);
+        }
+
+        static bool Minmax(
+            void* context,
+            std::uintptr_t,
+            const bool minimize,
+            const bool maximize) noexcept
+        {
+            return minimize && !maximize &&
+                static_cast<FakeBaseHookActions*>(context)->Run(
+                    BaseHookCall::minmax);
+        }
+
+        static bool Mode(
+            void* context,
+            std::uintptr_t,
+            const int first,
+            const int second,
+            const int third,
+            const int fourth) noexcept
+        {
+            return first == 1 && second == 1 && third == 1 && fourth == 1 &&
+                static_cast<FakeBaseHookActions*>(context)->Run(
+                    BaseHookCall::mode);
+        }
+
+        static bool PlaceWindow(void* context, std::uintptr_t) noexcept
+        {
+            return static_cast<FakeBaseHookActions*>(context)->Run(
+                BaseHookCall::place_window);
+        }
+
+        static bool ActivateResources(void* context, std::uintptr_t) noexcept
+        {
+            return static_cast<FakeBaseHookActions*>(context)->Run(
+                BaseHookCall::activate_resources);
+        }
+
+        static bool Compositor(void* context) noexcept
+        {
+            return static_cast<FakeBaseHookActions*>(context)->Run(
+                BaseHookCall::compositor);
+        }
+    };
+
+    void BaseHookWrappersPreserveNativeOrderingAndResults()
+    {
+        using namespace gc::windowed_widescreen;
+        const OutputSize output{.width = 1920, .height = 1280};
+
+        {
+            FakeBaseHookActions fake;
+            const auto result = RunConfigApplyHook(
+                0x12340000,
+                output,
+                ConfigApplyHookActions{
+                    .context = &fake,
+                    .call_original = &FakeBaseHookActions::Original,
+                    .config_vtable_matches = &FakeBaseHookActions::GuardConfig,
+                    .set_width = &FakeBaseHookActions::Width,
+                    .set_height = &FakeBaseHookActions::Height,
+                    .set_resize = &FakeBaseHookActions::Resize,
+                    .set_minmax = &FakeBaseHookActions::Minmax,
+                    .set_mode = &FakeBaseHookActions::Mode,
+                });
+            Expect(
+                result.has_value() && *result == 73,
+                "config wrapper preserves original success result");
+            Expect(
+                fake.calls == std::vector<BaseHookCall>{
+                    BaseHookCall::original,
+                    BaseHookCall::width,
+                    BaseHookCall::height,
+                    BaseHookCall::resize,
+                    BaseHookCall::minmax,
+                    BaseHookCall::mode,
+                },
+                "config original runs before every fixed-window setter");
+        }
+
+        {
+            FakeBaseHookActions fake;
+            fake.original_result = 0;
+            const auto result = RunWindowDeviceHook(
+                0x12340000,
+                WindowDeviceHookActions{
+                    .context = &fake,
+                    .call_original = &FakeBaseHookActions::Original,
+                    .validate_and_place = &FakeBaseHookActions::PlaceWindow,
+                    .activate_resources =
+                        &FakeBaseHookActions::ActivateResources,
+                });
+            Expect(
+                result.has_value() && *result == 0 &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::original,
+                    },
+                "native window failure returns unchanged without activation");
+        }
+
+        {
+            FakeBaseHookActions fake;
+            const auto result = RunWindowDeviceHook(
+                0x12340000,
+                WindowDeviceHookActions{
+                    .context = &fake,
+                    .call_original = &FakeBaseHookActions::Original,
+                    .validate_and_place = &FakeBaseHookActions::PlaceWindow,
+                    .activate_resources =
+                        &FakeBaseHookActions::ActivateResources,
+                });
+            Expect(
+                result.has_value() && *result == 73 &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::original,
+                        BaseHookCall::place_window,
+                        BaseHookCall::activate_resources,
+                    },
+                "window validation and resources follow native success");
+        }
+
+        {
+            FakeBaseHookActions fake;
+            const auto begin = RunFrameBoundaryHook(
+                0x12340000,
+                FrameBoundaryHookActions{
+                    .context = &fake,
+                    .run_compositor = &FakeBaseHookActions::Compositor,
+                    .call_original = &FakeBaseHookActions::Original,
+                },
+                WindowedWidescreenOperationStage::frame_begin);
+            Expect(
+                begin.has_value() && *begin == 73 &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::compositor,
+                        BaseHookCall::original,
+                    },
+                "wide scene binding precedes native frame begin");
+
+            fake.calls.clear();
+            const auto end = RunFrameBoundaryHook(
+                0x12340000,
+                FrameBoundaryHookActions{
+                    .context = &fake,
+                    .run_compositor = &FakeBaseHookActions::Compositor,
+                    .call_original = &FakeBaseHookActions::Original,
+                },
+                WindowedWidescreenOperationStage::frame_end);
+            Expect(
+                end.has_value() && *end == 73 &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::compositor,
+                        BaseHookCall::original,
+                    },
+                "final copy precedes native frame end and presentation");
         }
     }
 } // namespace
@@ -1243,5 +1479,6 @@ int main()
     HookCreationAndEnableFailuresRollbackInReverse();
     HookRollbackReportsVerificationAndPublicationFailures();
     HookTransactionRejectsInvalidActionsAndCapacity();
+    BaseHookWrappersPreserveNativeOrderingAndResults();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -139,6 +139,8 @@ for name, pointer_rva, target_rva in pointer_contracts:
         "expected": expected,
         "actual": actual,
         "matched": matched,
+        "target_name": None if actual is None else idc.get_func_name(actual),
+        "target_type": None if actual is None else idc.get_type(actual),
     }})
 
 calling_rows = []

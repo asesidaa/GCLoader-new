@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Patches/WindowedWidescreen/ResolutionModel.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -35,10 +37,31 @@ namespace gc::windowed_widescreen
         invalid_outer_size,
         no_fitting_work_area,
         arithmetic_overflow,
+        frame_adjustment_failed,
+        monitor_enumeration_failed,
+        renderer_contract_failed,
+        window_move_failed,
+    };
+
+    struct PreparedWindowPlacement
+    {
+        OutputSize client_size{};
+        WindowPlacement outer{};
+        std::uint32_t style{};
     };
 
     [[nodiscard]] std::expected<WindowPlacement, NativeWindowPolicyError>
     SelectWindowPlacement(
         std::span<const MonitorWorkArea> monitors,
         WindowOuterSize outer_size) noexcept;
+
+    [[nodiscard]] std::expected<
+        PreparedWindowPlacement,
+        NativeWindowPolicyError>
+    PrepareFixedWindowPlacement(OutputSize client_size) noexcept;
+
+    [[nodiscard]] std::expected<void, NativeWindowPolicyError>
+    ValidateAndPlaceRendererWindow(
+        std::uintptr_t renderer_owner,
+        const PreparedWindowPlacement& placement) noexcept;
 } // namespace gc::windowed_widescreen

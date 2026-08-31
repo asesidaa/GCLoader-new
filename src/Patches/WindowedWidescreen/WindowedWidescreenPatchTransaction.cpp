@@ -42,6 +42,7 @@ namespace gc::windowed_widescreen
             const WidescreenInstallActions& actions) noexcept
         {
             return actions.context != nullptr && actions.read != nullptr &&
+                actions.prepare_candidate != nullptr &&
                 actions.create_disabled != nullptr &&
                 actions.enable != nullptr && actions.reset != nullptr &&
                 actions.detach_renderer_resource != nullptr &&
@@ -244,6 +245,17 @@ namespace gc::windowed_widescreen
         std::array<WidescreenContractSite, kMaximumWidescreenHooks>
             created_sites{};
         std::size_t created_count{};
+
+        if (!actions.prepare_candidate(actions.context))
+        {
+            actions.detach_renderer_resource(actions.context);
+            actions.clear_callback_context(actions.context);
+            return std::unexpected(WidescreenInstallError{
+                .stage = WidescreenInstallStage::candidate_prepare,
+                .rollback_attempted = true,
+                .rollback_complete = true,
+            });
+        }
 
         const auto rollback = [&actions, image_base, manifest,
                                &created_sites, &created_count](

@@ -28,6 +28,7 @@ namespace gc::windowed_widescreen
         void* context{};
         bool (*read)(
             void*, std::uintptr_t, std::span<std::byte>) noexcept{};
+        bool (*prepare_candidate)(void*) noexcept{};
         bool (*create_disabled)(
             void*,
             WidescreenContractSite,
@@ -53,6 +54,7 @@ namespace gc::windowed_widescreen
         preflight_read,
         byte_mismatch,
         pointer_mismatch,
+        candidate_prepare,
         hook_create,
         hook_enable,
         owner_publish,
