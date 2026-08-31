@@ -1,763 +1,547 @@
-# ASIO Logical-Time Presentation Rewrite Design
+# ASIO Transport and Absolute Judgement Simplification
 
-**Date:** 2026-08-29
+**Status:** Review candidate. No implementation plan or source change is
+permitted until this exact specification receives two independent zero-finding
+reviews and the user approves it.
 
-**Status:** Approved for implementation
+This is the task's only normative specification. The adjacent
+`archive/failure-ledger.md` is non-normative history.
 
-**Scope:** Absolute judgement time, logical DirectSound playback, ASIO physical
-presentation, focus suspension, and physical-session recovery
+## 1. Controlling decision
 
-## Authority and supersession
+This task defaults every correction to deletion.
 
-This document is the sole design authority for the ASIO timing and recovery
-rewrite. It supersedes the ASIO-specific timing and recovery decisions in:
+- Delete the failed ASIO recovery and clock-reconciliation work.
+- Do not repair, preserve, or rename that machinery.
+- Add replacement behavior only where deletion alone cannot satisfy a required
+  behavior stated in this document.
+- Any unavoidable replacement is the smallest direct connection between
+  existing owners. It must not introduce another state machine, worker,
+  synchronization protocol, retry loop, clock bridge, history, generation,
+  lifecycle owner, or compatibility fallback.
+- A new secondary problem means the added mechanism is removed and the
+  smallest way to satisfy the original required behavior is reconsidered; it
+  is not a reason to omit that behavior or add another coordinating mechanism.
 
-- `2026-08-22-asio-absolute-time-judgement-design.md`;
-- `2026-08-25-asio-focus-recovery-design.md`;
-- `2026-08-28-asio-persistent-timeline-recovery-design.md`;
-- `2026-08-22-asio-absolute-time-judgement.md`;
-- `2026-08-25-asio-focus-recovery.md`;
-- `2026-08-27-asio-session-recovery.md`; and
-- `2026-08-28-asio-persistent-timeline-recovery.md`.
+This rule applies only to this ASIO simplification task.
 
-Those documents remain historical evidence. They are not implementation
-authority and must not be used to restore callback-derived judgement,
-synthetic detached anchors, or one-time physical-to-logical attachment.
+Removal-first is not a shortcut around required behavior. Every required case
+in this document must still have one explicit result: ordinary continuation,
+ordinary shutdown, or Fatal.
 
-The generic absolute-input capture, native recognition/score hooks, guarded
-patch rules, and accepted WASAPI behavior remain authoritative unless this
-document explicitly changes their dependency on ASIO physical output.
+Deletion may remove unnecessary machinery; it may not remove a required
+outcome or substitute for handling that outcome.
 
-No production implementation begins until this written specification is
-reviewed. After review, a separate implementation plan will identify exact
-file changes and commits.
+## 2. Required result
 
-## Problem statement
-
-The original ASIO path could sound and judge consistently during an
-uninterrupted physical session, but it made absolute judgement depend on ASIO
-callback anchors, callback history, and submitted output progress. Focus loss
-therefore removed information required to finalize judgement and exposed
-endpoint-generation, history-loss, backlog, song-transition, and lifetime
-failures.
-
-Successive recovery designs addressed those failures separately:
-
-1. callback-anchor history projected input through whichever physical
-   callbacks were available;
-2. detached rendering published synthetic anchors while no physical device
-   existed;
-3. callback interpolation or newest-anchor extrapolation allowed query timing
-   to affect the resolved event coordinate; and
-4. the persistent logical-timeline design removed callback dependence from
-   judgement, but attached the host timeline to the ASIO sample timeline only
-   once and never reconciled their independent rates afterward.
-
-The fourth design currently computes judgement from a host-derived logical
-timeline while rendering ASIO from session-local sample-position deltas. A
-one-time affine origin does not make the Windows multimedia clock and the
-audio-interface oscillator the same clock. Constant attachment error can
-change perceived offset, and rate error can accumulate across a song or
-credit. Later callback timestamps are diagnostic only, so the design has no
-mechanism that can restore physical alignment.
-
-This is not an ASIO-driver defect and cannot be repaired by another judgement
-offset, callback tolerance, history window, or recovery retry. The clock-domain
-boundary itself must be rewritten.
-
-## Why the cited projects do not solve this problem
-
-The experimental osu-framework ASIO pull request lets each ASIO callback pull
-the next frames directly from one BASS decode mixer. Device consumption and
-mixer progression are one stream during normal operation. Its discussion
-explicitly leaves alt-tab mode switching as an unresolved concern; it does not
-provide continuous judgement while the physical ASIO session is absent.
-
-KeyASIO is external middleware. Its hardware-mix mode owns hitsounds while osu
-owns music on another device; its full mode replaces osu audio externally. It
-does not own osu's native judgement clock, and its documentation warns that
-exclusive-device ownership can desynchronize osu's internal clock.
-
-GCLoader must satisfy a different combination of contracts: preserve a closed
-source game's DirectSound behavior and song sequence, capture high-rate input
-outside game-frame cadence, keep judgement time alive while audio is absent,
-and replace an exclusive physical session without falling back or pausing the
-game. Borrowing another project's normal callback loop does not solve those
-additional contracts.
-
-## Non-negotiable requirements
-
-1. Judgement is based on the captured absolute input timestamp.
-2. The resolved hit time and authored note time are expressed in the same
-   logical song/source timeline before native recognition and grading compare
-   them.
-3. Once an input transition has been mapped into logical song time, later
-   callback delivery, focus changes, rendering, recovery, or query timing can
-   never change it.
-4. ASIO callbacks, sample positions, submitted tails, physical-session
-   generations, buffer indices, and device availability never participate in
-   judgement resolution or judgement finality.
-5. No callback bracketing, interpolation, newest-anchor extrapolation, or
-   synthetic detached callback anchor is permitted in the judgement path.
-6. The logical song timeline and game-facing DirectSound cursor continue while
-   focus is lost. Audio may be silent during that interval.
-7. Physical audio must be made to follow the logical song timeline. A
-   one-time offset between independent clocks is insufficient.
-8. The ASIO driver owns the nominal physical sample rate. The implementation
-   must support the driver's accepted integral rate, including 44.1 and 48 kHz,
-   without a fixed-rate assumption.
-9. Driver output latency and any presentation-bridge group delay are accounted
-   exactly once in physical presentation. They are not judgement offsets.
-10. `GameTimeOffset` retains its existing game/audio alignment semantics.
-    `JudgTimeOffset` remains native grade-only correction. Neither setting may
-    hide an ASIO clock-domain error.
-11. Focus state, not elapsed time or callback silence, authorizes suspension
-    and focus recovery.
-12. ASIO never falls back to WASAPI or DirectSound.
-13. Recovery permits one immediate attempt and at most two delayed retries.
-    Unexpected instability after a physical session is committed as running is
-    fatal.
-14. The game may not continue in the foreground after ASIO has failed or the
-    presentation bridge has lost its timing contract.
-15. No new per-callback logging, allocation, blocking lock, or unbounded work
-    is introduced.
-16. Automated verification must have an independently derived behavioral
-    oracle. Source-grep, copied tables, and test-local restatements are not
-    accepted as tests.
-
-## Clock domains and canonical coordinates
-
-The rewrite names four different coordinates and prevents accidental
-substitution between them.
-
-### Absolute host time `H`
-
-`H` is captured at input observation and semantic-stage events. It preserves
-the existing paired host timestamp contract and wrap-safe multimedia-clock
-handling. It is available independently of every audio callback.
-
-For the ASIO logical timeline, `H` uses the captured multimedia-clock member,
-which is the Windows domain required for ASIO `systemTime`. The input value is
-captured at observation; it is never reconstructed later from a callback. The
-paired QPC member remains available to the accepted WASAPI route and transport
-diagnostics, but the two members are not mixed within one stage projection.
-
-### Logical output coordinate `L`
-
-`L(H)` is a persistent, monotonic rational output-frame coordinate derived
-only from absolute host time and the logical output rate. It belongs to the
-logical audio engine, not to a WASAPI or ASIO physical session.
-
-For a fixed logical epoch:
+The result has two independent paths:
 
 ```text
-L(H) = logical_origin
-     + logical_rate * (H - host_origin)
+QPC + selected-BGM Play anchor --------------------> Tune
+input event ----------------------> captured input QPC
+captured input QPC + same anchor --> absolute judgement when enabled
+captured input -------------------> unchanged native judgement when disabled
+
+DirectSound controls --> sequential mixer PCM --> ASIO callback --> device
 ```
 
-The calculation uses checked rational arithmetic. Integer frames are obtained
-only at APIs that explicitly require a whole render or DirectSound cursor
-coordinate.
+ASIO is only the physical PCM transport. It does not own, supply, correct,
+pause, resume, interpolate, or align gameplay time.
 
-### Authored source/song coordinate `C`
+The following ASIO values are never operands of DirectSound cursor reporting,
+Tune, input time, note time, judgement, GameTimeOffset, or JudgTimeOffset:
 
-Logical playback epochs map `L` into the source buffer's authored coordinate:
+- ASIO system time or sample position;
+- callback count, cadence, duration, or absence;
+- buffer index, buffer lead, or buffer duration;
+- driver latency;
+- mixer progress; and
+- ASIO startup, shutdown, focus, or fault state.
+
+WASAPI behavior is unchanged.
+
+## 3. Logical song and judgement time
+
+### 3.1 DirectSound logical position
+
+ASIO-mode DirectSound secondary buffers answer play position from their current
+control state plus QPC. Play, Stop, SetCurrentPosition, looping, and natural
+end retain their DirectSound-visible meanings.
+
+A DirectSound control captures its control QPC `Qc` before publishing one
+complete logical state containing the exact source-frame anchor `Sc` and the
+current play/stop/loop/end facts, then forwards the same control to the mixer.
+A cursor query first accepts one complete control state and only then captures
+its query QPC `q`. The exact source-frame projection applies the existing
+Play/Stop/SetCurrentPosition/loop/natural-end rules to that state. `q < Qc` is
+immediate Fatal.
+
+When a DirectSound API requires an integral cursor, it uses mathematical
+`floor` of that exact projected source frame, then applies the existing checked
+frame-to-byte and buffer wrap/end convention. Ordinary fractional progress is
+therefore not an arithmetic failure. The mixer never feeds position back into
+the logical state. No ASIO callback or ASIO value participates.
+
+The implementation stores only the information needed to answer the next
+logical query and to identify the current Play anchor. This specification does
+not authorize a publication history, clock service, bridge, reconciliation
+object, or additional lifecycle model.
+
+### 3.2 Stage anchor
+
+The existing sound-group-2 selection identifies the gameplay BGM. Stage entry
+clears any prior binding and begins one new, initially unbound stage. The first
+sound-group-2 observation that satisfies all of these conditions binds it:
+
+- the selected buffer is currently playing;
+- that current Play was issued after this stage entry in program order; and
+- this stage has not already bound an anchor.
+
+The qualifying current Play supplies one immutable anchor:
 
 ```text
-C(H) = source_origin
-     + (L(H) - logical_output_origin) * source_rate / logical_rate
+stage-entry GameTimeOffset Gstage
+Play QPC Qplay
+source frame Splay
+source sample rate Fs
+QPC frequency Fq
 ```
 
-Play, seek, loop, and natural-end transitions create or close logical playback
-epochs. They are logical DirectSound/mixer events, not physical endpoint
-events.
+If an observation is not yet eligible, the stage remains unbound; it does not
+search history or use a timeout. Once bound, later observations, Play, seek,
+stop, natural end, focus change, mixer advance, and ASIO events cannot replace
+or mutate the copied anchor. Stage exit discards it, so the next stage cannot
+reuse it.
 
-After applying the existing `GameTimeOffset` ownership exactly once, `C(H)` is
-the time passed to native recognition. Authored note target time is already in
-that same source/song domain. `JudgTimeOffset` remains inside the native grade
-calculation and is not part of this projection.
-
-### Physical ASIO coordinate `S`
-
-`S` is the session-local ASIO `samplePosition`. It may restart or change origin
-whenever a physical session is recreated. ASIO `systemTime` identifies the
-absolute host time associated with `S`, and `ASIOGetLatencies()` identifies
-when the buffer currently being filled will begin to sound.
-
-`S` is used only inside the physical presentation adapter for structural
-continuity and audio clock-domain tracking. It is never converted into a
-judgement timestamp.
-
-## Required data flow
-
-### Absolute judgement
+For a captured QPC value `q`, the absolute song position is:
 
 ```text
-captured absolute input timestamp H
-              |
-              v
-     persistent logical frame L(H)
-              |
-              v
- logical playback epoch: L -> source/song C
-              |
-              v
- native recognition and grade against authored note Cnote
+song_seconds(q) = Splay / Fs + (q - Qplay) / Fq
+J(q)            = song_seconds(q) + Gstage / 1000
 ```
 
-This path has no ASIO callback edge. A physical session can disappear between
-capture and resolution without changing the result.
+Every arithmetic operation and native-boundary conversion in section 3 has
+exactly two outcomes: the exact representable result or immediate non-returning
+Fatal. Division by zero, overflow, non-finite data, and an unrepresentable
+`passed_ms` are Fatal. No value is clamped, saturated, dropped, or replaced by a
+fallback. Input may have been captured before `Qplay`, so its signed difference
+is valid. An operation that requires a current-stage anchor before one has been
+accepted is Fatal; it never substitutes ASIO time, a prior stage, elapsed wall
+time, or a fallback clock.
 
-The projection from `H` through a fixed logical epoch is exact rational clock
-conversion. It is not interpolation between game frames or audio callbacks.
+### 3.3 Consumers and offsets
 
-### ASIO physical presentation
+At each existing Tune song-clock update, the loader captures QPC `q`, computes
+`J(q)` through the current-stage anchor, and performs the one declared native
+conversion:
 
 ```text
-logical mixer stream tagged in L
-              |
-              v
- ASIO presentation bridge / audio rate matcher
-              |
-              v
- physical ASIO buffers identified by S and systemTime
+desired_tune_tick(q) = mathematical floor(J(q) * configured_target_rate)
 ```
 
-At a valid callback with absolute `systemTime = A`, driver output latency
-`D`, and the rate matcher's known source-phase compensation `G`, the first
-audible sample being prepared must correspond to the logical coordinate for
-its predicted presentation time:
+`configured_target_rate` is the existing positive exact Tune/gameplay tick rate
+in ticks per second; this specification does not alter it. The result is a
+checked signed integral tick. The existing Tune update and its bounded catch-up
+consume that absolute desired tick. This adds no interpolation and no new clock
+state. After a native modal pause, Tune may catch up to a later absolute tick,
+but neither `J` nor judgement is rewritten. Judgement never consumes a Tune
+tick.
+
+Captured input retains its original QPC timestamp.
+
+When `enable_absolute_time_judgement` is enabled, the loader converts each
+accepted input timestamp through that same anchor. `J(q)` remains an exact
+rational value in seconds until the native call boundary, where conversion and
+grading retain the previously traced contract:
 
 ```text
-target_logical_phase = L(A) + D + G
+passed_ms      = checked truncation toward zero of (1000 * J(q))
+judged_ms      = passed_ms + native_player_base_ms
+grade_error_ms = note_target_ms - judged_ms
 ```
 
-`D` and `G` are expressed in logical frames using checked rate conversion.
-`G` is taken from the selected production rate matcher's documented latency;
-its sign is fixed by that API's source/output phase convention and is verified
-by an impulse-position contract test rather than guessed. These values affect
-which audio content is placed in a physical buffer; they never alter `L(H)` or
-`C(H)` for judgement.
-
-The callback thread's wall-clock entry time is not presentation evidence. A
-late thread dispatch or game-frame stall must not shift the requested song
-interval when the driver supplied valid `systemTime` and `samplePosition`.
-
-## Architecture
-
-### 1. Persistent logical presentation clock
-
-A backend-lifetime logical clock replaces ASIO-specific exact-clock ownership.
-It:
-
-- unwraps the selected absolute host-time domain;
-- projects any captured timestamp into `L` without consulting render progress;
-- exposes one stable logical generation for the backend lifetime;
-- survives every physical ASIO session replacement; and
-- has no IASIO, callback, buffer, submitted-tail, focus, or retry dependency.
-
-The current host-derived projection logic in `AsioLogicalTimeline` may be
-adapted, but the resulting component is common logical-audio infrastructure,
-not an ASIO clock. `ExactAsioClock` must not remain the conceptual owner of
-judgement time.
-
-### 2. Logical playback history
-
-The useful part of `AudioCursorTimeline` is retained: it records exact logical
-output-to-source epochs for Play, Seek, Loop, and natural end. Its exact
-history is rewritten so that:
-
-- epochs are keyed by the persistent logical generation rather than a physical
-  endpoint generation;
-- mapped tails describe logical mixer/source coverage, not physical submitted
-  output;
-- focus loss and physical-session replacement do not close an epoch;
-- a game Play or Seek can change playback generation; ASIO recovery cannot;
-- history readiness cannot depend on an ASIO callback; and
-- stage binding can fail only for real logical history loss or contradictory
-  game playback transitions.
-
-This preserves the information needed to express both input and notes in
-source time without preserving physical endpoint coupling.
-
-### 3. Backend-independent judgement resolver boundary
-
-`JudgementClockResolver` is changed from a concrete physical-output-endpoint
-consumer into a consumer of an exact judgement-timeline interface. The ASIO
-implementation of that interface is the persistent logical clock and has no
-physical ASIO dependency. The accepted WASAPI implementation is adapted to the
-interface without changing its existing clock projection or pacing behavior.
-
-For ASIO, the bound stage anchor contains:
-
-- semantic stage generation;
-- persistent judgement-timeline generation;
-- selected buffer instance and playback generation;
-- logical output origin and source origin;
-- logical and source rates; and
-- the existing configured `GameTimeOffset`.
-
-It does not contain an ASIO endpoint object or physical-session generation.
-After binding, ASIO `Resolve(H)` is a pure checked logical projection. The only
-normal pending state is that no eligible logical playback epoch exists yet at
-stage entry. Physical ASIO output progress cannot create pending work.
-
-Absolute input history, semantic-stage boundaries, native recognition, held
-state, sound dispatch, scoring, and grade behavior remain otherwise unchanged.
-
-### 4. Sequential logical render stream
-
-The mixer exposes one sequential logical stream in `L`. Exactly one render
-owner may advance it at a time:
-
-- the ASIO presentation bridge while a physical session is committed; or
-- the suspension pump while no physical session exists.
-
-The stream may internally render fixed miniaudio periods and retain a bounded,
-preallocated remainder for the presentation rate matcher. It may not be
-rewound, rendered concurrently, or silently skip/duplicate a logical interval
-after the session is running.
-
-Ownership transfer is an explicit transaction. The new owner starts at the
-exact logical tail committed by the previous owner. A failed transfer leaves
-the physical session silent and uncommitted.
-
-### 5. ASIO presentation bridge
-
-The bridge is physical-session-owned and is the only component allowed to
-combine logical time with ASIO timing. It contains:
-
-- ASIO callback validation;
-- session-local sample-position tracking;
-- driver `systemTime` validation;
-- driver output latency;
-- a preallocated final-output audio rate matcher;
-- logical source phase for the next physical output sample; and
-- bounded phase/rate controller state.
-
-The bridge has two timing modes.
-
-#### Priming mode
-
-Startup and recovery callbacks output silence while callback structure and
-time information are validated. Large phase correction is allowed only here:
-the rate matcher is reset and its logical source phase is aligned directly to
-the predicted presentation coordinate. Priming does not advance judgement or
-publish a synthetic judgement anchor.
-
-The physical session is committed only after the existing finite callback
-proof and a successful logical-render ownership handoff. The first audible
-buffer starts at the exact next logical stream coordinate chosen for its
-predicted presentation time.
-
-Recovery selects a future physical presentation boundary whose target logical
-coordinate is not earlier than the suspension pump's committed tail. ASIO
-continues to emit priming silence while the suspension pump advances to that
-coordinate. The pump then commits that exact tail, the bridge accepts ownership
-at the same coordinate, and only the corresponding future ASIO buffer becomes
-audible. Recovery never rewinds the mixer or plays missed background audio at
-an accelerated rate.
-
-#### Tracking mode
-
-Once running, each callback:
-
-1. validates buffer alternation, sample-position delta, time flags, and
-   session generation;
-2. determines the logical phase that should be audible for that physical
-   buffer;
-3. compares it with the bridge's current logical source phase;
-4. applies a bounded, smooth rate-ratio correction to the final mixed audio;
-5. pulls only the next sequential logical frames; and
-6. fills exactly the driver-requested physical frame count.
-
-This is asynchronous audio clock-domain conversion. It changes only the
-sampling of the final audio waveform so that a host-timed logical stream is
-presented by a separately clocked device. It never changes a judgement
-timestamp, logical playback epoch, note target, or game cursor.
-
-The implementation may use the existing miniaudio dependency's runtime
-resampler-rate support, but the rate matcher must be a final-output component.
-Changing every source voice's converter would mix physical clock correction
-into source/playback history and is prohibited.
-
-Tracking has a documented finite phase envelope and rate-ratio envelope based
-on the accepted driver rate, ASIO period, bridge capacity, and observed normal
-oscillator error. The implementation plan will derive the concrete constants
-from the existing Xonar callback evidence and verify them with independent
-clock-rate simulations. They are compile-time policy, not user timing knobs.
-
-No hard phase reset, block skip, block repeat, or source seek is allowed in
-tracking mode. Exceeding the envelope, exhausting logical input, overrunning
-the bounded bridge, or failing audio conversion is a fatal runtime contract
-failure.
-
-### 6. Game-facing DirectSound cursor
-
-For ASIO, `CurrentOutputFrame()` becomes the whole logical coordinate
-`floor(L(now))`, independent of physical presentation, submitted ASIO buffers,
-and an asynchronously sampled logical-render tail. `GetCurrentPosition`,
-`GetStatus`, drain completion, and song-end behavior resolve from the logical
-playback history at that coordinate.
-
-The active render owner remains required to advance the logical stream
-sequentially. An actual planning, render, commit, ownership, bridge-underflow,
-or pump failure is fatal. A game-thread cursor read cannot infer such a failure
-from a momentary `committed_tail <= floor(L(now))` snapshot because that read is
-not synchronized with the callback or suspension pump. This keeps normal
-ranking/demo and second-song transitions independent of both physical output
-and callback scheduling races.
-
-Physical presented position remains available only to the ASIO bridge and
-aggregate diagnostics. It must not be returned through the DirectSound facade
-or used to decide game sequence.
-
-### 7. ASIO lifecycle controller
-
-The logical engine and the physical session have separate lifetimes:
-
-| State | Logical clock/history | Render owner | Physical output |
-|---|---|---|---|
-| `Starting` | Constructing | None | Silent/uncommitted |
-| `Running` | Advancing | ASIO bridge | Audible |
-| `Suspended` | Advancing | Suspension pump | Absent |
-| `Recovering` | Advancing | Suspension pump until handoff | Priming silence |
-| `Fatal` | No longer usable | None | Stopped |
-| `Stopping` | Quiescing | None after transfer | Released |
-
-Focus loss can arrive during initial acquisition, priming, running, or
-recovery. The serialized control state records the desired foreground state
-and completes or unwinds the current physical transaction without changing
-logical time.
-
-#### Initial startup
-
-- Initial startup has no alternate backend.
-- Driver capability discovery adopts the driver's accepted integral sample
-  rate before the logical audio contract is committed.
-- Initial physical acquisition proceeds through its first `Running` commit even
-  when the initial foreground snapshot is false or a focus-loss edge arrives
-  during acquisition. The serialized controller records the desired background
-  state but may not park the attempt before synchronous backend startup has
-  completed. Immediately after startup commits, a still-background request
-  enters `Suspended` through the normal quiesce, lease-transfer, and release
-  transaction. This both validates the driver-owned rate and prevents startup
-  from waiting on a foreground transition that the blocked game thread cannot
-  complete.
-- A real initial acquisition failure fails backend startup. The game does not
-  continue under a silently broken ASIO selection.
-
-#### Focus suspension
-
-On an explicit focus-loss edge:
-
-1. the physical session stops accepting new audible render work;
-2. callback quiescence is proven;
-3. logical render ownership transfers to the suspension pump at the committed
-   logical tail;
-4. IASIO buffers and the physical session are released; and
-5. the logical clock, mixer voices, logical playback history, DirectSound
-   cursor, and judgement binding continue.
-
-The suspension pump advances/discards logical audio according to `L(now)`. It
-does not fabricate callback timestamps or physical presentation.
-
-#### Focus recovery
-
-On an explicit foreground-regained edge:
-
-1. create a completely fresh physical session and callback generation;
-2. require the same committed logical output-rate contract;
-3. prime and validate callbacks with silence;
-4. align a fresh bridge to the current logical presentation coordinate;
-5. transactionally transfer the sequential logical render stream from the
-   suspension pump to the bridge; and
-6. commit `Running` only after the first audible logical interval is ready.
-
-No old `samplePosition`, physical origin, bridge phase, or callback anchor is
-retained. The only continuity is the logical stream coordinate.
-
-Recovery allows one immediate acquisition attempt, one retry after one second,
-and one final retry after two additional seconds. Retry waits are interruptible
-by a new focus edge or shutdown. Only complete, clean failures before the new
-session is committed are retryable. Cleanup must prove that no callback,
-buffer, driver object, or render ownership remains from the failed attempt.
-
-## Error policy
-
-### Expected lifecycle events
-
-An explicit focus-loss edge permits silent suspension and physical-session
-release. Missing audio while backgrounded is expected. Logical time and game
-sequence continue.
-
-### Retryable recovery acquisition failures
-
-Only failures before `Running` may consume the bounded focus-recovery retry
-schedule. Each attempt starts from a fully released physical state.
-
-### Fatal failures
-
-The following fail immediately after a session is committed:
-
-- callback overlap or use after quiescence;
-- invalid buffer index or alternation;
-- repeated, regressed, or incorrectly stepped sample position;
-- invalid required ASIO time information;
-- unexpected sample-rate, latency, reset, resync, or buffer-size change;
-- bridge phase/rate envelope violation;
-- logical render underrun or bridge overrun;
-- conversion failure, non-finite output, or invalid render contract;
-- loss of sequential logical render ownership;
-- logical clock/history contradiction; or
-- failure to preserve the DirectSound ABI or initialized caller outputs.
-
-A foreground fatal failure cannot degrade into silence while the game
-continues, cannot trigger fallback, and cannot be disguised as focus loss.
-
-## Threading, ownership, and real-time constraints
-
-- The logical clock and logical playback history outlive every physical ASIO
-  session.
-- IASIO, driver buffers, callback state, bridge state, and physical generation
-  are owned by one physical session.
-- Callback function tables and actions are owned by value for at least the
-  complete callback lifetime.
-- The control thread owns physical construction, `Start`, stop, cleanup, focus
-  transitions, and retries.
-- Mixer/render ownership is explicit and exclusive between the bridge and
-  suspension pump.
-- The callback performs only bounded validation, rate matching, conversion,
-  counter updates, and buffer publication using preallocated storage.
-- No callback path allocates, logs, waits on the game thread, opens files,
-  touches configuration, or performs device lifecycle work.
-- Aggregate counters may be sampled by the existing observer outside the hot
-  path.
-
-## Diagnostics required for verification
-
-Diagnostics support verification but are not the fix. The hot path records
-only counters and bounded extrema. A startup, recovery, stage-end, fatal, or
-shutdown summary may report:
-
-- logical clock generation and rate;
-- physical session generation, driver rate, period, and output latency;
-- priming callbacks and handoff logical coordinate;
-- initial, maximum, and final physical-to-logical phase error;
-- minimum and maximum audio rate-match ratio;
-- bridge underflow/overflow counts, which must remain zero;
-- suspension advancement and recovery count;
-- unexpected ASIO messages and structural violations; and
-- judgement resolver counts proving that physical callback state is absent
-  from resolved/pending/failure reasons.
-
-No timestamp residual is allowed to re-anchor either logical time or a
-previously mapped input.
-
-## Rejected approaches
-
-### Restore callback-derived judgement
-
-Rejected. It can reproduce the old uninterrupted-session feel, but callback
-loss again makes judgement pending and makes physical session lifetime part of
-stage continuity.
-
-### Interpolate or extrapolate judgement from callback anchors
-
-Rejected. The answer can depend on which callbacks exist when an event is
-queried, and focus loss removes the required evidence. Absolute input must be
-projected from its captured timestamp through a fixed logical epoch instead.
-
-### Publish detached or synthetic physical anchors
-
-Rejected. No physical presentation exists while ASIO is absent. Inventing one
-conflates logical continuation with hardware evidence and recreates endpoint
-lifecycle failures.
-
-### Attach physical sample position once to host time
-
-Rejected. Independent clock frequencies are not made equal by sharing an
-origin. Diagnostic residuals do not correct audible phase or drift.
-
-### Correct drift by skipping or repeating complete blocks
-
-Rejected. It creates audible discontinuities and can advance mixer/source
-state inconsistently. Normal clock disagreement is handled only by the bounded
-final-output audio rate matcher.
-
-### Pause logical song or judgement time while ASIO is absent
-
-Rejected. The game cannot reliably recover its stage, note, and sequence state
-if the judgement timer is lost.
-
-### Use focus duration or callback timeout as focus evidence
-
-Rejected. Time may schedule work and retries, but only explicit focus state
-authorizes lifecycle transitions.
-
-### Fall back to WASAPI or DirectSound
-
-Rejected. Configured ASIO either runs correctly, remains explicitly suspended
-for focus loss, or fails.
-
-## Implementation boundary
-
-The rewrite is expected to replace or substantially refactor:
-
-- ASIO-specific ownership in `ExactAsioClock`;
-- physical endpoint dependency in `JudgementClockResolver`;
-- physical endpoint generation in exact logical playback history;
-- the one-time mapping in `AsioLogicalRenderSequencer`;
-- ASIO's physical `CurrentOutputFrame()` implementation; and
-- callback rendering that assumes one physical frame always equals one
-  independently derived logical frame.
-
-The rewrite should retain where their contracts remain valid:
-
-- absolute input timestamp capture and bounded history;
-- semantic-stage and native recognition/score hooks;
-- DirectSound COM surface and caller-visible ABI;
-- source snapshots and miniaudio voice graph;
-- exact Play/Seek/source epoch information after moving it to logical
-  generation ownership;
-- ASIO driver discovery, capability validation, sample conversion, and
-  callback safety infrastructure; and
-- foreground publication and bounded retry policy after removing clock
-  ownership from it.
-
-No compatibility shim may feed old callback anchors into the new judgement
-resolver. Intermediate commits may keep both implementations compiling, but
-only one complete clock model may be selectable in a runtime artifact.
-
-The accepted WASAPI runtime path is the behavioral comparison baseline and is
-not redesigned as part of this ASIO task. Shared judgement interfaces may be
-clarified only when required to remove ASIO physical state from the resolver.
-The WASAPI provider's projection, output clock ownership, cursor behavior, and
-pacing must otherwise remain unchanged and require focused compatibility
-verification.
-
-## Verification strategy
-
-### Behavioral contract tests
-
-Tests are added only where they have an independent oracle and protect a real
-failure class.
-
-1. **Callback-independent judgement projection**
-
-   Construct a logical clock and playback epoch from independently calculated
-   rational values. Resolve the same captured timestamps before and after
-   arbitrary focus/session/callback activity. The exact source coordinates
-   must remain identical, and no callback count or submitted tail may be an
-   input.
-
-2. **Logical Play/Seek/source mapping**
-
-   Exercise real production playback-history publication across Play, Seek,
-   Loop, natural end, and a physical-session replacement. Expected source
-   positions are derived from authored source rate and logical elapsed time.
-   Recovery must not create a playback generation or close an epoch.
-
-3. **Independent-clock convergence**
-
-   Drive the production presentation bridge with deterministic logical and
-   physical clocks whose rates intentionally differ in both directions. Over a
-   long simulated interval, the bridge must keep phase and bounded-buffer state
-   inside policy while consuming sequential logical audio. The judgement
-   results for the same host timestamps must be bit-identical with and without
-   physical drift. A tagged impulse at a known logical coordinate independently
-   verifies the rate matcher's source/output phase convention and that driver
-   plus bridge latency is applied once.
-
-4. **Priming and recovery handoff**
-
-   Simulate loss during startup, running, and recovery. Priming may realign
-   audio while silent; the first audible recovered sample must correspond to
-   the independently calculated current logical presentation coordinate. No
-   old session-local sample origin may survive.
-
-5. **Failure classification**
-
-   Verify that clean pre-commit acquisition failures consume only the bounded
-   retry schedule, whereas committed-session structural errors and bridge
-   underrun/overrun fail immediately. Verify that no failure selects another
-   backend.
-
-6. **Game-facing cursor continuity**
-
-   Through the production DirectSound facade, verify that cursor, status,
-   drain, and song-end progression continue on logical time during suspension
-   and are unchanged by physical session generation.
-
-Tests must call production components. They may not grep source, duplicate
-implementation constants as their oracle, or validate a test-only clock helper
-that production does not use.
-
-### Static verification
-
-Before runtime handoff:
-
-- build and run focused tests in x86 Debug;
-- build and run the full suite in x86 Debug and Release using the VS 18
-  Insiders `vcvars32.bat` environment and
-  `GC_ASIO_SDK_DIR=H:\gc\artifacts\ASIOSDK`;
-- run `git diff --check` and inspect `git status`;
-- verify no ASIO callback types or physical-session fields remain in the
-  judgement dependency graph;
-- verify the callback hot path has no allocation, logging, blocking lifecycle
-  action, or unbounded loop;
-- verify the configured ASIO path contains no alternate-backend selection;
-- inspect the built x86 artifact; and
-- hash-compare the candidate and deployed DLL before attributing runtime logs
-  to this implementation.
-
-### Runtime acceptance
-
-Static tests cannot prove audio feel, driver behavior, frame pacing, or game
-sequence. Runtime acceptance remains with the user and uses the exact deployed
-candidate.
-
-The minimum runtime matrix is:
-
-1. foreground startup and a complete multi-song credit;
-2. startup beginning while the game is backgrounded, then foreground recovery;
-3. startup followed shortly by backgrounding, then foreground recovery;
-4. focus loss and regain after startup but before gameplay;
-5. focus loss and regain in menus;
-6. focus loss and regain during gameplay, accepting temporary silence while
-   logical judgement time continues;
-7. a full two-song session with no second-song timing drift, loader-caused
-   frame drop, end-of-song crash, or ranking/demo sequence stall; and
-8. comparison with the accepted WASAPI path on the same physical listening
-   chain and unchanged offsets.
-
-Acceptance requires:
-
-- no fallback and no unexpected fatal record;
-- no bridge underrun, overrun, hard running-phase reset, skipped logical
-  interval, or repeated logical interval;
-- recovery only on explicit focus lifecycle;
-- stable judgement across songs without a backend-specific compensating
-  offset;
-- no callback/recovery work visible as a game-frame stall; and
-- normal post-credit ranking/demo progression.
-
-Logs may confirm these contracts, but the user's gameplay observation remains
-the authority for timing feel, audible continuity after recovery, and frame
-pacing.
-
-## Completion criteria
-
-The rewrite is complete only when all of the following are true:
-
-1. judgement has no physical ASIO dependency;
-2. captured input and authored note time meet in one logical source timeline;
-3. physical ASIO output continuously follows that logical timeline through a
-   bounded final-output clock-domain converter;
-4. focus loss preserves logical clock, playback history, cursor, and judgement;
-5. recovery replaces only physical-session and bridge state;
-6. normal running has no block skip/repeat, hidden phase reset, fallback, or
-   nonfatal structural failure;
-7. meaningful Debug and Release verification passes;
-8. the candidate/deployed artifact identity is proven; and
-9. the full runtime matrix is accepted by the user.
+The native per-player lookup supplies `native_player_base_ms`; it is unchanged
+and contains the live JudgTimeOffset with the additive sign shown above. The
+native score path receives the same `passed_ms` and retains its unchanged
+audio-group base. The loader applies the stage-entry GameTimeOffset once in
+`J`; it never reads, applies, caches, combines, or compensates JudgTimeOffset or
+the audio-group base. Note target and judged time therefore remain in the same
+native millisecond coordinate. No ASIO-specific offset or latency compensation
+exists.
+
+When `enable_absolute_time_judgement` is disabled, Tune still uses `J`, while
+the existing native judgement path remains unchanged. That legacy path also
+receives no ASIO time or state. This is an explicit supported exception to
+absolute input-time judgement, not a second loader clock.
+
+## 4. PCM production
+
+The mixer supplies the next sequential PCM frames requested by the audio
+backend. Its only ASIO-facing input is the requested frame count.
+
+```text
+RenderPcm(frame_count) -> exactly frame_count interleaved stereo float frames
+```
+
+Source-rate conversion, looping, Play, Stop, Seek, gain, and voice lifetime are
+ordinary mixer behavior. Any private sample-conversion cursor remains audio
+state only and is never exposed as gameplay time.
+
+`RenderPcm` receives no QPC, timestamp, sample position, latency, presentation
+coordinate, recovery state, or desired alignment. It performs no ASIO clock or
+timer query. It is allocation-free and non-throwing after successful startup.
+
+## 5. ASIO transport
+
+### 5.1 One session
+
+Startup is one synchronous sequence:
+
+1. open and initialize the configured driver;
+2. query its current sample rate, buffer capabilities, and output-channel
+   count;
+3. validate and freeze sample rate, exact configured frame count, and the two
+   selected output-channel indices;
+4. install the fixed callback route and create both output buffer halves;
+5. query the two active channel descriptions, then validate and freeze their
+   sample types;
+6. construct the mixer and fixed conversion storage for that frozen format;
+7. clear both halves with format-correct digital silence without calling the
+   mixer or advancing audio state;
+8. probe `outputReady` exactly once: `ASE_OK` freezes support as enabled,
+   `ASE_NotPresent` freezes it as disabled, and any other result is startup
+   Fatal;
+9. call Start; and
+10. return the live backend.
+
+Startup has no focus check, timeout, retry, fallback, replacement session,
+controller thread, readiness state, or post-start calibration. The actual stage
+does not begin inside ASIO startup, so startup may take as long as the driver
+requires.
+
+Any startup failure is immediate non-returning Fatal. Fatal performs no partial
+startup cleanup and no backend fallback.
+
+### 5.2 Immutable driver format
+
+The driver's current positive integral sample rate is used. It may be 44,100
+Hz, 48,000 Hz, or another rate accepted by the existing format constraints. The
+loader never forces 48 kHz and never changes the driver rate.
+
+The configured buffer frame count must be supported exactly. Sample rate,
+buffer frame count, output channels, channel indices, channel sample types, and
+conversion capacity are immutable for the session.
+
+ConfigGUI inspection and validation use the inspected driver rate. They do not
+assume 48 kHz; any duration display is derived from the inspected rate or is
+shown only in frames.
+
+### 5.3 Callback
+
+The bundled SDK permits callback access recursively. Both `bufferSwitch` and
+`bufferSwitchTimeInfo` are installed, and exactly one non-blocking atomic
+callback-active bit rejects recursion or simultaneous entry:
+
+```text
+if callback-active was already set: Fatal
+RenderPcm(frozen_frame_count)
+convert to the two frozen channel formats
+copy to the selected driver half
+call outputReady only when supported
+clear callback-active
+return
+```
+
+The bit is tested and set as the first callback operation, is cleared only
+immediately before normal return, and has no consumer outside the two callback
+entries. It never waits, queues, serializes after contention, orders lifecycle
+work, or protects any non-callback path. Reentry is an explicit structural
+overload and therefore immediate Fatal.
+
+Ordinary `asioMessage` capability queries use fixed, session-independent
+answers:
+
+- `kAsioSelectorSupported` returns supported exactly for
+  `kAsioEngineVersion`, `kAsioResetRequest`, `kAsioResyncRequest`,
+  `kAsioLatenciesChanged`, `kAsioOverload`, `kAsioSupportsTimeInfo`, and
+  `kAsioSupportsTimeCode`; it returns unsupported for every other selector,
+  including `kAsioBufferSizeChange` as required by the bundled SDK;
+- `kAsioEngineVersion` returns ASIO version 2;
+- `kAsioSupportsTimeInfo` returns supported;
+- `kAsioSupportsTimeCode` returns unsupported; and
+- every other capability query returns unsupported.
+
+The handled notification selectors include reset, resync, latency change, and
+overload so the driver can report them; delivery still enters the Fatal rule in
+section 5.4. Although buffer-size change is not advertised as supported, an
+actual `kAsioBufferSizeChange` delivery also enters that Fatal rule. These fixed
+replies require no lifecycle state.
+
+`directProcess` is a scheduling hint, not a failure report. Its value is
+ignored and both callback forms process synchronously; there is no deferral
+worker.
+
+The time-info callback never uses ASIO time as an audio position or logical-time
+operand. A null `ASIOTime*` is immediate structural Fatal. Otherwise, before
+rendering it applies only these physical-contract checks:
+
+- `kSampleRateChanged` or `kClockSourceChanged` is immediate Fatal;
+- when `kSampleRateValid` is present, the field must be finite and exactly
+  equal to the frozen driver sample rate, otherwise Fatal; and
+- when `kSpeedValid` is present, the field must be finite and exactly `1.0`,
+  otherwise Fatal.
+
+All other ASIO timestamps, sample positions, and time-code fields are ignored.
+After successful PCM submission, `bufferSwitchTimeInfo` returns `nullptr`; it
+does not mutate or return the driver's `ASIOTime` input. The legacy
+`bufferSwitch` callback performs the same PCM submission without time-info
+field checks and returns normally.
+
+An invalid buffer index, a render/conversion failure, a non-finite sample, or
+an enabled `outputReady` call returning anything other than `ASE_OK` is
+immediate Fatal.
+
+There is no worker, queue, render lock, overlap recovery or serialization,
+timing measurement, deadline, silence inference, callback history, or normal
+per-callback logging. The one callback-active bit is only a non-blocking Fatal
+detector.
+
+### 5.4 Focus and runtime faults
+
+The admitted configuration requires the ASIO driver to retain exclusive
+ownership from successful Start until ordinary Stop. Focus loss, focus return,
+window movement, resize, and foreground state are handled by retaining that
+same session and continuing callbacks. They never release, stop, restart, or
+replace the driver, and the independent QPC timeline continues. Recursive or
+simultaneous callback entry has only the structural Fatal result in section
+5.3; focus does not change that rule.
+
+The ASIO session is assumed to own its device exclusively. Windows
+notification or shared-mode audio may be blocked, routed elsewhere, or mixed
+outside this ASIO session through driver-specific behavior, but it cannot share
+or acquire this session's ownership and cannot interrupt or reconfigure it. If
+an explicit ASIO result or notification reports that ownership or session
+stability was lost, that report is immediate Fatal rather than a recovery
+trigger.
+
+The loader never infers a driver fault from elapsed time, callback silence,
+audio content, CPU load, or focus. It reacts only to an explicit SDK result or
+notification. Silent callback cessation is outside the admitted driver
+contract; no time watchdog is invented for it.
+
+From callback-route installation until callback-route clearing, each of these
+explicit observations is immediate non-returning Fatal whenever it can arrive,
+including during startup, ordinary running, or ordinary shutdown:
+
+- `kAsioResetRequest`;
+- `kAsioResyncRequest`;
+- `kAsioBufferSizeChange`;
+- `kAsioLatenciesChanged`;
+- `kAsioOverload`;
+- `sampleRateDidChange`, regardless of the numeric argument;
+- `kSampleRateChanged`; and
+- `kClockSourceChanged`.
+
+There is no pending flag, recovery owner, Stop/reopen sequence, retry budget,
+replacement, continuation, or fallback after such an observation.
+
+### 5.5 Shutdown and Fatal
+
+Ordinary shutdown is the only cleanup path. It discards unsubmitted audio work
+and directly performs:
+
+```text
+ASIOStop -> ASIODisposeBuffers -> ASIOExit -> clear callback route
+```
+
+No callback join, acknowledgement, generation, timeout, or teardown recovery
+is added. `ASIOStop`, `ASIODisposeBuffers`, and `ASIOExit` are each called once
+in that order and must return `ASE_OK`; the first other result enters Fatal
+immediately and no later cleanup step runs. `ASIOExit` is the one driver
+exit-and-release operation; there is no separate release call. Callback-route
+clearing occurs only after `ASIOExit` returns `ASE_OK` and is an infallible
+local assignment.
+
+Every Fatal source calls one production non-returning hard-crash boundary.
+Fatal may record only directly available bounded context. It performs no Stop,
+disposal, release, route clear, COM uninitialization, recovery, retry, fallback,
+or later state transition.
+
+## 6. Required deletion
+
+Delete, rather than disable, all code and build entries whose purpose is any of
+the following:
+
+- foreground/focus monitoring for ASIO;
+- recovery, retry, replacement, or session-state coordination;
+- ASIO-to-QPC or ASIO-to-gameplay clock conversion;
+- physical/logical presentation bridges, alignment, priming, phase correction,
+  or rate matching;
+- callback workers, deferred rendering, callback timing, deadline policy, or
+  timer-resolution policy;
+- presentation histories, handoffs, generations, leases, reseeds, or
+  acknowledgements; and
+- ASIO-derived judgement or offset behavior.
+
+Retain only the direct code required for the logical QPC behavior in section 3,
+the sequential mixer behavior in section 4, the single ASIO session in section
+5, ConfigGUI's driver-format validation, ordinary shutdown, and unchanged
+WASAPI behavior.
+
+Do not keep deleted mechanisms dormant behind flags or compatibility wrappers.
+
+## 7. Verification and acceptance
+
+### 7.1 Test policy
+
+No new automated test is authorized. Delete these rejected tests and their
+CMake registrations:
+
+- `tests/Audio/Logical/LogicalPresentationClockTests.cpp`;
+- `tests/Patches/AbsoluteJudgement/LogicalJudgementTimelineTests.cpp`;
+- `tests/Audio/Asio/AsioPhysicalSessionControllerTests.cpp`;
+- `tests/Audio/Asio/AsioForegroundStateTests.cpp`.
+
+Do not replace them with fake IASIO, fake-stage, source-grep, formula, selector,
+retry, or lifecycle tests. A future test requires explicit user approval and an
+independently derived oracle. Existing unrelated tests prove only what they
+execute.
+
+### 7.2 Static proof
+
+After implementation, trace the final source and demonstrate:
+
+- ASIO and mixer progress never reach DirectSound logical position, Tune,
+  input, judgement, GameTimeOffset, or JudgTimeOffset;
+- DirectSound controls capture QPC before publishing one complete state,
+  queries accept that state before capturing QPC, and integral cursors use the
+  declared mathematical floor conversion;
+- Tune alone converts `J` to
+  `floor(J * configured_target_rate)`; enabled absolute judgement uses the same
+  current-stage BGM anchor and exact event `J`, disabled judgement remains
+  wholly native, and neither judgement mode consumes Tune ticks;
+- each stage discards its anchor and cannot reuse the prior stage;
+- GameTimeOffset enters `J` exactly once and loader code never applies
+  JudgTimeOffset;
+- native judgement applies JudgTimeOffset exactly once in its existing base;
+- the PCM pull accepts only a frame count and advances sequentially;
+- channel sample types are frozen only after buffer creation, both halves are
+  silenced before Start, and startup never advances mixer state;
+- `asioMessage` capability replies are fixed and `outputReady` support comes
+  only from the one pre-Start probe;
+- `kAsioBufferSizeChange` is not advertised as supported, while any actual
+  delivery is Fatal;
+- valid time-info sample rate and speed fields can only confirm the frozen
+  physical format and never reach logical time;
+- both callback forms use the same synchronous PCM path regardless of the
+  `directProcess` hint;
+- callback recursion or simultaneous entry is rejected by one non-blocking
+  callback-active bit with no wait, queue, or lifecycle role;
+- no focus/window code reaches ASIO;
+- no loader focus, move/resize, or notification-audio path stops, releases,
+  restarts, or replaces the ASIO session;
+- no recovery, retry, replacement, or ASIO clock-reconciliation code remains;
+- every listed explicit runtime fault enters non-returning Fatal;
+- Fatal has no cleanup successor;
+- ordinary shutdown is exactly one successful
+  `ASIOStop -> ASIODisposeBuffers -> ASIOExit -> route clear` chain with no
+  added host synchronization protocol;
+- ConfigGUI has no 48 kHz assumption; and
+- WASAPI behavior is unchanged.
+
+CLion diagnostics are performed one source file at a time: open that file, let
+it analyze, then request its diagnostics. Do not batch diagnostics. Do not
+close, restart, stop, or terminate CLion or any other process.
+
+### 7.3 Build proof
+
+Use the x86 environment from:
+
+```text
+C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars32.bat
+```
+
+Set `GC_ASIO_SDK_DIR=H:\gc\artifacts\ASIOSDK` and use the existing
+`msvc32-*` presets. Build and existing-test success are static evidence, not
+gameplay acceptance.
+
+### 7.4 Runtime evidence
+
+Before a retained run, record source/build identity, intended/deployed DLL
+SHA-256 equality, backend/driver identity, frozen driver rate and buffer size,
+effective GameTimeOffset/JudgTimeOffset, and the effective
+`enable_absolute_time_judgement` value.
+
+`H:\gc\loader-log.txt` is overwritten each launch and represents only the
+latest run. Preserve it before another run only when that evidence is needed.
+
+Logging is limited to startup format, direct Fatal context, existing ordinary
+audio diagnostics, and the already-existing bounded judgement timing records
+consumed by the approved ConfigGUI Judgement Offset Advisor. No new
+per-callback, cadence, deadline, focus-recovery, or per-judgement diagnostic is
+added.
+
+### 7.5 User acceptance
+
+After static/build proof, the user verifies on the target driver:
+
+1. normal foreground startup;
+2. background shortly after startup, then foreground return;
+3. while in-game PCM is audibly playing, covering at least one menu preview and
+   one song, perform later background/foreground and move/resize: the audible
+   stream has no gap, silence, or repeated section and there is no ASIO
+   lifecycle transition;
+4. while audible in-game PCM continues in the background, trigger Windows
+   notification/shared-mode audio for the same physical output: the expected
+   exclusive-session result is uninterrupted ASIO with no gap, silence, or
+   repeated section; an explicit ownership-loss report instead takes the
+   required Fatal path rather than continuing;
+5. menu previews without repeat or silence;
+6. at least two songs in one credit;
+7. no visible frame hitch;
+8. with `enable_absolute_time_judgement` recorded as enabled, the configured
+   judgement offset has the same meaning as WASAPI and no second-song bias; and
+9. song end proceeds to normal ranking/demo; and
+10. after the retained session, use the game's ordinary close path, observe a
+    prompt normal exit without Fatal or hang, then start it normally again and
+    require the same ASIO driver to open successfully.
+
+An explicit reset, resync, overload, format/rate/latency/clock change, or
+structural callback failure must instead produce the recorded hard crash.
+Successful recovery is not an acceptance criterion because recovery does not
+exist.
+
+Any visible hitch fails that run. Its cause is investigated separately with an
+external profiler before attribution; ordinary logging is not treated as a
+frame-time oracle.
+
+For item 8, first require the retained provenance to record
+`enable_absolute_time_judgement` as enabled, then run the existing ConfigGUI
+`Analyze latest run` operation on the retained two-song log. Acceptance
+requires all of the following existing observables:
+
+- the advisor reports a stable suggestion, which already requires at least two
+  complete songs and an estimator spread no greater than 3 ms;
+- its ASIO estimator range overlaps the accepted WASAPI reference range
+  `-10..-8 ms` (center `-9 ms`); and
+- the absolute difference between the two displayed per-song `Median error
+  before offset` values is no greater than the larger of their displayed MADs.
+
+Failure of any condition rejects the run. The specification does not alter the
+advisor, add a test, or derive an offset from ASIO latency.
+
+Item 10 is a user-operated runtime acceptance step. It does not authorize the
+agent to close, stop, restart, or otherwise control any process.
+
+## 8. Review gate
+
+Freeze this specification and the non-normative failure ledger as one exact
+tree. Create two fresh independent reviewers after the tree is frozen; do not
+reuse reviewers from any rejected tree. Give both the exact tree hash and the
+same complete latest task rules and decisions. Both inspect that same tree and
+must report zero findings. Every finding is recorded before correction. Any
+correction creates a new tree and restarts both reviews with newly created
+reviewers.
+
+Only after two zero-finding reviews and explicit user approval may an
+implementation plan or source implementation begin.
