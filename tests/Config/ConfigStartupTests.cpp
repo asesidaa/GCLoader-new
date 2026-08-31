@@ -251,6 +251,16 @@ namespace
         {
             Expect(game->changes.empty(), "unchanged config records no repairs");
             Expect(!game->persisted, "unchanged config is not marked persisted");
+            const auto& widescreen = game->settings.windowed_widescreen();
+            Expect(!widescreen.enabled(), "distributed widescreen is disabled");
+            Expect(
+                widescreen.output_width() == 1920 &&
+                    widescreen.output_height() == 1280,
+                "distributed widescreen dimensions compile exactly");
+            Expect(
+                widescreen.clip_policy() ==
+                    gc::windowed_widescreen::StageClipPolicy::live_frustum,
+                "distributed widescreen clip policy compiles exactly");
         }
     }
 

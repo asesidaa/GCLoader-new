@@ -9,6 +9,7 @@
 #include "Nesys/NesysSettings.h"
 #include "Patches/AbsoluteJudgement/JudgementSettings.h"
 #include "Patches/Framerate/FramerateSettings.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 #include "Rfid/FeatureSettings.h"
 #include "SystemPath/SystemPathSettings.h"
 
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -34,6 +36,8 @@ static_assert(
 static_assert(std::is_copy_constructible_v<gc::framerate::FramerateSettings>);
 static_assert(std::is_copy_constructible_v<gc::rfid::FeatureSettings>);
 static_assert(std::is_move_constructible_v<gc::system_path::SystemPathSettings>);
+static_assert(std::is_copy_constructible_v<
+              gc::windowed_widescreen::WindowedWidescreenSettings>);
 
 namespace
 {
@@ -618,6 +622,109 @@ namespace
             }
         }
     }
+
+    void CompilerOwnsWindowedWidescreenSettings()
+    {
+        auto parsed =
+            gc::config::ParseConfigDocument(ReadDistributedConfig());
+        Expect(parsed.has_value(), "widescreen source document parses");
+        if (!parsed)
+        {
+            return;
+        }
+
+        auto& experimental = parsed->document.experimental();
+        experimental.enable_windowed_widescreen_stage = true;
+        experimental.widescreen_window_width = 1137;
+        experimental.widescreen_window_height = 1280;
+        experimental.widescreen_stage_clip_policy =
+            gc::windowed_widescreen::StageClipPolicy::authored;
+
+        auto compiled = gc::config::ConfigCompiler::Compile(parsed->document);
+        Expect(compiled.has_value(), "valid widescreen settings compile");
+        if (!compiled)
+        {
+            return;
+        }
+
+        const auto owned = compiled->windowed_widescreen();
+        experimental.enable_windowed_widescreen_stage = false;
+        experimental.widescreen_window_width = 720;
+        experimental.widescreen_window_height = 4096;
+        experimental.widescreen_stage_clip_policy =
+            gc::windowed_widescreen::StageClipPolicy::live_frustum;
+
+        Expect(owned.enabled(), "compiled widescreen enablement is owned");
+        Expect(
+            owned.output_width() == 1137,
+            "compiled widescreen width is owned");
+        Expect(
+            owned.output_height() == 1280,
+            "compiled widescreen height is owned");
+        Expect(
+            owned.clip_policy() ==
+                gc::windowed_widescreen::StageClipPolicy::authored,
+            "compiled widescreen clip policy is owned");
+    }
+
+    void CompilerRejectsInvalidWindowedWidescreenSettings()
+    {
+        const auto expect_error = [](
+            const auto mutate,
+            const std::string_view expected_path,
+            const gc::config::ConfigErrorCode expected_code,
+            const std::string_view message)
+        {
+            auto parsed =
+                gc::config::ParseConfigDocument(ReadDistributedConfig());
+            Expect(parsed.has_value(), "invalid widescreen source parses");
+            if (!parsed)
+            {
+                return;
+            }
+            mutate(parsed->document.experimental());
+            const auto compiled =
+                gc::config::ConfigCompiler::Compile(parsed->document);
+            Expect(!compiled.has_value(), message);
+            if (!compiled)
+            {
+                Expect(
+                    ErrorKeys(compiled.error()) == std::vector<ErrorKey>{
+                        {std::string{expected_path}, expected_code},
+                    },
+                    "invalid widescreen setting reports one stable error");
+            }
+        };
+
+        expect_error(
+            [](auto& value) { value.widescreen_window_width = 719; },
+            "experimental.widescreen_window_width",
+            gc::config::ConfigErrorCode::out_of_range,
+            "widescreen width below 720 is rejected");
+        expect_error(
+            [](auto& value) { value.widescreen_window_height = 1279; },
+            "experimental.widescreen_window_height",
+            gc::config::ConfigErrorCode::out_of_range,
+            "widescreen height below 1280 is rejected");
+        expect_error(
+            [](auto& value)
+            {
+                value.widescreen_window_width =
+                    std::numeric_limits<unsigned long>::max();
+            },
+            "experimental.widescreen_window_width",
+            gc::config::ConfigErrorCode::out_of_range,
+            "widescreen width beyond native signed range is rejected");
+        expect_error(
+            [](auto& value)
+            {
+                value.widescreen_stage_clip_policy =
+                    static_cast<gc::windowed_widescreen::StageClipPolicy>(255);
+            },
+            "experimental.widescreen_stage_clip_policy",
+            gc::config::ConfigErrorCode::unsupported_value,
+            "unknown widescreen clip policy is rejected");
+    }
 } // namespace
 
 int main()
@@ -634,5 +741,7 @@ int main()
     CompiledInputSettingsOwnControllerBindings();
     CompiledNesysAndRfidSettingsOwnDerivedValues();
     BackendMismatchReportsOnePrimaryBindingError();
+    CompilerOwnsWindowedWidescreenSettings();
+    CompilerRejectsInvalidWindowedWidescreenSettings();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

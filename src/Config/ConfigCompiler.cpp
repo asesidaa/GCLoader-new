@@ -344,6 +344,8 @@ namespace gc::config
         nesys_service::NesysSettings nesys,
         rfid::FeatureSettings rfid,
         system_path::SystemPathSettings system_path,
+        windowed_widescreen::WindowedWidescreenSettings
+            windowed_widescreen,
         bool unlock_all_songs_and_difficulties)
         : logging_(std::move(logging)),
           input_(std::move(input)),
@@ -354,6 +356,7 @@ namespace gc::config
           nesys_(std::move(nesys)),
           rfid_(std::move(rfid)),
           system_path_(std::move(system_path)),
+          windowed_widescreen_(std::move(windowed_widescreen)),
           unlock_all_songs_and_difficulties_(
               unlock_all_songs_and_difficulties)
     {
@@ -583,6 +586,80 @@ namespace gc::config
                 ConfigErrorCode::out_of_range,
                 "expected an integer from 60 through 500",
                 errors);
+
+            const auto widescreen_width = static_cast<std::uint64_t>(
+                document.experimental().widescreen_window_width());
+            const auto widescreen_height = static_cast<std::uint64_t>(
+                document.experimental().widescreen_window_height());
+            const bool widescreen_width_valid =
+                widescreen_width >= 720 &&
+                widescreen_width <=
+                    static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+            if (!widescreen_width_valid)
+            {
+                errors.push_back({
+                    .path = ConfigPath{
+                        "experimental",
+                        "widescreen_window_width",
+                    },
+                    .code = ConfigErrorCode::out_of_range,
+                    .message =
+                        "widescreen width must be from 720 through INT_MAX",
+                });
+            }
+            const bool widescreen_height_valid =
+                widescreen_height >= 1280 &&
+                widescreen_height <=
+                    static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+            if (!widescreen_height_valid)
+            {
+                errors.push_back({
+                    .path = ConfigPath{
+                        "experimental",
+                        "widescreen_window_height",
+                    },
+                    .code = ConfigErrorCode::out_of_range,
+                    .message =
+                        "widescreen height must be from 1280 through INT_MAX",
+                });
+            }
+            if (widescreen_width_valid && widescreen_height_valid &&
+                widescreen_width >
+                    std::numeric_limits<std::uint32_t>::max() /
+                        widescreen_height)
+            {
+                errors.push_back({
+                    .path = ConfigPath{
+                        "experimental",
+                        "widescreen_window_width",
+                    },
+                    .code = ConfigErrorCode::out_of_range,
+                    .message = "widescreen pixel-area arithmetic overflows",
+                    .related_paths = {
+                        ConfigPath{
+                            "experimental",
+                            "widescreen_window_height",
+                        },
+                    },
+                });
+            }
+
+            const auto clip_policy =
+                document.experimental().widescreen_stage_clip_policy();
+            if (clip_policy !=
+                    windowed_widescreen::StageClipPolicy::authored &&
+                clip_policy !=
+                    windowed_widescreen::StageClipPolicy::live_frustum)
+            {
+                errors.push_back({
+                    .path = ConfigPath{
+                        "experimental",
+                        "widescreen_stage_clip_policy",
+                    },
+                    .code = ConfigErrorCode::unsupported_value,
+                    .message = "unsupported widescreen stage clip policy",
+                });
+            }
 
             const auto audio_backend =
                 document.experimental().audio_backend();
@@ -893,6 +970,13 @@ namespace gc::config
                 system_path::SystemPathSettings{
                     document.registry().enabled(),
                     document.registry().system_path(),
+                },
+                windowed_widescreen::WindowedWidescreenSettings{
+                    document.experimental()
+                            .enable_windowed_widescreen_stage(),
+                    static_cast<std::uint32_t>(widescreen_width),
+                    static_cast<std::uint32_t>(widescreen_height),
+                    clip_policy,
                 },
                 document.experimental()
                         .unlock_all_songs_and_difficulties(),

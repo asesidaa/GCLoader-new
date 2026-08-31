@@ -5,6 +5,7 @@
 #include "Config/RegistryConfig.h"
 #include "Logging/LoggingSettings.h"
 #include "Patches/Framerate/FrameratePolicy.h"
+#include "Patches/WindowedWidescreen/StageClipPolicy.h"
 
 #include <cstdint>
 #include <expected>
@@ -46,6 +47,17 @@ namespace gc::config
         unlock_all_songs_and_difficulties{false};
         rfl::Rename<"enable_nesys_service_adapter_patch", bool>
         enable_nesys_service_adapter_patch{true};
+        rfl::Rename<"enable_windowed_widescreen_stage", bool>
+        enable_windowed_widescreen_stage{false};
+        rfl::Rename<"widescreen_window_width", unsigned long>
+        widescreen_window_width{1920};
+        rfl::Rename<"widescreen_window_height", unsigned long>
+        widescreen_window_height{1280};
+        rfl::Rename<
+            "widescreen_stage_clip_policy",
+            windowed_widescreen::StageClipPolicy>
+        widescreen_stage_clip_policy{
+            windowed_widescreen::StageClipPolicy::live_frustum};
         rfl::Rename<"audio_backend", audio::AudioBackend>
         audio_backend{audio::AudioBackend::directsound};
         rfl::Rename<

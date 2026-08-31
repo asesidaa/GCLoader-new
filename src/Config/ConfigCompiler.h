@@ -9,6 +9,7 @@
 #include "Nesys/NesysSettings.h"
 #include "Patches/AbsoluteJudgement/JudgementSettings.h"
 #include "Patches/Framerate/FramerateSettings.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 #include "Rfid/FeatureSettings.h"
 #include "SystemPath/SystemPathSettings.h"
 
@@ -73,6 +74,12 @@ namespace gc::config
             return unlock_all_songs_and_difficulties_;
         }
 
+        [[nodiscard]] const windowed_widescreen::WindowedWidescreenSettings&
+        windowed_widescreen() const noexcept
+        {
+            return windowed_widescreen_;
+        }
+
     private:
         ValidatedConfig(
             logging::LoggingSettings logging,
@@ -84,6 +91,8 @@ namespace gc::config
             nesys_service::NesysSettings nesys,
             rfid::FeatureSettings rfid,
             system_path::SystemPathSettings system_path,
+            windowed_widescreen::WindowedWidescreenSettings
+                windowed_widescreen,
             bool unlock_all_songs_and_difficulties);
 
         friend class ConfigCompiler;
@@ -96,6 +105,8 @@ namespace gc::config
         nesys_service::NesysSettings nesys_;
         rfid::FeatureSettings rfid_;
         system_path::SystemPathSettings system_path_;
+        windowed_widescreen::WindowedWidescreenSettings
+            windowed_widescreen_;
         bool unlock_all_songs_and_difficulties_{};
     };
 

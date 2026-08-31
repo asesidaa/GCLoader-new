@@ -1670,6 +1670,77 @@ namespace
                 "This value is formula-driven but not individually gameplay-validated.");
         }
 
+        ImGui::SeparatorText("Windowed widescreen stage");
+        bool widescreen_enabled =
+            experimental.enable_windowed_widescreen_stage();
+        if (ImGui::Checkbox(
+            "Enable windowed widescreen stage",
+            &widescreen_enabled))
+        {
+            experimental.enable_windowed_widescreen_stage =
+                widescreen_enabled;
+            dirty = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip(
+                "Creates a fixed-size decorated window on an ordinary "
+                "unrotated desktop.\n"
+                "Perspective 3D uses the configured width and height; the "
+                "complete 2D canvas stays centered at 720 x 1280.\n"
+                "Fullscreen, live resizing, display rotation, and 2D "
+                "stretching are not enabled. Restart the game after changes.");
+        }
+
+        auto& widescreen_width = experimental.widescreen_window_width();
+        if (ImGui::InputScalar(
+            "Widescreen window width",
+            ImGuiDataType_U32,
+            &widescreen_width,
+            nullptr,
+            nullptr,
+            "%u",
+            ImGuiInputTextFlags_CharsDecimal))
+        {
+            dirty = true;
+        }
+        auto& widescreen_height = experimental.widescreen_window_height();
+        if (ImGui::InputScalar(
+            "Widescreen window height",
+            ImGuiDataType_U32,
+            &widescreen_height,
+            nullptr,
+            nullptr,
+            "%u",
+            ImGuiInputTextFlags_CharsDecimal))
+        {
+            dirty = true;
+        }
+
+        int clip_policy =
+            experimental.widescreen_stage_clip_policy() ==
+                gc::windowed_widescreen::StageClipPolicy::authored
+                ? 0
+                : 1;
+        constexpr const char* clip_policies[]{
+            "Authored",
+            "Live frustum",
+        };
+        if (ImGui::Combo(
+            "Widescreen stage clip policy",
+            &clip_policy,
+            clip_policies,
+            IM_ARRAYSIZE(clip_policies)))
+        {
+            experimental.widescreen_stage_clip_policy =
+                clip_policy == 0
+                    ? gc::windowed_widescreen::StageClipPolicy::authored
+                    : gc::windowed_widescreen::StageClipPolicy::live_frustum;
+            dirty = true;
+        }
+
         bool absolute_time_judgement =
             experimental.enable_absolute_time_judgement();
         if (ImGui::Checkbox(
