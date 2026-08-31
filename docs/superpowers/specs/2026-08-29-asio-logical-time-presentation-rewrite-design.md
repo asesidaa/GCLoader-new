@@ -282,6 +282,12 @@ order is exact:
     loop; and
 14. return the shell for the already-live session after that signal.
 
+Start may invoke an audio callback synchronously before it returns. Because the
+complete route is already published, that callback uses the one normal
+`RenderPcm` path and may advance mixer state. Startup-complete publication is
+not an audio-start barrier, and there is no priming callback mode or readiness
+branch.
+
 The two handles have no general protocol. `startup-complete` is signalled once
 by the owner and waited once by the starting caller. `shutdown-requested` is
 signalled once by ordinary backend destruction and consumed by the owner
@@ -550,7 +556,8 @@ After implementation, trace the final source and demonstrate:
 - native judgement applies JudgTimeOffset exactly once in its existing base;
 - the PCM pull accepts only a frame count and advances sequentially;
 - channel sample types are frozen only after buffer creation, both halves are
-  silenced before Start, and startup never advances mixer state;
+  silenced before Start without calling `RenderPcm` or advancing mixer state,
+  and any callback admitted by Start uses the normal synchronous PCM path;
 - `asioMessage` capability replies are fixed and `outputReady` support comes
   only from the one pre-Start probe;
 - `kAsioBufferSizeChange` is not advertised as supported, while any actual

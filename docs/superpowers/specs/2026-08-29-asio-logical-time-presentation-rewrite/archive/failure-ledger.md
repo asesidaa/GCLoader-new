@@ -4100,3 +4100,16 @@ edits.
 - **Prevention:** Require exact COM balancing only for a session that reaches
   ordinary shutdown. Keep every Fatal path non-returning and cleanup-free even
   when STA initialization had already succeeded.
+
+### S-402: Startup proof contradicted synchronous callbacks from Start
+
+- **Mistake:** The first frozen STA rewrite correctly published the callback
+  target before Start and required every admitted callback to render, but its
+  static proof also said startup never advances mixer state. A conforming driver
+  may invoke a buffer callback synchronously inside Start, before Start returns,
+  so all three statements could not hold together.
+- **Prevention:** Limit the no-advance guarantee to the explicit pre-Start
+  digital-silence fill. A callback admitted by Start always uses the same normal
+  synchronous `RenderPcm` path and may advance the mixer before startup-complete
+  is signalled. Do not add a priming mode, readiness branch, or audio-start
+  barrier.
