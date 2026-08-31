@@ -11,6 +11,15 @@ namespace gc::windowed_widescreen
         live_frustum,
     };
 
+    enum class ClipGateAction : std::uint8_t
+    {
+        continue_authored,
+        jump_live_frustum,
+    };
+
+    [[nodiscard]] ClipGateAction SelectClipGateAction(
+        StageClipPolicy policy) noexcept;
+
     [[nodiscard]] constexpr std::string_view StageClipPolicyName(
         const StageClipPolicy policy) noexcept
     {

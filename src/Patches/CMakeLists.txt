@@ -23,6 +23,10 @@ add_library(gc_runtime_patches STATIC
         Framerate/FrameratePatchTransaction.cpp
         RendererDeviceLoss/RendererDeviceLossPatch.cpp
         Countdown/CountdownTimerFreeze.cpp
+        WindowedWidescreen/NativeWindowPolicy.cpp
+        WindowedWidescreen/ProjectionPolicy.cpp
+        WindowedWidescreen/ResolutionModel.cpp
+        WindowedWidescreen/StageClipPolicy.cpp
 )
 target_include_directories(gc_runtime_patches PUBLIC
         ${PROJECT_SOURCE_DIR}/src

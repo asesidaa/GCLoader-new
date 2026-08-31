@@ -64,3 +64,15 @@ add_test(
         NAME ConfigStartup
         COMMAND gc_config_startup_tests
 )
+
+add_executable(gc_windowed_widescreen_model_tests
+        Patches/WindowedWidescreen/WindowedWidescreenModelTests.cpp
+)
+target_link_libraries(gc_windowed_widescreen_model_tests PRIVATE
+        gc_runtime_patches
+)
+
+add_test(
+        NAME WindowedWidescreenModel
+        COMMAND gc_windowed_widescreen_model_tests
+)
