@@ -1343,6 +1343,13 @@ namespace gc::audio
             state_->ended.load(std::memory_order_seq_cst);
     }
 
+    std::uint64_t MixerVoice::consumed_source_frame() const noexcept
+    {
+        return state_ == nullptr
+                   ? 0
+                   : state_->cursor.load(std::memory_order_seq_cst);
+    }
+
     std::optional<std::uint64_t>
     MixerVoice::audible_until_output_frame() const noexcept
     {

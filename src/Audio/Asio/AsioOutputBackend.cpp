@@ -18,7 +18,6 @@
 #include <cstdint>
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
-#include <iomanip>
 #include <limits>
 #include <memory>
 #include <new>
@@ -215,31 +214,6 @@ namespace gc::audio
 
         std::atomic<LiveAsioSession*> callback_target{};
         std::atomic_flag callback_active = ATOMIC_FLAG_INIT;
-        std::atomic_uint32_t callback_mode_mask{};
-        std::atomic_uint32_t callback_count{};
-        std::atomic_uint32_t voice_diagnostic_count{};
-
-        constexpr std::uint32_t kDirectProcessTrue = 1U << 0U;
-        constexpr std::uint32_t kDirectProcessFalse = 1U << 1U;
-        constexpr std::uint32_t kDirectProcessInvalid = 1U << 2U;
-        constexpr std::uint32_t kLegacyCallback = 1U << 3U;
-        constexpr std::uint32_t kTimeInfoCallback = 1U << 4U;
-
-        void RecordCallbackMode(
-            const ASIOBool direct_process,
-            const std::uint32_t callback_form) noexcept
-        {
-            const auto direct_process_bit =
-                direct_process == ASIOTrue
-                    ? kDirectProcessTrue
-                    : direct_process == ASIOFalse
-                    ? kDirectProcessFalse
-                    : kDirectProcessInvalid;
-            callback_mode_mask.fetch_or(
-                direct_process_bit | callback_form,
-                std::memory_order_relaxed);
-            callback_count.fetch_add(1, std::memory_order_relaxed);
-        }
 
         [[nodiscard]] LiveAsioSession* CallbackTarget() noexcept
         {
@@ -382,7 +356,7 @@ namespace gc::audio
             const long buffer_index,
             const ASIOBool direct_process) noexcept
         {
-            RecordCallbackMode(direct_process, kLegacyCallback);
+            static_cast<void>(direct_process);
             auto* const target = CallbackTarget();
             if (callback_active.test_and_set(std::memory_order_acquire))
             {
@@ -471,7 +445,7 @@ namespace gc::audio
             const long buffer_index,
             const ASIOBool direct_process) noexcept
         {
-            RecordCallbackMode(direct_process, kTimeInfoCallback);
+            static_cast<void>(direct_process);
             auto* const target = CallbackTarget();
             if (callback_active.test_and_set(std::memory_order_acquire))
             {
@@ -638,48 +612,12 @@ namespace gc::audio
         const VoiceUsage usage,
         ma_result* const result) noexcept
     {
-        const auto source_bytes = snapshot != nullptr
-                                      ? snapshot->byte_length()
-                                      : 0;
-        auto voice = services_.render_core->CreateVoice(
+        return services_.render_core->CreateVoice(
             format,
             std::move(snapshot),
             nullptr,
             usage,
             result);
-        const auto source_frames = format.block_align == 0
-                                       ? 0
-                                       : source_bytes / format.block_align;
-        if (voice != nullptr)
-        {
-            const auto diagnostic_index =
-                voice_diagnostic_count.fetch_add(
-                    1, std::memory_order_relaxed);
-            if (diagnostic_index < 128)
-            {
-                try
-                {
-                    PLOG_INFO
-                        << "ASIO voice diagnostic: index="
-                        << diagnostic_index
-                        << ", sourceBytes=" << source_bytes
-                        << ", sourceFrames=" << source_frames
-                        << ", sourceRate=" << format.sample_rate
-                        << ", channels=" << format.channels
-                        << ", bits=" << format.bits_per_sample
-                        << ", usage=" << static_cast<unsigned>(usage)
-                        << ", callbackCount="
-                        << callback_count.load(std::memory_order_relaxed)
-                        << ", callbackModeMask=0x" << std::hex
-                        << callback_mode_mask.load(std::memory_order_relaxed)
-                        << std::dec;
-                }
-                catch (...)
-                {
-                }
-            }
-        }
-        return voice;
     }
 
     std::optional<std::uint64_t>
@@ -1003,9 +941,6 @@ namespace gc::audio
         }
 
         LiveAsioSession* expected_target{};
-        callback_mode_mask.store(0, std::memory_order_relaxed);
-        callback_count.store(0, std::memory_order_relaxed);
-        voice_diagnostic_count.store(0, std::memory_order_relaxed);
         if (!callback_target.compare_exchange_strong(
             expected_target,
             session.get(),

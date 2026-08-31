@@ -144,6 +144,7 @@ namespace gc::audio
         [[nodiscard]] bool playing() const noexcept;
         [[nodiscard]] bool looping() const noexcept;
         [[nodiscard]] bool at_end() const noexcept;
+        [[nodiscard]] std::uint64_t consumed_source_frame() const noexcept;
         [[nodiscard]] std::optional<std::uint64_t>
         audible_until_output_frame() const noexcept;
 

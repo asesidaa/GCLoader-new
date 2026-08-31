@@ -3,8 +3,6 @@
 #include "Audio/AudioBackendController.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 
-#include <plog/Log.h>
-
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cstring>
 // ReSharper disable once CppUnusedIncludeDirective
@@ -27,69 +25,6 @@ namespace gc::audio
             DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_LOCDEFER;
 
         std::atomic_uint64_t g_next_buffer_instance_id{1};
-        std::atomic_uint32_t g_buffer_diagnostic_events{};
-        constexpr std::uint32_t kBufferDiagnosticEventLimit = 4096;
-
-        bool ClaimBufferDiagnosticEvent() noexcept
-        {
-            return g_buffer_diagnostic_events.fetch_add(
-                    1, std::memory_order_relaxed) <
-                kBufferDiagnosticEventLimit;
-        }
-
-        void LogBufferCreate(
-            const std::uint64_t buffer_id,
-            const DWORD flags,
-            const DWORD buffer_bytes,
-            const NormalizedSourceFormat& format,
-            const VoiceUsage usage) noexcept
-        {
-            if (!ClaimBufferDiagnosticEvent())
-            {
-                return;
-            }
-            try
-            {
-                PLOG_INFO
-                    << "DirectSound buffer diagnostic: event=create, id="
-                    << buffer_id
-                    << ", flags=" << flags
-                    << ", bytes=" << buffer_bytes
-                    << ", frames=" << buffer_bytes / format.block_align
-                    << ", rate=" << format.sample_rate
-                    << ", channels=" << format.channels
-                    << ", bits=" << format.bits_per_sample
-                    << ", usage=" << static_cast<unsigned>(usage);
-            }
-            catch (...)
-            {
-            }
-        }
-
-        void LogBufferControl(
-            const char* const event,
-            const std::uint64_t buffer_id,
-            const std::uint64_t value0 = 0,
-            const std::uint64_t value1 = 0,
-            const std::uint64_t value2 = 0) noexcept
-        {
-            if (!ClaimBufferDiagnosticEvent())
-            {
-                return;
-            }
-            try
-            {
-                PLOG_INFO
-                    << "DirectSound buffer diagnostic: event=" << event
-                    << ", id=" << buffer_id
-                    << ", value0=" << value0
-                    << ", value1=" << value1
-                    << ", value2=" << value2;
-            }
-            catch (...)
-            {
-            }
-        }
 
         [[noreturn]] void ExactInvariantFatal() noexcept
         {
@@ -551,6 +486,9 @@ namespace gc::audio
         std::uint64_t buffer_instance_id) noexcept
         : engine_(engine),
           cursor_model_(engine.cursor_model()),
+          uses_streaming_refill_cursor_(
+              cursor_model_ == AudioCursorModel::LogicalQpc &&
+              (flags & DSBCAPS_CTRLPOSITIONNOTIFY) != 0),
           flags_(flags),
           buffer_bytes_(buffer_bytes),
           format_(format),
@@ -558,7 +496,8 @@ namespace gc::audio
           timeline_(std::move(timeline)),
           buffer_instance_id_(buffer_instance_id)
     {
-        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        if (cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_)
         {
             LARGE_INTEGER frequency{};
             if (!QueryPerformanceFrequency(&frequency) ||
@@ -679,13 +618,6 @@ namespace gc::audio
                 delete buffer;
                 return DSERR_OUTOFMEMORY;
             }
-
-            LogBufferCreate(
-                buffer_instance_id,
-                descriptor.dwFlags,
-                descriptor.dwBufferBytes,
-                format,
-                usage);
 
             *result = buffer;
             return DS_OK;
@@ -1028,10 +960,19 @@ namespace gc::audio
             return DSERR_INVALIDPARAM;
         }
         std::lock_guard control_lock(control_mutex_);
-        const auto source_frame =
-            cursor_model_ == AudioCursorModel::LogicalQpc
-                ? ResolveLogicalSourceFrameLocked()
-                : ResolvePresentedSourceFrameLocked();
+        std::uint64_t source_frame{};
+        if (uses_streaming_refill_cursor_)
+        {
+            const auto source_length = buffer_bytes_ / format_.block_align;
+            source_frame = voice_->consumed_source_frame() % source_length;
+            last_reported_source_frame_ = source_frame;
+        }
+        else
+        {
+            source_frame = cursor_model_ == AudioCursorModel::LogicalQpc
+                               ? ResolveLogicalSourceFrameLocked()
+                               : ResolvePresentedSourceFrameLocked();
+        }
         if (play_cursor != nullptr)
         {
             *play_cursor = static_cast<DWORD>(
@@ -1106,7 +1047,8 @@ namespace gc::audio
         }
         std::lock_guard control_lock(control_mutex_);
         *status = 0;
-        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        if (cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_)
         {
             const auto projection = ResolveLogicalQpcQueryLocked();
             PublishLogicalQpcObservationLocked(projection.playing);
@@ -1227,7 +1169,8 @@ namespace gc::audio
             return DSERR_INVALIDPARAM;
         }
         const auto logical_control_qpc =
-            cursor_model_ == AudioCursorModel::LogicalQpc
+            cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_
                 ? CaptureLogicalQpcOrFatal()
                 : 0;
         std::lock_guard control_lock(control_mutex_);
@@ -1235,7 +1178,8 @@ namespace gc::audio
             playback_generation_,
             timeline_ != nullptr && timeline_->HasExactPlaybackHistory());
 
-        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        if (cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_)
         {
             const auto projection =
                 ProjectLogicalQpcState(logical_control_, logical_control_qpc);
@@ -1274,12 +1218,6 @@ namespace gc::audio
             last_reported_source_frame_ =
                 FloorLogicalSourceFrameOrFatal(anchor) %
                 (buffer_bytes_ / format_.block_align);
-            LogBufferControl(
-                "play",
-                buffer_instance_id_,
-                looping ? 1 : 0,
-                generation,
-                last_reported_source_frame_);
             return DS_OK;
         }
 
@@ -1294,17 +1232,11 @@ namespace gc::audio
             playback_generation_ = generation;
             playback_origin_ = ExactPlaybackOrigin::Play;
             last_reported_source_frame_ = anchor;
-            if (timeline_->HasExactPlaybackHistory() &&
+            if (timeline_ != nullptr && timeline_->HasExactPlaybackHistory() &&
                 !timeline_->ExpectExactPlaybackGeneration(generation))
             {
                 ExactInvariantFatal();
             }
-            LogBufferControl(
-                "play",
-                buffer_instance_id_,
-                (flags & DSBPLAY_LOOPING) != 0 ? 1 : 0,
-                generation,
-                anchor);
         }
         return result;
     }
@@ -1318,7 +1250,8 @@ namespace gc::audio
             return DSERR_INVALIDPARAM;
         }
         const auto logical_control_qpc =
-            cursor_model_ == AudioCursorModel::LogicalQpc
+            cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_
                 ? CaptureLogicalQpcOrFatal()
                 : 0;
         std::lock_guard control_lock(control_mutex_);
@@ -1327,7 +1260,8 @@ namespace gc::audio
             playback_generation_,
             timeline_ != nullptr && timeline_->HasExactPlaybackHistory());
 
-        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        if (cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_)
         {
             const auto projection =
                 ProjectLogicalQpcState(logical_control_, logical_control_qpc);
@@ -1351,11 +1285,6 @@ namespace gc::audio
             playback_generation_ = generation;
             playback_origin_ = ExactPlaybackOrigin::Seek;
             last_reported_source_frame_ = source_frame;
-            LogBufferControl(
-                "seek",
-                buffer_instance_id_,
-                source_frame,
-                generation);
             return DS_OK;
         }
 
@@ -1365,16 +1294,11 @@ namespace gc::audio
             playback_generation_ = generation;
             playback_origin_ = ExactPlaybackOrigin::Seek;
             last_reported_source_frame_ = source_frame;
-            if (timeline_->HasExactPlaybackHistory() &&
+            if (timeline_ != nullptr && timeline_->HasExactPlaybackHistory() &&
                 !timeline_->ExpectExactPlaybackGeneration(generation))
             {
                 ExactInvariantFatal();
             }
-            LogBufferControl(
-                "seek",
-                buffer_instance_id_,
-                source_frame,
-                generation);
         }
         return result;
     }
@@ -1409,11 +1333,13 @@ namespace gc::audio
     HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Stop() noexcept
     {
         const auto logical_control_qpc =
-            cursor_model_ == AudioCursorModel::LogicalQpc
+            cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_
                 ? CaptureLogicalQpcOrFatal()
                 : 0;
         std::lock_guard control_lock(control_mutex_);
-        if (cursor_model_ == AudioCursorModel::LogicalQpc)
+        if (cursor_model_ == AudioCursorModel::LogicalQpc &&
+            !uses_streaming_refill_cursor_)
         {
             const auto projection =
                 ProjectLogicalQpcState(logical_control_, logical_control_qpc);
@@ -1427,19 +1353,20 @@ namespace gc::audio
                 FloorLogicalSourceFrameOrFatal(projection.source_frame) %
                 (buffer_bytes_ / format_.block_align);
             voice_->Stop();
-            LogBufferControl(
-                "stop",
-                buffer_instance_id_,
-                last_reported_source_frame_);
             return DS_OK;
         }
 
-        ResolvePresentedSourceFrameLocked();
+        if (uses_streaming_refill_cursor_)
+        {
+            const auto source_length = buffer_bytes_ / format_.block_align;
+            last_reported_source_frame_ =
+                voice_->consumed_source_frame() % source_length;
+        }
+        else
+        {
+            ResolvePresentedSourceFrameLocked();
+        }
         voice_->Stop();
-        LogBufferControl(
-            "stop",
-            buffer_instance_id_,
-            last_reported_source_frame_);
         return DS_OK;
     }
 
@@ -1449,26 +1376,11 @@ namespace gc::audio
         LPVOID second,
         DWORD second_bytes) noexcept
     {
-        const auto result = snapshot_->Unlock(
+        return snapshot_->Unlock(
             first,
             first_bytes,
             second,
             second_bytes);
-        if (SUCCEEDED(result))
-        {
-            const auto unlock_index = diagnostic_unlock_logs_.fetch_add(
-                1, std::memory_order_relaxed);
-            if (unlock_index < 4)
-            {
-                LogBufferControl(
-                    "unlock",
-                    buffer_instance_id_,
-                    first_bytes,
-                    second_bytes,
-                    unlock_index);
-            }
-        }
-        return result;
     }
 
     HRESULT STDMETHODCALLTYPE SecondarySoundBuffer::Restore() noexcept

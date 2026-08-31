@@ -59,15 +59,23 @@ DirectSound controls --> sequential mixer PCM --> ASIO callback --> device
 ASIO is only the physical PCM transport. It does not own, supply, correct,
 pause, resume, interpolate, or align gameplay time.
 
-The following ASIO values are never operands of DirectSound cursor reporting,
-Tune, input time, note time, judgement, GameTimeOffset, or JudgTimeOffset:
+The following physical-transport values are never operands of DirectSound
+logical cursor reporting, Tune, input time, note time, judgement,
+GameTimeOffset, or JudgTimeOffset:
 
 - ASIO system time or sample position;
 - callback count, cadence, duration, or absence;
 - buffer index, buffer lead, or buffer duration;
-- driver latency;
-- mixer progress; and
+- driver latency; and
 - ASIO startup, shutdown, focus, or fault state.
+
+One non-gameplay DirectSound cursor exists solely for native streaming-buffer
+ownership. An ASIO-mode secondary buffer created with
+`DSBCAPS_CTRLPOSITIONNOTIFY` reports the source frame already consumed by the
+mixer so the native ring refiller cannot overwrite unread PCM. That refill
+coordinate is not an ASIO or device clock, is never published as a gameplay
+observation, and never reaches Tune, input time, note time, judgement, either
+offset, or the stage anchor.
 
 WASAPI behavior is unchanged.
 
@@ -75,9 +83,9 @@ WASAPI behavior is unchanged.
 
 ### 3.1 DirectSound logical position
 
-ASIO-mode DirectSound secondary buffers answer play position from their current
-control state plus QPC. Play, Stop, SetCurrentPosition, looping, and natural
-end retain their DirectSound-visible meanings.
+Ordinary ASIO-mode DirectSound secondary buffers answer play position from
+their current control state plus QPC. Play, Stop, SetCurrentPosition, looping,
+and natural end retain their DirectSound-visible meanings.
 
 A DirectSound control captures its control QPC `Qc` before publishing one
 complete logical state containing the exact source-frame anchor `Sc` and the
@@ -92,6 +100,16 @@ When a DirectSound API requires an integral cursor, it uses mathematical
 frame-to-byte and buffer wrap/end convention. Ordinary fractional progress is
 therefore not an arithmetic failure. The mixer never feeds position back into
 the logical state. No ASIO callback or ASIO value participates.
+
+A secondary buffer created with `DSBCAPS_CTRLPOSITIONNOTIFY` is the one narrow
+exception to QPC cursor projection. `GetCurrentPosition` returns the mixer's
+already-consumed source frame, wrapped to that buffer, as both the play and
+write cursor. The mixer advances this cursor only after it has copied those
+source frames, so the native ring refiller may rewrite the reported region
+without racing unread PCM. Play, Stop, SetCurrentPosition, status, and looping
+for this buffer use the ordinary mixer voice state. No logical observation or
+stage anchor is published from this coordinate, and no ASIO time, sample
+position, callback count, latency, or device position contributes to it.
 
 The implementation stores only the information needed to answer the next
 logical query and to identify the current Play anchor. This specification does
@@ -195,8 +213,9 @@ RenderPcm(frame_count) -> exactly frame_count interleaved stereo float frames
 ```
 
 Source-rate conversion, looping, Play, Stop, Seek, gain, and voice lifetime are
-ordinary mixer behavior. Any private sample-conversion cursor remains audio
-state only and is never exposed as gameplay time.
+ordinary mixer behavior. A private sample-conversion cursor remains audio state
+only. Its sole external use is the section 3.1 streaming-refill coordinate; it
+is never exposed as gameplay time or a stage observation.
 
 `RenderPcm` receives no QPC, timestamp, sample position, latency, presentation
 coordinate, recovery state, or desired alignment. It performs no ASIO clock or
@@ -541,8 +560,12 @@ execute.
 
 After implementation, trace the final source and demonstrate:
 
-- ASIO and mixer progress never reach DirectSound logical position, Tune,
-  input, judgement, GameTimeOffset, or JudgTimeOffset;
+- ASIO progress never reaches DirectSound logical position, Tune, input,
+  judgement, GameTimeOffset, or JudgTimeOffset;
+- mixer-consumed source position reaches only the
+  `DSBCAPS_CTRLPOSITIONNOTIFY` refill cursor, advances only after source PCM is
+  copied, and never reaches a gameplay observation, stage anchor, Tune, input,
+  judgement, GameTimeOffset, or JudgTimeOffset;
 - DirectSound controls capture QPC before publishing one complete state,
   queries accept that state before capturing QPC, and integral cursors use the
   declared mathematical floor conversion;

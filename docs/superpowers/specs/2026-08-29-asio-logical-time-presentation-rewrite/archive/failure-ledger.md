@@ -4127,3 +4127,18 @@ edits.
   Replace them only after a full design/specification/plan rewrite or explicit
   user direction. A local document never overrides the user's later workflow
   instruction.
+
+### S-404: Blanket QPC cursor reporting broke native streaming refills
+
+- **Mistake:** The logical-time rewrite made every ASIO secondary buffer report
+  a QPC-projected play cursor. The native preview path uses
+  `DSBCAPS_CTRLPOSITIONNOTIFY`, treats the reported play cursor as the amount of
+  its ring buffer that is safe to refill, and ignores the write cursor. QPC
+  projection could therefore move past source PCM that the mixer had not copied
+  yet, letting the refill overwrite unread samples. Preview audio repeated and
+  crackled while immutable menu and stage buffers remained clean.
+- **Prevention:** Keep QPC logical position for ordinary static/gameplay
+  buffers. A notification-backed streaming buffer reports only the mixer's
+  already-consumed source frame as its DirectSound refill coordinate. Never
+  publish that coordinate as gameplay time or feed it into Tune, judgement,
+  either offset, or the stage anchor; no ASIO timing value is involved.
