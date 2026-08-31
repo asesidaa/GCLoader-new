@@ -1,10 +1,17 @@
 #include "Patches/WindowedWidescreen/NativeCanvasCompositor.h"
 #include "Patches/RendererDeviceLoss/RendererResourceLifecycle.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -747,7 +754,473 @@ namespace
             Expect(
                 resources.live_references == 0 &&
                     resources.cleanup_count == 1,
-                "partial allocation failure releases every owned reference");
+            "partial allocation failure releases every owned reference");
+        }
+    }
+
+    enum class InstallEventKind
+    {
+        read,
+        create,
+        enable,
+        reset,
+        detach_resource,
+        clear_context,
+        publish,
+    };
+
+    struct InstallEvent
+    {
+        InstallEventKind kind{};
+        gc::windowed_widescreen::WidescreenContractSite site{};
+
+        bool operator==(const InstallEvent&) const = default;
+    };
+
+    struct FakeInstallEnvironment
+    {
+        struct MemoryRegion
+        {
+            std::uintptr_t address{};
+            std::vector<std::byte> bytes;
+        };
+
+        std::vector<MemoryRegion> memory;
+        std::vector<InstallEvent> events;
+        std::optional<std::size_t> fail_create_index;
+        std::optional<std::size_t> fail_enable_index;
+        bool fail_reads_after_create{};
+        bool publish_succeeds{true};
+        bool owner_published{};
+        std::size_t create_count{};
+        std::size_t enable_count{};
+        std::size_t reads_before_first_create{};
+
+        void AddBytes(
+            const std::uintptr_t address,
+            const std::initializer_list<std::uint8_t> values)
+        {
+            MemoryRegion region{.address = address};
+            for (const auto value : values)
+            {
+                region.bytes.push_back(static_cast<std::byte>(value));
+            }
+            memory.push_back(std::move(region));
+        }
+
+        void AddPointer(
+            const std::uintptr_t address,
+            const std::uint32_t value)
+        {
+            AddBytes(
+                address,
+                {
+                    static_cast<std::uint8_t>(value & 0xFF),
+                    static_cast<std::uint8_t>((value >> 8) & 0xFF),
+                    static_cast<std::uint8_t>((value >> 16) & 0xFF),
+                    static_cast<std::uint8_t>((value >> 24) & 0xFF),
+                });
+        }
+
+        static bool Read(
+            void* context,
+            const std::uintptr_t address,
+            const std::span<std::byte> output) noexcept
+        {
+            auto* self = static_cast<FakeInstallEnvironment*>(context);
+            self->events.push_back({.kind = InstallEventKind::read});
+            if (self->create_count == 0)
+            {
+                ++self->reads_before_first_create;
+            }
+            else if (self->fail_reads_after_create)
+            {
+                return false;
+            }
+
+            for (const auto& region : self->memory)
+            {
+                if (region.address == address &&
+                    region.bytes.size() == output.size())
+                {
+                    std::copy(
+                        region.bytes.begin(),
+                        region.bytes.end(),
+                        output.begin());
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static bool CreateDisabled(
+            void* context,
+            const gc::windowed_widescreen::WidescreenContractSite site,
+            gc::windowed_widescreen::WidescreenHookKind,
+            std::uintptr_t,
+            void*) noexcept
+        {
+            auto* self = static_cast<FakeInstallEnvironment*>(context);
+            const auto index = self->create_count++;
+            self->events.push_back({InstallEventKind::create, site});
+            return !self->fail_create_index.has_value() ||
+                *self->fail_create_index != index;
+        }
+
+        static bool Enable(
+            void* context,
+            const gc::windowed_widescreen::WidescreenContractSite site) noexcept
+        {
+            auto* self = static_cast<FakeInstallEnvironment*>(context);
+            const auto index = self->enable_count++;
+            self->events.push_back({InstallEventKind::enable, site});
+            return !self->fail_enable_index.has_value() ||
+                *self->fail_enable_index != index;
+        }
+
+        static void Reset(
+            void* context,
+            const gc::windowed_widescreen::WidescreenContractSite site) noexcept
+        {
+            static_cast<FakeInstallEnvironment*>(context)->events.push_back(
+                {InstallEventKind::reset, site});
+        }
+
+        static void ClearContext(void* context) noexcept
+        {
+            static_cast<FakeInstallEnvironment*>(context)->events.push_back(
+                {.kind = InstallEventKind::clear_context});
+        }
+
+        static void DetachResource(void* context) noexcept
+        {
+            static_cast<FakeInstallEnvironment*>(context)->events.push_back(
+                {.kind = InstallEventKind::detach_resource});
+        }
+
+        static bool Publish(void* context) noexcept
+        {
+            auto* self = static_cast<FakeInstallEnvironment*>(context);
+            self->events.push_back({.kind = InstallEventKind::publish});
+            if (self->publish_succeeds)
+            {
+                self->owner_published = true;
+            }
+            return self->publish_succeeds;
+        }
+
+        [[nodiscard]] gc::windowed_widescreen::WidescreenInstallActions
+        Actions() noexcept
+        {
+            return {
+                .context = this,
+                .read = &Read,
+                .create_disabled = &CreateDisabled,
+                .enable = &Enable,
+                .reset = &Reset,
+                .detach_renderer_resource = &DetachResource,
+                .clear_callback_context = &ClearContext,
+                .publish_owner = &Publish,
+            };
+        }
+    };
+
+    struct SyntheticInstallFixture
+    {
+        static constexpr std::uintptr_t image_base = 0x00400000;
+
+        std::array<gc::windowed_widescreen::WidescreenByteContract, 3>
+            byte_contracts{
+                gc::windowed_widescreen::WidescreenByteContract{
+                    .site = gc::windowed_widescreen::
+                        WidescreenContractSite::config_apply,
+                    .rva = 0x100,
+                    .pattern = gc::windowed_widescreen::BytePatternOf<
+                        0xAA, 0xBB>(),
+                    .hook_kind = gc::windowed_widescreen::
+                        WidescreenHookKind::inline_hook,
+                },
+                gc::windowed_widescreen::WidescreenByteContract{
+                    .site = gc::windowed_widescreen::
+                        WidescreenContractSite::frame_begin,
+                    .rva = 0x120,
+                    .pattern = gc::windowed_widescreen::BytePatternOf<
+                        0xCC, 0xDD, 0xEE>(),
+                    .hook_kind = gc::windowed_widescreen::
+                        WidescreenHookKind::mid_hook,
+                },
+                gc::windowed_widescreen::WidescreenByteContract{
+                    .site = gc::windowed_widescreen::
+                        WidescreenContractSite::clip_default,
+                    .rva = 0x140,
+                    .pattern = gc::windowed_widescreen::BytePatternOf<
+                        0x11>(),
+                    .hook_kind = gc::windowed_widescreen::
+                        WidescreenHookKind::read_only,
+                },
+            };
+        std::array<gc::windowed_widescreen::WidescreenPointerContract, 1>
+            pointer_contracts{
+                gc::windowed_widescreen::WidescreenPointerContract{
+                    .site = gc::windowed_widescreen::
+                        WidescreenContractSite::config_width_setter,
+                    .pointer_rva = 0x160,
+                    .target_rva = 0x500,
+                },
+            };
+        std::array<gc::windowed_widescreen::WidescreenHookRequest, 2>
+            requests{
+                gc::windowed_widescreen::WidescreenHookRequest{
+                    .site = gc::windowed_widescreen::
+                        WidescreenContractSite::config_apply,
+                    .callback = reinterpret_cast<void*>(0x1111),
+                },
+                gc::windowed_widescreen::WidescreenHookRequest{
+                    .site = gc::windowed_widescreen::
+                        WidescreenContractSite::frame_begin,
+                    .callback = reinterpret_cast<void*>(0x2222),
+                },
+            };
+        FakeInstallEnvironment environment;
+
+        SyntheticInstallFixture()
+        {
+            environment.AddBytes(image_base + 0x100, {0xAA, 0xBB});
+            environment.AddBytes(image_base + 0x120, {0xCC, 0xDD, 0xEE});
+            environment.AddBytes(image_base + 0x140, {0x11});
+            environment.AddPointer(
+                image_base + 0x160,
+                static_cast<std::uint32_t>(image_base + 0x500));
+        }
+
+        [[nodiscard]] gc::windowed_widescreen::WidescreenContractManifest
+        Manifest() const noexcept
+        {
+            return {
+                .byte_contracts = byte_contracts,
+                .pointer_contracts = pointer_contracts,
+            };
+        }
+    };
+
+    void HookTransactionPreflightsEverythingBeforeCreation()
+    {
+        using namespace gc::windowed_widescreen;
+        SyntheticInstallFixture fixture;
+        const auto result = InstallWindowedWidescreenHooks(
+            fixture.image_base,
+            fixture.Manifest(),
+            fixture.requests,
+            fixture.environment.Actions());
+        Expect(result.has_value(), "synthetic hook transaction succeeds");
+        Expect(
+            fixture.environment.reads_before_first_create == 4,
+            "all byte and pointer contracts read before first create");
+        Expect(
+            fixture.environment.owner_published,
+            "owner publishes only after all hooks enable");
+        Expect(
+            fixture.environment.events == std::vector<InstallEvent>{
+                {.kind = InstallEventKind::read},
+                {.kind = InstallEventKind::read},
+                {.kind = InstallEventKind::read},
+                {.kind = InstallEventKind::read},
+                {InstallEventKind::create,
+                 WidescreenContractSite::config_apply},
+                {InstallEventKind::create,
+                 WidescreenContractSite::frame_begin},
+                {InstallEventKind::enable,
+                 WidescreenContractSite::config_apply},
+                {InstallEventKind::enable,
+                 WidescreenContractSite::frame_begin},
+                {.kind = InstallEventKind::publish},
+            },
+            "transaction order is preflight, disabled create, enable, publish");
+    }
+
+    void HookTransactionRejectsBasePointerAndAddressErrorsEarly()
+    {
+        using namespace gc::windowed_widescreen;
+        {
+            SyntheticInstallFixture fixture;
+            const auto wrong_base = InstallWindowedWidescreenHooks(
+                fixture.image_base + 0x1000,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !wrong_base && wrong_base.error().stage ==
+                    WidescreenInstallStage::unexpected_image_base &&
+                    fixture.environment.events.empty(),
+                "unexpected image base rejects before reads or hooks");
+        }
+        {
+            SyntheticInstallFixture fixture;
+            fixture.environment.memory.back().bytes[1] = std::byte{0x00};
+            const auto pointer_mismatch = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !pointer_mismatch && pointer_mismatch.error().stage ==
+                    WidescreenInstallStage::pointer_mismatch &&
+                    fixture.environment.create_count == 0,
+                "relocated pointer mismatch rejects before creation");
+        }
+        {
+            SyntheticInstallFixture fixture;
+            fixture.byte_contracts[0].rva =
+                std::numeric_limits<std::uint32_t>::max();
+            const auto overflow = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !overflow && overflow.error().stage ==
+                    WidescreenInstallStage::address_overflow &&
+                    fixture.environment.events.empty(),
+                "checked address overflow rejects before memory access");
+        }
+    }
+
+    void HookCreationAndEnableFailuresRollbackInReverse()
+    {
+        using namespace gc::windowed_widescreen;
+        for (std::size_t fail_index = 0; fail_index < 2; ++fail_index)
+        {
+            SyntheticInstallFixture fixture;
+            fixture.environment.fail_create_index = fail_index;
+            const auto failed = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !failed && failed.error().stage ==
+                    WidescreenInstallStage::hook_create &&
+                    failed.error().rollback_attempted &&
+                    failed.error().rollback_complete &&
+                    !fixture.environment.owner_published,
+                "failure at each create rolls back without owner publish");
+            const auto reset_count = static_cast<std::size_t>(std::count_if(
+                fixture.environment.events.begin(),
+                fixture.environment.events.end(),
+                [](const InstallEvent event)
+                {
+                    return event.kind == InstallEventKind::reset;
+                }));
+            Expect(
+                reset_count == fail_index,
+                "create failure resets every prior candidate once");
+        }
+
+        for (std::size_t fail_index = 0; fail_index < 2; ++fail_index)
+        {
+            SyntheticInstallFixture fixture;
+            fixture.environment.fail_enable_index = fail_index;
+            const auto failed = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !failed && failed.error().stage ==
+                    WidescreenInstallStage::hook_enable &&
+                    failed.error().rollback_attempted &&
+                    failed.error().rollback_complete &&
+                    !fixture.environment.owner_published,
+                "failure at each enable rolls back without owner publish");
+
+            std::vector<WidescreenContractSite> reset_sites;
+            for (const auto event : fixture.environment.events)
+            {
+                if (event.kind == InstallEventKind::reset)
+                {
+                    reset_sites.push_back(event.site);
+                }
+            }
+            Expect(
+                reset_sites == std::vector<WidescreenContractSite>{
+                    WidescreenContractSite::frame_begin,
+                    WidescreenContractSite::config_apply,
+                },
+                "enable failure resets all candidates in reverse order");
+        }
+    }
+
+    void HookRollbackReportsVerificationAndPublicationFailures()
+    {
+        using namespace gc::windowed_widescreen;
+        {
+            SyntheticInstallFixture fixture;
+            fixture.environment.fail_enable_index = 0;
+            fixture.environment.fail_reads_after_create = true;
+            const auto failed = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !failed && failed.error().rollback_attempted &&
+                    !failed.error().rollback_complete,
+                "rollback verification failure remains explicit");
+        }
+        {
+            SyntheticInstallFixture fixture;
+            fixture.environment.publish_succeeds = false;
+            const auto failed = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                fixture.environment.Actions());
+            Expect(
+                !failed && failed.error().stage ==
+                    WidescreenInstallStage::owner_publish &&
+                    failed.error().rollback_complete &&
+                    !fixture.environment.owner_published,
+            "owner publication failure rolls every hook back");
+        }
+    }
+
+    void HookTransactionRejectsInvalidActionsAndCapacity()
+    {
+        using namespace gc::windowed_widescreen;
+        {
+            SyntheticInstallFixture fixture;
+            auto actions = fixture.environment.Actions();
+            actions.enable = nullptr;
+            const auto invalid = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                fixture.requests,
+                actions);
+            Expect(
+                !invalid && invalid.error().stage ==
+                    WidescreenInstallStage::invalid_actions &&
+                    fixture.environment.events.empty(),
+                "missing install action rejects before memory access");
+        }
+        {
+            SyntheticInstallFixture fixture;
+            std::array<
+                WidescreenHookRequest,
+                kMaximumWidescreenHooks + 1> requests{};
+            for (auto& request : requests)
+            {
+                request = fixture.requests.front();
+            }
+            const auto overflow = InstallWindowedWidescreenHooks(
+                fixture.image_base,
+                fixture.Manifest(),
+                requests,
+                fixture.environment.Actions());
+            Expect(
+                !overflow && overflow.error().stage ==
+                    WidescreenInstallStage::capacity_overflow &&
+                    fixture.environment.events.empty(),
+                "hook capacity overflow rejects before memory access");
         }
     }
 } // namespace
@@ -765,5 +1238,10 @@ int main()
     RendererResourceLifecycleRetainsRecoverableFailureState();
     RendererResourceLifecycleRejectsInvalidParticipation();
     PartialResourceCreationNeverPublishesOrLeaks();
+    HookTransactionPreflightsEverythingBeforeCreation();
+    HookTransactionRejectsBasePointerAndAddressErrorsEarly();
+    HookCreationAndEnableFailuresRollbackInReverse();
+    HookRollbackReportsVerificationAndPublicationFailures();
+    HookTransactionRejectsInvalidActionsAndCapacity();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

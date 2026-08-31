@@ -32,6 +32,8 @@ add_library(gc_runtime_patches STATIC
         WindowedWidescreen/RenderSpacePolicy.cpp
         WindowedWidescreen/ResolutionModel.cpp
         WindowedWidescreen/StageClipPolicy.cpp
+        WindowedWidescreen/WindowedWidescreenAbi.cpp
+        WindowedWidescreen/WindowedWidescreenPatchTransaction.cpp
 )
 target_include_directories(gc_runtime_patches PUBLIC
         ${PROJECT_SOURCE_DIR}/src
