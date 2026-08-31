@@ -4142,3 +4142,17 @@ edits.
   already-consumed source frame as its DirectSound refill coordinate. Never
   publish that coordinate as gameplay time or feed it into Tune, judgement,
   either offset, or the stage anchor; no ASIO timing value is involved.
+
+### S-405: Removing the ASIO provider activation record broke ConfigGUI analysis
+
+- **Mistake:** The ASIO logical-clock rewrite correctly stopped emitting
+  `absolute-stage-activation`, whose payload describes the removed provider
+  timeline, but left ConfigGUI requiring that intermediate record before it
+  accepted a completed song. The retained log contained two trustworthy
+  `semantic-stage-end activated=1` records and hundreds of eligible timing
+  observations, yet the advisor discarded both songs and produced no estimate.
+- **Prevention:** Treat the matching `semantic-stage-end activated=1` record as
+  the authoritative proof that absolute judgement activated and the song
+  completed. Continue validating `absolute-stage-activation` when a
+  provider-backed run emits it, but never require that obsolete provider record
+  from an ASIO logical-clock stage.

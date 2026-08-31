@@ -142,11 +142,13 @@ the advisor does not read or approximate alternate judgement windows.
 
 ## Complete-Stage Eligibility
 
-A stage is usable only when the log contains, in order, one matching:
-
-1. `semantic-stage-open`;
-2. `absolute-stage-activation`; and
-3. `semantic-stage-end`.
+A stage is usable only when the log contains, in order, one matching
+`semantic-stage-open` and one matching `semantic-stage-end` whose
+`activated=1`. The end record is the authoritative proof that absolute
+judgement activated and the song completed. A provider-backed run may also
+contain `absolute-stage-activation`, which is still validated when present but
+is not required because ASIO logical-clock stages have no provider-timeline
+activation record.
 
 The stage is rejected when followed by
 `semantic-stage-termination source=test_mode_entry`, because entering Test Mode
