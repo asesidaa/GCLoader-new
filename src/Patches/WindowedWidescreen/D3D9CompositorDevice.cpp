@@ -471,8 +471,12 @@ namespace gc::windowed_widescreen
         }
 
         const auto intended_target = bound_target_;
-        if (FAILED(copy_state_block_->Apply()) ||
-            !BindTarget(intended_target))
+        // Bind first: BindTarget must clear sampler 0 before a texture can
+        // become a render target. Applying the captured block last restores
+        // that sampler (and the rest of the game's pipeline state) instead of
+        // immediately clearing it again.
+        if (!BindTarget(intended_target) ||
+            FAILED(copy_state_block_->Apply()))
         {
             return false;
         }
@@ -493,6 +497,8 @@ namespace gc::windowed_widescreen
         if (FAILED(device_->SetVertexShader(nullptr)) ||
             FAILED(device_->SetPixelShader(nullptr)) ||
             FAILED(device_->SetFVF(kCopyFvf)) ||
+            FAILED(device_->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID)) ||
+            FAILED(device_->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE)) ||
             FAILED(device_->SetRenderState(D3DRS_ZENABLE, FALSE)) ||
             FAILED(device_->SetRenderState(D3DRS_ZWRITEENABLE, FALSE)) ||
             FAILED(device_->SetRenderState(D3DRS_STENCILENABLE, FALSE)) ||
@@ -500,6 +506,8 @@ namespace gc::windowed_widescreen
             FAILED(device_->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE)) ||
             FAILED(device_->SetRenderState(D3DRS_FOGENABLE, FALSE)) ||
             FAILED(device_->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE)) ||
+            FAILED(device_->SetRenderState(D3DRS_CLIPPLANEENABLE, 0)) ||
+            FAILED(device_->SetRenderState(D3DRS_WRAP0, 0)) ||
             FAILED(device_->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE)) ||
             FAILED(device_->SetRenderState(
                 D3DRS_COLORWRITEENABLE,
@@ -524,6 +532,12 @@ namespace gc::windowed_widescreen
                 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1)) ||
             FAILED(device_->SetTextureStageState(
                 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE)) ||
+            FAILED(device_->SetTextureStageState(
+                0, D3DTSS_RESULTARG, D3DTA_CURRENT)) ||
+            FAILED(device_->SetTextureStageState(
+                0, D3DTSS_TEXCOORDINDEX, 0)) ||
+            FAILED(device_->SetTextureStageState(
+                0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE)) ||
             FAILED(device_->SetTextureStageState(
                 1, D3DTSS_COLOROP, D3DTOP_DISABLE)) ||
             FAILED(device_->SetTextureStageState(
@@ -635,20 +649,40 @@ namespace gc::windowed_widescreen
             .right = static_cast<LONG>(dimensions->width),
             .bottom = static_cast<LONG>(dimensions->height),
         };
-        return SUCCEEDED(device_->SetViewport(&viewport)) &&
-            SUCCEEDED(device_->SetScissorRect(&scissor));
+        if (FAILED(device_->SetViewport(&viewport)) ||
+            FAILED(device_->SetScissorRect(&scissor)))
+        {
+            return false;
+        }
+        if (space == RenderSpace::native_2d)
+        {
+            return SUCCEEDED(
+                       device_->SetRenderState(D3DRS_ZENABLE, FALSE)) &&
+                SUCCEEDED(device_->SetRenderState(
+                    D3DRS_ZWRITEENABLE,
+                    FALSE)) &&
+                SUCCEEDED(device_->SetRenderState(
+                    D3DRS_STENCILENABLE,
+                    FALSE));
+        }
+        return true;
     }
 
     bool D3D9CompositorDevice::NativeDepthStateIsDisabled() noexcept
     {
         DWORD z_enabled = TRUE;
         DWORD z_write_enabled = TRUE;
+        DWORD stencil_enabled = TRUE;
         return active_ && device_ &&
             SUCCEEDED(device_->GetRenderState(D3DRS_ZENABLE, &z_enabled)) &&
             SUCCEEDED(device_->GetRenderState(
                 D3DRS_ZWRITEENABLE,
                 &z_write_enabled)) &&
-            z_enabled == FALSE && z_write_enabled == FALSE;
+            SUCCEEDED(device_->GetRenderState(
+                D3DRS_STENCILENABLE,
+                &stencil_enabled)) &&
+            z_enabled == FALSE && z_write_enabled == FALSE &&
+            stencil_enabled == FALSE;
     }
 
     bool D3D9CompositorDevice::AttemptRestoreAfterFailure(

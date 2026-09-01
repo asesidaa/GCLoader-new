@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import sys
 from typing import Any
@@ -89,6 +91,23 @@ OBJECT_CONTRACTS = {
 SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src" / "Patches"
 WINDOWED_WIDESCREEN_SOURCE = SOURCE_ROOT / "WindowedWidescreen"
 RENDERER_LOSS_HOOK_RANGE = (0x000E5578, 0x000E7A84)
+EXPECTED_IDMAC_EXPORTS = (
+    "iDmacDrvOpen",
+    "iDmacDrvClose",
+    "iDmacDrvProgramDownload",
+    "iDmacDrvDmaRead",
+    "iDmacDrvDmaWrite",
+    "iDmacDrvRegisterRead",
+    "iDmacDrvRegisterWrite",
+    "iDmacDrvRegisterBufferRead",
+    "iDmacDrvRegisterBufferWrite",
+    "iDmacDrvMemoryRead",
+    "iDmacDrvMemoryWrite",
+    "iDmacDrvMemoryBufferRead",
+    "iDmacDrvMemoryBufferWrite",
+    "iDmacDrvMemoryReadExt",
+    "iDmacDrvMemoryWriteExt",
+)
 
 
 def _remote_audit_code() -> str:
@@ -167,6 +186,67 @@ __result__ = {{
 """
 
 
+def _pe_rva_to_offset(
+    data: bytes,
+    sections_offset: int,
+    section_count: int,
+    rva: int,
+) -> int:
+    for index in range(section_count):
+        section = sections_offset + index * 40
+        if section + 40 > len(data):
+            break
+        virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
+            "<IIII", data, section + 8
+        )
+        extent = max(virtual_size, raw_size)
+        if virtual_address <= rva < virtual_address + extent:
+            offset = raw_offset + rva - virtual_address
+            if offset >= len(data):
+                break
+            return offset
+    raise ValueError(f"PE RVA 0x{rva:X} is outside all file sections")
+
+
+def _read_pe_c_string(data: bytes, offset: int) -> str:
+    end = data.find(b"\0", offset)
+    if offset < 0 or end < 0:
+        raise ValueError("unterminated PE export name")
+    return data[offset:end].decode("ascii")
+
+
+def _read_pe_exports(
+    data: bytes,
+    optional_offset: int,
+    sections_offset: int,
+    section_count: int,
+) -> list[str]:
+    optional_magic = struct.unpack_from("<H", data, optional_offset)[0]
+    if optional_magic != 0x010B:
+        raise ValueError(f"expected PE32 optional header, got 0x{optional_magic:04X}")
+    export_rva, export_size = struct.unpack_from("<II", data, optional_offset + 96)
+    if export_rva == 0 or export_size == 0:
+        return []
+    export_offset = _pe_rva_to_offset(
+        data, sections_offset, section_count, export_rva
+    )
+    if export_offset + 40 > len(data):
+        raise ValueError("truncated PE export directory")
+    number_of_names = struct.unpack_from("<I", data, export_offset + 24)[0]
+    names_rva = struct.unpack_from("<I", data, export_offset + 32)[0]
+    names_offset = _pe_rva_to_offset(
+        data, sections_offset, section_count, names_rva
+    )
+    exports: list[str] = []
+    for index in range(number_of_names):
+        name_rva = struct.unpack_from("<I", data, names_offset + index * 4)[0]
+        name_offset = _pe_rva_to_offset(
+            data, sections_offset, section_count, name_rva
+        )
+        exports.append(_read_pe_c_string(data, name_offset))
+    return exports
+
+
 def _inspect_dll(path: Path) -> dict[str, Any]:
     data = path.read_bytes()
     if len(data) < 0x40 or data[:2] != b"MZ":
@@ -175,6 +255,16 @@ def _inspect_dll(path: Path) -> dict[str, Any]:
     if pe_offset + 6 > len(data) or data[pe_offset : pe_offset + 4] != b"PE\0\0":
         raise ValueError(f"invalid PE signature: {path}")
     machine = struct.unpack_from("<H", data, pe_offset + 4)[0]
+    section_count = struct.unpack_from("<H", data, pe_offset + 6)[0]
+    optional_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
+    optional_offset = pe_offset + 24
+    sections_offset = optional_offset + optional_size
+    exports = _read_pe_exports(
+        data,
+        optional_offset,
+        sections_offset,
+        section_count,
+    )
     required_strings = (
         b"enable_windowed_widescreen_stage",
         b"widescreen_window_width",
@@ -184,12 +274,17 @@ def _inspect_dll(path: Path) -> dict[str, Any]:
     )
     return {
         "path": str(path.resolve()),
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
         "machine": machine,
         "machine_hex": f"0x{machine:04X}",
         "is_x86": machine == 0x014C,
         "configuration_strings": {
             value.decode("ascii"): value in data for value in required_strings
         },
+        "exports": exports,
+        "expected_exports": list(EXPECTED_IDMAC_EXPORTS),
+        "exports_match": exports == sorted(EXPECTED_IDMAC_EXPORTS),
     }
 
 
@@ -199,24 +294,41 @@ def _audit_source_overlap() -> dict[str, Any]:
         for name, kind, rva, _ in BYTE_CONTRACTS
         if kind in {"inline", "mid"}
     }
+    hook_values = {
+        value: (name, rva, representation)
+        for rva, name in hook_rvas.items()
+        for value, representation in (
+            (rva, "rva"),
+            (PREFERRED_IMAGE_BASE + rva, "preferred_va"),
+        )
+    }
     collisions: list[dict[str, Any]] = []
+    seen: set[tuple[Path, int, str]] = set()
     for source in SOURCE_ROOT.rglob("*"):
         if source.suffix.lower() not in {".h", ".cpp"}:
             continue
         if WINDOWED_WIDESCREEN_SOURCE in source.parents:
             continue
-        text = source.read_text(encoding="utf-8", errors="replace")
-        folded = text.casefold()
-        for rva, name in hook_rvas.items():
-            needle = f"0x{rva:08x}"
-            if needle in folded:
-                collisions.append(
-                    {
-                        "site": name,
-                        "rva": rva,
-                        "source": str(source.relative_to(SOURCE_ROOT.parents[1])),
-                    }
-                )
+        source_text = source.read_text(encoding="utf-8", errors="replace")
+        for match in re.finditer(
+            r"\b0[xX]([0-9A-Fa-f]+)(?:[uUlL]*)\b", source_text
+        ):
+            matched = hook_values.get(int(match.group(1), 16))
+            if matched is None:
+                continue
+            name, rva, representation = matched
+            identity = (source, rva, representation)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            collisions.append(
+                {
+                    "site": name,
+                    "rva": rva,
+                    "representation": representation,
+                    "source": str(source.relative_to(SOURCE_ROOT.parents[1])),
+                }
+            )
 
     renderer_range_collisions = [
         {"site": name, "rva": rva}
@@ -272,6 +384,7 @@ def run_audit(dll_path: Path | None) -> dict[str, Any]:
             success
             and dll["is_x86"]
             and all(dll["configuration_strings"].values())
+            and dll["exports_match"]
         )
     result["success"] = success
     return result
@@ -282,7 +395,9 @@ def main() -> int:
         description="Read-only audit of the frozen windowed-widescreen ABI"
     )
     parser.add_argument(
+        "--artifact",
         "--dll",
+        dest="dll",
         type=Path,
         help="optional built iDmacDrv32.dll to inspect",
     )

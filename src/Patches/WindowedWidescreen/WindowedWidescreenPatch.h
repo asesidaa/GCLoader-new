@@ -134,6 +134,15 @@ namespace gc::windowed_widescreen
         height,
     };
 
+    enum class RenderQueryRoute : std::uint8_t
+    {
+        native_passthrough,
+        frame_virtualized,
+    };
+
+    [[nodiscard]] RenderQueryRoute ResolveRenderQueryRoute(
+        bool compositor_frame_active) noexcept;
+
     struct RenderDimensionHookActions
     {
         void* context{};

@@ -533,6 +533,34 @@ namespace
             "missing action rejects before frame or device mutation");
     }
 
+    void DeviceLossResetClosesAnInterruptedLogicalFrame()
+    {
+        using namespace gc::windowed_widescreen;
+        FakeThreadId thread;
+        FakeDeviceActions device;
+        NativeCanvasCompositor compositor{
+            OutputSize{.width = 1920, .height = 1280},
+            RenderThreadIdProvider{
+                .context = &thread,
+                .current = &FakeThreadId::Current,
+            },
+            device.Actions(),
+        };
+
+        Expect(
+            compositor.BeginFrame().has_value() &&
+                compositor.frame_active(),
+            "device-loss test begins an interrupted frame");
+        compositor.ResetForDeviceLoss();
+        Expect(
+            !compositor.frame_active(),
+            "device loss clears the interrupted logical frame");
+        Expect(
+            compositor.BeginFrame().has_value() &&
+                compositor.frame_active(),
+            "first frame after device recreation is not nested");
+    }
+
     struct FakeRendererResource
     {
         std::size_t create_count{};
@@ -1968,6 +1996,19 @@ namespace
             "frame end closes native space then performs one final copy");
     }
 
+    void OutsideFrameQueriesUseNativePassthrough()
+    {
+        using namespace gc::windowed_widescreen;
+        Expect(
+            ResolveRenderQueryRoute(false) ==
+                RenderQueryRoute::native_passthrough,
+            "outside-frame render queries preserve native lifecycle behavior");
+        Expect(
+            ResolveRenderQueryRoute(true) ==
+                RenderQueryRoute::frame_virtualized,
+            "active-frame render queries use compositor dimensions");
+    }
+
     struct FakeProjectionActions
     {
         gc::windowed_widescreen::RenderSpace space{
@@ -2198,6 +2239,7 @@ int main()
     PendingBatchesAndFailedRecoveryAreFatalState();
     RuntimeRejectsInvalidFrameAndThreadCalls();
     MissingDeviceActionRejectsBeforeFrameMutation();
+    DeviceLossResetClosesAnInterruptedLogicalFrame();
     RendererResourceLifecycleReleasesAndRecreatesExactlyOnce();
     RendererResourceLifecycleRetainsRecoverableFailureState();
     RendererResourceLifecycleRejectsInvalidParticipation();
@@ -2212,6 +2254,7 @@ int main()
     BaseHookWrappersPreserveNativeOrderingAndResults();
     DisabledInitializationGatePerformsNoEnabledAction();
     RenderHookWrappersRouteSpacesDimensionsAndViewport();
+    OutsideFrameQueriesUseNativePassthrough();
     ProjectionClipAndMouseWrappersPreserveNativeContracts();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

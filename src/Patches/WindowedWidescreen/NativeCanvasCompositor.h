@@ -74,6 +74,8 @@ namespace gc::windowed_widescreen
         [[nodiscard]] std::expected<void, CompositorError>
         EndFrame() noexcept;
 
+        void ResetForDeviceLoss() noexcept;
+
         [[nodiscard]] std::expected<RenderSpace, RenderSpaceError>
         CurrentSpace() const noexcept
         {

@@ -98,7 +98,7 @@ namespace gc::windowed_widescreen
             NativeCanvasCompositor compositor;
             std::array<StoredHook, kMaximumWidescreenHooks> hooks{};
             std::size_t hook_count{};
-            RuntimePublicationState publication_state{
+            std::atomic<RuntimePublicationState> publication_state{
                 RuntimePublicationState::preparing};
             std::optional<renderer_device_loss::RendererResourceError>
                 last_resource_error;
@@ -116,6 +116,13 @@ namespace gc::windowed_widescreen
         std::unique_ptr<WindowedWidescreenRuntime> g_runtime_owner;
         std::atomic<WindowedWidescreenRuntime*> g_callback_runtime{};
         std::atomic_bool g_runtime_fatal_published{};
+
+        [[nodiscard]] bool RuntimeCallbacksAreActive(
+            const WindowedWidescreenRuntime& runtime) noexcept
+        {
+            return runtime.publication_state.load(std::memory_order_acquire) ==
+                RuntimePublicationState::active;
+        }
 
         [[nodiscard]] StoredHook* FindHook(
             WindowedWidescreenRuntime& runtime,
@@ -276,7 +283,9 @@ namespace gc::windowed_widescreen
                 return false;
             }
             auto* runtime = context->candidate_owner->get();
-            runtime->publication_state = RuntimePublicationState::enabling;
+            runtime->publication_state.store(
+                RuntimePublicationState::enabling,
+                std::memory_order_release);
             runtime->device.SetNativeBatchActions(NativeBatchActions{
                 .context = runtime,
                 .flush = &FlushNativeBatches,
@@ -285,7 +294,28 @@ namespace gc::windowed_widescreen
             g_callback_runtime.store(runtime, std::memory_order_release);
             const auto attached =
                 renderer_device_loss::RendererDeviceLossAttachResource(
-                    runtime->device.ResourceParticipant());
+                    renderer_device_loss::RendererResourceParticipant{
+                        .context = runtime,
+                        .create = +[](
+                            void* opaque_runtime,
+                            const std::uintptr_t renderer_owner) noexcept
+                        {
+                            auto* owner = static_cast<
+                                WindowedWidescreenRuntime*>(opaque_runtime);
+                            return owner != nullptr &&
+                                owner->device.Create(renderer_owner);
+                        },
+                        .release = +[](void* opaque_runtime) noexcept
+                        {
+                            auto* owner = static_cast<
+                                WindowedWidescreenRuntime*>(opaque_runtime);
+                            if (owner != nullptr)
+                            {
+                                owner->compositor.ResetForDeviceLoss();
+                                owner->device.Release();
+                            }
+                        },
+                    });
             if (!attached)
             {
                 runtime->last_resource_error = attached.error();
@@ -517,7 +547,9 @@ namespace gc::windowed_widescreen
                 return false;
             }
             auto* runtime = context->candidate_owner->get();
-            runtime->publication_state = RuntimePublicationState::active;
+            runtime->publication_state.store(
+                RuntimePublicationState::active,
+                std::memory_order_release);
             g_runtime_owner = std::move(*context->candidate_owner);
             g_callback_runtime.store(runtime, std::memory_order_release);
             return true;
@@ -896,7 +928,7 @@ namespace gc::windowed_widescreen
             {
                 return 0;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
             {
                 return CallTaskDispatchOriginal(
                     runtime,
@@ -923,7 +955,7 @@ namespace gc::windowed_widescreen
             auto* runtime =
                 g_callback_runtime.load(std::memory_order_acquire);
             if (runtime == nullptr ||
-                runtime->publication_state != RuntimePublicationState::active)
+                !RuntimeCallbacksAreActive(*runtime))
             {
                 return;
             }
@@ -979,7 +1011,12 @@ namespace gc::windowed_widescreen
                     ? kNativeWidth
                     : kNativeHeight;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallDimensionOriginal<std::uint32_t>(*runtime, site);
+            }
+            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
+                RenderQueryRoute::native_passthrough)
             {
                 return CallDimensionOriginal<std::uint32_t>(*runtime, site);
             }
@@ -1008,7 +1045,12 @@ namespace gc::windowed_widescreen
                     ? static_cast<float>(kNativeWidth)
                     : static_cast<float>(kNativeHeight);
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallDimensionOriginal<float>(*runtime, site);
+            }
+            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
+                RenderQueryRoute::native_passthrough)
             {
                 return CallDimensionOriginal<float>(*runtime, site);
             }
@@ -1091,7 +1133,12 @@ namespace gc::windowed_widescreen
             }
             const auto* typed =
                 reinterpret_cast<const NativeViewport*>(viewport);
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallViewportOriginal(runtime, typed);
+            }
+            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
+                RenderQueryRoute::native_passthrough)
             {
                 return CallViewportOriginal(runtime, typed);
             }
@@ -1189,7 +1236,16 @@ namespace gc::windowed_widescreen
             {
                 return nullptr;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallPrimaryProjectionOriginal(
+                    runtime,
+                    destination,
+                    unused,
+                    scale);
+            }
+            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
+                RenderQueryRoute::native_passthrough)
             {
                 return CallPrimaryProjectionOriginal(
                     runtime,
@@ -1221,7 +1277,16 @@ namespace gc::windowed_widescreen
             {
                 return nullptr;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallOrientedProjectionOriginal(
+                    runtime,
+                    destination,
+                    camera,
+                    scale);
+            }
+            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
+                RenderQueryRoute::native_passthrough)
             {
                 return CallOrientedProjectionOriginal(
                     runtime,
@@ -1247,7 +1312,7 @@ namespace gc::windowed_widescreen
             auto* runtime =
                 g_callback_runtime.load(std::memory_order_acquire);
             if (runtime == nullptr ||
-                runtime->publication_state != RuntimePublicationState::active)
+                !RuntimeCallbacksAreActive(*runtime))
             {
                 return;
             }
@@ -1305,7 +1370,7 @@ namespace gc::windowed_widescreen
             {
                 return nullptr;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
             {
                 return reinterpret_cast<POINT*>(CallMousePollOriginal(
                     runtime,
@@ -1335,7 +1400,7 @@ namespace gc::windowed_widescreen
             {
                 return 0;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
             {
                 return CallConfigOriginal(
                     runtime,
@@ -1372,7 +1437,7 @@ namespace gc::windowed_widescreen
             {
                 return 0;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
             {
                 return CallWindowOriginal(
                     runtime,
@@ -1406,7 +1471,7 @@ namespace gc::windowed_widescreen
             {
                 return 0;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
             {
                 return CallFrameBeginOriginal(
                     runtime,
@@ -1424,6 +1489,12 @@ namespace gc::windowed_widescreen
             {
                 PublishRuntimeFatal(result.error());
             }
+            if (FAILED(static_cast<HRESULT>(*result)))
+            {
+                // Native BeginScene failed, so the render loop may skip the
+                // matching frame-end callback and proceed into device reset.
+                runtime->compositor.ResetForDeviceLoss();
+            }
             return *result;
         }
 
@@ -1437,7 +1508,7 @@ namespace gc::windowed_widescreen
             {
                 return 0;
             }
-            if (runtime->publication_state != RuntimePublicationState::active)
+            if (!RuntimeCallbacksAreActive(*runtime))
             {
                 return CallFrameEndOriginal(
                     runtime,
@@ -1629,6 +1700,14 @@ namespace gc::windowed_widescreen
             });
         }
         return {};
+    }
+
+    RenderQueryRoute ResolveRenderQueryRoute(
+        const bool compositor_frame_active) noexcept
+    {
+        return compositor_frame_active
+            ? RenderQueryRoute::frame_virtualized
+            : RenderQueryRoute::native_passthrough;
     }
 
     std::expected<std::uint32_t, WindowedWidescreenError>

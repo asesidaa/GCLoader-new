@@ -388,4 +388,10 @@ namespace gc::windowed_widescreen
         }
         return {};
     }
+
+    void NativeCanvasCompositor::ResetForDeviceLoss() noexcept
+    {
+        render_space_policy_.ResetForDeviceLoss();
+        last_published_space_ = RenderSpace::physical_3d;
+    }
 } // namespace gc::windowed_widescreen

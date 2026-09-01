@@ -257,6 +257,14 @@ viewport covers the wide scene. In `Native2D`, they report 720 x 1280 and
 viewport reset means the full native canvas. `Compositor` is loader-owned and
 cannot invoke game rendering.
 
+The same native getters are also used outside drawing by window sizing,
+device reset, and non-render helpers. When no compositor frame is active,
+getter, viewport, and projection hooks therefore pass through to the original
+native function unchanged. Render-space virtualization begins only after the
+frame-begin hook has published `Physical3D` and ends before native end-frame
+handling. This keeps lifecycle code independent of render-thread scope while
+retaining a fatal invariant for any game query made in `Compositor` space.
+
 The policy records the render-thread identity at first frame entry. A scope
 transition from another thread is a fatal invariant violation. Normal getter
 hooks contain no per-call logging.
@@ -319,9 +327,11 @@ Copying the current center background before 2D preserves destination-
 dependent blending. The canvas does not need to encode a separately
 compositable alpha layer.
 
-Approved native 2D segments render with depth testing and depth writes
-disabled. Development diagnostics detect a violation; the segment must be
-reclassified or receive an explicitly designed depth policy before release.
+Approved native 2D segments render with depth testing, depth writes, and
+stencil disabled. The compositor reapplies those states after restoring the
+game pipeline, then verifies them before entering the segment. A later native
+draw that requires a different policy must be explicitly designed rather than
+inheriting physical depth state accidentally.
 
 ### Return to physical 3D
 
@@ -358,6 +368,8 @@ All copy quads use:
 - Direct3D 9 half-pixel-correct destination coordinates;
 - one-to-one source/destination texel mapping;
 - fixed-function `XYZRHW | TEX1` vertices or loader-owned equivalent;
+- solid fill with culling, user clip planes, coordinate wrapping, and texture
+  transforms disabled;
 - opaque color selection with alpha blending, depth, stencil, fog, and scissor
   disabled;
 - all color channels enabled;
@@ -490,6 +502,9 @@ The compositor releases after native pre-reset subscribers and before
 `Reset`. It recreates only after a successful reset and native post-reset
 notification. Minimize/restore and lost-device sequences may repeat without
 leaking COM references or retaining default-pool resources across reset.
+The same pre-reset release closes any interrupted logical compositor frame;
+this covers a failed native `BeginScene` whose normal frame-end hook never ran
+and prevents the first frame after recreation from being rejected as nested.
 
 The shared lifecycle is justified because existing renderer recovery and the
 new compositor are two production consumers of the same ordering. It remains

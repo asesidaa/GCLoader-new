@@ -100,6 +100,12 @@ namespace gc::windowed_widescreen
         return {};
     }
 
+    void RenderSpacePolicy::ResetForDeviceLoss() noexcept
+    {
+        current_space_ = RenderSpace::physical_3d;
+        frame_active_ = false;
+    }
+
     std::expected<void, RenderSpaceError>
     RenderSpacePolicy::PublishSpace(const RenderSpace space) noexcept
     {
