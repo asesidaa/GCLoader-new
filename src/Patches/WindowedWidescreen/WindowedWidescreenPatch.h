@@ -4,7 +4,6 @@
 #include "Patches/WindowedWidescreen/D3D9CompositorDevice.h"
 #include "Patches/WindowedWidescreen/NativeWindowPolicy.h"
 #include "Patches/WindowedWidescreen/PassClassifier.h"
-#include "Patches/WindowedWidescreen/ProjectionPolicy.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 
@@ -31,7 +30,7 @@ namespace gc::windowed_widescreen
         dimension_query,
         viewport,
         projection,
-        clip_policy,
+        clip_bypass,
         mouse_mapping,
         reset_pre,
         reset_post,
@@ -49,7 +48,6 @@ namespace gc::windowed_widescreen
         std::optional<renderer_device_loss::RendererResetHookPairError>
             reset_hook_error;
         std::optional<CompositorError> compositor_error;
-        std::optional<ProjectionError> projection_error;
         D3D9CompositorFailure d3d_failure{};
     };
 
@@ -88,6 +86,35 @@ namespace gc::windowed_widescreen
     RunWindowDeviceHook(
         std::uintptr_t renderer_owner,
         const WindowDeviceHookActions& actions) noexcept;
+
+    enum class RenderDimensionAxis : std::uint8_t;
+
+    struct LogicalResolutionSetHookActions
+    {
+        void* context{};
+        int (*call_original)(
+            void*, std::uint32_t, std::uint32_t) noexcept{};
+        int (*set_target_width)(void*, std::uint32_t) noexcept{};
+        int (*set_target_height)(void*, std::uint32_t) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<int, WindowedWidescreenError>
+    RunLogicalResolutionSetHook(
+        std::uint32_t requested_width,
+        std::uint32_t requested_height,
+        const LogicalResolutionSetHookActions& actions) noexcept;
+
+    struct LogicalTargetDimensionSetHookActions
+    {
+        void* context{};
+        int (*call_original)(void*, std::uint32_t) noexcept{};
+    };
+
+    [[nodiscard]] std::expected<int, WindowedWidescreenError>
+    RunLogicalTargetDimensionSetHook(
+        RenderDimensionAxis axis,
+        std::uint32_t requested_value,
+        const LogicalTargetDimensionSetHookActions& actions) noexcept;
 
     struct FrameBoundaryHookActions
     {
@@ -179,35 +206,21 @@ namespace gc::windowed_widescreen
         const NativeViewport* viewport,
         const ViewportResetHookActions& actions) noexcept;
 
-    struct ProjectionHookActions
+    struct HudOrthographicArguments
     {
-        void* context{};
-        bool (*current_space)(void*, RenderSpace&) noexcept{};
-        float* (*call_primary_original)(
-            void*, float*, int, float) noexcept{};
-        float* (*call_oriented_original)(
-            void*, float*, float*, float) noexcept{};
+        float left{};
+        float right{};
+        float bottom{};
+        float top{};
+        float near_plane{};
+        float far_plane{};
     };
 
-    [[nodiscard]] std::expected<float*, WindowedWidescreenError>
-    RunPrimaryProjectionHook(
-        float* destination,
-        int unused,
-        float scale,
-        std::uint32_t output_height,
-        const ProjectionHookActions& actions) noexcept;
-
-    [[nodiscard]] std::expected<float*, WindowedWidescreenError>
-    RunOrientedProjectionHook(
-        float* destination,
-        float* camera,
-        float scale,
-        std::uint32_t output_height,
-        const ProjectionHookActions& actions) noexcept;
+    void ApplyNativeHudOrthographicArguments(
+        HudOrthographicArguments& arguments) noexcept;
 
     [[nodiscard]] std::expected<void, WindowedWidescreenError>
     ApplyClipGateHook(
-        StageClipPolicy policy,
         std::uintptr_t image_base,
         std::uint32_t live_continuation_rva,
         std::uint32_t& instruction_pointer) noexcept;

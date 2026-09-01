@@ -608,9 +608,7 @@ namespace gc::config
                 });
             }
             const bool widescreen_height_valid =
-                widescreen_height >= 1280 &&
-                widescreen_height <=
-                    static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+                widescreen_height == 1280;
             if (!widescreen_height_valid)
             {
                 errors.push_back({
@@ -619,8 +617,7 @@ namespace gc::config
                         "widescreen_window_height",
                     },
                     .code = ConfigErrorCode::out_of_range,
-                    .message =
-                        "widescreen height must be from 1280 through INT_MAX",
+                    .message = "widescreen height must be exactly 1280",
                 });
             }
             if (widescreen_width_valid && widescreen_height_valid &&
@@ -641,23 +638,6 @@ namespace gc::config
                             "widescreen_window_height",
                         },
                     },
-                });
-            }
-
-            const auto clip_policy =
-                document.experimental().widescreen_stage_clip_policy();
-            if (clip_policy !=
-                    windowed_widescreen::StageClipPolicy::authored &&
-                clip_policy !=
-                    windowed_widescreen::StageClipPolicy::live_frustum)
-            {
-                errors.push_back({
-                    .path = ConfigPath{
-                        "experimental",
-                        "widescreen_stage_clip_policy",
-                    },
-                    .code = ConfigErrorCode::unsupported_value,
-                    .message = "unsupported widescreen stage clip policy",
                 });
             }
 
@@ -976,7 +956,6 @@ namespace gc::config
                             .enable_windowed_widescreen_stage(),
                     static_cast<std::uint32_t>(widescreen_width),
                     static_cast<std::uint32_t>(widescreen_height),
-                    clip_policy,
                 },
                 document.experimental()
                         .unlock_all_songs_and_difficulties(),

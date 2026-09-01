@@ -28,10 +28,8 @@ add_library(gc_runtime_patches STATIC
         WindowedWidescreen/NativeWindowPolicy.cpp
         WindowedWidescreen/NativeCanvasCompositor.cpp
         WindowedWidescreen/PassClassifier.cpp
-        WindowedWidescreen/ProjectionPolicy.cpp
         WindowedWidescreen/RenderSpacePolicy.cpp
         WindowedWidescreen/ResolutionModel.cpp
-        WindowedWidescreen/StageClipPolicy.cpp
         WindowedWidescreen/WindowedWidescreenAbi.cpp
         WindowedWidescreen/WindowedWidescreenPatchTransaction.cpp
         WindowedWidescreen/WindowedWidescreenPatch.cpp

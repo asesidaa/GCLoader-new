@@ -32,7 +32,7 @@ namespace gc::windowed_widescreen
     enum class ResolutionError
     {
         width_below_native,
-        height_below_native,
+        height_not_native,
         signed_range,
         arithmetic_overflow,
     };

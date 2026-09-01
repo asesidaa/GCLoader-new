@@ -19,9 +19,9 @@ namespace gc::windowed_widescreen
         {
             return std::unexpected(ResolutionError::width_below_native);
         }
-        if (height < kNativeHeight)
+        if (height != kNativeHeight)
         {
-            return std::unexpected(ResolutionError::height_below_native);
+            return std::unexpected(ResolutionError::height_not_native);
         }
 
         constexpr auto maximum_signed =

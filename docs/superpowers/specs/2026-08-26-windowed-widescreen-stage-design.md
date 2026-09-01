@@ -52,13 +52,15 @@ express selected patch sites as RVAs with exact expected-byte guards.
 | `0x0045B490` | Calls `Present` with null source and destination rectangles. | A client/backbuffer mismatch would stretch the completed frame. |
 | `0x0045AC70` | Clears the current target and calls `BeginScene`. | The wide scene target must be bound before the native clear. |
 | `0x0045ACE0` | Calls `EndScene` and the native system callback. | The completed scene must be copied to the real backbuffer before native end-frame handling. |
-| `0x00452F20` through `0x00452FD0` | Return current-target and screen dimensions as integer and float variants. | Dimension queries require render-space-aware answers. |
+| `0x00452F20` through `0x00452FD0` | Return separate screen and current-target dimensions as integer and float variants. | The persistent screen domain can remain 720 x 1280 while the persistent target domain carries the physical output size; active render passes still require space-aware answers. |
+| `0x00453660`, `0x00452F60`, `0x00452F80` | The combined publisher writes both screen and target dimensions; the scalar setters rewrite only target width or height. | Initialization must publish a native screen and then restore a physical target. Device reset must preserve the physical target dimensions. |
 | `0x00453140` | Restores a full-target viewport from native global dimensions. | Native 2D scope must prevent this helper from restoring the wide viewport. |
-| `0x0063F5F0`, `0x0063F660` | Build perspective projections from live screen aspect and authored FOV scale. | Width 720 to wider output naturally produces horizontal-plus projection when height remains 1280. |
+| `0x0063F5F0`, `0x0063F660` | Build and cache perspective projections from target width/height and authored FOV scale. | Persistent target aspect must be physical even when the screen/UI domain remains native; otherwise the cached portrait projection is stretched across the wide viewport. |
 | `0x0063E4C0`, `0x0063E710`, `0x005ECC30` | Load and validate `_clip.dat` visibility tables. | Asset deletion is unnecessary; policy can select the existing fallback. |
 | `0x00644000` | Uses authored per-frame/part visibility when valid, otherwise live frustum testing. | Widescreen uses live frustum culling while retaining installed files. |
 | `0x0045C1B0`, `0x0045C7D0` | Dispatch task rendering in priority order. | Contiguous task-level 2D and 3D regions can be classified centrally. |
 | `0x00662F10` | Interleaves orthographic and perspective gameplay rendering in one task. | Gameplay needs internal subpass transitions in addition to task classification. |
+| `0x006449F0`, `0x00641DE0` | Bind stage-background transforms and render the animated four-corner color quad using target width/height before the perspective track. | This is stage-owned output, not HUD; it must use physical space so the authored background fills the widened stage. |
 
 The `_clip.dat` parser accepts a header plus one byte for each
 `part x frame` combination. Rendering uses a nonzero authored byte as
@@ -75,9 +77,13 @@ though it would work for normally projected geometry.
 
 - Create a fixed-size window with an exact configured upright client and
   backbuffer size.
-- Accept output dimensions of at least 720 x 1280 without scaling native 2D.
-- Keep the complete 2D presentation exactly 720 x 1280 pixels and center it in
-  the output.
+- Accept output widths of at least 720 at the fixed 1280-pixel height without
+  scaling native 2D. Width has no product-specific maximum; normal signed,
+  pixel-area, monitor-fit, and Direct3D capability limits still apply.
+- Keep authored HUD, menu, chart-overlay, and gameplay-effect presentation
+  exactly 720 x 1280 pixels and center it in the output.
+- Let the verified stage-owned color background fill the physical stage before
+  the native UI overlay is composited.
 - Render verified perspective stage passes across the complete output.
 - Preserve native render order and blending when 2D and 3D alternate within a
   frame.
@@ -97,7 +103,9 @@ though it would work for normally projected geometry.
 - Monitor rotation, Windows orientation changes, transposed targets, or a
   rotation setting.
 - Relayout, anchoring, scaling, or replacement of authored 2D assets.
-- Widening orthographic chart, HUD, menu, or gameplay-effect passes.
+- Widening orthographic chart, HUD, menu, or gameplay-effect passes. The
+  verified stage-background color quad is explicitly stage-owned and is not
+  part of this native UI restriction.
 - Supporting multisampled scene rendering in the first release.
 - Forcing all stage parts visible when live frustum culling rejects them.
 - Editing or deleting `_clip.dat` or `data/system.cfg`.
@@ -110,7 +118,7 @@ The design uses two upright spaces.
 
 ### Output and wide-scene space
 
-`OutputSize = (output_width, output_height)` is simultaneously:
+`OutputSize = (output_width, 1280)` is simultaneously:
 
 - the real decorated window's client size;
 - the Direct3D backbuffer size; and
@@ -127,7 +135,7 @@ is:
 
 ```text
 native_x = floor((output_width  -  720) / 2)
-native_y = floor((output_height - 1280) / 2)
+native_y = 0
 native_rect = (native_x, native_y, 720, 1280)
 ```
 
@@ -139,8 +147,8 @@ Examples:
 | 1137 x 1280 | `(208, 0, 720, 1280)` | 208 left, 209 right |
 | 1920 x 1280 | `(600, 0, 720, 1280)` | 600 left and right |
 
-Odd differences put the extra pixel on the right or bottom. Native content is
-copied one-to-one with no filtering scale.
+Odd horizontal differences put the extra pixel on the right. Native content
+is copied one-to-one with no filtering scale.
 
 ## Alternatives Considered
 
@@ -191,7 +199,7 @@ uniformly and preserves destination-dependent blending.
 WindowedWidescreenSettings
         |
         v
-ResolutionModel ----------> output size / native_rect / projection scale
+ResolutionModel ----------> output size / native_rect
         |
         +-> NativeWindowPolicy
         |       native config override, exact client/backbuffer
@@ -202,18 +210,15 @@ ResolutionModel ----------> output size / native_rect / projection scale
         +-> RenderSpacePolicy <---------- PassClassifier
         |       Physical3D / Native2D / Compositor
         |
-        +-> ProjectionPolicy
-        |       horizontal-plus and optional height expansion
-        |
-        +-> StageClipPolicy
-                authored or live-frustum visibility
+        +-> AuthoredClipBypass
+                always uses live-frustum visibility while enabled
 ```
 
 ### ResolutionModel
 
-A pure component validates configured dimensions and derives `native_rect`,
-perspective expansion, and input-coordinate mapping. It has no Direct3D,
-window, executable-memory, or serialization dependencies.
+A pure component validates configured dimensions and derives `native_rect`
+and input-coordinate mapping. It has no Direct3D, window, executable-memory,
+or serialization dependencies.
 
 ### NativeWindowPolicy
 
@@ -259,11 +264,40 @@ cannot invoke game rendering.
 
 The same native getters are also used outside drawing by window sizing,
 device reset, and non-render helpers. When no compositor frame is active,
-getter, viewport, and projection hooks therefore pass through to the original
-native function unchanged. Render-space virtualization begins only after the
+getter and viewport hooks therefore pass through to the original native
+function unchanged. Render-space virtualization begins only after the
 frame-begin hook has published `Physical3D` and ends before native end-frame
 handling. This keeps lifecycle code independent of render-thread scope while
 retaining a fatal invariant for any game query made in `Compositor` space.
+
+The game has two persistent dimension domains, not one logical canvas.
+`0x00453660` writes both the screen pair used by screen/UI matrices and the
+target pair consumed by the perspective builders. Window/device initialization
+at `0x0045B8A0` calls that combined publisher with the physical window size.
+The guarded detour instead calls the original publisher with 720 x 1280, then
+calls target-only setters `0x00452F60` and `0x00452F80` with the configured
+physical width and height. Device reset detours likewise preserve the physical
+values supplied to those target-only setters.
+
+The resulting persistent invariant is `screen = 720 x 1280` and
+`target = OutputSize`. Screen-owned cached 2D matrices therefore remain
+native-sized while perspective matrices cached outside an active compositor
+frame receive the wide aspect. During an active `Native2D` segment,
+render-space-aware target getters temporarily return 720 x 1280; during
+`Physical3D` they return the output size. Publishing both pairs as physical
+produces the observed 270-pixel-wide UI strip. Publishing both pairs as native
+fixes the UI but leaves a portrait perspective matrix that D3D stretches
+across the wide viewport.
+
+Gameplay HUD projection is one verified exception to screen ownership.
+`0x0063F9E0` constructs the cached perspective and HUD matrices before an
+active compositor frame. Its call at `0x0063FDBA` supplies target width and
+height to orthographic builder `0x005DF170`, stores the result at owner
+`+0x110`, and `0x00648D40` later binds that matrix as `D3DTS_PROJECTION` while
+rendering the native canvas. The guarded mid-hook at RVA `0x0023FDBA`
+therefore changes only the pending orthographic call's `right` and `bottom`
+stack arguments to 720 and 1280. It preserves `left`, `top`, near/far planes,
+the physical target pair, and the separately cached perspective matrix.
 
 The policy records the render-thread identity at first frame entry. A scope
 transition from another thread is a fatal invariant violation. Normal getter
@@ -285,7 +319,7 @@ Mixed gameplay rendering is classified at verified call boundaries inside
 
 | Native call | Space | Reason |
 | --- | --- | --- |
-| `0x006449F0` | `Native2D` | Orthographic screen/background rendering. |
+| `0x006449F0` | `Physical3D` | Stage-background transforms and the `0x00641DE0` target-sized animated color quad. |
 | `0x00648680` | `Physical3D` | Perspective track and stage-part rendering. |
 | `0x0064DA90` | `Physical3D` | Perspective player visual. |
 | optional `0x00645120` | `Physical3D` | Perspective stage-related rendering. |
@@ -386,8 +420,8 @@ viewport reset and depth-surface compatibility rules.
 
 ## Projection Policy
 
-For the primary V1 case, output height remains 1280. The game keeps its native
-authored vertical FOV and uses the wider live aspect ratio:
+Output height is exactly 1280. The game keeps its native authored vertical FOV
+and uses the wider live target aspect ratio:
 
 ```text
 vertical_fov = 75 degrees * native_CTune_scale
@@ -395,49 +429,28 @@ aspect = output_width / 1280
 horizontal_fov = 2 * atan(tan(vertical_fov / 2) * aspect)
 ```
 
-Increasing width from 720 therefore expands horizontal perspective naturally;
-the projection must not replace the authored vertical FOV with the earlier
-transposed-axis formula.
+Increasing width from 720 therefore expands horizontal perspective naturally.
+The persistent physical target getters already supply the required aspect to
+the perspective builders at `0x0063F5F0` and `0x0063F660`; no projection-scale
+detour is required at fixed height. Near/far planes and native CTune scale
+remain unchanged.
 
-When output height exceeds 1280, the policy preserves the native center view's
-focal length in pixels:
+Output beyond monitor or device capabilities is rejected during setup.
+Approved orthographic passes run against the true 720 x 1280 canvas. The
+gameplay HUD matrix described above is also constructed explicitly with 720 x
+1280 extents because its native owner reads the persistent physical target
+pair before the compositor frame begins.
 
-```text
-expanded_vertical_fov =
-    2 * atan(
-        tan(native_vertical_fov / 2) *
-        output_height / 1280
-    )
-```
+## Stage Clip Bypass
 
-The resulting output aspect expands horizontal view in proportion to
-`output_width / 720`. At exactly 1280 high, this transform is identity. Both
-perspective builders at `0x0063F5F0` and `0x0063F660` follow the same policy.
-Near/far planes and native CTune scale remain unchanged.
+Enabled widescreen always skips the valid `_clip.dat` branch at `0x006441CA`
+and continues at `0x0064422F`. This selects the game's existing no-valid-table
+path, allowing `0x00643BE0` to test stage parts against the widened projection.
+It does not bypass live frustum culling or force all parts visible.
 
-Non-finite values, output beyond device caps, or calculated FOV of 170 degrees
-or more are rejected during setup. Orthographic matrices remain native because
-approved orthographic passes run against the true 720 x 1280 canvas.
-
-## Stage Clip Policy
-
-The feature owns:
-
-```cpp
-enum class StageClipPolicy {
-    Authored,
-    LiveFrustum,
-};
-```
-
-`Authored` preserves the valid `_clip.dat` path. `LiveFrustum` selects the
-existing no-valid-table branch at `0x00644000`, allowing `0x00643BE0` to test
-stage parts against the widened projection. It does not bypass live culling or
-force all parts visible.
-
-The default is `LiveFrustum` when widescreen is enabled. The installed asset is
-not deleted or modified, so disabling widescreen retains native authored
-behavior.
+There is no clip policy or configuration option. The installed asset is not
+deleted or modified. Disabling widescreen installs no clip hook and therefore
+retains native authored behavior.
 
 ## Configuration
 
@@ -449,7 +462,6 @@ disabled defaults present in the distributed configuration:
 enable_windowed_widescreen_stage = false
 widescreen_window_width = 1920
 widescreen_window_height = 1280
-widescreen_stage_clip_policy = 'live_frustum'
 ```
 
 There is no rotation, fullscreen, borderless, UI-scale, UI-anchor, monitor, or
@@ -457,9 +469,8 @@ resize-policy field in V1.
 
 The pure configuration compiler validates:
 
-- width is at least 720;
-- height is at least 1280;
-- the clip-policy string is recognized; and
+- width is at least 720, with no arbitrary product maximum;
+- height is exactly 1280;
 - rectangle/dimension arithmetic cannot overflow the settings types.
 
 Enabled startup capability checks, outside semantic compilation, validate:
@@ -551,8 +562,6 @@ ResolutionModel.h/.cpp
 NativeCanvasCompositor.h/.cpp
 RenderSpacePolicy.h/.cpp
 PassClassifier.h/.cpp
-ProjectionPolicy.h/.cpp
-StageClipPolicy.h/.cpp
 ```
 
 Configuration fields remain owned by the shared configuration document and
@@ -575,11 +584,11 @@ Every automated test protects an independently derived invariant.
 - 720 x 1280 produces a zero-offset 720 x 1280 native rectangle.
 - 1137 x 1280 produces 208/209 horizontal side distribution.
 - 1920 x 1280 produces 600-pixel side regions.
-- height above 1280 centers native content on both axes.
+- 3840 x 1280 remains valid and centers the native canvas.
 - client-to-native mapping round-trips boundary and interior coordinates.
-- invalid minimums, overflow, and FOV limits are rejected.
+- invalid width, non-1280 height, signed-range, and area overflow are rejected.
 
-The pure model covers invalid minimums, overflow, and FOV limits. Startup
+The pure model covers invalid dimensions and overflow. Startup
 capability tests separately cover texture-cap excess, unsupported render-target
 formats, multisampling, and the no-fitting-monitor case; they do not introduce
 environment queries into `ResolutionModel`.
@@ -606,9 +615,12 @@ Using injected device actions and owned fake COM references:
 
 - verified task identities and gameplay subpasses select intended space;
 - unknown identities select native space and deduplicate diagnostics;
-- authored and live-frustum policy select only their native branch;
-- perspective expectations are independently derived for native, 1137, 1920,
-  and height-expanded outputs;
+- enabled widescreen always redirects the guarded clip gate to the native
+  live-frustum continuation;
+- logical resolution initialization and reset preserve native screen
+  dimensions and physical target dimensions as separate persistent domains;
+- the physical target pair supplies wide aspect while the screen/UI pair stays
+  native, with no redundant projection-scale hooks;
 - screen/current-target integer and float getters agree in each scope;
 - native config override forces windowed fixed-size settings only when enabled;
 - all native contracts preflight before installation; and
@@ -643,7 +655,8 @@ deployed build. It requires:
 - enabled 1137 x 1280 and 1920 x 1280 windows on an unrotated desktop;
 - UI elements measuring the same 720 x 1280 pixel bounds in every mode;
 - perspective geometry, not stretched pixels, occupying additional regions;
-- authored versus live-frustum policy showing predicted visibility changes;
+- `_clip.dat` remains installed while widened geometry is selected through the
+  native live-frustum branch;
 - correct one-player and two-player layouts;
 - menu, song-select, gameplay, result, and attract transitions without stale
   or one-frame mistargeted content;
@@ -665,3 +678,5 @@ Verified perspective passes use that complete scene. Every approved
 orthographic pass renders through an exact centered 720 x 1280 native canvas.
 The final scene copy is one-to-one and unrotated. The feature never asks the
 player to rotate the display and exposes no rotation or fullscreen setting.
+While enabled, authored `_clip.dat` bounds are always bypassed in favor of the
+game's existing live-frustum path; this behavior is not configurable.

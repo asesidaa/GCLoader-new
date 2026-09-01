@@ -1378,7 +1378,28 @@ namespace
         using namespace gc::windowed_widescreen;
         FullSyntheticInstallFixture sample;
         Expect(
-            sample.requests.size() == 23 &&
+            sample.requests.size() == 25 &&
+                std::ranges::any_of(
+                    sample.requests,
+                    [](const WidescreenHookRequest request)
+                    {
+                        return request.site ==
+                            WidescreenContractSite::logical_resolution_set;
+                    }) &&
+                std::ranges::any_of(
+                    sample.requests,
+                    [](const WidescreenHookRequest request)
+                    {
+                        return request.site ==
+                            WidescreenContractSite::logical_target_width_set;
+                    }) &&
+                std::ranges::any_of(
+                    sample.requests,
+                    [](const WidescreenHookRequest request)
+                    {
+                        return request.site ==
+                            WidescreenContractSite::logical_target_height_set;
+                    }) &&
                 std::ranges::any_of(
                     sample.requests,
                     [](const WidescreenHookRequest request)
@@ -1392,6 +1413,13 @@ namespace
                     {
                         return request.site ==
                             WidescreenContractSite::reset_post;
+                    }) &&
+                std::ranges::any_of(
+                    sample.requests,
+                    [](const WidescreenHookRequest request)
+                    {
+                        return request.site ==
+                            WidescreenContractSite::gameplay_hud_projection;
                     }),
             "full hook plan includes every hook contract and reset pair");
 
@@ -1633,6 +1661,116 @@ namespace
         }
     };
 
+    enum class LogicalDimensionCall
+    {
+        screen,
+        target_width,
+        target_height,
+    };
+
+    struct LogicalDimensionRecorder
+    {
+        std::uint32_t width{};
+        std::uint32_t height{};
+        std::uint32_t target_width{};
+        std::uint32_t target_height{};
+        std::vector<LogicalDimensionCall> calls;
+
+        static int Resolution(
+            void* context,
+            const std::uint32_t width,
+            const std::uint32_t height) noexcept
+        {
+            auto* self = static_cast<LogicalDimensionRecorder*>(context);
+            self->width = width;
+            self->height = height;
+            self->calls.push_back(LogicalDimensionCall::screen);
+            return static_cast<int>(width + height);
+        }
+
+        static int TargetWidth(
+            void* context,
+            const std::uint32_t value) noexcept
+        {
+            auto* self = static_cast<LogicalDimensionRecorder*>(context);
+            self->target_width = value;
+            self->calls.push_back(LogicalDimensionCall::target_width);
+            return static_cast<int>(value);
+        }
+
+        static int TargetHeight(
+            void* context,
+            const std::uint32_t value) noexcept
+        {
+            auto* self = static_cast<LogicalDimensionRecorder*>(context);
+            self->target_height = value;
+            self->calls.push_back(LogicalDimensionCall::target_height);
+            return static_cast<int>(value);
+        }
+    };
+
+    void LogicalScreenRemainsNativeWhileRenderTargetStaysPhysical()
+    {
+        using namespace gc::windowed_widescreen;
+
+        LogicalDimensionRecorder recorder;
+        const auto initialized = RunLogicalResolutionSetHook(
+            1920,
+            1280,
+            LogicalResolutionSetHookActions{
+                .context = &recorder,
+                .call_original = &LogicalDimensionRecorder::Resolution,
+                .set_target_width = &LogicalDimensionRecorder::TargetWidth,
+                .set_target_height = &LogicalDimensionRecorder::TargetHeight,
+            });
+        constexpr std::array expected_initialization_order{
+            LogicalDimensionCall::screen,
+            LogicalDimensionCall::target_width,
+            LogicalDimensionCall::target_height,
+        };
+        Expect(
+            initialized.has_value() && *initialized == 2000 &&
+                recorder.width == 720 && recorder.height == 1280 &&
+                recorder.target_width == 1920 &&
+                recorder.target_height == 1280 &&
+                recorder.calls == std::vector(
+                    expected_initialization_order.begin(),
+                    expected_initialization_order.end()),
+            "initialization keeps the screen native and restores the physical target");
+
+        recorder.target_width = 0;
+        recorder.calls.clear();
+        const auto reset_width = RunLogicalTargetDimensionSetHook(
+            RenderDimensionAxis::width,
+            1920,
+            LogicalTargetDimensionSetHookActions{
+                .context = &recorder,
+                .call_original = &LogicalDimensionRecorder::TargetWidth,
+            });
+        Expect(
+            reset_width.has_value() && *reset_width == 1920 &&
+                recorder.target_width == 1920 &&
+                recorder.calls ==
+                    std::vector{LogicalDimensionCall::target_width},
+            "device reset preserves the physical target width");
+
+        recorder.target_height = 0;
+        recorder.calls.clear();
+        const auto reset_height = RunLogicalTargetDimensionSetHook(
+            RenderDimensionAxis::height,
+            1280,
+            LogicalTargetDimensionSetHookActions{
+                .context = &recorder,
+                .call_original = &LogicalDimensionRecorder::TargetHeight,
+            });
+        Expect(
+            reset_height.has_value() && *reset_height == 1280 &&
+                recorder.target_height == 1280 &&
+                recorder.calls ==
+                    std::vector{LogicalDimensionCall::target_height},
+            "device reset preserves the physical target height");
+    }
+
     void BaseHookWrappersPreserveNativeOrderingAndResults()
     {
         using namespace gc::windowed_widescreen;
@@ -1666,6 +1804,35 @@ namespace
                     BaseHookCall::mode,
                 },
                 "config original runs before every fixed-window setter");
+        }
+
+        {
+            FakeBaseHookActions fake;
+            fake.original_result = 0;
+            const auto result = RunConfigApplyHook(
+                0x12340000,
+                output,
+                ConfigApplyHookActions{
+                    .context = &fake,
+                    .call_original = &FakeBaseHookActions::Original,
+                    .config_vtable_matches = &FakeBaseHookActions::GuardConfig,
+                    .set_width = &FakeBaseHookActions::Width,
+                    .set_height = &FakeBaseHookActions::Height,
+                    .set_resize = &FakeBaseHookActions::Resize,
+                    .set_minmax = &FakeBaseHookActions::Minmax,
+                    .set_mode = &FakeBaseHookActions::Mode,
+                });
+            Expect(
+                result.has_value() && *result == 0 &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::original,
+                        BaseHookCall::width,
+                        BaseHookCall::height,
+                        BaseHookCall::resize,
+                        BaseHookCall::minmax,
+                        BaseHookCall::mode,
+                    },
+                "native config zero result is preserved after authoritative overrides");
         }
 
         {
@@ -1707,6 +1874,51 @@ namespace
                         BaseHookCall::activate_resources,
                     },
                 "window validation and resources follow native success");
+        }
+
+        {
+            FakeBaseHookActions fake;
+            fake.fail_call = BaseHookCall::place_window;
+            const auto result = RunWindowDeviceHook(
+                0x12340000,
+                WindowDeviceHookActions{
+                    .context = &fake,
+                    .call_original = &FakeBaseHookActions::Original,
+                    .validate_and_place = &FakeBaseHookActions::PlaceWindow,
+                    .activate_resources =
+                        &FakeBaseHookActions::ActivateResources,
+                });
+            Expect(
+                !result && result.error().stage ==
+                        WindowedWidescreenOperationStage::window_policy &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::original,
+                        BaseHookCall::place_window,
+                    },
+                "window validation failure remains distinguishable");
+        }
+
+        {
+            FakeBaseHookActions fake;
+            fake.fail_call = BaseHookCall::activate_resources;
+            const auto result = RunWindowDeviceHook(
+                0x12340000,
+                WindowDeviceHookActions{
+                    .context = &fake,
+                    .call_original = &FakeBaseHookActions::Original,
+                    .validate_and_place = &FakeBaseHookActions::PlaceWindow,
+                    .activate_resources =
+                        &FakeBaseHookActions::ActivateResources,
+                });
+            Expect(
+                !result && result.error().stage ==
+                        WindowedWidescreenOperationStage::resource_attach &&
+                    fake.calls == std::vector<BaseHookCall>{
+                        BaseHookCall::original,
+                        BaseHookCall::place_window,
+                        BaseHookCall::activate_resources,
+                    },
+                "resource activation failure remains distinguishable");
         }
 
         {
@@ -1911,7 +2123,7 @@ namespace
         };
         Expect(
             RunGameplaySpaceHook(
-                GameplayPass::orthographic_background,
+                GameplayPass::stage_background,
                 space_actions).has_value() &&
                 RunGameplaySpaceHook(
                     GameplayPass::perspective_track,
@@ -1922,7 +2134,7 @@ namespace
                 RunGameplaySpaceHook(
                     GameplayPass::orthographic_effects,
                     space_actions).has_value(),
-            "gameplay wrapper accepts native physical physical native sequence");
+            "gameplay wrapper accepts physical physical physical native sequence");
         Expect(
             std::count(
                 device.calls.begin(),
@@ -2009,65 +2221,6 @@ namespace
             "active-frame render queries use compositor dimensions");
     }
 
-    struct FakeProjectionActions
-    {
-        gc::windowed_widescreen::RenderSpace space{
-            gc::windowed_widescreen::RenderSpace::physical_3d};
-        std::size_t primary_calls{};
-        std::size_t oriented_calls{};
-        float* destination{};
-        float* camera{};
-        int unused{};
-        float scale{};
-
-        static bool CurrentSpace(
-            void* context,
-            gc::windowed_widescreen::RenderSpace& output) noexcept
-        {
-            output = static_cast<FakeProjectionActions*>(context)->space;
-            return true;
-        }
-
-        static float* Primary(
-            void* context,
-            float* destination,
-            const int unused,
-            const float scale) noexcept
-        {
-            auto* self = static_cast<FakeProjectionActions*>(context);
-            ++self->primary_calls;
-            self->destination = destination;
-            self->unused = unused;
-            self->scale = scale;
-            return destination;
-        }
-
-        static float* Oriented(
-            void* context,
-            float* destination,
-            float* camera,
-            const float scale) noexcept
-        {
-            auto* self = static_cast<FakeProjectionActions*>(context);
-            ++self->oriented_calls;
-            self->destination = destination;
-            self->camera = camera;
-            self->scale = scale;
-            return destination;
-        }
-
-        [[nodiscard]] gc::windowed_widescreen::ProjectionHookActions
-        Actions() noexcept
-        {
-            return {
-                .context = this,
-                .current_space = &CurrentSpace,
-                .call_primary_original = &Primary,
-                .call_oriented_original = &Oriented,
-            };
-        }
-    };
-
     struct FakeMouseActions
     {
         std::array<std::uint32_t, 7> sample{};
@@ -2086,88 +2239,19 @@ namespace
         }
     };
 
-    void ProjectionClipAndMouseWrappersPreserveNativeContracts()
+    void ClipAndMouseWrappersPreserveNativeContracts()
     {
         using namespace gc::windowed_widescreen;
-        float destination[16]{};
-        float camera[16]{};
-
-        {
-            FakeProjectionActions fake;
-            fake.space = RenderSpace::native_2d;
-            const auto result = RunPrimaryProjectionHook(
-                destination,
-                37,
-                1.25F,
-                1440,
-                fake.Actions());
-            Expect(
-                result.has_value() && *result == destination &&
-                    fake.destination == destination && fake.unused == 37 &&
-                    fake.scale == 1.25F && fake.primary_calls == 1,
-                "native projection forwards every argument unchanged");
-        }
-
-        {
-            FakeProjectionActions fake;
-            const auto result = RunPrimaryProjectionHook(
-                destination,
-                41,
-                1.0F,
-                1280,
-                fake.Actions());
-            Expect(
-                result.has_value() && fake.scale == 1.0F,
-                "physical projection at native height is bit-preserving");
-
-            const auto transformed = RunOrientedProjectionHook(
-                destination,
-                camera,
-                1.0F,
-                1440,
-                fake.Actions());
-            const auto expected = TransformProjectionScale(1.0F, 1440);
-            Expect(
-                transformed.has_value() && *transformed == destination &&
-                    fake.destination == destination && fake.camera == camera &&
-                    expected.has_value() && fake.scale == *expected &&
-                    fake.oriented_calls == 1,
-                "height-expanded oriented projection changes only CTune scale");
-
-            const auto invalid = RunPrimaryProjectionHook(
-                destination,
-                0,
-                std::numeric_limits<float>::infinity(),
-                1440,
-                fake.Actions());
-            Expect(
-                !invalid &&
-                    invalid.error().stage ==
-                        WindowedWidescreenOperationStage::projection &&
-                    fake.primary_calls == 1,
-                "invalid physical projection never calls native builder");
-        }
-
         {
             std::uint32_t instruction_pointer = 0x006441CA;
-            const auto authored = ApplyClipGateHook(
-                StageClipPolicy::authored,
-                0x00400000,
-                0x0024422F,
-                instruction_pointer);
-            Expect(
-                authored.has_value() &&
-                    instruction_pointer == 0x006441CA,
-                "authored clip policy leaves EIP unchanged");
             const auto live = ApplyClipGateHook(
-                StageClipPolicy::live_frustum,
                 0x00400000,
                 0x0024422F,
                 instruction_pointer);
             Expect(
                 live.has_value() &&
                     instruction_pointer == 0x0064422F,
-                "live-frustum clip policy redirects to guarded continuation");
+                "widescreen always skips authored stage clipping");
         }
 
         const auto resolution = ResolutionModel::Create(1920, 1280);
@@ -2228,6 +2312,31 @@ namespace
                 "invalid original mouse sample remains byte-for-byte unchanged");
         }
     }
+
+    void HudOrthographicProjectionRemainsNative()
+    {
+        using namespace gc::windowed_widescreen;
+
+        HudOrthographicArguments arguments{
+            .left = 12.5F,
+            .right = 2560.0F,
+            .bottom = 1440.0F,
+            .top = -7.25F,
+            .near_plane = 0.5F,
+            .far_plane = 999.0F,
+        };
+
+        ApplyNativeHudOrthographicArguments(arguments);
+
+        Expect(
+            arguments.left == 12.5F &&
+                arguments.right == 720.0F &&
+                arguments.bottom == 1280.0F &&
+                arguments.top == -7.25F &&
+                arguments.near_plane == 0.5F &&
+                arguments.far_plane == 999.0F,
+            "HUD orthographic projection rewrites only authored extents");
+    }
 } // namespace
 
 int main()
@@ -2251,10 +2360,12 @@ int main()
     FullHookPlanRollsBackAtEveryLogicalIndex();
     HookRollbackReportsVerificationAndPublicationFailures();
     HookTransactionRejectsInvalidActionsAndCapacity();
+    LogicalScreenRemainsNativeWhileRenderTargetStaysPhysical();
     BaseHookWrappersPreserveNativeOrderingAndResults();
     DisabledInitializationGatePerformsNoEnabledAction();
     RenderHookWrappersRouteSpacesDimensionsAndViewport();
     OutsideFrameQueriesUseNativePassthrough();
-    ProjectionClipAndMouseWrappersPreserveNativeContracts();
+    ClipAndMouseWrappersPreserveNativeContracts();
+    HudOrthographicProjectionRemainsNative();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -257,10 +257,6 @@ namespace
                 widescreen.output_width() == 1920 &&
                     widescreen.output_height() == 1280,
                 "distributed widescreen dimensions compile exactly");
-            Expect(
-                widescreen.clip_policy() ==
-                    gc::windowed_widescreen::StageClipPolicy::live_frustum,
-                "distributed widescreen clip policy compiles exactly");
         }
     }
 

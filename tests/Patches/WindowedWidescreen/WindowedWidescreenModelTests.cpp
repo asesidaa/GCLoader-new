@@ -1,12 +1,9 @@
 #include "Patches/WindowedWidescreen/NativeWindowPolicy.h"
 #include "Patches/WindowedWidescreen/PassClassifier.h"
-#include "Patches/WindowedWidescreen/ProjectionPolicy.h"
 #include "Patches/WindowedWidescreen/RenderSpacePolicy.h"
 #include "Patches/WindowedWidescreen/ResolutionModel.h"
-#include "Patches/WindowedWidescreen/StageClipPolicy.h"
 
 #include <array>
-#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -28,8 +25,8 @@ namespace
     void ResolutionCentersTheNativeCanvasWithHalfOpenMapping()
     {
         const auto model =
-            gc::windowed_widescreen::ResolutionModel::Create(1137, 1281);
-        Expect(model.has_value(), "valid odd-sized output creates a model");
+            gc::windowed_widescreen::ResolutionModel::Create(1137, 1280);
+        Expect(model.has_value(), "valid odd-width output creates a model");
         if (!model)
         {
             return;
@@ -37,7 +34,7 @@ namespace
 
         const auto output = model->output_size();
         Expect(
-            output.width == 1137 && output.height == 1281,
+            output.width == 1137 && output.height == 1280,
             "model preserves physical output size");
 
         const auto native = model->native_rect();
@@ -78,8 +75,14 @@ namespace
         const auto short_output = ResolutionModel::Create(720, 1279);
         Expect(
             !short_output &&
-                short_output.error() == ResolutionError::height_below_native,
+                short_output.error() == ResolutionError::height_not_native,
             "height below the native canvas is rejected");
+
+        const auto tall_output = ResolutionModel::Create(720, 1281);
+        Expect(
+            !tall_output &&
+                tall_output.error() == ResolutionError::height_not_native,
+            "height above the native canvas is rejected");
 
         const auto signed_overflow = ResolutionModel::Create(
             std::numeric_limits<std::uint32_t>::max(),
@@ -89,59 +92,22 @@ namespace
                 signed_overflow.error() == ResolutionError::signed_range,
             "geometry beyond signed client coordinates is rejected");
 
-        const auto area_overflow = ResolutionModel::Create(65'536, 65'536);
+        const auto area_overflow = ResolutionModel::Create(3'355'444, 1280);
         Expect(
             !area_overflow &&
                 area_overflow.error() == ResolutionError::arithmetic_overflow,
             "physical pixel-area overflow is rejected");
     }
 
-    void ProjectionExpandsOnlyForOutputHeight()
+    void ResolutionAcceptsPracticalWideOutputs()
     {
-        using gc::windowed_widescreen::ProjectionError;
-        using gc::windowed_widescreen::TransformProjectionScale;
-
-        const auto identity = TransformProjectionScale(1.0F, 1280);
+        const auto model =
+            gc::windowed_widescreen::ResolutionModel::Create(3840, 1280);
         Expect(
-            identity.has_value() && *identity == 1.0F,
-            "native height preserves the native projection scale exactly");
-
-        const auto taller = TransformProjectionScale(1.0F, 1600);
-        Expect(
-            taller.has_value() && std::abs(*taller - 1.16815F) < 0.0001F,
-            "1600-high output expands the vertical field of view");
-
-        const auto scaled_identity = TransformProjectionScale(2.0F, 1280);
-        Expect(
-            scaled_identity.has_value() && *scaled_identity == 2.0F,
-            "native height preserves caller-provided scale exactly");
-
-        const auto invalid = TransformProjectionScale(0.0F, 1280);
-        Expect(
-            !invalid && invalid.error() == ProjectionError::invalid_scale,
-            "non-positive projection scale is rejected");
-
-        const auto non_finite = TransformProjectionScale(
-            std::numeric_limits<float>::infinity(),
-            1280);
-        Expect(
-            !non_finite &&
-                non_finite.error() == ProjectionError::invalid_scale,
-            "non-finite projection scale is rejected");
-
-        const auto native_limit = TransformProjectionScale(2.3F, 1280);
-        Expect(
-            !native_limit &&
-                native_limit.error() == ProjectionError::fov_limit,
-            "native field of view at or beyond the safety limit is rejected");
-
-        const auto expanded_limit = TransformProjectionScale(
-            1.0F,
-            std::numeric_limits<std::uint32_t>::max());
-        Expect(
-            !expanded_limit &&
-                expanded_limit.error() == ProjectionError::fov_limit,
-            "expanded field of view at the safety limit is rejected");
+            model.has_value() && model->output_size().width == 3840 &&
+                model->native_rect().left == 1560 &&
+                model->native_rect().right == 2280,
+            "wide output remains valid and centers the native canvas");
     }
 
     void WindowPlacementPrefersPrimaryThenEnumerationOrder()
@@ -254,19 +220,6 @@ namespace
             "window that fits no work area is rejected");
     }
 
-    void ClipPolicySelectsOneStableGateAction()
-    {
-        using namespace gc::windowed_widescreen;
-        Expect(
-            SelectClipGateAction(StageClipPolicy::authored) ==
-                ClipGateAction::continue_authored,
-            "authored policy continues the original clip branch");
-        Expect(
-            SelectClipGateAction(StageClipPolicy::live_frustum) ==
-                ClipGateAction::jump_live_frustum,
-            "live-frustum policy skips authored clip loading");
-    }
-
     struct ClassifierDiagnostics
     {
         std::size_t identity_count{};
@@ -311,9 +264,9 @@ namespace
             "relocated CCommon3DTask vtable selects physical space");
         Expect(
             PassClassifier::ClassifyGameplay(
-                GameplayPass::orthographic_background) ==
-                RenderSpace::native_2d,
-            "orthographic gameplay background is native");
+                GameplayPass::stage_background) ==
+                RenderSpace::physical_3d,
+            "stage background and its color quad use physical space");
         Expect(
             PassClassifier::ClassifyGameplay(
                 GameplayPass::perspective_track) ==
@@ -368,7 +321,7 @@ namespace
         using namespace gc::windowed_widescreen;
         FakeThreadId thread{.value = 41};
         RenderSpacePolicy policy{
-            OutputSize{.width = 1920, .height = 1600},
+            OutputSize{.width = 1920, .height = 1280},
             RenderThreadIdProvider{
                 .context = &thread,
                 .current = &FakeThreadId::Current,
@@ -424,15 +377,15 @@ namespace
     void RenderDimensionsFollowLogicalSpace()
     {
         using namespace gc::windowed_widescreen;
-        const OutputSize output{.width = 1920, .height = 1600};
+        const OutputSize output{.width = 1920, .height = 1280};
 
         const auto physical =
             SelectRenderDimensions(RenderSpace::physical_3d, output);
         Expect(
             physical.has_value() && physical->width == 1920 &&
-                physical->height == 1600 &&
+                physical->height == 1280 &&
                 physical->width_float == 1920.0F &&
-                physical->height_float == 1600.0F,
+                physical->height_float == 1280.0F,
             "physical dimensions report exact integer and float output");
 
         const auto native =
@@ -458,10 +411,9 @@ int main()
 {
     ResolutionCentersTheNativeCanvasWithHalfOpenMapping();
     ResolutionRejectsUnsafeGeometry();
-    ProjectionExpandsOnlyForOutputHeight();
+    ResolutionAcceptsPracticalWideOutputs();
     WindowPlacementPrefersPrimaryThenEnumerationOrder();
     WindowPlacementRejectsInvalidOrUnfittableRequests();
-    ClipPolicySelectsOneStableGateAction();
     PassClassifierUsesOnlyVerifiedStableIdentities();
     RenderSpacePolicyOwnsFrameAndThreadState();
     RenderDimensionsFollowLogicalSpace();

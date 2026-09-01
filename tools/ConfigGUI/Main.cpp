@@ -1688,7 +1688,8 @@ namespace
             ImGui::SetTooltip(
                 "Creates a fixed-size decorated window on an ordinary "
                 "unrotated desktop.\n"
-                "Perspective 3D uses the configured width and height; the "
+                "Perspective 3D uses the configured width at fixed 1280 "
+                "height; the "
                 "complete 2D canvas stays centered at 720 x 1280.\n"
                 "Fullscreen, live resizing, display rotation, and 2D "
                 "stretching are not enabled. Restart the game after changes.");
@@ -1707,38 +1708,20 @@ namespace
             dirty = true;
         }
         auto& widescreen_height = experimental.widescreen_window_height();
-        if (ImGui::InputScalar(
+        ImGui::BeginDisabled();
+        ImGui::InputScalar(
             "Widescreen window height",
             ImGuiDataType_U32,
             &widescreen_height,
             nullptr,
             nullptr,
             "%u",
-            ImGuiInputTextFlags_CharsDecimal))
+            ImGuiInputTextFlags_CharsDecimal);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
-            dirty = true;
-        }
-
-        int clip_policy =
-            experimental.widescreen_stage_clip_policy() ==
-                gc::windowed_widescreen::StageClipPolicy::authored
-                ? 0
-                : 1;
-        constexpr const char* clip_policies[]{
-            "Authored",
-            "Live frustum",
-        };
-        if (ImGui::Combo(
-            "Widescreen stage clip policy",
-            &clip_policy,
-            clip_policies,
-            IM_ARRAYSIZE(clip_policies)))
-        {
-            experimental.widescreen_stage_clip_policy =
-                clip_policy == 0
-                    ? gc::windowed_widescreen::StageClipPolicy::authored
-                    : gc::windowed_widescreen::StageClipPolicy::live_frustum;
-            dirty = true;
+            ImGui::SetTooltip(
+                "Fixed at 1280 by the widescreen renderer contract.");
         }
 
         bool absolute_time_judgement =

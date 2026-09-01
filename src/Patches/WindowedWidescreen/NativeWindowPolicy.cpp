@@ -260,11 +260,20 @@ namespace gc::windowed_widescreen
         if (!ReadRendererWindowContract(
                 renderer_owner,
                 window,
-                stored_style) ||
-            !IsWindow(window) || stored_style != placement.style)
+                stored_style))
         {
             return std::unexpected(
                 NativeWindowPolicyError::renderer_contract_failed);
+        }
+        if (!IsWindow(window))
+        {
+            return std::unexpected(
+                NativeWindowPolicyError::renderer_window_invalid);
+        }
+        if (stored_style != placement.style)
+        {
+            return std::unexpected(
+                NativeWindowPolicyError::stored_style_mismatch);
         }
 
         constexpr auto structural_style_mask =
@@ -273,11 +282,15 @@ namespace gc::windowed_widescreen
         SetLastError(ERROR_SUCCESS);
         const auto actual_style = static_cast<std::uint32_t>(
             GetWindowLongPtrW(window, GWL_STYLE));
-        if ((actual_style & structural_style_mask) != placement.style ||
-            !ClientSizeMatches(window, placement.client_size))
+        if ((actual_style & structural_style_mask) != placement.style)
         {
             return std::unexpected(
-                NativeWindowPolicyError::renderer_contract_failed);
+                NativeWindowPolicyError::actual_style_mismatch);
+        }
+        if (!ClientSizeMatches(window, placement.client_size))
+        {
+            return std::unexpected(
+                NativeWindowPolicyError::client_size_mismatch);
         }
 
         if (!SetWindowPos(
@@ -287,11 +300,15 @@ namespace gc::windowed_widescreen
                 placement.outer.y,
                 static_cast<int>(placement.outer.size.width),
                 static_cast<int>(placement.outer.size.height),
-                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER) ||
-            !ClientSizeMatches(window, placement.client_size))
+                SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER))
         {
             return std::unexpected(
                 NativeWindowPolicyError::window_move_failed);
+        }
+        if (!ClientSizeMatches(window, placement.client_size))
+        {
+            return std::unexpected(
+                NativeWindowPolicyError::moved_client_size_mismatch);
         }
         return {};
     }

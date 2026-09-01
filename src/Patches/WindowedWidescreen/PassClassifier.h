@@ -10,7 +10,7 @@ namespace gc::windowed_widescreen
 {
     enum class GameplayPass : std::uint8_t
     {
-        orthographic_background,
+        stage_background,
         perspective_track,
         orthographic_effects,
     };

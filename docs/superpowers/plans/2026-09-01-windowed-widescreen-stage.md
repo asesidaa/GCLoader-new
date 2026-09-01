@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an opt-in, fixed-size windowed mode whose upright client, Direct3D 9 backbuffer, and perspective scene use a configured size of at least 720 x 1280, while all approved 2D rendering remains an unscaled, centered 720 x 1280 canvas.
+**Goal:** Add an opt-in, fixed-size windowed mode whose upright client, Direct3D 9 backbuffer, and perspective scene use a configured width of at least 720 at exactly 1280 pixels high, while all approved 2D rendering remains an unscaled, centered 720 x 1280 canvas.
 
 **Architecture:** Compile strict TOML into immutable widescreen settings, derive all geometry through pure policies, and install one guarded game-binary hook transaction. A segmented Direct3D 9 compositor preserves native 2D blending and draw order while render-space-aware hooks widen only verified perspective passes. The existing renderer device-loss module owns the single reset lifecycle seam.
 
@@ -10,13 +10,64 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-26-windowed-widescreen-stage-design.md` at approved commit `d3e9394d6207ae5b448cfd11363719f2c17caa92`.
 
+## Implementation Amendments From Runtime Testing
+
+Runtime testing exposed two persistent resolution domains that the original
+plan treated as one. `0x00453660` writes both the screen/UI pair and the target
+pair. Its only caller, `0x0045B8A0`, supplies the physical window size. The
+perspective builders at `0x0063F5F0` and `0x0063F660` consume the target pair,
+while the screen-matrix builders at `0x00476450` and `0x00476500` consume the
+screen pair. Publishing both pairs as 1920 x 1280 compressed the native UI to
+270 pixels. Publishing both pairs as 720 x 1280 corrected the UI but cached a
+portrait perspective that D3D stretched across the wide viewport.
+
+The guarded hook set therefore owns `0x00453660`, `0x00452F60`, and
+`0x00452F80` with an explicit split invariant. Initialization calls the
+combined publisher with 720 x 1280, then immediately restores the target-only
+pair to the configured physical output through the two scalar setters. Reset
+preserves physical values at those target-only seams. Persistent screen state
+is native; persistent target state is physical. Active render-space getters
+still virtualize the target pair back to 720 x 1280 inside native UI segments.
+
+Runtime testing then exposed a gameplay-specific cached HUD matrix that is
+not screen-owned. `0x0063F9E0` reads the persistent target pair and calls the
+orthographic builder at `0x0063FDBA`, before an active compositor frame can
+virtualize those getters. The result is stored at owner `+0x110` and later
+bound by `0x00648D40`; at 1920 wide it compresses native HUD content by
+`720 / 1920`. A guarded mid-hook at RVA `0x0023FDBA` changes only the pending
+orthographic call's `right` and `bottom` stack arguments to 720 and 1280.
+Perspective construction, physical target dimensions, and the now-correct
+wide stage/background path remain unchanged.
+
+The same runtime pass proved that the first gameplay seam is stage background,
+not HUD. `0x006449F0` binds its transforms and calls `0x00641DE0`, whose
+assembly obtains target width/height and submits the animated four-corner color
+quad through `0x005796F0`. RVA `0x00262FA0` therefore requests physical space,
+as do the track calls that follow. RVA `0x00263041` remains the return to the
+native effects/HUD canvas.
+
+The final user decision also removes clip policy from V1. When widescreen is
+enabled, the guarded `_clip.dat` gate always jumps to the game's existing
+live-frustum continuation. There is no schema field, settings member, GUI
+control, or authored branch in the enabled hook. The asset remains untouched,
+and disabled widescreen still installs no hook and preserves native behavior.
+
+The final output contract fixes height at exactly 1280. Width remains
+configurable from 720 upward without an arbitrary product maximum, subject to
+signed-coordinate, pixel-area, monitor-fit, and Direct3D capability bounds.
+Because the old projection-scale transform was identity at 1280, its primary
+and oriented detours are removed. The physical target getters continue to
+supply wide aspect to the native perspective builders, and the guarded cached
+HUD orthographic hook remains responsible for exact 720 x 1280 UI extents.
+
 ## Global Constraints
 
 - Work only in `H:\gc\artifacts\GCLoader`. `H:\gc`, including `game471.exe.i64`, `data\system.cfg`, `_clip.dat`, logs, and deployed binaries, is read-only evidence unless a later user request explicitly authorizes deployment.
 - Preserve unrelated work on `fix/asio-lifecycle-recovery`. The plan baseline is source commit `ada301b0216d2b02d896f53184ff86d688cab00c`; re-read overlapping files before each edit if the branch advances.
 - V1 is an ordinary decorated, movable, minimizable, closable, fixed-size window on an unrotated desktop. Do not add fullscreen, borderless, maximize, live resize, monitor selection, Windows/monitor rotation, transposed targets, final-image rotation, UI scaling, or UI anchoring.
 - Keep `data\system.cfg` and every `_clip.dat` file unchanged. Enabled policy overrides the already-parsed native config in memory; disabled policy installs no widescreen hooks, performs no monitor/device probes, and preserves native behavior.
-- Keep `NativeCanvasSize` exactly 720 x 1280. Do not widen orthographic chart, HUD, menu, or gameplay-effect passes.
+- Keep `NativeCanvasSize` exactly 720 x 1280. Do not widen orthographic chart, HUD, menu, or gameplay-effect passes. The IDA-proven stage-background color quad is stage-owned and uses physical space.
+- Keep output height exactly 1280. Accept width from 720 upward without a product-specific cap; enforce only representation, pixel-area, monitor-fit, and Direct3D capability bounds.
 - Do not use `StretchRect`, add a second `BeginScene`/`EndScene`, read pixels back to the CPU, or stretch the final backbuffer through a mismatched client.
 - Do not add a generic render callback registry. The reset seam remains renderer-specific and has exactly one optional compositor participant.
 - Keep render/getter/copy success paths free of per-call logging and dynamic allocation. Unknown task diagnostics are bounded and deduplicated.
@@ -40,13 +91,9 @@
 
 ### New production and analysis files
 
-- `src/Patches/WindowedWidescreen/StageClipPolicy.h`
-- `src/Patches/WindowedWidescreen/StageClipPolicy.cpp`
 - `src/Patches/WindowedWidescreen/WindowedWidescreenSettings.h`
 - `src/Patches/WindowedWidescreen/ResolutionModel.h`
 - `src/Patches/WindowedWidescreen/ResolutionModel.cpp`
-- `src/Patches/WindowedWidescreen/ProjectionPolicy.h`
-- `src/Patches/WindowedWidescreen/ProjectionPolicy.cpp`
 - `src/Patches/WindowedWidescreen/NativeWindowPolicy.h`
 - `src/Patches/WindowedWidescreen/NativeWindowPolicy.cpp`
 - `src/Patches/WindowedWidescreen/RenderSpacePolicy.h`
@@ -107,17 +154,19 @@ These contracts were freshly read from `H:\gc\game471.exe.i64` through the activ
 | Current-target height int | `0x00052FB0` | `A1 FC 6F 78 00 C3` | Inline getter. |
 | Current-target width float | `0x00052FC0` | `D9 05 00 70 78 00 C3` | Inline getter. |
 | Current-target height float | `0x00052FD0` | `D9 05 04 70 78 00 C3` | Inline getter. |
+| Combined screen/target publisher | `0x00053660` | `6A FF 68 EB DA 66 00 64 A1 00 00 00 00 50` | Inline cdecl; publish native screen dimensions, then restore configured physical target dimensions through the scalar setters. |
+| Target-width publisher | `0x00052F60` | `DB 44 24 04 8B 44 24 04 A3 F8 6F 78 00` | Inline cdecl; preserve the physical target width at initialization and reset. |
+| Target-height publisher | `0x00052F80` | `DB 44 24 04 8B 44 24 04 A3 FC 6F 78 00` | Inline cdecl; preserve the physical target height at initialization and reset. |
 | Viewport reset | `0x00053140` | `8B 4C 24 04 33 C0 83 EC 20 3B C8 0F` | Inline; explicit viewport arguments pass through, null uses current render-space dimensions. |
-| Primary projection | `0x0023F5F0` | `55 8B EC 83 EC 54 56 57 D9 05 D4 BC 6F 00` | Inline `float* __cdecl(float*, int, float)`. |
-| Oriented projection | `0x0023F660` | `55 8B EC 81 EC CC 00 00 00 56 57 D9 05 D4 BC` | Inline `float* __cdecl(float*, float*, float)`. |
 | Mouse/debug poll | `0x000B06B0` | `55 8B EC 83 EC 08 89 4D F8 8B 45 F8` | Inline `__thiscall`; map returned client coordinates into native canvas. |
 | After native pre-reset notification | `0x0005B28B` | `83 BE 94 00 00 00 00` | Mid; release compositor resources before `IDirect3DDevice9::Reset`. |
 | After successful reset/native post notification | `0x0005B474` | `83 C4 04 B8 01 00 00 00` | Mid; recreate resources only on successful reset. |
-| Gameplay enter native | `0x00262FA0` | `E8 4B 1A FE FF 8B 4D C4` | Mid before call to `0x006449F0`. |
-| Gameplay enter physical | `0x00262FA8` | `E8 D3 56 FE FF 8B 4D C4` | Mid before call to `0x00648680`; later physical calls stay in this space. |
-| Gameplay return native | `0x00263041` | `E8 FA 5C FE FF E8 D5 00 DF FF` | Mid before call to `0x00648D40`. |
-| Clip default flag | `0x002441C6` | `C6 45 DF 00` | Read-only guard proving `var_21 = 0` before the policy gate. |
-| Clip policy gate | `0x002441CA` | `8B 95 80 FE FF FF 8B 82 4C 02 00 00 0F B6 88 5C 01 00 00` | Mid; authored continues, live-frustum jumps to the guarded continuation. |
+| Gameplay stage background | `0x00262FA0` | `E8 4B 1A FE FF 8B 4D C4` | Mid before physical stage-background call `0x006449F0`. |
+| Gameplay track | `0x00262FA8` | `E8 D3 56 FE FF 8B 4D C4` | Mid before physical call `0x00648680`; later physical calls stay in this space. |
+| Gameplay effects/HUD | `0x00263041` | `E8 FA 5C FE FF E8 D5 00 DF FF` | Mid before native-canvas call `0x00648D40`. |
+| Gameplay HUD orthographic construction | `0x0023FDBA` | `E8 B1 F3 F9 FF 8B B5 24 FF FF FF 81 C6 D0 00 00` | Mid at the cached HUD orthographic-builder call; rewrite only right/bottom stack arguments to 720/1280. |
+| Clip default flag | `0x002441C6` | `C6 45 DF 00` | Read-only guard proving `var_21 = 0` before the bypass gate. |
+| Clip bypass gate | `0x002441CA` | `8B 95 80 FE FF FF 8B 82 4C 02 00 00 0F B6 88 5C 01 00 00` | Mid; enabled widescreen always jumps to the guarded live-frustum continuation. |
 | Clip live continuation | `0x0024422F` | `8B 4D D8 E8 C9 18 DC FF 0F B6` | Read-only continuation target. |
 | Native batch flush | `0x001C9B10` | `55 8B EC 83 EC 08 C7 45 FC 00 00 00` | Read-only callable barrier before every actual target switch. |
 | Clip renderer owner | `0x00244000` | `55 8B EC 81 EC A0 01 00 00 56 57 89` | Read-only owner contract for the gate. |
@@ -152,7 +201,6 @@ The implementation must regenerate this evidence with the saved audit script bef
 
 **Files:**
 
-- Create: `src/Patches/WindowedWidescreen/StageClipPolicy.h`
 - Create: `src/Patches/WindowedWidescreen/WindowedWidescreenSettings.h`
 - Modify: `src/Config/ConfigDocument.h`
 - Modify: `src/Config/ConfigCompiler.h`
@@ -167,42 +215,32 @@ The implementation must regenerate this evidence with the saved audit script bef
 ```cpp
 namespace gc::windowed_widescreen {
 
-enum class StageClipPolicy : std::uint8_t {
-    authored,
-    live_frustum,
-};
-
-[[nodiscard]] constexpr std::string_view StageClipPolicyName(
-    StageClipPolicy policy) noexcept;
-
 class WindowedWidescreenSettings final {
 public:
     [[nodiscard]] bool enabled() const noexcept;
     [[nodiscard]] std::uint32_t output_width() const noexcept;
     [[nodiscard]] std::uint32_t output_height() const noexcept;
-    [[nodiscard]] StageClipPolicy clip_policy() const noexcept;
 
 private:
     WindowedWidescreenSettings(
         bool enabled,
         std::uint32_t output_width,
-        std::uint32_t output_height,
-        StageClipPolicy clip_policy) noexcept;
+        std::uint32_t output_height) noexcept;
     friend class gc::config::ConfigCompiler;
 };
 
 } // namespace gc::windowed_widescreen
 ```
 
-- [ ] Add RED configuration tests that require all four distributed keys, validate defaults, copy the compiled settings by value, and expect semantic paths `experimental.widescreen_window_width`, `experimental.widescreen_window_height`, and `experimental.widescreen_stage_clip_policy` for invalid values. The initial compile/test must fail because the fields/accessor do not exist.
-- [ ] Add these required reflect-cpp fields to `ExperimentalConfig` using 32-bit `unsigned long` raw dimensions: enabled `false`, width `1920`, height `1280`, and policy `live_frustum`.
+- [ ] Add RED configuration tests that require all three distributed keys, validate defaults, copy the compiled settings by value, and expect semantic paths `experimental.widescreen_window_width` and `experimental.widescreen_window_height` for invalid values. The initial compile/test must fail because the fields/accessors do not exist.
+- [ ] Add these required reflect-cpp fields to `ExperimentalConfig` using 32-bit `unsigned long` raw dimensions: enabled `false`, width `1920`, and height `1280`.
 - [ ] Add the exact same keys to distributed `config.toml`. Do not add a migration or optional-field fallback: runtime configuration is strict and complete.
-- [ ] Validate width `>= 720`, height `>= 1280`, both dimensions `<= INT_MAX`, the enum is one of the two supported values, and checked rectangle/area arithmetic fits the compiled model's integer types even when the feature is disabled.
+- [ ] Validate width `>= 720`, height exactly `1280`, width `<= INT_MAX`, and checked rectangle/area arithmetic fits the compiled model's integer types even when the feature is disabled.
 - [ ] Construct and own `WindowedWidescreenSettings` inside `ValidatedConfig`; add only `windowed_widescreen() const noexcept`. Do not expose the mutable document.
-- [ ] Extend `ConfigContractTests` with independently meaningful cases: minimum accepted, 1137 x 1280 retained exactly, width/height below minimum, values above signed native range, invalid enum via an explicit out-of-range enum value, and copied settings surviving source-document mutation.
+- [ ] Extend `ConfigContractTests` with independently meaningful cases: minimum accepted, practical wide output retained exactly, width below minimum, height below or above 1280, values above signed native range, and copied settings surviving source-document mutation.
 - [ ] Extend `ConfigStartupTests` only to prove a valid game config publishes the compiled settings and the NESYS role still publishes only logging/NESYS settings with no game-side probe, write, or feature initialization.
-- [ ] Add a `Windowed widescreen stage` section near the top of `DrawExperimental`: enabled checkbox, U32 width/height inputs, and `Authored`/`Live frustum` combo. Mark `dirty` on every change and rely on the existing global compiler result to gate Save.
-- [ ] Add a concise tooltip: fixed-size decorated window, ordinary unrotated desktop, perspective scene uses configured W x H, complete 2D remains centered 720 x 1280, restart required. Do not expose any non-goal field.
+- [ ] Add a `Windowed widescreen stage` section near the top of `DrawExperimental`: enabled checkbox, editable U32 width, and read-only fixed height 1280. Mark `dirty` on editable changes and rely on the existing global compiler result to gate Save.
+- [ ] Add a concise tooltip: fixed-size decorated window, ordinary unrotated desktop, perspective scene uses configured width at fixed 1280 height, complete 2D remains centered 720 x 1280, restart required. Do not expose any non-goal field.
 - [ ] Run the focused GREEN check:
 
   ```powershell
@@ -217,23 +255,20 @@ private:
 - [ ] Commit only Task 1 files:
 
   ```powershell
-  git add -- config.toml src/Config/ConfigDocument.h src/Config/ConfigCompiler.h src/Config/ConfigCompiler.cpp src/Patches/WindowedWidescreen/StageClipPolicy.h src/Patches/WindowedWidescreen/WindowedWidescreenSettings.h tools/ConfigGUI/Main.cpp tests/Config/ConfigContractTests.cpp tests/Config/ConfigStartupTests.cpp
+  git add -- config.toml src/Config/ConfigDocument.h src/Config/ConfigCompiler.h src/Config/ConfigCompiler.cpp src/Patches/WindowedWidescreen/WindowedWidescreenSettings.h tools/ConfigGUI/Main.cpp tests/Config/ConfigContractTests.cpp tests/Config/ConfigStartupTests.cpp
   git commit -m "Add windowed widescreen configuration"
   ```
 
 ---
 
-## Task 2: Implement pure resolution, projection, clip, and monitor-placement policies
+## Task 2: Implement pure resolution and monitor-placement policies
 
 **Files:**
 
 - Create: `src/Patches/WindowedWidescreen/ResolutionModel.h`
 - Create: `src/Patches/WindowedWidescreen/ResolutionModel.cpp`
-- Create: `src/Patches/WindowedWidescreen/ProjectionPolicy.h`
-- Create: `src/Patches/WindowedWidescreen/ProjectionPolicy.cpp`
 - Create: `src/Patches/WindowedWidescreen/NativeWindowPolicy.h`
 - Create: `src/Patches/WindowedWidescreen/NativeWindowPolicy.cpp`
-- Create: `src/Patches/WindowedWidescreen/StageClipPolicy.cpp`
 - Create: `tests/Patches/WindowedWidescreen/WindowedWidescreenModelTests.cpp`
 - Modify: `src/Patches/CMakeLists.txt`
 - Modify: `tests/CMakeLists.txt`
@@ -260,7 +295,7 @@ struct NativePoint final {
 
 enum class ResolutionError : std::uint8_t {
     width_below_native,
-    height_below_native,
+    height_not_native,
     signed_range,
     arithmetic_overflow,
 };
@@ -278,23 +313,12 @@ public:
 };
 ```
 
-- [ ] Write RED model tests for 720 x 1280, 1137 x 1280 with 208 left/209 right, 1920 x 1280 with 600-pixel sides, and a larger height with the odd remainder on the right/bottom. Include all four native-rectangle corners, one-past-edge rejection, negative client coordinates, minimum failures, signed-range failures, and checked area overflow.
+- [ ] Write RED model tests for 720 x 1280, 1137 x 1280 with 208 left/209 right, 1920 x 1280 with 600-pixel sides, and a practical 3840 x 1280 output. Include all four native-rectangle corners, one-past-edge rejection, negative client coordinates, width failure, non-1280 height failures, signed-range failures, and checked area overflow.
 - [ ] Implement `ResolutionModel::Create` with `NativeCanvasSize = {720, 1280}` and floor-centering. Keep dimensions integral; never infer them from the HWND after startup.
 - [ ] Implement client mapping as half-open rectangle membership. Subtract `left/top` only for points inside `[left,right) x [top,bottom)`; return `nullopt` outside rather than clamping.
-- [ ] Implement `ProjectionPolicy` as a pure transform of the native CTune scale:
-
-  ```text
-  native_fov_rad = radians(75 * native_scale)
-  expanded_fov_rad = 2 * atan(tan(native_fov_rad / 2) * output_height / 1280)
-  transformed_scale = degrees(expanded_fov_rad) / 75
-  ```
-
-  Width does not change the scale. At height 1280 return the native scale. Reject non-finite/non-positive input and any native or expanded vertical FOV `>= 170` degrees.
-
-- [ ] Derive projection expectations in tests with the trigonometric formula, not implementation constants copied from the result. Cover native, 1137 x 1280, 1920 x 1280, and at least one height-expanded output.
+- [ ] Keep the native perspective builders unchanged. Persistent physical target getters supply `output_width / 1280` aspect, so fixed-height horizontal-plus needs no projection-scale transform.
 - [ ] Define Win32-independent `MonitorWorkArea`, `WindowOuterSize`, and `WindowPlacement` values. `SelectWindowPlacement` chooses primary when it fits, otherwise the first enumerated fitting work area, centers the adjusted outer rectangle, and returns `no_fitting_work_area` if none fits.
 - [ ] Test primary fit, primary miss/secondary fit, deterministic first-fit, exact-edge fit, odd centering, negative monitor origins, and no fit. Do not call Win32 in these tests.
-- [ ] Implement clip policy as a pure decision: authored continues at the gate; live-frustum selects the guarded continuation. It never forces visibility and never deletes data.
 - [ ] Add `gc_windowed_widescreen_model_tests` to CMake and link it to the owning feature/runtime library without duplicating production constants in the test.
 - [ ] Run RED before implementation and GREEN after:
 
@@ -308,7 +332,7 @@ public:
 - [ ] Commit:
 
   ```powershell
-  git add -- src/Patches/WindowedWidescreen/ResolutionModel.h src/Patches/WindowedWidescreen/ResolutionModel.cpp src/Patches/WindowedWidescreen/ProjectionPolicy.h src/Patches/WindowedWidescreen/ProjectionPolicy.cpp src/Patches/WindowedWidescreen/NativeWindowPolicy.h src/Patches/WindowedWidescreen/NativeWindowPolicy.cpp src/Patches/WindowedWidescreen/StageClipPolicy.cpp src/Patches/CMakeLists.txt tests/Patches/WindowedWidescreen/WindowedWidescreenModelTests.cpp tests/CMakeLists.txt
+  git add -- src/Patches/WindowedWidescreen/ResolutionModel.h src/Patches/WindowedWidescreen/ResolutionModel.cpp src/Patches/WindowedWidescreen/NativeWindowPolicy.h src/Patches/WindowedWidescreen/NativeWindowPolicy.cpp src/Patches/CMakeLists.txt tests/Patches/WindowedWidescreen/WindowedWidescreenModelTests.cpp tests/CMakeLists.txt
   git commit -m "Add widescreen geometry policies"
   ```
 
@@ -335,7 +359,7 @@ enum class RenderSpace : std::uint8_t {
 };
 
 enum class GameplayPass : std::uint8_t {
-    orthographic_background,
+    stage_background,
     perspective_track,
     orthographic_effects,
 };
@@ -611,12 +635,12 @@ WindowedWidescreenPatchInit(
 
 - [ ] Implement the task-dispatch inline detour as `int __thiscall(task_node)`: read `task = *task_node`, guard its vtable read, request the classified space, then call the original vtable dispatch. Leave the selected space active for the next task so equal-policy tasks remain one segment.
 - [ ] Unknown or unreadable task identities default to native. Emit only the bounded development diagnostic; do not classify by guessed class layouts or filename strings.
-- [ ] Implement midhooks at gameplay RVAs `0x00262FA0`, `0x00262FA8`, and `0x00263041`. The first requests native, the second physical, and the third native. Calls at `0x0064DA90` and optional `0x00645120` stay physical without redundant hooks.
+- [ ] Implement midhooks at gameplay RVAs `0x00262FA0`, `0x00262FA8`, and `0x00263041`. The stage-background and track seams request physical space; the final effects/HUD seam returns to native. Calls at `0x0064DA90` and optional `0x00645120` stay physical without redundant hooks.
 - [ ] Before every actual target change, call native batch flush RVA `0x001C9B10` while the old target is bound. In development, read the four proven pending counts and reject/log once if any remains nonzero. Do not assume the caller already flushed.
 - [ ] Implement all eight getter inline hooks. During an active compositor frame, physical returns output W/H, native returns 720/1280, and float/int variants agree exactly. Outside a compositor frame, pass through to the original getter because reset, `WM_SIZE`, and non-render helpers also call these functions. Disabled never installs them; compositor-space entry is fatal because loader drawing must not call native getters.
 - [ ] Implement viewport-reset inline hook with exact `int __cdecl(int* viewport)` ABI. Outside a compositor frame, pass through unchanged. During a frame, non-null passes through unchanged and null constructs `{0.0F, 0.0F, width, height}` for current space before calling the original, avoiding its direct global-dimension path.
 - [ ] After every compositor state restore, explicitly apply matching viewport/scissor independently of the viewport hook.
-- [ ] Extend fake integration tests with a sequence containing adjacent native tasks, native -> physical -> physical -> native gameplay subpasses, explicit and null viewport calls, all getter variants, and a pending-batch failure. Assert exact copy counts.
+- [ ] Extend fake integration tests with a sequence containing adjacent native tasks, physical -> physical -> physical -> native gameplay subpasses, explicit and null viewport calls, all getter variants, and a pending-batch failure. Assert exact copy counts.
 - [ ] Run:
 
   ```powershell
@@ -633,29 +657,25 @@ WindowedWidescreenPatchInit(
 
 ---
 
-## Task 9: Install projection, `_clip.dat` policy, and client-coordinate hooks
+## Task 9: Install cached-HUD, mandatory `_clip.dat` bypass, and client-coordinate hooks
 
 **Files:**
 
 - Modify: `src/Patches/WindowedWidescreen/WindowedWidescreenPatch.cpp`
-- Modify: `src/Patches/WindowedWidescreen/ProjectionPolicy.cpp`
-- Modify: `src/Patches/WindowedWidescreen/StageClipPolicy.cpp`
-- Modify: `tests/Patches/WindowedWidescreen/WindowedWidescreenModelTests.cpp`
 - Modify: `tests/Patches/WindowedWidescreen/WindowedWidescreenRuntimeTests.cpp`
 
-- [ ] Implement both projection inline detours with their exact cdecl signatures. Outside a compositor frame, call original unchanged. In physical space, transform only the CTune scale for output height above 1280 and let the hooked target getters supply output aspect. At height 1280 pass the native scale bit-for-bit. In native space call original unchanged.
-- [ ] Preserve destination pointer, camera/orientation pointer, unused primary argument, near plane 1.0, far plane 1000.0, and the original projection builders. Do not replace matrices or apply a transposed-axis formula.
-- [ ] Treat non-finite/invalid scale or FOV `>= 170` as a fatal rendering invariant; do not clamp or silently fall back mid-frame.
-- [ ] Implement the clip midhook. `authored` changes nothing. `live_frustum` sets EIP to `image_base + 0x0024422F` only after preflight proved `var_21 = 0` at `0x002441C6`, the gate bytes, the continuation, owner, and live helper. This selects the game's existing fallback frustum; it does not force all parts visible.
+- [ ] Do not hook the primary or oriented perspective builders. Fixed 1280 height makes the prior scale transform identity; the physical target getters supply output aspect while preserving the original builders, CTune scale, near plane, and far plane.
+- [ ] Guard RVA `0x0023FDBA` and normalize only the cached gameplay HUD orthographic call's `right` and `bottom` arguments to 720 and 1280. Preserve left/top, near/far, the physical target pair, and the separately built perspective matrix.
+- [ ] Implement the clip midhook. Enabled widescreen always sets EIP to `image_base + 0x0024422F` only after preflight proved `var_21 = 0` at `0x002441C6`, the gate bytes, the continuation, owner, and live helper. This selects the game's existing fallback frustum; it does not force all parts visible.
 - [ ] Implement mouse/debug inline detour with exact `POINT* __thiscall(owner, DWORD* output)` ABI. Call original, map `output[0:2]` only when `output[6] == 1`, subtract native rect origin inside the canvas, and set validity to zero outside. Preserve every other word and return value.
 - [ ] Keep booster/button input unchanged; do not touch polling, FastIO, Switch input, or input timestamps.
-- [ ] Add wrapper tests for projection argument forwarding, 1280-height identity, height expansion, authored no-op, live EIP redirect, mouse inside/boundary/outside behavior, invalid-original sample preservation, and unchanged non-coordinate output words.
+- [ ] Add wrapper tests for the exact cached HUD argument rewrite, unconditional live EIP redirect, mouse inside/boundary/outside behavior, invalid-original sample preservation, and unchanged non-coordinate output words.
 - [ ] Run both focused suites and build the DLL as in Task 8.
 - [ ] Commit:
 
   ```powershell
-  git add -- src/Patches/WindowedWidescreen/WindowedWidescreenPatch.cpp src/Patches/WindowedWidescreen/ProjectionPolicy.cpp src/Patches/WindowedWidescreen/StageClipPolicy.cpp tests/Patches/WindowedWidescreen/WindowedWidescreenModelTests.cpp tests/Patches/WindowedWidescreen/WindowedWidescreenRuntimeTests.cpp
-  git commit -m "Add widescreen projection clip and input policies"
+  git add -- src/Patches/WindowedWidescreen/WindowedWidescreenPatch.cpp tests/Patches/WindowedWidescreen/WindowedWidescreenRuntimeTests.cpp
+  git commit -m "Add widescreen HUD clip and input policies"
   ```
 
 ---
@@ -677,7 +697,7 @@ WindowedWidescreenPatchInit(
 - [ ] Give `RendererDeviceLossRuntime` ownership of the pre/post reset `MidHook` objects and one `RendererResourceLifecycle`. Expose one compound, idempotently resettable install operation to the widescreen transaction; no other module owns hooks at those addresses.
 - [ ] The pre-reset callback runs after native notification at RVA `0x0005B283`, calls lifecycle `BeforeReset`, closes any interrupted logical compositor frame, and leaves resources released before native `Reset`. This must cover a failed `BeginScene` with no frame-end callback. The post callback runs only after successful Reset and native post notification at RVA `0x0005B46F`, then calls `AfterReset(ESI)`.
 - [ ] Include both reset byte contracts in the widescreen all-sites preflight before the compound operation creates either hook. If the second reset hook or any later widescreen hook fails, reset both and detach the participant during reverse rollback.
-- [ ] Complete the hook plan with every contract in the frozen table. Create all candidates disabled, attach candidate context, enable them, and publish the runtime owner only on total success. Emit one structured success record with output size, native rect, clip policy, and hook count.
+- [ ] Complete the hook plan with every contract in the frozen table. Create all candidates disabled, attach candidate context, enable them, and publish the runtime owner only on total success. Emit one structured success record with output size, native rect, mandatory authored-clip bypass, and hook count.
 - [ ] Add `PublishWindowedWidescreenInitializationFatal` in `Loader/DllMain.cpp` using the existing `gc::system_path::PublishStartupFatal` actions and a one-shot atomic. Format stage/site/rollback/capability details; use a feature-specific title and exit code.
 - [ ] Immediately after successful `RendererDeviceLossPatchInit`, copy `settings.windowed_widescreen()` into `WindowedWidescreenPatchInit`. On error publish fatal and return `FALSE`. This code remains inside the existing game-only role branch, before audio. NESYS must never invoke it.
 - [ ] For device-created and mid-session compositor errors occurring after `DllMain`, use the same existing startup-fatal/log/modal/fail-fast boundary from the feature runtime. Rendering must not continue on the native backbuffer after enabled setup failed.
@@ -756,7 +776,7 @@ WindowedWidescreenPatchInit(
   - enabled 1137 x 1280 and 1920 x 1280 on an unrotated desktop;
   - centered 720 x 1280 UI measurements at every output;
   - actual perspective geometry, not stretched pixels, in added horizontal regions;
-  - authored versus live-frustum visibility difference with `_clip.dat` still present;
+  - `_clip.dat` remains present while widened geometry uses the native live-frustum branch;
   - one-player and two-player menu, song-select, gameplay, result, and attract layouts;
   - at least three consecutive tunes over several stage themes without stale/one-frame mistargeting;
   - minimize/restore and repeated device-loss recovery without leaks, blank frames, or flashes;
@@ -770,9 +790,9 @@ WindowedWidescreenPatchInit(
 | --- | --- | --- |
 | Fixed ordinary window, exact client/backbuffer, no rotation | Tasks 1, 2, 7, 10 | Config/model tests, startup/capability checks, operator matrix |
 | Centered unscaled 720 x 1280 2D | Tasks 2, 4, 5, 8 | Geometry/action tests, operator pixel measurements |
-| Full configured perspective scene | Tasks 4, 5, 8, 9 | Transition/projection tests, operator geometry observation |
-| Hor+ at height 1280; focal-length preservation above | Tasks 2 and 9 | Independently derived trigonometric tests |
-| `_clip.dat` retained; authored/live-frustum policy | Tasks 1, 2, 6, 9 | Config/policy/contract tests and operator comparison |
+| Full configured perspective scene | Tasks 4, 5, 8, 9 | Transition/target-domain tests, operator geometry observation |
+| Horizontal-plus at fixed height 1280 | Tasks 1, 2, 8, and 9 | Exact-height validation, physical target aspect, operator geometry observation |
+| `_clip.dat` retained; mandatory live-frustum bypass while enabled | Tasks 6 and 9 plus implementation amendment | Guarded redirect test, IDA contract audit, and operator geometry observation |
 | Native order/blending across mixed gameplay | Tasks 3, 4, 8 | Fake action/copy-count tests and multi-screen runtime matrix |
 | Device loss/reset integration | Tasks 5 and 10 | Lifecycle tests and operator repeated reset |
 | Guarded all-or-nothing installation | Tasks 6 and 10 | Synthetic preflight/rollback tests and fresh IDA audit |

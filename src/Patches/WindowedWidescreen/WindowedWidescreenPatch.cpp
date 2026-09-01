@@ -17,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <type_traits>
 
 namespace gc::windowed_widescreen
 {
@@ -100,6 +101,8 @@ namespace gc::windowed_widescreen
             std::size_t hook_count{};
             std::atomic<RuntimePublicationState> publication_state{
                 RuntimePublicationState::preparing};
+            std::optional<NativeWindowPolicyError>
+                last_window_policy_error;
             std::optional<renderer_device_loss::RendererResourceError>
                 last_resource_error;
             std::optional<CompositorError> last_compositor_error;
@@ -158,9 +161,17 @@ namespace gc::windowed_widescreen
             try
             {
                 log = std::format(
-                    "WindowedWidescreen: fatal stage={} d3d_stage={} hook_stage={}",
+                    "WindowedWidescreen: fatal stage={} window_policy_error={} resource_error={} d3d_stage={} d3d_hresult=0x{:08X} hook_stage={}",
                     static_cast<unsigned>(error.stage),
+                    error.window_policy_error.has_value()
+                        ? static_cast<int>(*error.window_policy_error)
+                        : -1,
+                    error.resource_error.has_value()
+                        ? static_cast<int>(*error.resource_error)
+                        : -1,
                     static_cast<unsigned>(error.d3d_failure.stage),
+                    static_cast<std::uint32_t>(
+                        error.d3d_failure.result),
                     error.install_error.has_value()
                         ? static_cast<unsigned>(error.install_error->stage)
                         : 0U);
@@ -732,15 +743,57 @@ namespace gc::windowed_widescreen
                     reinterpret_cast<void*>(renderer));
         }
 
+        [[nodiscard]] int CallLogicalResolutionSetOriginal(
+            void* context,
+            const std::uint32_t width,
+            const std::uint32_t height) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            auto* hook = runtime == nullptr
+                ? nullptr
+                : FindHook(
+                    *runtime,
+                    WidescreenContractSite::logical_resolution_set);
+            return hook == nullptr
+                ? 0
+                : hook->inline_hook.ccall<int>(
+                    static_cast<int>(width),
+                    static_cast<int>(height));
+        }
+
+        template <WidescreenContractSite Site>
+        [[nodiscard]] int CallLogicalTargetDimensionSetOriginal(
+            void* context,
+            const std::uint32_t value) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            auto* hook = runtime == nullptr
+                ? nullptr
+                : FindHook(*runtime, Site);
+            return hook == nullptr
+                ? 0
+                : hook->inline_hook.ccall<int>(static_cast<int>(value));
+        }
+
         [[nodiscard]] bool ValidateAndPlaceWindow(
             void* context,
             const std::uintptr_t renderer) noexcept
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
-            return runtime != nullptr &&
-                ValidateAndPlaceRendererWindow(
-                    renderer,
-                    runtime->placement).has_value();
+            if (runtime == nullptr)
+            {
+                return false;
+            }
+            runtime->last_window_policy_error.reset();
+            const auto placed = ValidateAndPlaceRendererWindow(
+                renderer,
+                runtime->placement);
+            if (!placed)
+            {
+                runtime->last_window_policy_error = placed.error();
+                return false;
+            }
+            return true;
         }
 
         [[nodiscard]] bool ActivateRendererResources(
@@ -752,6 +805,7 @@ namespace gc::windowed_widescreen
             {
                 return false;
             }
+            runtime->last_resource_error.reset();
             const auto activated =
                 renderer_device_loss::RendererDeviceLossOnDeviceCreated(
                     renderer);
@@ -971,19 +1025,56 @@ namespace gc::windowed_widescreen
             }
         }
 
-        void GameplayNativeMid(safetyhook::Context&) noexcept
+        void GameplayStageBackgroundMid(safetyhook::Context&) noexcept
         {
-            RequestGameplayPass(GameplayPass::orthographic_background);
+            RequestGameplayPass(GameplayPass::stage_background);
         }
 
-        void GameplayPhysicalMid(safetyhook::Context&) noexcept
+        void GameplayTrackMid(safetyhook::Context&) noexcept
         {
             RequestGameplayPass(GameplayPass::perspective_track);
         }
 
-        void GameplayReturnNativeMid(safetyhook::Context&) noexcept
+        void GameplayEffectsMid(safetyhook::Context&) noexcept
         {
             RequestGameplayPass(GameplayPass::orthographic_effects);
+        }
+
+        [[nodiscard]] bool TryApplyNativeHudOrthographicArguments(
+            const std::uint32_t stack_pointer) noexcept
+        {
+            __try
+            {
+                auto* const arguments =
+                    reinterpret_cast<HudOrthographicArguments*>(
+                        static_cast<std::uintptr_t>(stack_pointer));
+                ApplyNativeHudOrthographicArguments(*arguments);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        void GameplayHudProjectionMid(safetyhook::Context& context) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr ||
+                !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+            if (!TryApplyNativeHudOrthographicArguments(context.esp))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage =
+                            WindowedWidescreenOperationStage::projection,
+                    });
+            }
         }
 
         void RendererOwnedResetHookSentinel(safetyhook::Context&) noexcept
@@ -1156,157 +1247,6 @@ namespace gc::windowed_widescreen
             return *result;
         }
 
-        [[nodiscard]] bool ReadCurrentSpace(
-            void* context,
-            RenderSpace& space) noexcept
-        {
-            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
-            if (runtime == nullptr)
-            {
-                return false;
-            }
-            const auto current = runtime->compositor.CurrentSpace();
-            if (!current)
-            {
-                return false;
-            }
-            space = *current;
-            return true;
-        }
-
-        [[nodiscard]] float* CallPrimaryProjectionOriginal(
-            void* context,
-            float* destination,
-            const int unused,
-            const float scale) noexcept
-        {
-            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
-            auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(
-                    *runtime,
-                    WidescreenContractSite::primary_projection);
-            return hook == nullptr
-                ? nullptr
-                : hook->inline_hook.ccall<float*>(
-                    destination,
-                    unused,
-                    scale);
-        }
-
-        [[nodiscard]] float* CallOrientedProjectionOriginal(
-            void* context,
-            float* destination,
-            float* camera,
-            const float scale) noexcept
-        {
-            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
-            auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(
-                    *runtime,
-                    WidescreenContractSite::oriented_projection);
-            return hook == nullptr
-                ? nullptr
-                : hook->inline_hook.ccall<float*>(
-                    destination,
-                    camera,
-                    scale);
-        }
-
-        [[nodiscard]] ProjectionHookActions ProductionProjectionActions(
-            WindowedWidescreenRuntime& runtime) noexcept
-        {
-            return ProjectionHookActions{
-                .context = &runtime,
-                .current_space = &ReadCurrentSpace,
-                .call_primary_original = &CallPrimaryProjectionOriginal,
-                .call_oriented_original = &CallOrientedProjectionOriginal,
-            };
-        }
-
-        float* __cdecl PrimaryProjectionDetour(
-            float* const destination,
-            const int unused,
-            const float scale) noexcept
-        {
-            auto* runtime =
-                g_callback_runtime.load(std::memory_order_acquire);
-            if (runtime == nullptr)
-            {
-                return nullptr;
-            }
-            if (!RuntimeCallbacksAreActive(*runtime))
-            {
-                return CallPrimaryProjectionOriginal(
-                    runtime,
-                    destination,
-                    unused,
-                    scale);
-            }
-            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
-                RenderQueryRoute::native_passthrough)
-            {
-                return CallPrimaryProjectionOriginal(
-                    runtime,
-                    destination,
-                    unused,
-                    scale);
-            }
-            const auto result = RunPrimaryProjectionHook(
-                destination,
-                unused,
-                scale,
-                runtime->resolution.output_size().height,
-                ProductionProjectionActions(*runtime));
-            if (!result)
-            {
-                PublishRenderRuntimeFatal(*runtime, result.error());
-            }
-            return *result;
-        }
-
-        float* __cdecl OrientedProjectionDetour(
-            float* const destination,
-            float* const camera,
-            const float scale) noexcept
-        {
-            auto* runtime =
-                g_callback_runtime.load(std::memory_order_acquire);
-            if (runtime == nullptr)
-            {
-                return nullptr;
-            }
-            if (!RuntimeCallbacksAreActive(*runtime))
-            {
-                return CallOrientedProjectionOriginal(
-                    runtime,
-                    destination,
-                    camera,
-                    scale);
-            }
-            if (ResolveRenderQueryRoute(runtime->compositor.frame_active()) ==
-                RenderQueryRoute::native_passthrough)
-            {
-                return CallOrientedProjectionOriginal(
-                    runtime,
-                    destination,
-                    camera,
-                    scale);
-            }
-            const auto result = RunOrientedProjectionHook(
-                destination,
-                camera,
-                scale,
-                runtime->resolution.output_size().height,
-                ProductionProjectionActions(*runtime));
-            if (!result)
-            {
-                PublishRenderRuntimeFatal(*runtime, result.error());
-            }
-            return *result;
-        }
-
         void ClipGateMid(safetyhook::Context& context) noexcept
         {
             auto* runtime =
@@ -1324,12 +1264,11 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage =
-                            WindowedWidescreenOperationStage::clip_policy,
+                            WindowedWidescreenOperationStage::clip_bypass,
                     });
             }
             auto instruction_pointer = context.eip;
             const auto result = ApplyClipGateHook(
-                runtime->settings.clip_policy(),
                 runtime->image_base,
                 continuation->rva,
                 instruction_pointer);
@@ -1390,6 +1329,74 @@ namespace gc::windowed_widescreen
                 PublishRenderRuntimeFatal(*runtime, result.error());
             }
             return reinterpret_cast<POINT*>(*result);
+        }
+
+        int __cdecl LogicalResolutionSetDetour(
+            const std::uint32_t width,
+            const std::uint32_t height) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr)
+            {
+                return 0;
+            }
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallLogicalResolutionSetOriginal(
+                    runtime,
+                    width,
+                    height);
+            }
+            const auto result = RunLogicalResolutionSetHook(
+                width,
+                height,
+                LogicalResolutionSetHookActions{
+                    .context = runtime,
+                    .call_original = &CallLogicalResolutionSetOriginal,
+                    .set_target_width =
+                        &CallLogicalTargetDimensionSetOriginal<
+                            WidescreenContractSite::logical_target_width_set>,
+                    .set_target_height =
+                        &CallLogicalTargetDimensionSetOriginal<
+                            WidescreenContractSite::logical_target_height_set>,
+                });
+            if (!result)
+            {
+                PublishRuntimeFatal(result.error());
+            }
+            return *result;
+        }
+
+        template <RenderDimensionAxis Axis, WidescreenContractSite Site>
+        int __cdecl LogicalTargetDimensionSetDetour(
+            const std::uint32_t value) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr)
+            {
+                return 0;
+            }
+            if (!RuntimeCallbacksAreActive(*runtime))
+            {
+                return CallLogicalTargetDimensionSetOriginal<Site>(
+                    runtime,
+                    value);
+            }
+            const auto result = RunLogicalTargetDimensionSetHook(
+                Axis,
+                value,
+                LogicalTargetDimensionSetHookActions{
+                    .context = runtime,
+                    .call_original =
+                        &CallLogicalTargetDimensionSetOriginal<Site>,
+                });
+            if (!result)
+            {
+                PublishRuntimeFatal(result.error());
+            }
+            return *result;
         }
 
         int __cdecl ConfigApplyDetour(const int config) noexcept
@@ -1454,6 +1461,8 @@ namespace gc::windowed_widescreen
             if (!result)
             {
                 auto error = result.error();
+                error.window_policy_error =
+                    runtime->last_window_policy_error;
                 error.resource_error = runtime->last_resource_error;
                 error.d3d_failure = runtime->device.last_failure();
                 PublishRuntimeFatal(error);
@@ -1549,10 +1558,6 @@ namespace gc::windowed_widescreen
         const auto native_result = actions.call_original(
             actions.context,
             main_config_ptr);
-        if (native_result == 0)
-        {
-            return native_result;
-        }
         if (!actions.config_vtable_matches(
                 actions.context,
                 main_config_ptr) ||
@@ -1612,16 +1617,60 @@ namespace gc::windowed_widescreen
         }
         if (!actions.validate_and_place(
                 actions.context,
-                renderer_owner) ||
-            !actions.activate_resources(
+                renderer_owner))
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::window_policy,
+            });
+        }
+        if (!actions.activate_resources(
                 actions.context,
                 renderer_owner))
         {
             return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::window_device,
+                .stage = WindowedWidescreenOperationStage::resource_attach,
             });
         }
         return native_result;
+    }
+
+    std::expected<int, WindowedWidescreenError>
+    RunLogicalResolutionSetHook(
+        const std::uint32_t requested_width,
+        const std::uint32_t requested_height,
+        const LogicalResolutionSetHookActions& actions) noexcept
+    {
+        if (actions.context == nullptr || actions.call_original == nullptr ||
+            actions.set_target_width == nullptr ||
+            actions.set_target_height == nullptr)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::invalid_actions,
+            });
+        }
+        const auto native_result = actions.call_original(
+            actions.context,
+            kNativeWidth,
+            kNativeHeight);
+        actions.set_target_width(actions.context, requested_width);
+        actions.set_target_height(actions.context, requested_height);
+        return native_result;
+    }
+
+    std::expected<int, WindowedWidescreenError>
+    RunLogicalTargetDimensionSetHook(
+        const RenderDimensionAxis axis,
+        const std::uint32_t requested_value,
+        const LogicalTargetDimensionSetHookActions& actions) noexcept
+    {
+        (void)axis;
+        if (actions.context == nullptr || actions.call_original == nullptr)
+        {
+            return std::unexpected(WindowedWidescreenError{
+                .stage = WindowedWidescreenOperationStage::invalid_actions,
+            });
+        }
+        return actions.call_original(actions.context, requested_value);
     }
 
     std::expected<int, WindowedWidescreenError> RunFrameBoundaryHook(
@@ -1791,117 +1840,27 @@ namespace gc::windowed_widescreen
         return actions.call_original(actions.context, &explicit_viewport);
     }
 
-    std::expected<float*, WindowedWidescreenError>
-    RunPrimaryProjectionHook(
-        float* const destination,
-        const int unused,
-        const float scale,
-        const std::uint32_t output_height,
-        const ProjectionHookActions& actions) noexcept
+    void ApplyNativeHudOrthographicArguments(
+        HudOrthographicArguments& arguments) noexcept
     {
-        if (actions.context == nullptr || actions.current_space == nullptr ||
-            actions.call_primary_original == nullptr)
-        {
-            return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::invalid_actions,
-            });
-        }
-
-        RenderSpace space{};
-        if (!actions.current_space(actions.context, space) ||
-            space == RenderSpace::compositor)
-        {
-            return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::projection,
-            });
-        }
-
-        const auto transformed = TransformProjectionScale(
-            scale,
-            space == RenderSpace::physical_3d
-                ? output_height
-                : kNativeHeight);
-        if (!transformed)
-        {
-            return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::projection,
-                .projection_error = transformed.error(),
-            });
-        }
-        const auto forwarded_scale = space == RenderSpace::physical_3d
-            ? *transformed
-            : scale;
-        return actions.call_primary_original(
-            actions.context,
-            destination,
-            unused,
-            forwarded_scale);
-    }
-
-    std::expected<float*, WindowedWidescreenError>
-    RunOrientedProjectionHook(
-        float* const destination,
-        float* const camera,
-        const float scale,
-        const std::uint32_t output_height,
-        const ProjectionHookActions& actions) noexcept
-    {
-        if (actions.context == nullptr || actions.current_space == nullptr ||
-            actions.call_oriented_original == nullptr)
-        {
-            return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::invalid_actions,
-            });
-        }
-
-        RenderSpace space{};
-        if (!actions.current_space(actions.context, space) ||
-            space == RenderSpace::compositor)
-        {
-            return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::projection,
-            });
-        }
-
-        const auto transformed = TransformProjectionScale(
-            scale,
-            space == RenderSpace::physical_3d
-                ? output_height
-                : kNativeHeight);
-        if (!transformed)
-        {
-            return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::projection,
-                .projection_error = transformed.error(),
-            });
-        }
-        const auto forwarded_scale = space == RenderSpace::physical_3d
-            ? *transformed
-            : scale;
-        return actions.call_oriented_original(
-            actions.context,
-            destination,
-            camera,
-            forwarded_scale);
+        static_assert(
+            std::is_standard_layout_v<HudOrthographicArguments> &&
+            sizeof(HudOrthographicArguments) == sizeof(float) * 6);
+        arguments.right = static_cast<float>(kNativeWidth);
+        arguments.bottom = static_cast<float>(kNativeHeight);
     }
 
     std::expected<void, WindowedWidescreenError> ApplyClipGateHook(
-        const StageClipPolicy policy,
         const std::uintptr_t image_base,
         const std::uint32_t live_continuation_rva,
         std::uint32_t& instruction_pointer) noexcept
     {
-        if (SelectClipGateAction(policy) ==
-            ClipGateAction::continue_authored)
-        {
-            return {};
-        }
         if (image_base >
             std::numeric_limits<std::uint32_t>::max() -
                 live_continuation_rva)
         {
             return std::unexpected(WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::clip_policy,
+                .stage = WindowedWidescreenOperationStage::clip_bypass,
             });
         }
         instruction_pointer = static_cast<std::uint32_t>(
@@ -2082,6 +2041,21 @@ namespace gc::windowed_widescreen
                     WidescreenContractSite::window_device_create,
                     reinterpret_cast<void*>(&WindowDeviceDetour)},
                 WidescreenHookRequest{
+                    WidescreenContractSite::logical_resolution_set,
+                    reinterpret_cast<void*>(&LogicalResolutionSetDetour)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::logical_target_width_set,
+                    reinterpret_cast<void*>(
+                        &LogicalTargetDimensionSetDetour<
+                            RenderDimensionAxis::width,
+                            WidescreenContractSite::logical_target_width_set>)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::logical_target_height_set,
+                    reinterpret_cast<void*>(
+                        &LogicalTargetDimensionSetDetour<
+                            RenderDimensionAxis::height,
+                            WidescreenContractSite::logical_target_height_set>)},
+                WidescreenHookRequest{
                     WidescreenContractSite::frame_begin,
                     reinterpret_cast<void*>(&FrameBeginDetour)},
                 WidescreenHookRequest{
@@ -2118,23 +2092,20 @@ namespace gc::windowed_widescreen
                     WidescreenContractSite::viewport_reset,
                     reinterpret_cast<void*>(&ViewportResetDetour)},
                 WidescreenHookRequest{
-                    WidescreenContractSite::primary_projection,
-                    reinterpret_cast<void*>(&PrimaryProjectionDetour)},
-                WidescreenHookRequest{
-                    WidescreenContractSite::oriented_projection,
-                    reinterpret_cast<void*>(&OrientedProjectionDetour)},
-                WidescreenHookRequest{
                     WidescreenContractSite::mouse_debug_poll,
                     reinterpret_cast<void*>(&MouseDebugPollDetour)},
                 WidescreenHookRequest{
-                    WidescreenContractSite::gameplay_native,
-                    reinterpret_cast<void*>(&GameplayNativeMid)},
+                    WidescreenContractSite::gameplay_stage_background,
+                    reinterpret_cast<void*>(&GameplayStageBackgroundMid)},
                 WidescreenHookRequest{
-                    WidescreenContractSite::gameplay_physical,
-                    reinterpret_cast<void*>(&GameplayPhysicalMid)},
+                    WidescreenContractSite::gameplay_track,
+                    reinterpret_cast<void*>(&GameplayTrackMid)},
                 WidescreenHookRequest{
-                    WidescreenContractSite::gameplay_return_native,
-                    reinterpret_cast<void*>(&GameplayReturnNativeMid)},
+                    WidescreenContractSite::gameplay_effects,
+                    reinterpret_cast<void*>(&GameplayEffectsMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::gameplay_hud_projection,
+                    reinterpret_cast<void*>(&GameplayHudProjectionMid)},
                 WidescreenHookRequest{
                     WidescreenContractSite::clip_gate,
                     reinterpret_cast<void*>(&ClipGateMid)},
@@ -2191,8 +2162,7 @@ namespace gc::windowed_widescreen
                     << resolution->output_size().height
                     << " native_rect=" << native.left << ',' << native.top
                     << ',' << native.right << ',' << native.bottom
-                    << " clip_policy="
-                    << StageClipPolicyName(settings.clip_policy())
+                    << " authored_stage_clip=bypassed"
                     << " hook_count=" << requests.size();
             }
             catch (...)

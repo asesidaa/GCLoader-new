@@ -635,10 +635,8 @@ namespace
 
         auto& experimental = parsed->document.experimental();
         experimental.enable_windowed_widescreen_stage = true;
-        experimental.widescreen_window_width = 1137;
+        experimental.widescreen_window_width = 3840;
         experimental.widescreen_window_height = 1280;
-        experimental.widescreen_stage_clip_policy =
-            gc::windowed_widescreen::StageClipPolicy::authored;
 
         auto compiled = gc::config::ConfigCompiler::Compile(parsed->document);
         Expect(compiled.has_value(), "valid widescreen settings compile");
@@ -651,20 +649,14 @@ namespace
         experimental.enable_windowed_widescreen_stage = false;
         experimental.widescreen_window_width = 720;
         experimental.widescreen_window_height = 4096;
-        experimental.widescreen_stage_clip_policy =
-            gc::windowed_widescreen::StageClipPolicy::live_frustum;
 
         Expect(owned.enabled(), "compiled widescreen enablement is owned");
         Expect(
-            owned.output_width() == 1137,
+            owned.output_width() == 3840,
             "compiled widescreen width is owned");
         Expect(
             owned.output_height() == 1280,
             "compiled widescreen height is owned");
-        Expect(
-            owned.clip_policy() ==
-                gc::windowed_widescreen::StageClipPolicy::authored,
-            "compiled widescreen clip policy is owned");
     }
 
     void CompilerRejectsInvalidWindowedWidescreenSettings()
@@ -707,6 +699,11 @@ namespace
             gc::config::ConfigErrorCode::out_of_range,
             "widescreen height below 1280 is rejected");
         expect_error(
+            [](auto& value) { value.widescreen_window_height = 1281; },
+            "experimental.widescreen_window_height",
+            gc::config::ConfigErrorCode::out_of_range,
+            "widescreen height above 1280 is rejected");
+        expect_error(
             [](auto& value)
             {
                 value.widescreen_window_width =
@@ -715,15 +712,6 @@ namespace
             "experimental.widescreen_window_width",
             gc::config::ConfigErrorCode::out_of_range,
             "widescreen width beyond native signed range is rejected");
-        expect_error(
-            [](auto& value)
-            {
-                value.widescreen_stage_clip_policy =
-                    static_cast<gc::windowed_widescreen::StageClipPolicy>(255);
-            },
-            "experimental.widescreen_stage_clip_policy",
-            gc::config::ConfigErrorCode::unsupported_value,
-            "unknown widescreen clip policy is rejected");
     }
 } // namespace
 

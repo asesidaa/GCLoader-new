@@ -63,20 +63,24 @@ namespace gc::windowed_widescreen
                 BytePatternOf<0xD9, 0x05, 0x04, 0x70, 0x78, 0x00, 0xC3>(),
                 WidescreenHookKind::inline_hook},
             WidescreenByteContract{
+                WidescreenContractSite::logical_resolution_set, 0x00053660,
+                BytePatternOf<0x6A, 0xFF, 0x68, 0xEB, 0xDA, 0x66, 0x00,
+                              0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50>(),
+                WidescreenHookKind::inline_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::logical_target_width_set, 0x00052F60,
+                BytePatternOf<0xDB, 0x44, 0x24, 0x04, 0x8B, 0x44, 0x24,
+                              0x04, 0xA3, 0xF8, 0x6F, 0x78, 0x00>(),
+                WidescreenHookKind::inline_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::logical_target_height_set, 0x00052F80,
+                BytePatternOf<0xDB, 0x44, 0x24, 0x04, 0x8B, 0x44, 0x24,
+                              0x04, 0xA3, 0xFC, 0x6F, 0x78, 0x00>(),
+                WidescreenHookKind::inline_hook},
+            WidescreenByteContract{
                 WidescreenContractSite::viewport_reset, 0x00053140,
                 BytePatternOf<0x8B, 0x4C, 0x24, 0x04, 0x33, 0xC0, 0x83,
                               0xEC, 0x20, 0x3B, 0xC8, 0x0F>(),
-                WidescreenHookKind::inline_hook},
-            WidescreenByteContract{
-                WidescreenContractSite::primary_projection, 0x0023F5F0,
-                BytePatternOf<0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x54, 0x56,
-                              0x57, 0xD9, 0x05, 0xD4, 0xBC, 0x6F, 0x00>(),
-                WidescreenHookKind::inline_hook},
-            WidescreenByteContract{
-                WidescreenContractSite::oriented_projection, 0x0023F660,
-                BytePatternOf<0x55, 0x8B, 0xEC, 0x81, 0xEC, 0xCC, 0x00,
-                              0x00, 0x00, 0x56, 0x57, 0xD9, 0x05, 0xD4,
-                              0xBC>(),
                 WidescreenHookKind::inline_hook},
             WidescreenByteContract{
                 WidescreenContractSite::mouse_debug_poll, 0x000B06B0,
@@ -93,19 +97,25 @@ namespace gc::windowed_widescreen
                               0x00>(),
                 WidescreenHookKind::mid_hook},
             WidescreenByteContract{
-                WidescreenContractSite::gameplay_native, 0x00262FA0,
+                WidescreenContractSite::gameplay_stage_background, 0x00262FA0,
                 BytePatternOf<0xE8, 0x4B, 0x1A, 0xFE, 0xFF, 0x8B, 0x4D,
                               0xC4>(),
                 WidescreenHookKind::mid_hook},
             WidescreenByteContract{
-                WidescreenContractSite::gameplay_physical, 0x00262FA8,
+                WidescreenContractSite::gameplay_track, 0x00262FA8,
                 BytePatternOf<0xE8, 0xD3, 0x56, 0xFE, 0xFF, 0x8B, 0x4D,
                               0xC4>(),
                 WidescreenHookKind::mid_hook},
             WidescreenByteContract{
-                WidescreenContractSite::gameplay_return_native, 0x00263041,
+                WidescreenContractSite::gameplay_effects, 0x00263041,
                 BytePatternOf<0xE8, 0xFA, 0x5C, 0xFE, 0xFF, 0xE8, 0xD5,
                               0x00, 0xDF, 0xFF>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::gameplay_hud_projection, 0x0023FDBA,
+                BytePatternOf<0xE8, 0xB1, 0xF3, 0xF9, 0xFF, 0x8B, 0xB5,
+                              0x24, 0xFF, 0xFF, 0xFF, 0x81, 0xC6, 0xD0,
+                              0x00, 0x00>(),
                 WidescreenHookKind::mid_hook},
             WidescreenByteContract{
                 WidescreenContractSite::clip_default, 0x002441C6,
@@ -190,24 +200,29 @@ namespace gc::windowed_widescreen
                 WidescreenCallingConvention::cdecl_call, 0},
             WidescreenFunctionAbi{WidescreenContractSite::target_height_float,
                 WidescreenCallingConvention::cdecl_call, 0},
+            WidescreenFunctionAbi{WidescreenContractSite::logical_resolution_set,
+                WidescreenCallingConvention::cdecl_call, 2},
+            WidescreenFunctionAbi{WidescreenContractSite::logical_target_width_set,
+                WidescreenCallingConvention::cdecl_call, 1},
+            WidescreenFunctionAbi{WidescreenContractSite::logical_target_height_set,
+                WidescreenCallingConvention::cdecl_call, 1},
             WidescreenFunctionAbi{WidescreenContractSite::viewport_reset,
                 WidescreenCallingConvention::cdecl_call, 1},
-            WidescreenFunctionAbi{WidescreenContractSite::primary_projection,
-                WidescreenCallingConvention::cdecl_call, 3},
-            WidescreenFunctionAbi{WidescreenContractSite::oriented_projection,
-                WidescreenCallingConvention::cdecl_call, 3},
             WidescreenFunctionAbi{WidescreenContractSite::mouse_debug_poll,
                 WidescreenCallingConvention::thiscall_call, 2},
             WidescreenFunctionAbi{WidescreenContractSite::reset_pre,
                 WidescreenCallingConvention::mid_context, 1},
             WidescreenFunctionAbi{WidescreenContractSite::reset_post,
                 WidescreenCallingConvention::mid_context, 1},
-            WidescreenFunctionAbi{WidescreenContractSite::gameplay_native,
+            WidescreenFunctionAbi{WidescreenContractSite::gameplay_stage_background,
                 WidescreenCallingConvention::mid_context, 1},
-            WidescreenFunctionAbi{WidescreenContractSite::gameplay_physical,
+            WidescreenFunctionAbi{WidescreenContractSite::gameplay_track,
                 WidescreenCallingConvention::mid_context, 1},
             WidescreenFunctionAbi{
-                WidescreenContractSite::gameplay_return_native,
+                WidescreenContractSite::gameplay_effects,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::gameplay_hud_projection,
                 WidescreenCallingConvention::mid_context, 1},
             WidescreenFunctionAbi{WidescreenContractSite::clip_gate,
                 WidescreenCallingConvention::mid_context, 1},
@@ -251,15 +266,17 @@ namespace gc::windowed_widescreen
         case WidescreenContractSite::target_height_int: return "target_height_int";
         case WidescreenContractSite::target_width_float: return "target_width_float";
         case WidescreenContractSite::target_height_float: return "target_height_float";
+        case WidescreenContractSite::logical_resolution_set: return "logical_resolution_set";
+        case WidescreenContractSite::logical_target_width_set: return "logical_target_width_set";
+        case WidescreenContractSite::logical_target_height_set: return "logical_target_height_set";
         case WidescreenContractSite::viewport_reset: return "viewport_reset";
-        case WidescreenContractSite::primary_projection: return "primary_projection";
-        case WidescreenContractSite::oriented_projection: return "oriented_projection";
         case WidescreenContractSite::mouse_debug_poll: return "mouse_debug_poll";
         case WidescreenContractSite::reset_pre: return "reset_pre";
         case WidescreenContractSite::reset_post: return "reset_post";
-        case WidescreenContractSite::gameplay_native: return "gameplay_native";
-        case WidescreenContractSite::gameplay_physical: return "gameplay_physical";
-        case WidescreenContractSite::gameplay_return_native: return "gameplay_return_native";
+        case WidescreenContractSite::gameplay_stage_background: return "gameplay_stage_background";
+        case WidescreenContractSite::gameplay_track: return "gameplay_track";
+        case WidescreenContractSite::gameplay_effects: return "gameplay_effects";
+        case WidescreenContractSite::gameplay_hud_projection: return "gameplay_hud_projection";
         case WidescreenContractSite::clip_default: return "clip_default";
         case WidescreenContractSite::clip_gate: return "clip_gate";
         case WidescreenContractSite::clip_continuation: return "clip_continuation";

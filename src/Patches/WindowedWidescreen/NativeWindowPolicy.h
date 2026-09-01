@@ -41,6 +41,11 @@ namespace gc::windowed_widescreen
         monitor_enumeration_failed,
         renderer_contract_failed,
         window_move_failed,
+        renderer_window_invalid,
+        stored_style_mismatch,
+        actual_style_mismatch,
+        client_size_mismatch,
+        moved_client_size_mismatch,
     };
 
     struct PreparedWindowPlacement

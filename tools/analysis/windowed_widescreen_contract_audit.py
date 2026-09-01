@@ -36,15 +36,37 @@ BYTE_CONTRACTS = (
     ("target_height_int", "inline", 0x00052FB0, "A1 FC 6F 78 00 C3"),
     ("target_width_float", "inline", 0x00052FC0, "D9 05 00 70 78 00 C3"),
     ("target_height_float", "inline", 0x00052FD0, "D9 05 04 70 78 00 C3"),
+    (
+        "logical_resolution_set",
+        "inline",
+        0x00053660,
+        "6A FF 68 EB DA 66 00 64 A1 00 00 00 00 50",
+    ),
+    (
+        "logical_target_width_set",
+        "inline",
+        0x00052F60,
+        "DB 44 24 04 8B 44 24 04 A3 F8 6F 78 00",
+    ),
+    (
+        "logical_target_height_set",
+        "inline",
+        0x00052F80,
+        "DB 44 24 04 8B 44 24 04 A3 FC 6F 78 00",
+    ),
     ("viewport_reset", "inline", 0x00053140, "8B 4C 24 04 33 C0 83 EC 20 3B C8 0F"),
-    ("primary_projection", "inline", 0x0023F5F0, "55 8B EC 83 EC 54 56 57 D9 05 D4 BC 6F 00"),
-    ("oriented_projection", "inline", 0x0023F660, "55 8B EC 81 EC CC 00 00 00 56 57 D9 05 D4 BC"),
     ("mouse_debug_poll", "inline", 0x000B06B0, "55 8B EC 83 EC 08 89 4D F8 8B 45 F8"),
     ("reset_pre", "mid", 0x0005B28B, "83 BE 94 00 00 00 00"),
     ("reset_post", "mid", 0x0005B474, "83 C4 04 B8 01 00 00 00"),
-    ("gameplay_native", "mid", 0x00262FA0, "E8 4B 1A FE FF 8B 4D C4"),
-    ("gameplay_physical", "mid", 0x00262FA8, "E8 D3 56 FE FF 8B 4D C4"),
-    ("gameplay_return_native", "mid", 0x00263041, "E8 FA 5C FE FF E8 D5 00 DF FF"),
+    ("gameplay_stage_background", "mid", 0x00262FA0, "E8 4B 1A FE FF 8B 4D C4"),
+    ("gameplay_track", "mid", 0x00262FA8, "E8 D3 56 FE FF 8B 4D C4"),
+    ("gameplay_effects", "mid", 0x00263041, "E8 FA 5C FE FF E8 D5 00 DF FF"),
+    (
+        "gameplay_hud_projection",
+        "mid",
+        0x0023FDBA,
+        "E8 B1 F3 F9 FF 8B B5 24 FF FF FF 81 C6 D0 00 00",
+    ),
     ("clip_default", "read_only", 0x002441C6, "C6 45 DF 00"),
     ("clip_gate", "mid", 0x002441CA, "8B 95 80 FE FF FF 8B 82 4C 02 00 00 0F B6 88 5C 01 00 00"),
     ("clip_continuation", "read_only", 0x0024422F, "8B 4D D8 E8 C9 18 DC FF 0F B6"),
@@ -69,9 +91,10 @@ CALLING_CONVENTIONS = (
     ("frame_begin", 0x0005AC70, "int __thiscall(renderer)"),
     ("frame_end", 0x0005ACE0, "int __thiscall(renderer)"),
     ("task_dispatch", 0x0005C1B0, "int __thiscall(DWORD* task_node)"),
+    ("logical_resolution_set", 0x00053660, "int __cdecl(int width, int height)"),
+    ("logical_target_width_set", 0x00052F60, "int __cdecl(int width)"),
+    ("logical_target_height_set", 0x00052F80, "int __cdecl(int height)"),
     ("viewport_reset", 0x00053140, "int __cdecl(int* viewport)"),
-    ("primary_projection", 0x0023F5F0, "float* __cdecl(float* dst, int a2, float scale)"),
-    ("oriented_projection", 0x0023F660, "float* __cdecl(float* dst, float* camera, float scale)"),
     ("mouse_debug_poll", 0x000B06B0, "POINT* __thiscall(owner, DWORD* output)"),
 )
 
@@ -269,8 +292,9 @@ def _inspect_dll(path: Path) -> dict[str, Any]:
         b"enable_windowed_widescreen_stage",
         b"widescreen_window_width",
         b"widescreen_window_height",
+    )
+    forbidden_configuration_strings = (
         b"widescreen_stage_clip_policy",
-        b"live_frustum",
     )
     return {
         "path": str(path.resolve()),
@@ -281,6 +305,10 @@ def _inspect_dll(path: Path) -> dict[str, Any]:
         "is_x86": machine == 0x014C,
         "configuration_strings": {
             value.decode("ascii"): value in data for value in required_strings
+        },
+        "forbidden_configuration_strings": {
+            value.decode("ascii"): value in data
+            for value in forbidden_configuration_strings
         },
         "exports": exports,
         "expected_exports": list(EXPECTED_IDMAC_EXPORTS),
@@ -384,6 +412,7 @@ def run_audit(dll_path: Path | None) -> dict[str, Any]:
             success
             and dll["is_x86"]
             and all(dll["configuration_strings"].values())
+            and not any(dll["forbidden_configuration_strings"].values())
             and dll["exports_match"]
         )
     result["success"] = success
