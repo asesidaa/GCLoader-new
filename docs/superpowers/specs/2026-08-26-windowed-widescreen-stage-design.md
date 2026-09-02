@@ -61,6 +61,12 @@ express selected patch sites as RVAs with exact expected-byte guards.
 | `0x0045C1B0`, `0x0045C7D0` | Dispatch task rendering in priority order. | Contiguous task-level 2D and 3D regions can be classified centrally. |
 | `0x00662F10` | Interleaves orthographic and perspective gameplay rendering in one task. | Gameplay needs internal subpass transitions in addition to task classification. |
 | `0x006449F0`, `0x00641DE0` | Bind stage-background transforms and render the animated four-corner color quad using target width/height before the perspective track. | This is stage-owned output, not HUD; it must use physical space so the authored background fills the widened stage. |
+| `0x005E4503` through `0x005E4558` | Draws the ordinary per-entry CHAIN label and digits; entry is stored at `[ebp-0x14]`. The separate milestone branch is outside this window. | A guarded viewport window can move only the ordinary counter to the corresponding player side while leaving milestone presentation centered. |
+| `0x00662FA8` | Calls the perspective-track owner with CTune in `ecx` immediately before the player-visual function. | Capture CTune early enough to identify Player 1 judgement, which renders before the later gameplay-HUD pass. |
+| `0x006463F0` | Produces judgement effects only for native owner lanes `nn < 4`; grades 0 through 4 use CTune slot `93 + 5 * nn + grade`. | Player 1 is the first lane, slots 93 through 97. The other lanes are not interpreted as multiplayer participant capacity, and the producer is not hooked. |
+| `0x005F11E8` through `0x005F11ED` | Calls the generic effect-tree renderer with the current effect root in `ecx`. | An exact match for Player 1 judgement temporarily captures physical-3D D3D state, applies the right native HUD viewport for the complete tree, then restores the captured state. |
+| `0x0064A2D5` through `0x0064A2DA` | Draws tutorial group 6 inside the gameplay-effects routine. | The concrete tutorial group uses the right gameplay-HUD viewport and restores center immediately after the call. |
+| `0x0063AA89` through `0x0063AA8E` | Calls `0x00576660`, which renders the Test Mode `CRootWindow`, before continuing LoopLastTask bookkeeping. | A guarded call bracket can render the complete Test Mode form through the centered native canvas without resizing or stretching the wide output. |
 
 The `_clip.dat` parser accepts a header plus one byte for each
 `part x frame` combination. Rendering uses a nonzero authored byte as
@@ -80,8 +86,13 @@ though it would work for normally projected geometry.
 - Accept output widths of at least 720 at the fixed 1280-pixel height without
   scaling native 2D. Width has no product-specific maximum; normal signed,
   pixel-area, monitor-fit, and Direct3D capability limits still apply.
-- Keep authored HUD, menu, chart-overlay, and gameplay-effect presentation
-  exactly 720 x 1280 pixels and center it in the output.
+- Keep authored menus and common 2D tasks on the centered 720 x 1280 native
+  texture. Render gameplay HUD/effects at native 720 x 1280 scale directly on
+  the wide scene through a 720 x 1280 viewport, without horizontal stretching.
+- Keep the gameplay HUD centered except while drawing an ordinary combo
+  counter: entry 0 uses the right 720-pixel viewport and entry 1 uses the left.
+  Move Player 1's tutorial group and judgement roots to the right viewport;
+  opponent judgement and milestone combo effects remain centered.
 - Let the verified stage-owned color background fill the physical stage before
   the native UI overlay is composited.
 - Render verified perspective stage passes across the complete output.
@@ -102,7 +113,8 @@ though it would work for normally projected geometry.
   in the first release.
 - Monitor rotation, Windows orientation changes, transposed targets, or a
   rotation setting.
-- Relayout, anchoring, scaling, or replacement of authored 2D assets.
+- General relayout, scaling, or replacement of authored 2D assets beyond the
+  explicitly guarded ordinary-combo and local-judgement exceptions.
 - Widening orthographic chart, HUD, menu, or gameplay-effect passes. The
   verified stage-background color quad is explicitly stage-owned and is not
   part of this native UI restriction.
@@ -114,7 +126,8 @@ though it would work for normally projected geometry.
 
 ## Coordinate Spaces
 
-The design uses two upright spaces.
+The design uses two upright coordinate sizes and three game-visible render
+spaces. Nothing is rotated.
 
 ### Output and wide-scene space
 
@@ -149,6 +162,23 @@ Examples:
 
 Odd horizontal differences put the extra pixel on the right. Native content
 is copied one-to-one with no filtering scale.
+
+### Gameplay HUD space
+
+`GameplayHud` retains native logical dimensions `(720, 1280)` but renders
+directly into the wide-scene texture. Its normal viewport is `native_rect`.
+Temporary ordinary-counter viewports are:
+
+```text
+left_combo_rect  = (0,                  0, 720, 1280)
+right_combo_rect = (output_width - 720, 0, 720, 1280)
+```
+
+The viewport and scissor move together. Native dimension queries still return
+720 x 1280, and the hooked native viewport-reset helper translates any local
+viewport origin by the active gameplay-HUD origin. This prevents a native
+reset from collapsing a centered or side HUD viewport back to output `x = 0`.
+At 720 x 1280, centered, left, and right resolve to the same rectangle.
 
 ## Alternatives Considered
 
@@ -191,7 +221,14 @@ The selected design renders into a wide texture, copies the current scene
 center into a true 720 x 1280 target before each native 2D segment, lets the
 game perform its original blending there, and copies the completed result back
 into the scene center. It handles transformed and pre-transformed content
-uniformly and preserves destination-dependent blending.
+uniformly and preserves destination-dependent blending for common 2D tasks.
+
+The gameplay task uses a separate `GameplayHud` space. It keeps the wide scene
+bound and renders with native 720 x 1280 logical dimensions through a centered
+viewport. Ordinary combo hooks temporarily select the left or right native-
+sized viewport, with a batch flush before each viewport change. This avoids a
+wide/native texture crossing inside the interleaved gameplay task and keeps
+the full-width stage/background intact.
 
 ## Architecture
 
@@ -205,10 +242,14 @@ ResolutionModel ----------> output size / native_rect
         |       native config override, exact client/backbuffer
         |
         +-> NativeCanvasCompositor <---- RendererResourceLifecycle
-        |       wide scene, native canvas, copy state
+        |       wide scene, native canvas, gameplay HUD, copy state
         |
         +-> RenderSpacePolicy <---------- PassClassifier
-        |       Physical3D / Native2D / Compositor
+        |       Physical3D / Native2D / GameplayHud / Compositor
+        |
+        +-> GameplayFeedbackPlacement
+        |       centered/left/right HUD viewport, combo ownership,
+        |       Player 1 tutorial-group/judgement ownership
         |
         +-> AuthoredClipBypass
                 always uses live-frustum visibility while enabled
@@ -253,6 +294,7 @@ The render thread holds a thread-local scope:
 enum class RenderSpace {
     Physical3D,
     Native2D,
+    GameplayHud,
     Compositor,
 };
 ```
@@ -260,7 +302,9 @@ enum class RenderSpace {
 In `Physical3D`, screen and current-target queries report `OutputSize` and the
 viewport covers the wide scene. In `Native2D`, they report 720 x 1280 and
 viewport reset means the full native canvas. `Compositor` is loader-owned and
-cannot invoke game rendering.
+cannot invoke game rendering. In `GameplayHud`, queries also report 720 x 1280,
+but the wide scene remains bound and viewport reset preserves the active
+centered/left/right output origin.
 
 The same native getters are also used outside drawing by window sizing,
 device reset, and non-render helpers. When no compositor frame is active,
@@ -282,19 +326,19 @@ values supplied to those target-only setters.
 The resulting persistent invariant is `screen = 720 x 1280` and
 `target = OutputSize`. Screen-owned cached 2D matrices therefore remain
 native-sized while perspective matrices cached outside an active compositor
-frame receive the wide aspect. During an active `Native2D` segment,
-render-space-aware target getters temporarily return 720 x 1280; during
-`Physical3D` they return the output size. Publishing both pairs as physical
-produces the observed 270-pixel-wide UI strip. Publishing both pairs as native
-fixes the UI but leaves a portrait perspective matrix that D3D stretches
-across the wide viewport.
+frame receive the wide aspect. During an active `Native2D` or `GameplayHud`
+segment, render-space-aware target getters temporarily return 720 x 1280;
+during `Physical3D` they return the output size. Publishing both pairs as
+physical produces the observed 270-pixel-wide UI strip. Publishing both pairs
+as native fixes the UI but leaves a portrait perspective matrix that D3D
+stretches across the wide viewport.
 
 Gameplay HUD projection is one verified exception to screen ownership.
 `0x0063F9E0` constructs the cached perspective and HUD matrices before an
 active compositor frame. Its call at `0x0063FDBA` supplies target width and
 height to orthographic builder `0x005DF170`, stores the result at owner
 `+0x110`, and `0x00648D40` later binds that matrix as `D3DTS_PROJECTION` while
-rendering the native canvas. The guarded mid-hook at RVA `0x0023FDBA`
+rendering gameplay HUD/effects. The guarded mid-hook at RVA `0x0023FDBA`
 therefore changes only the pending orthographic call's `right` and `bottom`
 stack arguments to 720 and 1280. It preserves `left`, `top`, near/far planes,
 the physical target pair, and the separately cached perspective matrix.
@@ -324,16 +368,50 @@ Mixed gameplay rendering is classified at verified call boundaries inside
 | `0x0064DA90` | `Physical3D` | Perspective player visual. |
 | optional `0x00645120` | `Physical3D` | Perspective stage-related rendering. |
 | `0x005C9B10` | `Physical3D` barrier | Flushes four native buffered queues before the next transition. |
-| `0x00648D40` | `Native2D` | Orthographic gameplay effects, chart visuals, and HUD. |
+| `0x00648D40` | `GameplayHud` | Orthographic gameplay effects, chart visuals, and HUD render at native scale directly on the wide scene. |
 
 `CCommon3DTask` at priority 700 uses `Physical3D`.
 `CCommon2DTask` at priority 800 uses `Native2D`.
 
-Every target transition requires proof that no native batch remains pending.
-Known flush points are used where available. Development diagnostics assert
-the observed pending-buffer state at each transition. A transition with a
-pending batch is rejected rather than submitting deferred geometry to the
-wrong target.
+Every target or gameplay-HUD viewport transition flushes the native queues and
+checks their actual pending-buffer state. A transition with a pending batch is
+rejected rather than submitting deferred geometry to the wrong target.
+
+Within `GameplayHud`, RVA `0x001E4503` begins the ordinary combo-counter
+window before the CHAIN label and RVA `0x001E4558` restores the centered
+viewport after the normal digit call at RVA `0x001E4550`. Entry 0 selects the
+right viewport, entry 1 selects the left viewport, and an unexpected entry
+selects center. Both changes flush and verify native batches first. The
+milestone/celebration counter belongs to a separate branch outside this hook
+window and therefore retains its centered native presentation.
+
+The gameplay-track call at RVA `0x00262FA8` captures CTune before the
+player-visual function. Within that scope, the generic manager call at RVA
+`0x001F11E8` receives its current effect root in `ecx`. Exact pointer
+matches against Player 1 slots 93 through 97 capture the current physical-3D
+D3D state and temporarily apply the right native HUD viewport. Because
+`sub_5F1F70` renders child effects before returning, the complete judgement
+tree moves together. RVA `0x001F11ED` flushes that tree and restores the exact
+captured state; unrelated gameplay effects remain in physical 3D.
+
+The gameplay-effects call at RVA `0x00263041` then enters `GameplayHud`.
+Within `GC120FPS_GameplayRender_Effects_FrameDomainTiming`, the direct group-6
+call at RVA `0x0024A2D5` owns the note-tutorial family. That concrete bracket
+selects Player 1's right viewport, and RVA `0x0024A2DA` restores the centered
+gameplay-HUD viewport. This avoids depending on individual tutorial-root
+matching.
+
+Test Mode is a direct root-form traversal rather than a common-task vtable
+dispatch. `sub_453120` returns the renderer's `IDirect3DDevice9*` from
+`GWMainPC+0x08`; LoopLastTask calls that device's vtable slots `+0xA4` and
+`+0xA8` directly for `BeginScene` and `EndScene`, bypassing the game's normal
+frame wrappers at `0x0045AC70` and `0x0045ACE0`. The guarded boundary at RVA
+`0x0023AA89` therefore opens a standalone compositor frame after the direct
+`BeginScene` and requests `Native2D`. RVA `0x0023AA8E` finishes and composites
+that frame after `sub_576660` renders the complete form and before the direct
+`EndScene`. A missing or duplicate local scope is not process-fatal. The
+configured wide window and backbuffer remain unchanged, so Test Mode is
+centered and unstretched with unused horizontal space left blank.
 
 ## Frame Data Flow
 
@@ -367,6 +445,22 @@ game pipeline, then verifies them before entering the segment. A later native
 draw that requires a different policy must be explicitly designed rather than
 inheriting physical depth state accidentally.
 
+### Enter gameplay HUD
+
+After the gameplay batch barrier, the compositor keeps the wide scene and its
+depth surface bound, switches logical dimensions to 720 x 1280, applies the
+centered 720 x 1280 viewport/scissor, and disables depth testing, depth writes,
+and stencil. No scene/native texture copy occurs when moving between
+`Physical3D` and `GameplayHud` because both spaces use the wide target.
+Gameplay HUD blending therefore operates against the actual wide-scene color
+already present at each destination pixel.
+
+Ordinary combo begin/end hooks temporarily change only the gameplay-HUD
+viewport and scissor after flushing pending batches. The native viewport-reset
+detour adds the active output origin to any game-supplied local origin, so the
+game cannot erase the temporary placement. Returning to center leaves the
+remaining chart/HUD/effect rendering at native scale in `native_rect`.
+
 ### Return to physical 3D
 
 After the native segment's batch barrier:
@@ -386,7 +480,7 @@ native render order requires while also drawing into newly exposed regions.
 
 Before `0x0045ACE0` calls native `EndScene`, the compositor:
 
-1. closes an outstanding native segment if necessary;
+1. closes an outstanding native or gameplay-HUD segment if necessary;
 2. binds the real output-sized backbuffer;
 3. draws the complete wide scene into the complete backbuffer one-to-one; and
 4. invokes native end-frame handling.
@@ -436,10 +530,34 @@ detour is required at fixed height. Near/far planes and native CTune scale
 remain unchanged.
 
 Output beyond monitor or device capabilities is rejected during setup.
-Approved orthographic passes run against the true 720 x 1280 canvas. The
-gameplay HUD matrix described above is also constructed explicitly with 720 x
-1280 extents because its native owner reads the persistent physical target
-pair before the compositor frame begins.
+Common orthographic tasks run against the true 720 x 1280 native canvas.
+Gameplay orthographic passes run with the same logical extents through the
+active 720 x 1280 `GameplayHud` viewport on the wide scene. The gameplay HUD
+matrix described above is constructed explicitly with 720 x 1280 extents
+because its native owner reads the persistent physical target pair before the
+compositor frame begins.
+
+### Player 1 judgement placement
+
+`sub_6463F0` accepts a rendered judgement-owner slot `nn` only when
+`nn < 4`. For grades 0 through 4 it resolves the effect root from:
+
+```text
+CTune.effect_slots[93 + 5 * nn + grade]
+```
+
+The four values are native judgement-effect owner lanes, not an asserted limit
+on matching or LAN participants. Current scope is Player 1 only, so the
+widescreen runtime builds the five-slot set at 93 through 97. It does not read
+participant state, and no other lane is used as a coordinate or direction
+reference.
+
+When the manager presents one of those exact roots at RVA `0x001F11E8`, the
+runtime captures the physical-3D D3D state and selects Player 1's right 720 x
+1280 HUD viewport for the complete effect-tree draw. It flushes the tree and
+restores the captured physical state at RVA `0x001F11ED`. It does not rewrite
+the effect's position, mutate other lanes, or hook the producer. At width 720,
+the right and centered viewports are identical.
 
 ## Stage Clip Bypass
 
@@ -570,80 +688,36 @@ device-loss module rather than duplicated in a second unordered hook. Loader
 startup invokes the initializer only in the game process and after validated
 settings are available.
 
-The implementation plan must re-read the current IDB, convert each final
-virtual address to a named RVA, record exact expected bytes and continuations,
-and prove coexistence with current renderer and framerate patches before source
-implementation begins.
+The implementation record names each selected RVA, exact expected bytes, and
+continuation established during reverse engineering. These contracts coexist
+with the renderer and framerate patch manifests and are checked fail-closed in
+the target process before any widescreen hook is enabled.
 
-## Tests
+## Verification Boundary
 
-Every automated test protects an independently derived invariant.
+Static tests, models, mocks, fake devices, synthetic executable memory, copied
+constants, and test-only callback wrappers are not oracles for game behavior,
+native hook integration, renderer behavior, visual placement, or runtime
+acceptance. No widescreen test may encode this design and then report that the
+game follows it. Such tests were removed rather than retained as workflow
+ceremony.
 
-### ResolutionModel tests
+The only permitted exception is a narrowly scoped property formally derivable
+from an authoritative, independently sourced contract. Even then, the claim is
+limited to that property and cannot be promoted into evidence that the target
+process executed the hook or displayed the intended result.
 
-- 720 x 1280 produces a zero-offset 720 x 1280 native rectangle.
-- 1137 x 1280 produces 208/209 horizontal side distribution.
-- 1920 x 1280 produces 600-pixel side regions.
-- 3840 x 1280 remains valid and centers the native canvas.
-- client-to-native mapping round-trips boundary and interior coordinates.
-- invalid width, non-1280 height, signed-range, and area overflow are rejected.
+Post-build verification for this implementation is intentionally limited to:
 
-The pure model covers invalid dimensions and overflow. Startup
-capability tests separately cover texture-cap excess, unsupported render-target
-formats, multisampling, and the no-fitting-monitor case; they do not introduce
-environment queries into `ResolutionModel`.
+1. complete `msvc32-debug` and `msvc32-release` compilation and linkage;
+2. artifact presence/metadata inspection;
+3. `git diff --check`; and
+4. exact final worktree-change accounting.
 
-### Render state-machine tests
-
-Using injected device actions and owned fake COM references:
-
-- frame begin binds wide scene before native clear/begin;
-- contiguous equal-space tasks do not copy unnecessarily;
-- `Physical3D -> Native2D` copies scene center before native rendering;
-- `Native2D -> Physical3D` copies completed native content back once;
-- frame end closes native space, copies the scene once, then invokes native
-  end-frame handling;
-- state restore is followed by the destination target's correct viewport and
-  scissor;
-- failed bind, surface acquisition, state capture, or draw publishes no
-  partial state and selects the fatal boundary;
-- lost/reset releases every default-pool reference before reset and recreates
-  exactly once; and
-- non-render-thread transition is rejected.
-
-### Policy and patch tests
-
-- verified task identities and gameplay subpasses select intended space;
-- unknown identities select native space and deduplicate diagnostics;
-- enabled widescreen always redirects the guarded clip gate to the native
-  live-frustum continuation;
-- logical resolution initialization and reset preserve native screen
-  dimensions and physical target dimensions as separate persistent domains;
-- the physical target pair supplies wide aspect while the screen/UI pair stays
-  native, with no redundant projection-scale hooks;
-- screen/current-target integer and float getters agree in each scope;
-- native config override forces windowed fixed-size settings only when enabled;
-- all native contracts preflight before installation; and
-- failure at each hook creation resets earlier candidates and publishes no
-  runtime owner.
-
-Tests do not grep source, duplicate executable byte tables as an oracle, patch
-a live process, or claim visual correctness.
-
-## Static Verification
-
-Implementation completion requires:
-
-1. focused Debug and Release builds/tests for the feature;
-2. complete `msvc32-debug` and `msvc32-release` builds and CTest suites;
-3. fresh daemon-backed IDA reads of every final RVA, expected bytes,
-   continuation, config seam, and pass boundary;
-4. artifact inspection confirming configuration strings and guarded contracts
-   exist only in the game-process runtime;
-5. `git diff --check`; and
-6. exact final worktree-change accounting.
-
-These establish source, build, and supported-binary contracts only.
+Those checks establish only that the edited source compiles, links, and has a
+reviewable diff. The executable byte guards are enforced transactionally when
+the supported target process launches; post-build IDA invocation is neither
+required nor accepted as runtime proof.
 
 ## Runtime Acceptance
 
@@ -657,7 +731,21 @@ deployed build. It requires:
 - perspective geometry, not stretched pixels, occupying additional regions;
 - `_clip.dat` remains installed while widened geometry is selected through the
   native live-frustum branch;
-- correct one-player and two-player layouts;
+- correct Player 1 placement in the current one-player scope; multiplayer
+  participant capacity is not inferred from the native judgement lanes;
+- ordinary entry-0 and entry-1 combo counters appear on their assigned right
+  and left sides without stretching, while milestone combo presentation stays
+  centered;
+- only Player 1's MISS/GOOD/COOL/GREAT effect follows the primary combo cluster,
+  with opponent judgement effects unchanged;
+- all note-tutorial variants and their companion effect appear beside the
+  local player's feedback cluster, while non-tutorial gameplay effects remain
+  centered;
+- chart objects, hit effects, player markers, stage color, and widened
+  perspective geometry retain their intended positions while combo,
+  judgement, and tutorial placement changes;
+- Test Mode renders as an unstretched 720 x 1280 form centered within each
+  configured wide window, with blank side regions and no window resize;
 - menu, song-select, gameplay, result, and attract transitions without stale
   or one-frame mistargeted content;
 - at least three consecutive tunes across several stage themes;
@@ -674,9 +762,15 @@ exist; it is not acceptance of UI isolation, lifecycle, or performance.
 
 V1 is a fixed-size decorated window on an unrotated Windows desktop. Its
 client, real backbuffer, and wide scene use the same upright configured size.
-Verified perspective passes use that complete scene. Every approved
-orthographic pass renders through an exact centered 720 x 1280 native canvas.
-The final scene copy is one-to-one and unrotated. The feature never asks the
-player to rotate the display and exposes no rotation or fullscreen setting.
-While enabled, authored `_clip.dat` bounds are always bypassed in favor of the
-game's existing live-frustum path; this behavior is not configurable.
+Verified perspective passes use that complete scene. Common 2D tasks render
+through the centered 720 x 1280 native texture; the direct Test Mode root-form
+render owns a standalone compositor frame around that same native space.
+Gameplay HUD/effects render at native logical scale on the wide scene through
+a 720 x 1280 viewport. The ordinary combo counter uses its existing per-entry
+side mapping. Player 1 judgement borrows the right native viewport with exact
+physical-state restoration, while the concrete tutorial group-6 draw moves the
+gameplay-HUD viewport right and then back to center. The final
+scene copy is one-to-one and unrotated. The feature never asks the player to
+rotate the display and exposes no rotation or fullscreen setting. While
+enabled, authored `_clip.dat` bounds are always bypassed in favor of the game's
+existing live-frustum path; this behavior is not configurable.

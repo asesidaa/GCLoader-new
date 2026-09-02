@@ -59,7 +59,7 @@ namespace gc::windowed_widescreen
         switch (pass)
         {
         case GameplayPass::orthographic_effects:
-            return RenderSpace::native_2d;
+            return RenderSpace::gameplay_hud;
         case GameplayPass::stage_background:
         case GameplayPass::perspective_track:
             return RenderSpace::physical_3d;

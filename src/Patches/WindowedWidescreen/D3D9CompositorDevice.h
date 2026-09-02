@@ -128,6 +128,11 @@ namespace gc::windowed_widescreen
         [[nodiscard]] bool RestoreGameState() noexcept;
         [[nodiscard]] bool SetFullViewportAndScissor(
             RenderSpace space) noexcept;
+        [[nodiscard]] bool SetGameplayHudViewport(
+            GameplayHudPlacement placement) noexcept;
+        [[nodiscard]] bool ApplyViewportAndScissor(
+            const GameplayHudViewport& viewport,
+            bool disable_depth) noexcept;
         [[nodiscard]] bool NativeDepthStateIsDisabled() noexcept;
         [[nodiscard]] bool AttemptRestoreAfterFailure(
             RenderSpace stable_space) noexcept;
@@ -147,6 +152,9 @@ namespace gc::windowed_widescreen
         static bool SetViewportAndScissor(
             void* context,
             RenderSpace space) noexcept;
+        static bool SetGameplayHudViewportAction(
+            void* context,
+            GameplayHudPlacement placement) noexcept;
         static bool CheckNativeDepthState(void* context) noexcept;
         static bool FlushNativeBatches(void* context) noexcept;
         static bool NativeBatchesAreEmpty(void* context) noexcept;

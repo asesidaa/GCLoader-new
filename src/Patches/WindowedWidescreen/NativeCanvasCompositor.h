@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Patches/WindowedWidescreen/GameplayFeedbackPlacement.h"
 #include "Patches/WindowedWidescreen/RenderSpacePolicy.h"
 
 #include <cstdint>
@@ -21,6 +22,8 @@ namespace gc::windowed_widescreen
         bool (*draw_scene_to_backbuffer)(void*) noexcept{};
         bool (*set_full_viewport_and_scissor)(
             void*, RenderSpace) noexcept{};
+        bool (*set_gameplay_hud_viewport)(
+            void*, GameplayHudPlacement) noexcept{};
         bool (*native_depth_state_is_disabled)(void*) noexcept{};
         bool (*flush_native_batches)(void*) noexcept{};
         bool (*native_batches_are_empty)(void*) noexcept{};
@@ -42,6 +45,7 @@ namespace gc::windowed_widescreen
         draw_native_to_scene_center,
         draw_scene_to_backbuffer,
         set_viewport_and_scissor,
+        set_gameplay_hud_viewport,
         native_depth_state,
         flush_native_batches,
         pending_native_batches,
@@ -72,6 +76,16 @@ namespace gc::windowed_widescreen
         RequestSpace(RenderSpace requested_space) noexcept;
 
         [[nodiscard]] std::expected<void, CompositorError>
+        SetGameplayHudPlacement(GameplayHudPlacement placement) noexcept;
+
+        [[nodiscard]] std::expected<void, CompositorError>
+        BeginPhysicalGameplayHudOverlay(
+            GameplayHudPlacement placement) noexcept;
+
+        [[nodiscard]] std::expected<void, CompositorError>
+        EndPhysicalGameplayHudOverlay() noexcept;
+
+        [[nodiscard]] std::expected<void, CompositorError>
         EndFrame() noexcept;
 
         void ResetForDeviceLoss() noexcept;
@@ -91,6 +105,18 @@ namespace gc::windowed_widescreen
         [[nodiscard]] bool frame_active() const noexcept
         {
             return render_space_policy_.frame_active();
+        }
+
+        [[nodiscard]] GameplayHudPlacement gameplay_hud_placement()
+            const noexcept
+        {
+            return gameplay_hud_placement_;
+        }
+
+        [[nodiscard]] bool physical_gameplay_hud_overlay_active()
+            const noexcept
+        {
+            return physical_gameplay_hud_overlay_active_;
         }
 
     private:
@@ -116,5 +142,8 @@ namespace gc::windowed_widescreen
         RenderSpacePolicy render_space_policy_;
         CompositorDeviceActions actions_{};
         RenderSpace last_published_space_{RenderSpace::physical_3d};
+        GameplayHudPlacement gameplay_hud_placement_{
+            GameplayHudPlacement::centered};
+        bool physical_gameplay_hud_overlay_active_{};
     };
 } // namespace gc::windowed_widescreen

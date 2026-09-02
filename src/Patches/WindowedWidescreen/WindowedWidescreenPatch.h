@@ -30,6 +30,7 @@ namespace gc::windowed_widescreen
         dimension_query,
         viewport,
         projection,
+        gameplay_hud_placement,
         clip_bypass,
         mouse_mapping,
         reset_pre,
@@ -197,7 +198,7 @@ namespace gc::windowed_widescreen
     struct ViewportResetHookActions
     {
         void* context{};
-        bool (*current_dimensions)(void*, RenderDimensions&) noexcept{};
+        bool (*current_viewport)(void*, NativeViewport&) noexcept{};
         int (*call_original)(void*, const NativeViewport*) noexcept{};
     };
 

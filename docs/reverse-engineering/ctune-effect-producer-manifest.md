@@ -425,10 +425,147 @@ those definitions into effect slots `0xB2` through `0xC0`.
 The catalog is verification-only and does not constrain customized runtime
 assets.
 
+## Widescreen gameplay-feedback placement boundary (2026-09-03)
+
+This section records the static producer/consumer boundary used by the
+windowed-widescreen implementation. It does not claim that the built hook has
+executed in the game or that its visual placement is accepted.
+
+### Ordinary combo draw window
+
+The ordinary per-entry combo branch is bounded by these guarded sites:
+
+| VA | RVA | Expected bytes | Placement role |
+|---:|---:|---|---|
+| `0x005E4503` | `0x001E4503` | `E8 A8 D0 FF FF` | Begin before the static CHAIN-label draw; entry is `[ebp-0x14]`. |
+| `0x005E4550` | `0x001E4550` | `E8 0B 7B FE FF` | Read-only byte witness for the normal digit draw inside the window. |
+| `0x005E4558` | `0x001E4558` | `C7 45 CC 00 00 00 00` | End after the digit call and restore the centered HUD viewport. |
+
+The milestone/celebration counter follows a separate branch outside this
+window. Consequently, the implementation changes viewport placement only for
+the ordinary CHAIN label/digits: entry 0 selects the right 720-pixel viewport,
+entry 1 selects the left viewport, and an unexpected entry selects center.
+
+### Player 1 judgement effect ownership
+
+`sub_6463F0` accepts judgement owner `nn` only when `nn < 4`. For native
+grades 0 through 4, it resolves and registers:
+
+```text
+CTune.effect_slots[93 + 5 * nn + grade]
+```
+
+The four-value bound belongs to this native judgement-effect owner array. It is
+not evidence for a maximum count of online matching or LAN participants.
+Current widescreen scope is Player 1 only, so the implementation matches the
+first lane's five roots at slots 93 through 97. It neither selects a lane from
+participant state, reads another lane's coordinates, nor rewrites
+`effect+0x18`.
+
+The former proposed hook at VA `0x006465F3` / RVA `0x002465F3` was rejected
+after runtime feedback. Native placement at that boundary is the sum of CTune
+vectors at `0x1C8C + 12 * nn` and `0x1CBC + 12 * nn`; deriving a direction
+from two entries of only the second array was not valid. The implementation no
+longer hooks this site. The existing authored-frame timing hook at RVA
+`0x00246517` remains unchanged.
+
+`sub_646650` remains excluded. It owns a different effect family and is not
+needed to identify the Player 1 judgement roots.
+
+## Widescreen Player 1 feedback placement boundary (2026-09-03)
+
+`GC120FPS_GameplayRender_Effects_FrameDomainTiming` at `0x00648D40` selects
+group-0 tutorial definitions 61 through 69 and resolves them through CTune
+runtime effect slots. The note-type paths use slots `0xB2`, `0xB3`, `0xB4`,
+`0xB5`, `0xB6`, `0xBA`, `0xBB`, and `0xC0`; paired variants at `0xB3` and
+`0xBB` also use companion slot `0xB9`. Their authored base X coordinate is 580,
+confirming that the family was placed near the portrait canvas's right edge.
+
+The supported game's effect collection is a native 24-byte collection at
+`CTune+0x1D6C`, not a zero-offset three-pointer `std::vector`.
+`sub_4128A0` computes its count from the pointers at collection offsets `+0x0C`
+and `+0x10`; `sub_43D0C0` indexes the pointer array beginning at `+0x0C`.
+Player 1 judgement matching therefore validates both pointers, their ordering
+and four-byte alignment, the required element count, and slots 93 through 97
+before comparing live effect pointers.
+
+CTune is captured before the player-visual call at:
+
+```text
+00662FA8  E8 D3 56 FE FF       call    00648680
+00662FAD  8B 4D C4             mov     ecx, [ebp-3Ch]
+```
+
+This is earlier than the gameplay-effects call because Player 1 judgement is
+drawn by the player-visual path before tutorial and the other orthographic
+effects. The later gameplay-effects call remains bracketed by:
+
+```text
+00663041  E8 FA 5C FE FF       call    00648D40
+00663046  E8 D5 00 DF FF       call    00453120
+```
+
+At `0x00663041`, `ecx` is checked against the CTune captured at
+`0x00662FA8`, and the pointer is cleared at `0x00663046`. This spans the
+player-visual judgement draw and the subsequent tutorial pass without
+classifying generic manager draws outside the gameplay task.
+
+`sub_5F1180` calls the complete effect-tree renderer at this bracket:
+
+```text
+005F11E5  8B 4D F8             mov     ecx, [ebp-8]
+005F11E8  E8 83 0D 00 00       call    sub_5F1F70
+005F11ED  8B 4D F8             mov     ecx, [ebp-8]
+005F11F0  8B 51 0C             mov     edx, [ecx+0Ch]
+005F11F3  81 E2 00 40 00 00    and     edx, 4000h
+```
+
+The call-site `ecx` is compared only with Player 1 judgement slots 93 through
+97. On a match, the compositor flushes pending batches, captures the complete
+physical-3D D3D state, and applies Player 1's right 720-pixel HUD viewport.
+`sub_5F1F70` renders child effects before returning, so the complete
+judgement tree inherits that placement. The post-call boundary flushes the
+tree and restores the exact captured physical state. Other effects and all
+manager calls outside the captured CTune scope are unchanged.
+
+Tutorial placement uses the concrete group-6 call made by
+`GC120FPS_GameplayRender_Effects_FrameDomainTiming`:
+
+```text
+0064A2D5  E8 A6 6E FA FF       call    005F1180
+0064A2DA  0F B6 55 08          movzx   edx, byte ptr [ebp+8]
+```
+
+The begin boundary selects Player 1's right gameplay-HUD viewport and the end
+boundary restores center. This keeps the full note-tutorial family together
+without matching its individual CTune roots or inferring another local player
+from network state.
+
+## Widescreen Test Mode containment boundary (2026-09-03)
+
+Test Mode form rendering is not owned by the common 2D task vtable. The
+`LoopLastTask_RunStateMachine` path invokes `sub_576660`, which forwards the
+active Test Mode root window through `sub_4BFEE0` and recursive `sub_4C27B0`
+form rendering. Its narrow call bracket is:
+
+```text
+0063AA89  E8 D2 BB F3 FF       call    sub_576660
+0063AA8E  E8 8D 86 E1 FF       call    sub_453120
+```
+
+Because this path calls Direct3D `BeginScene`/`EndScene` directly rather than
+the game's normal frame wrapper, the begin hook opens a standalone compositor
+frame and requests `Native2D`. The end hook composites and closes that frame
+before the direct `EndScene`. This confines the complete Test Mode
+`CRootWindow` traversal to the centered 720 x 1280 native canvas while
+retaining the configured wide window and real backbuffer.
+
 ## Completion boundary
 
 The executable identity, xref census, timing-site dispositions, hook byte
 contracts, four new producer data flows, manager bypass, renderer consumer,
 child derivation, and vector-copy exclusions are statically complete for the
-recorded SHA-256. Gameplay acceptance at 60, 144, 240, and 500 FPS remains an
-operator-run gate and is not claimed by this report.
+recorded SHA-256. On 2026-09-03 the operator accepted centered Test Mode and
+the final Player 1 judgement/tutorial placement in the deployed configuration.
+The broader multi-stage and frame-rate acceptance matrix remains an
+operator-run gate.

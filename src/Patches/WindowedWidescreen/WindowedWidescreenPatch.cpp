@@ -1,5 +1,6 @@
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatch.h"
 
+#include "Patches/WindowedWidescreen/GameplayFeedbackPlacement.h"
 #include "Patches/WindowedWidescreen/NativeCanvasCompositor.h"
 #include "SystemPath/StartupFatal.h"
 
@@ -23,6 +24,14 @@ namespace gc::windowed_widescreen
 {
     namespace
     {
+        constexpr std::size_t kComboEntryFrameOffset = 0x14;
+        constexpr std::size_t kTuneEffectCollectionOffset = 0x1D6C;
+        constexpr std::size_t kPointerCollectionBeginOffset = 0x0C;
+        constexpr std::size_t kPointerCollectionEndOffset = 0x10;
+        constexpr std::uint32_t kJudgementFirstEffectSlot = 93;
+        constexpr std::uint32_t kPlayerOneJudgementEffectCount = 5;
+        static_assert(sizeof(std::uintptr_t) == sizeof(std::uint32_t));
+
         void ReportUnknownTaskIdentity(
             void*,
             const std::uintptr_t identity) noexcept
@@ -48,6 +57,12 @@ namespace gc::windowed_widescreen
             preparing,
             enabling,
             active,
+        };
+
+        enum class GameplayFeedbackDrawScope : std::uint8_t
+        {
+            none,
+            physical_gameplay_hud_overlay,
         };
 
         struct StoredHook
@@ -109,6 +124,13 @@ namespace gc::windowed_widescreen
             std::optional<renderer_device_loss::RendererResetHookPairError>
                 last_reset_hook_error;
             bool pending_batches_reported{};
+            std::uintptr_t active_gameplay_tune{};
+            GameplayFeedbackDrawScope gameplay_feedback_draw_scope{
+                GameplayFeedbackDrawScope::none};
+            bool note_tutorial_group_active{};
+            bool judgement_scope_reported{};
+            bool note_tutorial_scope_reported{};
+            bool test_mode_native_active{};
         };
 
         struct ProductionInstallContext
@@ -119,6 +141,16 @@ namespace gc::windowed_widescreen
         std::unique_ptr<WindowedWidescreenRuntime> g_runtime_owner;
         std::atomic<WindowedWidescreenRuntime*> g_callback_runtime{};
         std::atomic_bool g_runtime_fatal_published{};
+
+        void ResetScopedRenderState(
+            WindowedWidescreenRuntime& runtime) noexcept
+        {
+            runtime.active_gameplay_tune = 0;
+            runtime.gameplay_feedback_draw_scope =
+                GameplayFeedbackDrawScope::none;
+            runtime.note_tutorial_group_active = false;
+            runtime.test_mode_native_active = false;
+        }
 
         [[nodiscard]] bool RuntimeCallbacksAreActive(
             const WindowedWidescreenRuntime& runtime) noexcept
@@ -161,7 +193,7 @@ namespace gc::windowed_widescreen
             try
             {
                 log = std::format(
-                    "WindowedWidescreen: fatal stage={} window_policy_error={} resource_error={} d3d_stage={} d3d_hresult=0x{:08X} hook_stage={}",
+                    "WindowedWidescreen: fatal stage={} window_policy_error={} resource_error={} d3d_stage={} d3d_hresult=0x{:08X} hook_stage={} compositor_stage={} compositor_policy_error={} compositor_stable_space={} compositor_requested_space={} compositor_restore_attempted={} compositor_restore_succeeded={}",
                     static_cast<unsigned>(error.stage),
                     error.window_policy_error.has_value()
                         ? static_cast<int>(*error.window_policy_error)
@@ -174,7 +206,30 @@ namespace gc::windowed_widescreen
                         error.d3d_failure.result),
                     error.install_error.has_value()
                         ? static_cast<unsigned>(error.install_error->stage)
-                        : 0U);
+                        : 0U,
+                    error.compositor_error.has_value()
+                        ? static_cast<int>(error.compositor_error->stage)
+                        : -1,
+                    error.compositor_error.has_value() &&
+                            error.compositor_error->policy_error.has_value()
+                        ? static_cast<int>(
+                              *error.compositor_error->policy_error)
+                        : -1,
+                    error.compositor_error.has_value()
+                        ? static_cast<int>(error.compositor_error->stable_space)
+                        : -1,
+                    error.compositor_error.has_value()
+                        ? static_cast<int>(
+                              error.compositor_error->requested_space)
+                        : -1,
+                    error.compositor_error.has_value() &&
+                            error.compositor_error->restoration_attempted
+                        ? 1
+                        : 0,
+                    error.compositor_error.has_value() &&
+                            error.compositor_error->restoration_succeeded
+                        ? 1
+                        : 0);
             }
             catch (...)
             {
@@ -322,6 +377,7 @@ namespace gc::windowed_widescreen
                                 WindowedWidescreenRuntime*>(opaque_runtime);
                             if (owner != nullptr)
                             {
+                                ResetScopedRenderState(*owner);
                                 owner->compositor.ResetForDeviceLoss();
                                 owner->device.Release();
                             }
@@ -916,6 +972,24 @@ namespace gc::windowed_widescreen
             return true;
         }
 
+        [[nodiscard]] bool RequestRuntimeGameplayHudPlacement(
+            WindowedWidescreenRuntime& runtime,
+            const GameplayHudPlacement placement) noexcept
+        {
+            if (!runtime.device.active())
+            {
+                return false;
+            }
+            const auto changed =
+                runtime.compositor.SetGameplayHudPlacement(placement);
+            if (!changed)
+            {
+                runtime.last_compositor_error = changed.error();
+                return false;
+            }
+            return true;
+        }
+
         [[nodiscard]] int CallTaskDispatchOriginal(
             void* context,
             const std::uintptr_t task_node) noexcept
@@ -945,6 +1019,45 @@ namespace gc::windowed_widescreen
                 return false;
             }
             dimensions = *current;
+            return true;
+        }
+
+        [[nodiscard]] bool ReadCurrentViewport(
+            void* context,
+            NativeViewport& viewport) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
+            if (runtime == nullptr)
+            {
+                return false;
+            }
+            const auto current_space = runtime->compositor.CurrentSpace();
+            const auto dimensions = runtime->compositor.CurrentDimensions();
+            if (!current_space || !dimensions)
+            {
+                return false;
+            }
+
+            viewport = NativeViewport{
+                .x = 0.0F,
+                .y = 0.0F,
+                .width = dimensions->width_float,
+                .height = dimensions->height_float,
+            };
+            if (*current_space != RenderSpace::gameplay_hud)
+            {
+                return true;
+            }
+
+            const auto gameplay_viewport = ResolveGameplayHudViewport(
+                runtime->resolution.output_size(),
+                runtime->compositor.gameplay_hud_placement());
+            if (!gameplay_viewport)
+            {
+                return false;
+            }
+            viewport.x = static_cast<float>(gameplay_viewport->x);
+            viewport.y = static_cast<float>(gameplay_viewport->y);
             return true;
         }
 
@@ -1030,14 +1143,386 @@ namespace gc::windowed_widescreen
             RequestGameplayPass(GameplayPass::stage_background);
         }
 
-        void GameplayTrackMid(safetyhook::Context&) noexcept
+        void GameplayTrackMid(safetyhook::Context& context) noexcept
         {
             RequestGameplayPass(GameplayPass::perspective_track);
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+            if (context.ecx == 0 || runtime->active_gameplay_tune != 0 ||
+                runtime->gameplay_feedback_draw_scope !=
+                    GameplayFeedbackDrawScope::none ||
+                runtime->note_tutorial_group_active)
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            runtime->active_gameplay_tune =
+                static_cast<std::uintptr_t>(context.ecx);
         }
 
-        void GameplayEffectsMid(safetyhook::Context&) noexcept
+        template <std::size_t SlotCount>
+        [[nodiscard]] bool TryMatchEffectSlots(
+            const std::uintptr_t tune,
+            const std::uintptr_t effect,
+            const std::array<std::uint32_t, SlotCount>& slots,
+            bool& matches) noexcept
         {
+            matches = false;
+            constexpr auto collection_extent =
+                kTuneEffectCollectionOffset + kPointerCollectionEndOffset;
+            if (tune == 0 || effect == 0 ||
+                tune > std::numeric_limits<std::uintptr_t>::max() -
+                    collection_extent)
+            {
+                return false;
+            }
+
+            const auto collection = tune + kTuneEffectCollectionOffset;
+            std::uintptr_t begin{};
+            std::uintptr_t end{};
+            if (!ReadRuntimePointer(
+                    nullptr,
+                    collection + kPointerCollectionBeginOffset,
+                    begin) ||
+                !ReadRuntimePointer(
+                    nullptr,
+                    collection + kPointerCollectionEndOffset,
+                    end) ||
+                begin == 0 || end < begin ||
+                (end - begin) % sizeof(std::uintptr_t) != 0)
+            {
+                return false;
+            }
+
+            const auto count =
+                (end - begin) / sizeof(std::uintptr_t);
+            if (slots.empty() || count <= slots.back())
+            {
+                return false;
+            }
+
+            for (const auto slot : slots)
+            {
+                const auto byte_offset =
+                    static_cast<std::size_t>(slot) * sizeof(std::uintptr_t);
+                if (begin >
+                    std::numeric_limits<std::uintptr_t>::max() - byte_offset)
+                {
+                    return false;
+                }
+                std::uintptr_t candidate{};
+                if (!ReadRuntimePointer(
+                        nullptr,
+                        begin + byte_offset,
+                        candidate))
+                {
+                    return false;
+                }
+                matches = matches || candidate == effect;
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool TryMatchPlayerOneJudgementEffect(
+            const std::uintptr_t tune,
+            const std::uintptr_t effect,
+            bool& matches) noexcept
+        {
+            std::array<std::uint32_t, kPlayerOneJudgementEffectCount> slots{};
+            for (std::size_t index = 0; index < slots.size(); ++index)
+            {
+                slots[index] =
+                    kJudgementFirstEffectSlot +
+                    static_cast<std::uint32_t>(index);
+            }
+            return TryMatchEffectSlots(tune, effect, slots, matches);
+        }
+
+        void GameplayEffectsMid(safetyhook::Context& context) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+            if (context.ecx == 0 || runtime->active_gameplay_tune == 0 ||
+                runtime->active_gameplay_tune !=
+                    static_cast<std::uintptr_t>(context.ecx) ||
+                runtime->gameplay_feedback_draw_scope !=
+                    GameplayFeedbackDrawScope::none ||
+                runtime->note_tutorial_group_active)
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
             RequestGameplayPass(GameplayPass::orthographic_effects);
+        }
+
+        void GameplayEffectsEndMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+            if (runtime->gameplay_feedback_draw_scope !=
+                GameplayFeedbackDrawScope::none ||
+                runtime->compositor.physical_gameplay_hud_overlay_active())
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            if (runtime->note_tutorial_group_active)
+            {
+                runtime->note_tutorial_group_active = false;
+                if (!RequestRuntimeGameplayHudPlacement(
+                        *runtime,
+                        GameplayHudPlacement::centered))
+                {
+                    PublishRenderRuntimeFatal(
+                        *runtime,
+                        WindowedWidescreenError{
+                            .stage = WindowedWidescreenOperationStage::
+                                gameplay_hud_placement,
+                        });
+                }
+            }
+            runtime->active_gameplay_tune = 0;
+        }
+
+        void GameplayFeedbackDrawBeginMid(
+            safetyhook::Context& context) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
+                runtime->active_gameplay_tune == 0)
+            {
+                return;
+            }
+            if (runtime->gameplay_feedback_draw_scope !=
+                GameplayFeedbackDrawScope::none)
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+
+            bool is_player_one_judgement{};
+            if (!TryMatchPlayerOneJudgementEffect(
+                    runtime->active_gameplay_tune,
+                    static_cast<std::uintptr_t>(context.ecx),
+                    is_player_one_judgement))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            if (!is_player_one_judgement)
+            {
+                return;
+            }
+
+            const auto begun =
+                runtime->compositor.BeginPhysicalGameplayHudOverlay(
+                    GameplayHudPlacement::right);
+            if (!begun)
+            {
+                runtime->last_compositor_error = begun.error();
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            runtime->gameplay_feedback_draw_scope =
+                GameplayFeedbackDrawScope::physical_gameplay_hud_overlay;
+            if (!runtime->judgement_scope_reported)
+            {
+                runtime->judgement_scope_reported = true;
+                PLOG_INFO
+                    << "WindowedWidescreen diagnostic: Player 1 judgement root entered right HUD overlay";
+            }
+        }
+
+        void GameplayFeedbackDrawEndMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
+                runtime->gameplay_feedback_draw_scope ==
+                    GameplayFeedbackDrawScope::none)
+            {
+                return;
+            }
+            if (runtime->gameplay_feedback_draw_scope !=
+                GameplayFeedbackDrawScope::physical_gameplay_hud_overlay)
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            const auto ended =
+                runtime->compositor.EndPhysicalGameplayHudOverlay();
+            if (!ended)
+            {
+                runtime->last_compositor_error = ended.error();
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            runtime->gameplay_feedback_draw_scope =
+                GameplayFeedbackDrawScope::none;
+        }
+
+        void NoteTutorialGroupBeginMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
+                runtime->active_gameplay_tune == 0)
+            {
+                return;
+            }
+            if (runtime->note_tutorial_group_active ||
+                runtime->gameplay_feedback_draw_scope !=
+                    GameplayFeedbackDrawScope::none ||
+                !RequestRuntimeGameplayHudPlacement(
+                    *runtime,
+                    GameplayHudPlacement::right))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+            runtime->note_tutorial_group_active = true;
+            if (!runtime->note_tutorial_scope_reported)
+            {
+                runtime->note_tutorial_scope_reported = true;
+                PLOG_INFO
+                    << "WindowedWidescreen diagnostic: note tutorial group entered right HUD viewport";
+            }
+        }
+
+        void NoteTutorialGroupEndMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
+                !runtime->note_tutorial_group_active)
+            {
+                return;
+            }
+            runtime->note_tutorial_group_active = false;
+            if (!RequestRuntimeGameplayHudPlacement(
+                    *runtime,
+                    GameplayHudPlacement::centered))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+        }
+
+        void TestModeNativeBeginMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+
+            // LoopLastTask calls IDirect3DDevice9::BeginScene directly, so the
+            // game's normal frame wrapper never opens a compositor frame for
+            // this standalone 2D traversal. Its direct EndScene is likewise
+            // unconditional, making these two guarded sites the frame owner.
+            if (runtime->test_mode_native_active)
+            {
+                return;
+            }
+            if (!BeginCompositorFrame(runtime))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            render_transition,
+                    });
+            }
+
+            if (!RequestRuntimeSpace(runtime, RenderSpace::native_2d))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            render_transition,
+                    });
+            }
+            runtime->test_mode_native_active = true;
+        }
+
+        void TestModeNativeEndMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+            if (!runtime->test_mode_native_active)
+            {
+                return;
+            }
+
+            runtime->test_mode_native_active = false;
+            if (!EndCompositorFrame(runtime))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            render_transition,
+                    });
+            }
         }
 
         [[nodiscard]] bool TryApplyNativeHudOrthographicArguments(
@@ -1073,6 +1558,72 @@ namespace gc::windowed_widescreen
                     WindowedWidescreenError{
                         .stage =
                             WindowedWidescreenOperationStage::projection,
+                    });
+            }
+        }
+
+        [[nodiscard]] bool TryReadComboEntry(
+            const std::uint32_t frame_pointer,
+            std::int32_t& entry) noexcept
+        {
+            if (frame_pointer < kComboEntryFrameOffset)
+            {
+                return false;
+            }
+            __try
+            {
+                entry = *reinterpret_cast<const std::int32_t*>(
+                    static_cast<std::uintptr_t>(frame_pointer) -
+                    kComboEntryFrameOffset);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
+
+        void ComboBeginMid(safetyhook::Context& context) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+
+            std::int32_t entry{};
+            if (!TryReadComboEntry(context.ebp, entry) ||
+                !RequestRuntimeGameplayHudPlacement(
+                    *runtime,
+                    ResolveComboHudPlacement(entry)))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
+                    });
+            }
+        }
+
+        void ComboEndMid(safetyhook::Context&) noexcept
+        {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
+            {
+                return;
+            }
+            if (!RequestRuntimeGameplayHudPlacement(
+                    *runtime,
+                    GameplayHudPlacement::centered))
+            {
+                PublishRenderRuntimeFatal(
+                    *runtime,
+                    WindowedWidescreenError{
+                        .stage = WindowedWidescreenOperationStage::
+                            gameplay_hud_placement,
                     });
             }
         }
@@ -1237,7 +1788,7 @@ namespace gc::windowed_widescreen
                 typed,
                 ViewportResetHookActions{
                     .context = runtime,
-                    .current_dimensions = &ReadCurrentDimensions,
+                    .current_viewport = &ReadCurrentViewport,
                     .call_original = &CallViewportOriginal,
                 });
             if (!result)
@@ -1363,7 +1914,7 @@ namespace gc::windowed_widescreen
                 });
             if (!result)
             {
-                PublishRuntimeFatal(result.error());
+                PublishRenderRuntimeFatal(*runtime, result.error());
             }
             return *result;
         }
@@ -1394,7 +1945,7 @@ namespace gc::windowed_widescreen
                 });
             if (!result)
             {
-                PublishRuntimeFatal(result.error());
+                PublishRenderRuntimeFatal(*runtime, result.error());
             }
             return *result;
         }
@@ -1496,12 +2047,13 @@ namespace gc::windowed_widescreen
                 WindowedWidescreenOperationStage::frame_begin);
             if (!result)
             {
-                PublishRuntimeFatal(result.error());
+                PublishRenderRuntimeFatal(*runtime, result.error());
             }
             if (FAILED(static_cast<HRESULT>(*result)))
             {
                 // Native BeginScene failed, so the render loop may skip the
                 // matching frame-end callback and proceed into device reset.
+                ResetScopedRenderState(*runtime);
                 runtime->compositor.ResetForDeviceLoss();
             }
             return *result;
@@ -1533,7 +2085,7 @@ namespace gc::windowed_widescreen
                 WindowedWidescreenOperationStage::frame_end);
             if (!result)
             {
-                PublishRuntimeFatal(result.error());
+                PublishRenderRuntimeFatal(*runtime, result.error());
             }
             return *result;
         }
@@ -1812,32 +2364,36 @@ namespace gc::windowed_widescreen
         const ViewportResetHookActions& actions) noexcept
     {
         if (actions.context == nullptr ||
-            actions.current_dimensions == nullptr ||
+            actions.current_viewport == nullptr ||
             actions.call_original == nullptr)
         {
             return std::unexpected(WindowedWidescreenError{
                 .stage = WindowedWidescreenOperationStage::invalid_actions,
             });
         }
-        if (viewport != nullptr)
-        {
-            return actions.call_original(actions.context, viewport);
-        }
-
-        RenderDimensions dimensions{};
-        if (!actions.current_dimensions(actions.context, dimensions))
+        NativeViewport current_viewport{};
+        if (!actions.current_viewport(actions.context, current_viewport))
         {
             return std::unexpected(WindowedWidescreenError{
                 .stage = WindowedWidescreenOperationStage::viewport,
             });
         }
-        const NativeViewport explicit_viewport{
-            .x = 0.0F,
-            .y = 0.0F,
-            .width = dimensions.width_float,
-            .height = dimensions.height_float,
+        if (viewport == nullptr)
+        {
+            return actions.call_original(
+                actions.context,
+                &current_viewport);
+        }
+
+        const NativeViewport translated_viewport{
+            .x = current_viewport.x + viewport->x,
+            .y = current_viewport.y + viewport->y,
+            .width = viewport->width,
+            .height = viewport->height,
         };
-        return actions.call_original(actions.context, &explicit_viewport);
+        return actions.call_original(
+            actions.context,
+            &translated_viewport);
     }
 
     void ApplyNativeHudOrthographicArguments(
@@ -2065,6 +2621,12 @@ namespace gc::windowed_widescreen
                     WidescreenContractSite::task_dispatch,
                     reinterpret_cast<void*>(&TaskDispatchDetour)},
                 WidescreenHookRequest{
+                    WidescreenContractSite::test_mode_native_begin,
+                    reinterpret_cast<void*>(&TestModeNativeBeginMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::test_mode_native_end,
+                    reinterpret_cast<void*>(&TestModeNativeEndMid)},
+                WidescreenHookRequest{
                     WidescreenContractSite::screen_width_int,
                     reinterpret_cast<void*>(&ScreenWidthIntDetour)},
                 WidescreenHookRequest{
@@ -2104,8 +2666,29 @@ namespace gc::windowed_widescreen
                     WidescreenContractSite::gameplay_effects,
                     reinterpret_cast<void*>(&GameplayEffectsMid)},
                 WidescreenHookRequest{
+                    WidescreenContractSite::gameplay_effects_end,
+                    reinterpret_cast<void*>(&GameplayEffectsEndMid)},
+                WidescreenHookRequest{
                     WidescreenContractSite::gameplay_hud_projection,
                     reinterpret_cast<void*>(&GameplayHudProjectionMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::combo_begin,
+                    reinterpret_cast<void*>(&ComboBeginMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::combo_end,
+                    reinterpret_cast<void*>(&ComboEndMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::gameplay_feedback_draw_begin,
+                    reinterpret_cast<void*>(&GameplayFeedbackDrawBeginMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::gameplay_feedback_draw_end,
+                    reinterpret_cast<void*>(&GameplayFeedbackDrawEndMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::note_tutorial_group_begin,
+                    reinterpret_cast<void*>(&NoteTutorialGroupBeginMid)},
+                WidescreenHookRequest{
+                    WidescreenContractSite::note_tutorial_group_end,
+                    reinterpret_cast<void*>(&NoteTutorialGroupEndMid)},
                 WidescreenHookRequest{
                     WidescreenContractSite::clip_gate,
                     reinterpret_cast<void*>(&ClipGateMid)},

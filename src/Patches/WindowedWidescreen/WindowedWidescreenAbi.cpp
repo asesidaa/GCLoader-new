@@ -109,13 +109,63 @@ namespace gc::windowed_widescreen
             WidescreenByteContract{
                 WidescreenContractSite::gameplay_effects, 0x00263041,
                 BytePatternOf<0xE8, 0xFA, 0x5C, 0xFE, 0xFF, 0xE8, 0xD5,
-                              0x00, 0xDF, 0xFF>(),
+                               0x00, 0xDF, 0xFF>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::gameplay_effects_end, 0x00263046,
+                BytePatternOf<0xE8, 0xD5, 0x00, 0xDF, 0xFF>(),
                 WidescreenHookKind::mid_hook},
             WidescreenByteContract{
                 WidescreenContractSite::gameplay_hud_projection, 0x0023FDBA,
                 BytePatternOf<0xE8, 0xB1, 0xF3, 0xF9, 0xFF, 0x8B, 0xB5,
                               0x24, 0xFF, 0xFF, 0xFF, 0x81, 0xC6, 0xD0,
                               0x00, 0x00>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::combo_begin, 0x001E4503,
+                BytePatternOf<0xE8, 0xA8, 0xD0, 0xFF, 0xFF>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::combo_normal_digits, 0x001E4550,
+                BytePatternOf<0xE8, 0x0B, 0x7B, 0xFE, 0xFF>(),
+                WidescreenHookKind::read_only},
+            WidescreenByteContract{
+                WidescreenContractSite::combo_end, 0x001E4558,
+                BytePatternOf<0xC7, 0x45, 0xCC, 0x00, 0x00, 0x00, 0x00>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::gameplay_feedback_draw_begin,
+                0x001F11E8,
+                BytePatternOf<0xE8, 0x83, 0x0D, 0x00, 0x00>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::gameplay_feedback_draw_end,
+                0x001F11ED,
+                BytePatternOf<0x8B, 0x4D, 0xF8, 0x8B, 0x51, 0x0C, 0x81,
+                              0xE2, 0x00, 0x40>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::note_tutorial_group_begin,
+                0x0024A2D5,
+                BytePatternOf<0xE8, 0xA6, 0x6E, 0xFA, 0xFF>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::note_tutorial_group_end,
+                0x0024A2DA,
+                BytePatternOf<0x0F, 0xB6, 0x55, 0x08, 0x85, 0xD2, 0x74,
+                              0x1B>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::test_mode_native_begin,
+                0x0023AA89,
+                BytePatternOf<0xE8, 0xD2, 0xBB, 0xF3, 0xFF, 0xE8, 0x8D,
+                              0x86, 0xE1, 0xFF>(),
+                WidescreenHookKind::mid_hook},
+            WidescreenByteContract{
+                WidescreenContractSite::test_mode_native_end,
+                0x0023AA8E,
+                BytePatternOf<0xE8, 0x8D, 0x86, 0xE1, 0xFF, 0x89, 0x85,
+                              0x80, 0xFE, 0xFF, 0xFF, 0x8B, 0x8D>(),
                 WidescreenHookKind::mid_hook},
             WidescreenByteContract{
                 WidescreenContractSite::clip_default, 0x002441C6,
@@ -222,7 +272,32 @@ namespace gc::windowed_widescreen
                 WidescreenContractSite::gameplay_effects,
                 WidescreenCallingConvention::mid_context, 1},
             WidescreenFunctionAbi{
+                WidescreenContractSite::gameplay_effects_end,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
                 WidescreenContractSite::gameplay_hud_projection,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{WidescreenContractSite::combo_begin,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{WidescreenContractSite::combo_end,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::gameplay_feedback_draw_begin,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::gameplay_feedback_draw_end,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::note_tutorial_group_begin,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::note_tutorial_group_end,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::test_mode_native_begin,
+                WidescreenCallingConvention::mid_context, 1},
+            WidescreenFunctionAbi{
+                WidescreenContractSite::test_mode_native_end,
                 WidescreenCallingConvention::mid_context, 1},
             WidescreenFunctionAbi{WidescreenContractSite::clip_gate,
                 WidescreenCallingConvention::mid_context, 1},
@@ -258,6 +333,8 @@ namespace gc::windowed_widescreen
         case WidescreenContractSite::frame_begin: return "frame_begin";
         case WidescreenContractSite::frame_end: return "frame_end";
         case WidescreenContractSite::task_dispatch: return "task_dispatch";
+        case WidescreenContractSite::test_mode_native_begin: return "test_mode_native_begin";
+        case WidescreenContractSite::test_mode_native_end: return "test_mode_native_end";
         case WidescreenContractSite::screen_width_int: return "screen_width_int";
         case WidescreenContractSite::screen_height_int: return "screen_height_int";
         case WidescreenContractSite::screen_width_float: return "screen_width_float";
@@ -276,7 +353,15 @@ namespace gc::windowed_widescreen
         case WidescreenContractSite::gameplay_stage_background: return "gameplay_stage_background";
         case WidescreenContractSite::gameplay_track: return "gameplay_track";
         case WidescreenContractSite::gameplay_effects: return "gameplay_effects";
+        case WidescreenContractSite::gameplay_effects_end: return "gameplay_effects_end";
         case WidescreenContractSite::gameplay_hud_projection: return "gameplay_hud_projection";
+        case WidescreenContractSite::combo_begin: return "combo_begin";
+        case WidescreenContractSite::combo_normal_digits: return "combo_normal_digits";
+        case WidescreenContractSite::combo_end: return "combo_end";
+        case WidescreenContractSite::gameplay_feedback_draw_begin: return "gameplay_feedback_draw_begin";
+        case WidescreenContractSite::gameplay_feedback_draw_end: return "gameplay_feedback_draw_end";
+        case WidescreenContractSite::note_tutorial_group_begin: return "note_tutorial_group_begin";
+        case WidescreenContractSite::note_tutorial_group_end: return "note_tutorial_group_end";
         case WidescreenContractSite::clip_default: return "clip_default";
         case WidescreenContractSite::clip_gate: return "clip_gate";
         case WidescreenContractSite::clip_continuation: return "clip_continuation";

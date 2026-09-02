@@ -2,6 +2,22 @@
 
 namespace gc::windowed_widescreen
 {
+    namespace
+    {
+        [[nodiscard]] bool UsesNativeTarget(
+            const RenderSpace space) noexcept
+        {
+            return space == RenderSpace::native_2d;
+        }
+
+        [[nodiscard]] bool NeedsDisabledDepth(
+            const RenderSpace space) noexcept
+        {
+            return space == RenderSpace::native_2d ||
+                space == RenderSpace::gameplay_hud;
+        }
+    } // namespace
+
     NativeCanvasCompositor::NativeCanvasCompositor(
         const OutputSize output_size,
         const RenderThreadIdProvider thread_id_provider,
@@ -22,6 +38,7 @@ namespace gc::windowed_widescreen
             actions_.draw_native_to_scene_center != nullptr &&
             actions_.draw_scene_to_backbuffer != nullptr &&
             actions_.set_full_viewport_and_scissor != nullptr &&
+            actions_.set_gameplay_hud_viewport != nullptr &&
             actions_.native_depth_state_is_disabled != nullptr &&
             actions_.flush_native_batches != nullptr &&
             actions_.native_batches_are_empty != nullptr &&
@@ -61,6 +78,10 @@ namespace gc::windowed_widescreen
             }
         }
         last_published_space_ = stable_space;
+        if (stable_space == RenderSpace::gameplay_hud)
+        {
+            gameplay_hud_placement_ = GameplayHudPlacement::centered;
+        }
 
         return std::unexpected(CompositorError{
             .stage = stage,
@@ -109,6 +130,7 @@ namespace gc::windowed_widescreen
                 RenderSpace::physical_3d,
                 true);
         }
+        gameplay_hud_placement_ = GameplayHudPlacement::centered;
         return {};
     }
 
@@ -137,6 +159,192 @@ namespace gc::windowed_widescreen
     }
 
     std::expected<void, CompositorError>
+    NativeCanvasCompositor::SetGameplayHudPlacement(
+        const GameplayHudPlacement placement) noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current)
+        {
+            return PolicyFailure(current.error(), RenderSpace::gameplay_hud);
+        }
+        if (*current != RenderSpace::gameplay_hud)
+        {
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current,
+                .requested_space = RenderSpace::gameplay_hud,
+            });
+        }
+
+        const auto active_viewport = ResolveGameplayHudViewport(
+            render_space_policy_.output_size(),
+            gameplay_hud_placement_);
+        const auto requested_viewport = ResolveGameplayHudViewport(
+            render_space_policy_.output_size(),
+            placement);
+        if (!active_viewport || !requested_viewport)
+        {
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current,
+                .requested_space = RenderSpace::gameplay_hud,
+            });
+        }
+        if (*active_viewport == *requested_viewport)
+        {
+            gameplay_hud_placement_ = placement;
+            return {};
+        }
+
+        if (!actions_.flush_native_batches(actions_.context))
+        {
+            return FailAction(
+                CompositorStage::flush_native_batches,
+                *current,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+        if (!actions_.native_batches_are_empty(actions_.context))
+        {
+            return FailAction(
+                CompositorStage::pending_native_batches,
+                *current,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+        if (!actions_.set_gameplay_hud_viewport(
+                actions_.context,
+                placement))
+        {
+            return FailAction(
+                CompositorStage::set_gameplay_hud_viewport,
+                *current,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+
+        gameplay_hud_placement_ = placement;
+        return {};
+    }
+
+    std::expected<void, CompositorError>
+    NativeCanvasCompositor::BeginPhysicalGameplayHudOverlay(
+        const GameplayHudPlacement placement) noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current)
+        {
+            return PolicyFailure(
+                current.error(),
+                RenderSpace::gameplay_hud);
+        }
+        if (*current != RenderSpace::physical_3d ||
+            physical_gameplay_hud_overlay_active_)
+        {
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current,
+                .requested_space = RenderSpace::gameplay_hud,
+            });
+        }
+
+        if (!actions_.flush_native_batches(actions_.context))
+        {
+            return FailAction(
+                CompositorStage::flush_native_batches,
+                RenderSpace::physical_3d,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+        if (!actions_.native_batches_are_empty(actions_.context))
+        {
+            return FailAction(
+                CompositorStage::pending_native_batches,
+                RenderSpace::physical_3d,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+        if (!actions_.capture_game_state(actions_.context))
+        {
+            return FailAction(
+                CompositorStage::capture_game_state,
+                RenderSpace::physical_3d,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+        if (!actions_.set_gameplay_hud_viewport(
+                actions_.context,
+                placement))
+        {
+            return FailAction(
+                CompositorStage::set_gameplay_hud_viewport,
+                RenderSpace::physical_3d,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+        if (!actions_.native_depth_state_is_disabled(actions_.context))
+        {
+            return FailAction(
+                CompositorStage::native_depth_state,
+                RenderSpace::physical_3d,
+                RenderSpace::gameplay_hud,
+                false);
+        }
+
+        physical_gameplay_hud_overlay_active_ = true;
+        return {};
+    }
+
+    std::expected<void, CompositorError>
+    NativeCanvasCompositor::EndPhysicalGameplayHudOverlay() noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current)
+        {
+            return PolicyFailure(
+                current.error(),
+                RenderSpace::physical_3d);
+        }
+        if (*current != RenderSpace::physical_3d ||
+            !physical_gameplay_hud_overlay_active_)
+        {
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current,
+                .requested_space = RenderSpace::physical_3d,
+            });
+        }
+
+        const auto fail = [this](
+                              const CompositorStage stage)
+            -> std::expected<void, CompositorError>
+        {
+            physical_gameplay_hud_overlay_active_ = false;
+            return FailAction(
+                stage,
+                RenderSpace::physical_3d,
+                RenderSpace::physical_3d,
+                false);
+        };
+
+        if (!actions_.flush_native_batches(actions_.context))
+        {
+            return fail(CompositorStage::flush_native_batches);
+        }
+        if (!actions_.native_batches_are_empty(actions_.context))
+        {
+            return fail(CompositorStage::pending_native_batches);
+        }
+        if (!actions_.restore_game_state(actions_.context))
+        {
+            return fail(CompositorStage::restore_game_state);
+        }
+
+        physical_gameplay_hud_overlay_active_ = false;
+        return {};
+    }
+
+    std::expected<void, CompositorError>
     NativeCanvasCompositor::Transition(
         const RenderSpace stable_space,
         const RenderSpace requested_space) noexcept
@@ -157,72 +365,78 @@ namespace gc::windowed_widescreen
                 requested_space,
                 false);
         }
-        if (!actions_.capture_game_state(actions_.context))
+        const bool target_changes =
+            UsesNativeTarget(stable_space) !=
+            UsesNativeTarget(requested_space);
+        if (target_changes)
         {
-            return FailAction(
-                CompositorStage::capture_game_state,
-                stable_space,
-                requested_space,
-                false);
-        }
+            if (!actions_.capture_game_state(actions_.context))
+            {
+                return FailAction(
+                    CompositorStage::capture_game_state,
+                    stable_space,
+                    requested_space,
+                    false);
+            }
 
-        if (const auto entered =
-                render_space_policy_.PublishSpace(RenderSpace::compositor);
-            !entered)
-        {
-            return FailAction(
-                CompositorStage::render_policy,
-                stable_space,
-                requested_space,
-                false);
-        }
+            if (const auto entered = render_space_policy_.PublishSpace(
+                    RenderSpace::compositor);
+                !entered)
+            {
+                return FailAction(
+                    CompositorStage::render_policy,
+                    stable_space,
+                    requested_space,
+                    false);
+            }
 
-        if (requested_space == RenderSpace::native_2d)
-        {
-            if (!actions_.bind_native_canvas(actions_.context))
+            if (UsesNativeTarget(requested_space))
             {
-                return FailAction(
-                    CompositorStage::bind_native_canvas,
-                    stable_space,
-                    requested_space,
-                    false);
+                if (!actions_.bind_native_canvas(actions_.context))
+                {
+                    return FailAction(
+                        CompositorStage::bind_native_canvas,
+                        stable_space,
+                        requested_space,
+                        false);
+                }
+                if (!actions_.draw_scene_center_to_native(actions_.context))
+                {
+                    return FailAction(
+                        CompositorStage::draw_scene_center_to_native,
+                        stable_space,
+                        requested_space,
+                        false);
+                }
             }
-            if (!actions_.draw_scene_center_to_native(actions_.context))
+            else
             {
-                return FailAction(
-                    CompositorStage::draw_scene_center_to_native,
-                    stable_space,
-                    requested_space,
-                    false);
+                if (!actions_.bind_wide_scene(actions_.context))
+                {
+                    return FailAction(
+                        CompositorStage::bind_wide_scene,
+                        stable_space,
+                        requested_space,
+                        false);
+                }
+                if (!actions_.draw_native_to_scene_center(actions_.context))
+                {
+                    return FailAction(
+                        CompositorStage::draw_native_to_scene_center,
+                        stable_space,
+                        requested_space,
+                        false);
+                }
             }
-        }
-        else
-        {
-            if (!actions_.bind_wide_scene(actions_.context))
-            {
-                return FailAction(
-                    CompositorStage::bind_wide_scene,
-                    stable_space,
-                    requested_space,
-                    false);
-            }
-            if (!actions_.draw_native_to_scene_center(actions_.context))
-            {
-                return FailAction(
-                    CompositorStage::draw_native_to_scene_center,
-                    stable_space,
-                    requested_space,
-                    false);
-            }
-        }
 
-        if (!actions_.restore_game_state(actions_.context))
-        {
-            return FailAction(
-                CompositorStage::restore_game_state,
-                stable_space,
-                requested_space,
-                false);
+            if (!actions_.restore_game_state(actions_.context))
+            {
+                return FailAction(
+                    CompositorStage::restore_game_state,
+                    stable_space,
+                    requested_space,
+                    false);
+            }
         }
         if (!actions_.set_full_viewport_and_scissor(
                 actions_.context,
@@ -234,7 +448,7 @@ namespace gc::windowed_widescreen
                 requested_space,
                 false);
         }
-        if (requested_space == RenderSpace::native_2d &&
+        if (NeedsDisabledDepth(requested_space) &&
             !actions_.native_depth_state_is_disabled(actions_.context))
         {
             return FailAction(
@@ -255,6 +469,7 @@ namespace gc::windowed_widescreen
                 false);
         }
         last_published_space_ = requested_space;
+        gameplay_hud_placement_ = GameplayHudPlacement::centered;
         return {};
     }
 
@@ -357,10 +572,11 @@ namespace gc::windowed_widescreen
                 RenderSpace::physical_3d);
         }
 
-        if (*current == RenderSpace::native_2d)
+        if (*current == RenderSpace::native_2d ||
+            *current == RenderSpace::gameplay_hud)
         {
             if (const auto closed = Transition(
-                    RenderSpace::native_2d,
+                    *current,
                     RenderSpace::physical_3d);
                 !closed)
             {
@@ -393,5 +609,7 @@ namespace gc::windowed_widescreen
     {
         render_space_policy_.ResetForDeviceLoss();
         last_published_space_ = RenderSpace::physical_3d;
+        gameplay_hud_placement_ = GameplayHudPlacement::centered;
+        physical_gameplay_hud_overlay_active_ = false;
     }
 } // namespace gc::windowed_widescreen

@@ -383,6 +383,8 @@ namespace gc::windowed_widescreen
             .draw_native_to_scene_center = &DrawNativeToSceneCenter,
             .draw_scene_to_backbuffer = &DrawSceneToBackbuffer,
             .set_full_viewport_and_scissor = &SetViewportAndScissor,
+            .set_gameplay_hud_viewport =
+                &SetGameplayHudViewportAction,
             .native_depth_state_is_disabled = &CheckNativeDepthState,
             .flush_native_batches = &FlushNativeBatches,
             .native_batches_are_empty = &NativeBatchesAreEmpty,
@@ -627,6 +629,11 @@ namespace gc::windowed_widescreen
         {
             return false;
         }
+        if (space == RenderSpace::gameplay_hud)
+        {
+            return SetGameplayHudViewport(
+                GameplayHudPlacement::centered);
+        }
         const auto dimensions = SelectRenderDimensions(
             space,
             resolution_.output_size());
@@ -635,26 +642,59 @@ namespace gc::windowed_widescreen
             return false;
         }
 
-        const D3DVIEWPORT9 viewport{
-            .X = 0,
-            .Y = 0,
-            .Width = dimensions->width,
-            .Height = dimensions->height,
+        return ApplyViewportAndScissor(
+            GameplayHudViewport{
+                .x = 0,
+                .y = 0,
+                .width = dimensions->width,
+                .height = dimensions->height,
+            },
+            space == RenderSpace::native_2d);
+    }
+
+    bool D3D9CompositorDevice::SetGameplayHudViewport(
+        const GameplayHudPlacement placement) noexcept
+    {
+        if (!active_ || !device_ ||
+            bound_target_ != BoundTarget::wide_scene)
+        {
+            return false;
+        }
+        const auto viewport = ResolveGameplayHudViewport(
+            resolution_.output_size(),
+            placement);
+        return viewport && ApplyViewportAndScissor(*viewport, true);
+    }
+
+    bool D3D9CompositorDevice::ApplyViewportAndScissor(
+        const GameplayHudViewport& viewport,
+        const bool disable_depth) noexcept
+    {
+        if (!active_ || !device_)
+        {
+            return false;
+        }
+
+        const D3DVIEWPORT9 native_viewport{
+            .X = viewport.x,
+            .Y = viewport.y,
+            .Width = viewport.width,
+            .Height = viewport.height,
             .MinZ = 0.0F,
             .MaxZ = 1.0F,
         };
         const RECT scissor{
-            .left = 0,
-            .top = 0,
-            .right = static_cast<LONG>(dimensions->width),
-            .bottom = static_cast<LONG>(dimensions->height),
+            .left = static_cast<LONG>(viewport.x),
+            .top = static_cast<LONG>(viewport.y),
+            .right = static_cast<LONG>(viewport.x + viewport.width),
+            .bottom = static_cast<LONG>(viewport.y + viewport.height),
         };
-        if (FAILED(device_->SetViewport(&viewport)) ||
+        if (FAILED(device_->SetViewport(&native_viewport)) ||
             FAILED(device_->SetScissorRect(&scissor)))
         {
             return false;
         }
-        if (space == RenderSpace::native_2d)
+        if (disable_depth)
         {
             return SUCCEEDED(
                        device_->SetRenderState(D3DRS_ZENABLE, FALSE)) &&
@@ -848,6 +888,15 @@ namespace gc::windowed_widescreen
         return context != nullptr &&
             static_cast<D3D9CompositorDevice*>(context)
                 ->SetFullViewportAndScissor(space);
+    }
+
+    bool D3D9CompositorDevice::SetGameplayHudViewportAction(
+        void* context,
+        const GameplayHudPlacement placement) noexcept
+    {
+        return context != nullptr &&
+            static_cast<D3D9CompositorDevice*>(context)
+                ->SetGameplayHudViewport(placement);
     }
 
     bool D3D9CompositorDevice::CheckNativeDepthState(

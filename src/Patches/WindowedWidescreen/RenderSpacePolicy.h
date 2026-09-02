@@ -11,6 +11,7 @@ namespace gc::windowed_widescreen
     {
         physical_3d,
         native_2d,
+        gameplay_hud,
         compositor,
     };
 

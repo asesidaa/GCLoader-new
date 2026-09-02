@@ -17,6 +17,7 @@ namespace gc::windowed_widescreen
                 .height_float = static_cast<float>(output_size.height),
             };
         case RenderSpace::native_2d:
+        case RenderSpace::gameplay_hud:
             return RenderDimensions{
                 .width = kNativeWidth,
                 .height = kNativeHeight,
