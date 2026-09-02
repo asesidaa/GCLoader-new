@@ -109,6 +109,21 @@ and the test explains what accidental change they protect. Prefer invariant and
 transaction tests for patch-plan plumbing; keep authoritative binary evidence
 in the relevant reverse-engineering record.
 
+Static tests must not be written or reported as proof of game behavior, native
+hook integration, renderer behavior, visual placement, timing feel, or runtime
+acceptance. In particular, models, mocks, fake devices, synthetic executable
+memory, copied constants, and test-only callback wrappers are not acceptable
+oracles for those claims. Do not write a static test whose expected result
+asserts any such behavior, and do not add tests that merely encode the intended
+design and then assert that the design is correct.
+
+The only exception is a narrowly scoped property whose result is formally
+derivable from an authoritative, independently sourced contract. Such a test
+may claim only that property; it still must not be promoted into evidence that
+the target game executes the relevant path or that the user-visible result is
+correct. Runtime acceptance requires the actual deployed artifact to execute in
+the target process and the relevant behavior to be observed there.
+
 Automated tests prove only what they execute. Keep build/static proof separate
 from in-game acceptance, and do not report gameplay success without the user's
 runtime confirmation.
@@ -118,8 +133,10 @@ runtime confirmation.
 - For reverse engineering, recheck the current `game471.exe` binary or
   `game471.exe.i64` database rather than trusting stale addresses, planning
   prose, or field-name guesses.
-- Treat install-time byte guards, focused tests, full CTest results, export
-  inspection, and artifact inspection as static evidence.
+- Treat install-time byte guards, compilation/linkage, export inspection, and
+  artifact inspection as static evidence only. A permitted formal-property
+  test is evidence solely for the exact independent contract it executes;
+  neither focused tests nor a full CTest run are evidence of game behavior.
 - Treat boot, NESYS child startup, input feel, card scanning, storage behavior,
   audio quality, high-FPS timing, and shutdown behavior as runtime acceptance.
 - When runtime behavior is in scope, use `loader-log.txt` and
