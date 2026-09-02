@@ -1,6 +1,6 @@
 # Native Auto Play Safety Design
 
-**Status:** Draft for review on 2026-09-03
+**Status:** Approved for implementation planning on 2026-09-03
 
 ## Goal
 
