@@ -1756,6 +1756,21 @@ namespace
             judgement_log_path,
             judgement_offset_advisor);
 
+        bool auto_play = experimental.enable_auto_play();
+        if (ImGui::Checkbox("Native auto play", &auto_play))
+        {
+            experimental.enable_auto_play = auto_play;
+            dirty = true;
+        }
+        if (auto_play)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(
+                ImVec4(1.0F, 0.75F, 0.2F, 1.0F),
+                "Gameplay input/free taps ignored; card and score saving "
+                "disabled; in-game marker mandatory; restart required.");
+        }
+
         bool timer_freeze = experimental.enable_timer_freeze_patches();
         if (ImGui::Checkbox("Timer freeze patches", &timer_freeze))
         {

@@ -69,6 +69,11 @@ namespace gc::config
             return system_path_;
         }
 
+        [[nodiscard]] bool enable_auto_play() const noexcept
+        {
+            return enable_auto_play_;
+        }
+
         [[nodiscard]] bool unlock_all_songs_and_difficulties() const noexcept
         {
             return unlock_all_songs_and_difficulties_;
@@ -93,6 +98,7 @@ namespace gc::config
             system_path::SystemPathSettings system_path,
             windowed_widescreen::WindowedWidescreenSettings
                 windowed_widescreen,
+            bool enable_auto_play,
             bool unlock_all_songs_and_difficulties);
 
         friend class ConfigCompiler;
@@ -107,6 +113,7 @@ namespace gc::config
         system_path::SystemPathSettings system_path_;
         windowed_widescreen::WindowedWidescreenSettings
             windowed_widescreen_;
+        bool enable_auto_play_{};
         bool unlock_all_songs_and_difficulties_{};
     };
 

@@ -346,6 +346,7 @@ namespace gc::config
         system_path::SystemPathSettings system_path,
         windowed_widescreen::WindowedWidescreenSettings
             windowed_widescreen,
+        const bool enable_auto_play,
         bool unlock_all_songs_and_difficulties)
         : logging_(std::move(logging)),
           input_(std::move(input)),
@@ -357,6 +358,7 @@ namespace gc::config
           rfid_(std::move(rfid)),
           system_path_(std::move(system_path)),
           windowed_widescreen_(std::move(windowed_widescreen)),
+          enable_auto_play_(enable_auto_play),
           unlock_all_songs_and_difficulties_(
               unlock_all_songs_and_difficulties)
     {
@@ -957,6 +959,7 @@ namespace gc::config
                     static_cast<std::uint32_t>(widescreen_width),
                     static_cast<std::uint32_t>(widescreen_height),
                 },
+                document.experimental().enable_auto_play(),
                 document.experimental()
                         .unlock_all_songs_and_difficulties(),
             };

@@ -67,6 +67,7 @@ level = 'Info'
 [experimental]
 target_fps = 60
 enable_absolute_time_judgement = false
+enable_auto_play = false
 enable_testmode_storage_redirect = false
 enable_timer_freeze_patches = false
 unlock_all_songs_and_difficulties = false
