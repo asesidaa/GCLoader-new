@@ -23,28 +23,30 @@ independently.
 ## Supported Binary and Evidence
 
 The supported analysis target is `H:\gc\game471.exe.i64`, with preferred image
-base `0x00400000`. The corresponding deployed `game471.exe` has SHA-256
-`FEAD3BD4D0E0985F101965EDC417DD2B96522F8716FF789D84618FEB0D7A2522`.
+base `0x00400000`.
 
 The existing game-binary compatibility audit accounts for every `.text`
 difference between this image and the clean `game_decrypted.exe`. None of those
 differences overlap the sites in this design, so both forms of this game build
 have the same auto-play, no-save, marker-hook, and native-text contracts.
-Applicability still comes from exact bytes at each named RVA, not from a file
-name or hash alone.
+Applicability still comes from exact bytes and decoded behavior at each named
+RVA, not from a file name alone.
 
 The reusable read-only IDA queries are stored under
 `H:\gc\artifacts\GCLoader\.codex-tmp` and connect briefly to the existing
-daemon with `AgentSession.connect(...)`. The decisive artifacts are:
+daemon with `AgentSession.connect(...)`. The decisive artifacts and their
+semantic roles are:
 
-| Artifact | SHA-256 |
+| Artifact | Semantic evidence |
 |---|---|
-| `game471-autoplay-patch-contract.json` | `06E2C1F788F4DD8BBE072D53E3952E2275D376954EF1A399331C2215022A423F` |
-| `game471-autoplay-mute-audio-closure.json` | `B44046F98BCEBFE2F353BF64A54CA9CFCD7B4932325AD1218BA069972F7C10F9` |
-| `game471-autoplay-grade-state.json` | `06DB7C31042170D84C1893F977F7C25BDE02818EBFCF7B84FEF07AC0A7136471` |
-| `game471-debug-text-outer-frame-trace.json` | `FD2FBB6475A0368B8C7DE1356F7F16E74DB7F2612481318FB674AB3998B9BBE7` |
+| `game471-autoplay-patch-contract.json` | Direct-site RVAs, clean bytes, patched bytes, and decoded instructions |
+| `game471-autoplay-mute-audio-closure.json` | `+0xA6` consumers and the HIDDEN/AD-LIB audio-completion control flow |
+| `game471-autoplay-grade-state.json` | Separation of the native grade field at `+0xA7` from the auto-play and completion gates |
+| `game471-debug-text-outer-frame-trace.json` | Marker seam, native debug-text target, call ABI, and outer-frame reachability |
 
-These artifacts are analysis evidence, not runtime acceptance.
+Generated artifact serialization is not a contract and is not checked. The
+native fields summarized above are read from the actual target. These artifacts
+are analysis evidence, not runtime acceptance.
 
 ## Native Behavior
 
@@ -96,7 +98,7 @@ are driven by free-input flags, which auto play intentionally suppresses.
 
 The auto-play helper records the authored target timestamp and normally writes
 grade value `3`, which this build labels `GREAT`. Its only alternate branch
-tests the adjacent `+0xA7` byte and would write grade `2` (`COOL`) once before
+reads the adjacent `+0xA7` byte and would write grade `2` (`COOL`) once before
 resetting that byte.
 
 The supported binary initializes `+0xA7` to zero. The judgement-state ownership
@@ -317,66 +319,25 @@ states that GCLoader refused to continue because it could not guarantee both
 save suppression and the visible marker, and directs the operator to
 `loader-log.txt` for the exact contract failure.
 
-## Test Contract
+## Analysis, Build, and Runtime Acceptance
 
-Automated tests exercise production-facing configuration and the transaction
-through injected memory and hook actions. They do not patch a live process or
-claim gameplay/visual success.
+This native patch does not add or extend unit tests, fake-memory models,
+synthetic hook backends, copied binary fixtures, callback recorders, or a
+standalone verifier. TDD does not apply to this work. Saved IDA scripts exist
+only to make the direct binary analysis repeatable; their files and generated
+artifacts are not hashed or treated as proof by themselves.
 
-Required configuration cases are:
+Implementation evidence is limited to:
 
-- the distributed `config.toml` strictly parses with
-  `enable_auto_play = false`;
-- omitting the required field fails strict parsing;
-- false and true values survive parse, compile, immutable settings transfer,
-  serialization, and reparse;
-- ConfigGUI changes only the one field.
-
-Required transaction cases are:
-
-- disabled initialization performs zero reads, writes, hook operations, or
-  native-target resolution;
-- all eight clean/already-patched combinations across the three direct sites
-  are accepted, and only clean sites are written;
-- the hook is installed for every enabled combination, including an image
-  whose three direct sites were already patched;
-- an unknown value or read failure at each direct site causes zero mutation;
-- a marker-seam mismatch, text-target mismatch, address overflow, or invalid
-  action table causes zero mutation;
-- hook installation failure occurs before any direct write;
-- failure at each direct-write position resets the hook and restores only the
-  writes owned by that invocation;
-- rollback failure is reported and can never publish committed/active state;
-- successful writes occur in no-save, `+0xA6`, `+0xA5` order, and marker
-  activation occurs only after the last write succeeds;
-- a second initialization after commit performs no additional operations.
-
-A focused marker-producer test may use an injected native-text sink to verify
-that inactive state emits nothing and committed state emits the fixed two-line
-foreground/shadow call set once per callback. That test proves only the
-producer contract; it does not prove native rendering, visibility, placement,
-or z-order.
-
-The small binary fixtures must record their independent provenance from the
-IDA artifacts above. Tests must not scrape the production source or duplicate
-an entire executable.
-
-## Static Verification and Runtime Acceptance
-
-Static verification requires:
-
-1. rerun the saved read-only IDA scripts against the current
-   `game471.exe.i64` daemon and retain artifact hashes;
-2. build affected x86 Debug and Release targets, including `iDmacDrv32` and
+1. direct IDA analysis of the current `game471.exe.i64` target using the saved
+   scripts, with the relevant RVAs, bytes, decoded instructions, ABI, and
+   control flow reviewed from the results;
+2. successful x86 Debug and Release compilation of `iDmacDrv32` and
    `ConfigGUI`;
-3. run focused auto-play/configuration tests and the full Debug and Release
-   CTest suites;
-4. inspect the built DLL for the fixed marker strings and named contract RVAs;
-5. run `git diff --check` and inspect the final working-tree/staged state.
+3. source review and a clean repository diff for the intended file set.
 
-These checks prove buildability, byte classification, transaction behavior,
-rollback, and static integration only. Runtime acceptance requires an
-operator-run game and must separately establish:
+Compilation proves only that the implementation builds. Runtime acceptance
+requires an operator-run game and must separately establish:
 
 - with the setting false, normal gameplay input, free taps, card saving, CSV
   behavior, and absence of the marker remain unchanged;
@@ -418,15 +379,13 @@ of implementation unless separately requested.
 Implementation is expected to touch only the feature and its direct integration
 surfaces:
 
-- `src/Patches/AutoPlay/` for contracts, transaction, marker, and diagnostics;
+- `src/Patches/AutoPlay/` for the production transaction, marker, and diagnostics;
 - `src/Patches/CMakeLists.txt` for the production target;
 - `src/Config/ConfigDocument.h` and `ConfigCompiler.*` for the strict immutable
   setting;
 - `src/Loader/DllMain.cpp` for game-only startup;
 - `tools/ConfigGUI/Main.cpp` for the checkbox and warning;
-- `config.toml` for the required disabled default;
-- focused files under `tests/Config/` and `tests/Patches/AutoPlay/`, plus the
-  test target registration.
+- `config.toml` for the required disabled default.
 
 No unrelated framerate, input, audio, NESYS, renderer, widescreen, or game
 compatibility behavior is part of this feature.

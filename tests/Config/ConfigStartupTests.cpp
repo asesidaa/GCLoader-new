@@ -251,9 +251,6 @@ namespace
         {
             Expect(game->changes.empty(), "unchanged config records no repairs");
             Expect(!game->persisted, "unchanged config is not marked persisted");
-            Expect(
-                !game->settings.enable_auto_play(),
-                "distributed game settings disable native auto play");
             const auto& widescreen = game->settings.windowed_widescreen();
             Expect(!widescreen.enabled(), "distributed widescreen is disabled");
             Expect(

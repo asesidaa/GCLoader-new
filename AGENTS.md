@@ -81,6 +81,21 @@ cmake --fresh --preset msvc32-debug
 
 ## Test Policy
 
+For reverse-engineering and native runtime-patch work, do not use TDD and do
+not add or extend unit tests, fake executable memory, synthetic backends,
+mocks, copied binary fixtures, callback recorders, or standalone verification
+scripts unless the user explicitly requests that exact testing work. This rule
+overrides the general focused/full-suite guidance above for that class of work.
+Establish the native contract by direct IDA/binary analysis, use compilation as
+build proof, and reserve behavioral claims for an explicitly authorized run in
+the real target process.
+
+Do not calculate or compare hashes of analysis scripts or generated analysis
+artifacts in specifications, plans, implementation work, or verification.
+Their helper implementation and serialization are not native-contract
+evidence. Check the relevant RVAs, bytes, decoded instructions, ABI, ownership,
+and control flow directly against the actual target instead.
+
 Every test must have a plausible regression it can catch. Prefer tests of:
 
 - observable behavior and public or production-facing contracts;

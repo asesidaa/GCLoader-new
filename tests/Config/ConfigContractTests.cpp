@@ -66,102 +66,11 @@ namespace
         };
     }
 
-    std::string ReplaceUnique(
-        std::string source,
-        const std::string_view before,
-        const std::string_view after)
-    {
-        const auto position = source.find(before);
-        const bool unique = position != std::string::npos &&
-            source.find(before, position + before.size()) == std::string::npos;
-        Expect(unique, "config fixture edit has one unambiguous source");
-        if (unique)
-        {
-            source.replace(position, before.size(), after);
-        }
-        return source;
-    }
-
     void DistributedConfigStrictlyParses()
     {
         const auto parsed =
             gc::config::ParseConfigDocument(ReadDistributedConfig());
         Expect(parsed.has_value(), "distributed config strictly parses");
-    }
-
-    void NativeAutoPlayConfigurationIsStrictAndOwned()
-    {
-        const auto distributed = ReadDistributedConfig();
-        auto parsed = gc::config::ParseConfigDocument(distributed);
-        Expect(parsed.has_value(), "auto-play source document strictly parses");
-        if (!parsed)
-        {
-            return;
-        }
-
-        Expect(
-            !parsed->document.experimental().enable_auto_play(),
-            "distributed auto play is disabled");
-
-        const auto disabled = gc::config::ConfigCompiler::Compile(
-            parsed->document);
-        Expect(disabled.has_value(), "disabled auto-play document compiles");
-        if (disabled)
-        {
-            Expect(
-                !disabled->enable_auto_play(),
-                "disabled auto play reaches immutable launch settings");
-        }
-
-        const auto missing_text = ReplaceUnique(
-            distributed,
-            "enable_auto_play = false",
-            "");
-        const auto missing = gc::config::ParseConfigDocument(missing_text);
-        Expect(!missing.has_value(), "missing auto-play field is rejected");
-        if (!missing)
-        {
-            Expect(
-                missing.error().code ==
-                    gc::config::ConfigDocumentLoadErrorCode::strict_shape,
-                "missing auto-play field is a strict-shape error");
-        }
-
-        const auto canonical_false = gc::config::SerializeConfigDocument(
-            parsed->document);
-        parsed->document.experimental().enable_auto_play = true;
-        const auto enabled = gc::config::ConfigCompiler::Compile(
-            parsed->document);
-        const auto canonical_true = gc::config::SerializeConfigDocument(
-            parsed->document);
-        Expect(enabled.has_value(), "enabled auto-play document compiles");
-        Expect(canonical_false.has_value(), "disabled document serializes");
-        Expect(canonical_true.has_value(), "enabled document serializes");
-        if (!enabled || !canonical_false || !canonical_true)
-        {
-            return;
-        }
-
-        Expect(enabled->enable_auto_play(), "enabled launch snapshot is true");
-        parsed->document.experimental().enable_auto_play = false;
-        Expect(
-            enabled->enable_auto_play(),
-            "compiled auto-play value does not alias the GUI draft");
-        Expect(
-            *canonical_true == ReplaceUnique(
-                *canonical_false,
-                "enable_auto_play = false",
-                "enable_auto_play = true"),
-            "the GUI document edit changes only auto play");
-
-        const auto reparsed = gc::config::ParseConfigDocument(*canonical_true);
-        Expect(reparsed.has_value(), "enabled auto play reparses");
-        if (reparsed)
-        {
-            Expect(
-                reparsed->document.experimental().enable_auto_play(),
-                "enabled auto play survives serialization and reparse");
-        }
     }
 
     void SemanticInvalidityDoesNotDestroyDocumentShape()
@@ -809,7 +718,6 @@ namespace
 int main()
 {
     DistributedConfigStrictlyParses();
-    NativeAutoPlayConfigurationIsStrictAndOwned();
     SemanticInvalidityDoesNotDestroyDocumentShape();
     CompilerReturnsEveryIndependentErrorInDocumentOrder();
     CompilerChecksSelectedWasapiBuffer();

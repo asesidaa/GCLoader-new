@@ -30,59 +30,47 @@ namespace gc::auto_play
                 0xFFFFFF00U,
                 "SCORE SAVE DISABLED"},
         };
+
+        [[nodiscard]] bool CallNativeDebugText(
+            const NativeDebugTextFunction function,
+            const MarkerTextCall& call) noexcept
+        {
+#if defined(_MSC_VER)
+            __try
+            {
+                (void)function(
+                    call.x,
+                    call.y,
+                    call.argb,
+                    "%s",
+                    call.text);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+#else
+#error "Native auto play requires the MSVC x86 SEH boundary"
+#endif
+        }
     } // namespace
 
-    AutoPlayMarkerFrameResult ProduceAutoPlayMarkerFrame(
-        const bool active,
-        const AutoPlayMarkerTextActions& actions) noexcept
+    bool DrawAutoPlayMarker(
+        const NativeDebugTextFunction function) noexcept
     {
-        if (!active)
+        if (function == nullptr)
         {
-            return AutoPlayMarkerFrameResult::inactive;
-        }
-        if (actions.context == nullptr || actions.queue == nullptr)
-        {
-            return AutoPlayMarkerFrameResult::invalid_actions;
+            return false;
         }
 
         for (const auto& call : kMarkerTextCalls)
         {
-            if (!actions.queue(
-                    actions.context,
-                    call.x,
-                    call.y,
-                    call.argb,
-                    call.text))
+            if (!CallNativeDebugText(function, call))
             {
-                return AutoPlayMarkerFrameResult::native_text_failure;
+                return false;
             }
         }
-        return AutoPlayMarkerFrameResult::queued;
-    }
-
-    bool CallNativeDebugTextGuarded(
-        const NativeDebugTextFunction function,
-        const float x,
-        const float y,
-        const std::uint32_t argb,
-        const char* const text) noexcept
-    {
-        if (function == nullptr || text == nullptr)
-        {
-            return false;
-        }
-#if defined(_MSC_VER)
-        __try
-        {
-            (void)function(x, y, argb, "%s", text);
-            return true;
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return false;
-        }
-#else
-#error "Native auto play requires the MSVC x86 SEH boundary"
-#endif
+        return true;
     }
 } // namespace gc::auto_play
