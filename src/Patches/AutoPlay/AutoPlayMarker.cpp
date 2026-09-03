@@ -1,0 +1,88 @@
+#include "AutoPlayMarker.h"
+
+#include <Windows.h>
+
+#include <array>
+
+namespace gc::auto_play
+{
+    namespace
+    {
+        struct MarkerTextCall
+        {
+            float x;
+            float y;
+            std::uint32_t argb;
+            const char* text;
+        };
+
+        constexpr std::array kMarkerTextCalls{
+            MarkerTextCall{34.0F, 34.0F, 0xFF000000U, "AUTO PLAY"},
+            MarkerTextCall{
+                34.0F,
+                54.0F,
+                0xFF000000U,
+                "SCORE SAVE DISABLED"},
+            MarkerTextCall{32.0F, 32.0F, 0xFFFFFF00U, "AUTO PLAY"},
+            MarkerTextCall{
+                32.0F,
+                52.0F,
+                0xFFFFFF00U,
+                "SCORE SAVE DISABLED"},
+        };
+    } // namespace
+
+    AutoPlayMarkerFrameResult ProduceAutoPlayMarkerFrame(
+        const bool active,
+        const AutoPlayMarkerTextActions& actions) noexcept
+    {
+        if (!active)
+        {
+            return AutoPlayMarkerFrameResult::inactive;
+        }
+        if (actions.context == nullptr || actions.queue == nullptr)
+        {
+            return AutoPlayMarkerFrameResult::invalid_actions;
+        }
+
+        for (const auto& call : kMarkerTextCalls)
+        {
+            if (!actions.queue(
+                    actions.context,
+                    call.x,
+                    call.y,
+                    call.argb,
+                    call.text))
+            {
+                return AutoPlayMarkerFrameResult::native_text_failure;
+            }
+        }
+        return AutoPlayMarkerFrameResult::queued;
+    }
+
+    bool CallNativeDebugTextGuarded(
+        const NativeDebugTextFunction function,
+        const float x,
+        const float y,
+        const std::uint32_t argb,
+        const char* const text) noexcept
+    {
+        if (function == nullptr || text == nullptr)
+        {
+            return false;
+        }
+#if defined(_MSC_VER)
+        __try
+        {
+            (void)function(x, y, argb, "%s", text);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+#else
+#error "Native auto play requires the MSVC x86 SEH boundary"
+#endif
+    }
+} // namespace gc::auto_play

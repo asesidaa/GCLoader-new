@@ -64,3 +64,15 @@ add_test(
         NAME ConfigStartup
         COMMAND gc_config_startup_tests
 )
+
+add_executable(gc_auto_play_patch_tests
+        Patches/AutoPlay/AutoPlayPatchTests.cpp
+)
+target_link_libraries(gc_auto_play_patch_tests PRIVATE
+        gc_runtime_patches
+)
+
+add_test(
+        NAME AutoPlayPatch
+        COMMAND gc_auto_play_patch_tests
+)
