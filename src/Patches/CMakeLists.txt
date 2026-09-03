@@ -8,6 +8,8 @@ add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/JudgementScope.cpp
         AbsoluteJudgement/JudgementStage.cpp
         AutoPlay/AutoPlayMarker.cpp
+        AutoPlay/AutoPlayPatch.cpp
+        AutoPlay/AutoPlayPatchDiagnostics.cpp
         AutoPlay/AutoPlayPatchTransaction.cpp
         GameCompatibility/GameBinaryPatch.cpp
         GameCompatibility/GameBinaryPatchDiagnostics.cpp

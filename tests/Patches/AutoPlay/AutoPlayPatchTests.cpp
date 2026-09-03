@@ -1,4 +1,5 @@
 #include "Patches/AutoPlay/AutoPlayMarker.h"
+#include "Patches/AutoPlay/AutoPlayPatchDiagnostics.h"
 #include "Patches/AutoPlay/AutoPlayPatchTransaction.h"
 
 #include <algorithm>
@@ -1028,6 +1029,68 @@ namespace
             ExpectInactiveAndUnpublished(runtime);
         }
     }
+
+    void DiagnosticsRetainContractAndRollbackEvidence()
+    {
+        const gc::auto_play::AutoPlayPatchError error{
+            .stage = gc::auto_play::AutoPlayPatchStage::direct_write,
+            .site = gc::auto_play::AutoPlayContractSite::native_auto_play,
+            .rva = 0x0003CADAU,
+            .expected_clean =
+                TestPattern<0x8A, 0x80, 0xA5, 0x00, 0x00, 0x00>(),
+            .expected_patched =
+                TestPattern<0xB0, 0x01, 0x90, 0x90, 0x90, 0x90>(),
+            .actual = TestPattern<0xCC, 0x80, 0xA5, 0x00, 0x00, 0x00>(),
+            .memory_stage =
+                gc::game_compatibility::GameBinaryMemoryStage::Copy,
+            .win32_error = ERROR_WRITE_FAULT,
+            .rollback_attempted = true,
+            .rollback_complete = false,
+            .rollback_site =
+                gc::auto_play::AutoPlayContractSite::complete_is_mute,
+            .rollback_memory_stage =
+                gc::game_compatibility::GameBinaryMemoryStage::
+                    RestoreProtection,
+            .rollback_win32_error = ERROR_ACCESS_DENIED,
+        };
+
+        const auto diagnostic =
+            gc::auto_play::BuildAutoPlayPatchFatalDiagnostic(error);
+        Expect(
+            diagnostic.title == L"GCLoader auto play setup failed",
+            "auto-play fatal uses its exact setup title");
+        Expect(diagnostic.exit_code == 30, "auto-play fatal owns exit code 30");
+
+        constexpr std::array log_fragments{
+            "stage=direct_write",
+            "site=native_auto_play",
+            "rva=0x3CADA",
+            "expected_clean=",
+            "expected_patched=",
+            "actual=",
+            "memory_stage=copy",
+            "win32_error=29",
+            "rollback_attempted=1",
+            "rollback_complete=0",
+            "rollback_site=complete_is_mute",
+            "rollback_memory_stage=restore_protection",
+            "rollback_win32_error=5",
+        };
+        for (const std::string_view fragment : log_fragments)
+        {
+            Expect(
+                diagnostic.log.find(fragment) != std::string::npos,
+                "auto-play fatal log retains complete transaction evidence");
+        }
+
+        Expect(
+            diagnostic.modal.find(L"save suppression") != std::wstring::npos &&
+                diagnostic.modal.find(L"visible marker") !=
+                    std::wstring::npos &&
+                diagnostic.modal.find(L"loader-log.txt") !=
+                    std::wstring::npos,
+            "auto-play fatal modal explains both safety guarantees and log path");
+    }
 } // namespace
 
 int main()
@@ -1037,5 +1100,6 @@ int main()
     EveryDirectStateCombinationCommitsInSafetyOrder();
     EveryPreflightFailureLeavesTheImageAndHookUntouched();
     HookAndDirectWriteFailuresRollbackOnlyOwnedSites();
+    DiagnosticsRetainContractAndRollbackEvidence();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

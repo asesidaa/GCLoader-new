@@ -17,6 +17,7 @@
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
+#include "Patches/AutoPlay/AutoPlayPatch.h"
 #include "Patches/GameCompatibility/GameBinaryPatch.h"
 #include "Patches/GameCompatibility/GameBinaryPatchDiagnostics.h"
 #include "Patches/SongUnlock/SongUnlockPatch.h"
@@ -678,6 +679,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             {
                 PublishInputConfigurationFatal(
                     "Input settings copy failed unexpectedly");
+                return FALSE;
+            }
+
+            if (!gc::auto_play::AutoPlayPatchInit(
+                    settings.enable_auto_play()))
+            {
+                PLOG_ERROR << "AutoPlayPatch: fail-closed DLL attach";
                 return FALSE;
             }
 
