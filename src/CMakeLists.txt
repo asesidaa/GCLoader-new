@@ -33,11 +33,14 @@ add_subdirectory(Patches)
 
 add_library(gc_loader_startup STATIC
         Loader/StartupConfiguration.cpp
+        Loader/GameVersionedStartupPlan.cpp
+        Loader/NesysVersionedStartupPlan.cpp
 )
 target_include_directories(gc_loader_startup PUBLIC
         ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(gc_loader_startup PUBLIC
+        gc_game_version
         gc_config
         gc_system_path
         gc_test_mode_storage

@@ -1,4 +1,5 @@
 add_subdirectory(RuntimeImage)
+add_subdirectory(GameVersion)
 
 add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
