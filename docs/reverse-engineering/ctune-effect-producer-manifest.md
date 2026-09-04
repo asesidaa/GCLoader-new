@@ -431,7 +431,7 @@ This section records the static producer/consumer boundary used by the
 windowed-widescreen implementation. It does not claim that the built hook has
 executed in the game or that its visual placement is accepted.
 
-### Ordinary combo draw window
+### Per-entry combo draw window
 
 The ordinary per-entry combo branch is bounded by these guarded sites:
 
@@ -439,11 +439,13 @@ The ordinary per-entry combo branch is bounded by these guarded sites:
 |---:|---:|---|---|
 | `0x005E4503` | `0x001E4503` | `E8 A8 D0 FF FF` | Begin before the static CHAIN-label draw; entry is `[ebp-0x14]`. |
 | `0x005E4550` | `0x001E4550` | `E8 0B 7B FE FF` | Read-only byte witness for the normal digit draw inside the window. |
-| `0x005E4558` | `0x001E4558` | `C7 45 CC 00 00 00 00` | End after the digit call and restore the centered HUD viewport. |
+| `0x005E4B58` | `0x001E4B58` | `8B 55 E4 8B 45 E0 89 02 E9 D9 F8 FF FF` | Shared post-effect join; restore the centered HUD viewport only after every layer using this entry's combo value has completed. |
 
-The milestone/celebration counter follows a separate branch outside this
-window. Consequently, the implementation changes viewport placement only for
-the ordinary CHAIN label/digits: entry 0 selects the right 720-pixel viewport,
+The calls after the normal digit draw reuse the same per-entry combo value for
+threshold glow and milestone/celebration layers before joining at `0x005E4B58`.
+Restoring at the old `0x005E4558` boundary split those layers across two
+viewports and produced a centered duplicate number. The complete per-entry
+presentation now stays together: entry 0 selects the right 720-pixel viewport,
 entry 1 selects the left viewport, and an unexpected entry selects center.
 
 ### Player 1 judgement effect ownership

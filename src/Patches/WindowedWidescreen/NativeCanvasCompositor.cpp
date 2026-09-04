@@ -196,6 +196,39 @@ namespace gc::windowed_widescreen
             return {};
         }
 
+        return ReapplyGameplayHudPlacement(placement);
+    }
+
+    std::expected<void, CompositorError>
+    NativeCanvasCompositor::ReapplyGameplayHudPlacement(
+        const GameplayHudPlacement placement) noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current)
+        {
+            return PolicyFailure(current.error(), RenderSpace::gameplay_hud);
+        }
+        if (*current != RenderSpace::gameplay_hud)
+        {
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current,
+                .requested_space = RenderSpace::gameplay_hud,
+            });
+        }
+
+        const auto requested_viewport = ResolveGameplayHudViewport(
+            render_space_policy_.output_size(),
+            placement);
+        if (!requested_viewport)
+        {
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current,
+                .requested_space = RenderSpace::gameplay_hud,
+            });
+        }
+
         if (!actions_.flush_native_batches(actions_.context))
         {
             return FailAction(

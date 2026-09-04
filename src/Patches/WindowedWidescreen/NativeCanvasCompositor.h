@@ -79,6 +79,9 @@ namespace gc::windowed_widescreen
         SetGameplayHudPlacement(GameplayHudPlacement placement) noexcept;
 
         [[nodiscard]] std::expected<void, CompositorError>
+        ReapplyGameplayHudPlacement(GameplayHudPlacement placement) noexcept;
+
+        [[nodiscard]] std::expected<void, CompositorError>
         BeginPhysicalGameplayHudOverlay(
             GameplayHudPlacement placement) noexcept;
 

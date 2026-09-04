@@ -9,7 +9,7 @@
 
 namespace gc::windowed_widescreen
 {
-    inline constexpr std::size_t kMaximumWidescreenHooks = 34;
+    inline constexpr std::size_t kMaximumWidescreenHooks = 36;
 
     struct WidescreenContractManifest
     {

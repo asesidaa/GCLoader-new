@@ -18,6 +18,7 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <type_traits>
 
 namespace gc::windowed_widescreen
@@ -30,7 +31,28 @@ namespace gc::windowed_widescreen
         constexpr std::size_t kPointerCollectionEndOffset = 0x10;
         constexpr std::uint32_t kJudgementFirstEffectSlot = 93;
         constexpr std::uint32_t kPlayerOneJudgementEffectCount = 5;
+        constexpr std::string_view kNetworkStatusNesysClipName = "imc_ico_n";
+        constexpr std::string_view kNetworkStatusLocalClipName = "imc_ico_l";
+        constexpr std::size_t kNetworkStatusVisitorMatrixStackOffset = 0x1A0;
+        constexpr std::size_t kNetworkStatusMatrixElementCount = 16;
         static_assert(sizeof(std::uintptr_t) == sizeof(std::uint32_t));
+
+        [[nodiscard]] consteval std::uint32_t MovieClipNameHash(
+            const std::string_view name) noexcept
+        {
+            std::uint32_t value{};
+            for (const auto character : name)
+            {
+                value = value * 33U +
+                    static_cast<std::uint8_t>(character);
+            }
+            return value;
+        }
+
+        constexpr auto kNetworkStatusNesysClipHash =
+            MovieClipNameHash(kNetworkStatusNesysClipName);
+        constexpr auto kNetworkStatusLocalClipHash =
+            MovieClipNameHash(kNetworkStatusLocalClipName);
 
         void ReportUnknownTaskIdentity(
             void*,
@@ -65,12 +87,28 @@ namespace gc::windowed_widescreen
             physical_gameplay_hud_overlay,
         };
 
+        enum class NetworkStatusClip : std::uint8_t
+        {
+            none,
+            nesys,
+            local,
+        };
+
+        struct StoredVtableHook
+        {
+            std::uintptr_t entry{};
+            std::uintptr_t original{};
+            std::uintptr_t replacement{};
+            bool enabled{};
+        };
+
         struct StoredHook
         {
             WidescreenContractSite site{WidescreenContractSite::none};
             WidescreenHookKind kind{WidescreenHookKind::read_only};
             safetyhook::InlineHook inline_hook{};
             safetyhook::MidHook mid_hook{};
+            StoredVtableHook vtable_hook{};
         };
 
         struct WindowedWidescreenRuntime
@@ -89,8 +127,9 @@ namespace gc::windowed_widescreen
                       PassClassifierDiagnosticSink{
                           .unknown_identity = &ReportUnknownTaskIdentity,
                           .unknown_capacity_exhausted =
-                              &ReportUnknownTaskCapacity,
-                      }},
+                          &ReportUnknownTaskCapacity,
+                      }
+                  },
                   device{resolution},
                   compositor{
                       resolution.output_size(),
@@ -101,7 +140,8 @@ namespace gc::windowed_widescreen
                                   GetCurrentThreadId());
                           },
                       },
-                      device.DeviceActions()}
+                      device.DeviceActions()
+                  }
             {
             }
 
@@ -115,18 +155,23 @@ namespace gc::windowed_widescreen
             std::array<StoredHook, kMaximumWidescreenHooks> hooks{};
             std::size_t hook_count{};
             std::atomic<RuntimePublicationState> publication_state{
-                RuntimePublicationState::preparing};
+                RuntimePublicationState::preparing
+            };
             std::optional<NativeWindowPolicyError>
-                last_window_policy_error;
+            last_window_policy_error;
             std::optional<renderer_device_loss::RendererResourceError>
-                last_resource_error;
+            last_resource_error;
             std::optional<CompositorError> last_compositor_error;
             std::optional<renderer_device_loss::RendererResetHookPairError>
-                last_reset_hook_error;
+            last_reset_hook_error;
             bool pending_batches_reported{};
+            std::atomic_bool gameplay_frame_active{};
+            std::atomic_uint32_t frame_sequence{};
+            std::atomic_uint32_t network_status_log_mask{};
             std::uintptr_t active_gameplay_tune{};
             GameplayFeedbackDrawScope gameplay_feedback_draw_scope{
-                GameplayFeedbackDrawScope::none};
+                GameplayFeedbackDrawScope::none
+            };
             bool note_tutorial_group_active{};
             bool judgement_scope_reported{};
             bool note_tutorial_scope_reported{};
@@ -141,11 +186,59 @@ namespace gc::windowed_widescreen
         std::unique_ptr<WindowedWidescreenRuntime> g_runtime_owner;
         std::atomic<WindowedWidescreenRuntime*> g_callback_runtime{};
         std::atomic_bool g_runtime_fatal_published{};
+        std::atomic<std::uintptr_t> g_movie_clip_accept_original{};
+        std::atomic<std::uintptr_t> g_shape_draw_visit_original{};
+        thread_local std::uint32_t g_network_status_native_scope_depth{};
+        thread_local NetworkStatusClip g_network_status_active_clip{
+            NetworkStatusClip::none};
+        thread_local bool g_network_status_local_matrix_corrected{};
+
+        class NetworkStatusNativeScope final
+        {
+        public:
+            explicit NetworkStatusNativeScope(
+                const NetworkStatusClip clip) noexcept
+                : previous_clip_{g_network_status_active_clip},
+                  previous_local_matrix_corrected_{
+                      g_network_status_local_matrix_corrected}
+            {
+                ++g_network_status_native_scope_depth;
+                g_network_status_active_clip = clip;
+                g_network_status_local_matrix_corrected = false;
+            }
+
+            ~NetworkStatusNativeScope() noexcept
+            {
+                g_network_status_local_matrix_corrected =
+                    previous_local_matrix_corrected_;
+                g_network_status_active_clip = previous_clip_;
+                if (g_network_status_native_scope_depth != 0)
+                {
+                    --g_network_status_native_scope_depth;
+                }
+            }
+
+            [[nodiscard]] bool local_matrix_corrected() const noexcept
+            {
+                return g_network_status_local_matrix_corrected;
+            }
+
+            NetworkStatusNativeScope(const NetworkStatusNativeScope&) = delete;
+            NetworkStatusNativeScope& operator=(
+                const NetworkStatusNativeScope&) = delete;
+
+        private:
+            NetworkStatusClip previous_clip_{NetworkStatusClip::none};
+            bool previous_local_matrix_corrected_{};
+        };
 
         void ResetScopedRenderState(
             WindowedWidescreenRuntime& runtime) noexcept
         {
             runtime.active_gameplay_tune = 0;
+            runtime.gameplay_frame_active.store(
+                false,
+                std::memory_order_release);
             runtime.gameplay_feedback_draw_scope =
                 GameplayFeedbackDrawScope::none;
             runtime.note_tutorial_group_active = false;
@@ -171,6 +264,20 @@ namespace gc::windowed_widescreen
                 }
             }
             return nullptr;
+        }
+
+        [[nodiscard]] std::atomic<std::uintptr_t>* VtableOriginalStorage(
+            const WidescreenContractSite site) noexcept
+        {
+            switch (site)
+            {
+            case WidescreenContractSite::network_status_movie_clip_accept:
+                return &g_movie_clip_accept_original;
+            case WidescreenContractSite::network_status_shape_draw_visit:
+                return &g_shape_draw_visit_original;
+            default:
+                return nullptr;
+            }
         }
 
         [[nodiscard]] const WidescreenByteContract* FindProductionContract(
@@ -211,23 +318,23 @@ namespace gc::windowed_widescreen
                         ? static_cast<int>(error.compositor_error->stage)
                         : -1,
                     error.compositor_error.has_value() &&
-                            error.compositor_error->policy_error.has_value()
+                    error.compositor_error->policy_error.has_value()
                         ? static_cast<int>(
-                              *error.compositor_error->policy_error)
+                            *error.compositor_error->policy_error)
                         : -1,
                     error.compositor_error.has_value()
                         ? static_cast<int>(error.compositor_error->stable_space)
                         : -1,
                     error.compositor_error.has_value()
                         ? static_cast<int>(
-                              error.compositor_error->requested_space)
+                            error.compositor_error->requested_space)
                         : -1,
                     error.compositor_error.has_value() &&
-                            error.compositor_error->restoration_attempted
+                    error.compositor_error->restoration_attempted
                         ? 1
                         : 0,
                     error.compositor_error.has_value() &&
-                            error.compositor_error->restoration_succeeded
+                    error.compositor_error->restoration_succeeded
                         ? 1
                         : 0);
             }
@@ -268,6 +375,72 @@ namespace gc::windowed_widescreen
             }
         }
 
+        [[nodiscard]] bool EnableVtableHook(
+            StoredVtableHook& hook) noexcept
+        {
+            if (hook.entry == 0 || hook.original == 0 ||
+                hook.replacement == 0 || hook.enabled)
+            {
+                return false;
+            }
+
+            auto unprotected = safetyhook::unprotect(
+                reinterpret_cast<std::uint8_t*>(hook.entry),
+                sizeof(std::uintptr_t));
+            if (!unprotected)
+            {
+                return false;
+            }
+
+            auto* const entry = reinterpret_cast<PVOID volatile*>(hook.entry);
+            const auto observed = reinterpret_cast<std::uintptr_t>(
+                InterlockedCompareExchangePointer(
+                    entry,
+                    reinterpret_cast<PVOID>(hook.replacement),
+                    reinterpret_cast<PVOID>(hook.original)));
+            const bool exchanged = observed == hook.original;
+            if (exchanged)
+            {
+                hook.enabled = true;
+                (void)FlushInstructionCache(
+                    GetCurrentProcess(),
+                    reinterpret_cast<void*>(hook.entry),
+                    sizeof(std::uintptr_t));
+            }
+            return exchanged;
+        }
+
+        void ResetVtableHook(StoredVtableHook& hook) noexcept
+        {
+            if (!hook.enabled || hook.entry == 0)
+            {
+                return;
+            }
+
+            auto unprotected = safetyhook::unprotect(
+                reinterpret_cast<std::uint8_t*>(hook.entry),
+                sizeof(std::uintptr_t));
+            if (!unprotected)
+            {
+                return;
+            }
+
+            auto* const entry = reinterpret_cast<PVOID volatile*>(hook.entry);
+            const auto observed = reinterpret_cast<std::uintptr_t>(
+                InterlockedCompareExchangePointer(
+                    entry,
+                    reinterpret_cast<PVOID>(hook.original),
+                    reinterpret_cast<PVOID>(hook.replacement)));
+            if (observed == hook.replacement)
+            {
+                hook.enabled = false;
+                (void)FlushInstructionCache(
+                    GetCurrentProcess(),
+                    reinterpret_cast<void*>(hook.entry),
+                    sizeof(std::uintptr_t));
+            }
+        }
+
         [[nodiscard]] bool FlushNativeBatches(void* opaque) noexcept
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(opaque);
@@ -290,38 +463,48 @@ namespace gc::windowed_widescreen
             }
         }
 
-        [[nodiscard]] bool NativeBatchesAreEmpty(void* opaque) noexcept
-        {
-            auto* runtime = static_cast<WindowedWidescreenRuntime*>(opaque);
-            if (runtime == nullptr)
-            {
-                return false;
-            }
+        using NativeBatchCounts =
+        std::array<std::uint32_t, kBatchQueueCount>;
 
+        [[nodiscard]] bool ReadNativeBatchCounts(
+            WindowedWidescreenRuntime& runtime,
+            NativeBatchCounts& pending) noexcept
+        {
             std::uintptr_t queue_base{};
             if (!ProductionRead(
                     nullptr,
-                    runtime->image_base + kBatchQueuePointerRva,
+                    runtime.image_base + kBatchQueuePointerRva,
                     std::as_writable_bytes(std::span{&queue_base, 1})) ||
                 queue_base == 0)
             {
                 return false;
             }
 
-            std::array<std::uint32_t, kBatchQueueCount> pending{};
             for (std::size_t index = 0; index < pending.size(); ++index)
             {
                 const auto count_address = queue_base +
                     kBatchPendingCountOffset +
                     kBatchQueueStride * index;
                 if (!ProductionRead(
-                        nullptr,
-                        count_address,
-                        std::as_writable_bytes(
-                            std::span{&pending[index], 1})))
+                    nullptr,
+                    count_address,
+                    std::as_writable_bytes(
+                        std::span{&pending[index], 1})))
                 {
                     return false;
                 }
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool NativeBatchesAreEmpty(void* opaque) noexcept
+        {
+            auto* runtime = static_cast<WindowedWidescreenRuntime*>(opaque);
+            NativeBatchCounts pending{};
+            if (runtime == nullptr ||
+                !ReadNativeBatchCounts(*runtime, pending))
+            {
+                return false;
             }
 
             const bool empty = std::ranges::all_of(
@@ -363,8 +546,8 @@ namespace gc::windowed_widescreen
                     renderer_device_loss::RendererResourceParticipant{
                         .context = runtime,
                         .create = +[](
-                            void* opaque_runtime,
-                            const std::uintptr_t renderer_owner) noexcept
+                        void* opaque_runtime,
+                        const std::uintptr_t renderer_owner) noexcept
                         {
                             auto* owner = static_cast<
                                 WindowedWidescreenRuntime*>(opaque_runtime);
@@ -423,15 +606,15 @@ namespace gc::windowed_widescreen
                         renderer_device_loss::RendererResetFailureActions{
                             .context = &runtime,
                             .failure = +[](
-                                void* opaque_runtime,
-                                const renderer_device_loss::
-                                    RendererResetLifecycleStage stage,
-                                const renderer_device_loss::
-                                    RendererResourceError error) noexcept
+                            void* opaque_runtime,
+                            const renderer_device_loss::
+                            RendererResetLifecycleStage stage,
+                            const renderer_device_loss::
+                            RendererResourceError error) noexcept
                             {
                                 auto* failed_runtime = static_cast<
                                     WindowedWidescreenRuntime*>(
-                                        opaque_runtime);
+                                    opaque_runtime);
                                 if (failed_runtime == nullptr)
                                 {
                                     return;
@@ -439,16 +622,16 @@ namespace gc::windowed_widescreen
                                 PublishRuntimeFatal(
                                     WindowedWidescreenError{
                                         .stage = stage ==
-                                                renderer_device_loss::
-                                                    RendererResetLifecycleStage::
-                                                        before_reset
-                                            ? WindowedWidescreenOperationStage::
-                                                reset_pre
-                                            : WindowedWidescreenOperationStage::
-                                                reset_post,
+                                                 renderer_device_loss::
+                                                 RendererResetLifecycleStage::
+                                                 before_reset
+                                                     ? WindowedWidescreenOperationStage::
+                                                     reset_pre
+                                                     : WindowedWidescreenOperationStage::
+                                                     reset_post,
                                         .resource_error = error,
                                         .d3d_failure = failed_runtime->device.
-                                            last_failure(),
+                                                                       last_failure(),
                                     });
                             },
                         });
@@ -464,7 +647,7 @@ namespace gc::windowed_widescreen
                 return renderer_device_loss::
                     RendererDeviceLossResetHookPairState() ==
                     renderer_device_loss::
-                        RendererResetHookPairState::disabled;
+                    RendererResetHookPairState::disabled;
             }
 
             if (runtime.hook_count >= runtime.hooks.size())
@@ -500,6 +683,45 @@ namespace gc::windowed_widescreen
                         return false;
                     }
                     slot.mid_hook = std::move(*created);
+                }
+                else if (kind == WidescreenHookKind::vtable_hook)
+                {
+                    auto* const original_storage =
+                        VtableOriginalStorage(site);
+                    std::uintptr_t original{};
+                    if (original_storage == nullptr || !ProductionRead(
+                            nullptr,
+                            address,
+                            std::as_writable_bytes(
+                                std::span{&original, 1})) ||
+                        original == 0)
+                    {
+                        return false;
+                    }
+                    const auto known_original =
+                        original_storage->load(
+                            std::memory_order_acquire);
+                    if (known_original != 0 && known_original != original)
+                    {
+                        return false;
+                    }
+                    original_storage->store(
+                        original,
+                        std::memory_order_release);
+                    slot.vtable_hook = StoredVtableHook{
+                        .entry = address,
+                        .original = original,
+                        .replacement = reinterpret_cast<std::uintptr_t>(
+                            callback),
+                    };
+                    PLOG_INFO
+                        << "WindowedWidescreen vtable hook prepared"
+                        << " site=" << WidescreenContractSiteName(site)
+                        << " slot=0x" << std::hex << address
+                        << " original=0x" << original
+                        << " replacement=0x"
+                        << reinterpret_cast<std::uintptr_t>(callback)
+                        << std::dec;
                 }
                 else
                 {
@@ -541,7 +763,7 @@ namespace gc::windowed_widescreen
                 return renderer_device_loss::
                     RendererDeviceLossResetHookPairState() ==
                     renderer_device_loss::
-                        RendererResetHookPairState::active;
+                    RendererResetHookPairState::active;
             }
             auto* hook = FindHook(**context->candidate_owner, site);
             if (hook == nullptr)
@@ -550,9 +772,34 @@ namespace gc::windowed_widescreen
             }
             try
             {
-                return hook->kind == WidescreenHookKind::inline_hook
-                    ? hook->inline_hook.enable().has_value()
-                    : hook->mid_hook.enable().has_value();
+                if (hook->kind == WidescreenHookKind::inline_hook)
+                {
+                    return hook->inline_hook.enable().has_value();
+                }
+                if (hook->kind == WidescreenHookKind::mid_hook)
+                {
+                    return hook->mid_hook.enable().has_value();
+                }
+                if (hook->kind != WidescreenHookKind::vtable_hook)
+                {
+                    return false;
+                }
+                const bool enabled = EnableVtableHook(hook->vtable_hook);
+                std::uintptr_t observed{};
+                const bool observed_valid = ProductionRead(
+                    nullptr,
+                    hook->vtable_hook.entry,
+                    std::as_writable_bytes(std::span{&observed, 1}));
+                PLOG_INFO
+                    << "WindowedWidescreen vtable hook enable"
+                    << " site=" << WidescreenContractSiteName(site)
+                    << " success=" << enabled
+                    << " observed_valid=" << observed_valid
+                    << " slot=0x" << std::hex << hook->vtable_hook.entry
+                    << " observed=0x" << observed
+                    << " replacement=0x" << hook->vtable_hook.replacement
+                    << std::dec;
+                return enabled;
             }
             catch (...)
             {
@@ -587,6 +834,10 @@ namespace gc::windowed_widescreen
                     else if (hook->kind == WidescreenHookKind::mid_hook)
                     {
                         hook->mid_hook.reset();
+                    }
+                    else if (hook->kind == WidescreenHookKind::vtable_hook)
+                    {
+                        ResetVtableHook(hook->vtable_hook);
                     }
                 }
                 catch (...)
@@ -776,11 +1027,11 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(*runtime, WidescreenContractSite::config_apply);
+                             ? nullptr
+                             : FindHook(*runtime, WidescreenContractSite::config_apply);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.ccall<int>(static_cast<int>(config));
+                       ? 0
+                       : hook->inline_hook.ccall<int>(static_cast<int>(config));
         }
 
         [[nodiscard]] int CallWindowOriginal(
@@ -789,14 +1040,14 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(
-                    *runtime,
-                    WidescreenContractSite::window_device_create);
+                             ? nullptr
+                             : FindHook(
+                                 *runtime,
+                                 WidescreenContractSite::window_device_create);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.thiscall<int>(
-                    reinterpret_cast<void*>(renderer));
+                       ? 0
+                       : hook->inline_hook.thiscall<int>(
+                           reinterpret_cast<void*>(renderer));
         }
 
         [[nodiscard]] int CallLogicalResolutionSetOriginal(
@@ -806,15 +1057,15 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(
-                    *runtime,
-                    WidescreenContractSite::logical_resolution_set);
+                             ? nullptr
+                             : FindHook(
+                                 *runtime,
+                                 WidescreenContractSite::logical_resolution_set);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.ccall<int>(
-                    static_cast<int>(width),
-                    static_cast<int>(height));
+                       ? 0
+                       : hook->inline_hook.ccall<int>(
+                           static_cast<int>(width),
+                           static_cast<int>(height));
         }
 
         template <WidescreenContractSite Site>
@@ -824,11 +1075,11 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(*runtime, Site);
+                             ? nullptr
+                             : FindHook(*runtime, Site);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.ccall<int>(static_cast<int>(value));
+                       ? 0
+                       : hook->inline_hook.ccall<int>(static_cast<int>(value));
         }
 
         [[nodiscard]] bool ValidateAndPlaceWindow(
@@ -879,12 +1130,12 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(*runtime, WidescreenContractSite::frame_begin);
+                             ? nullptr
+                             : FindHook(*runtime, WidescreenContractSite::frame_begin);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.thiscall<int>(
-                    reinterpret_cast<void*>(renderer));
+                       ? 0
+                       : hook->inline_hook.thiscall<int>(
+                           reinterpret_cast<void*>(renderer));
         }
 
         [[nodiscard]] int CallFrameEndOriginal(
@@ -893,12 +1144,12 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(*runtime, WidescreenContractSite::frame_end);
+                             ? nullptr
+                             : FindHook(*runtime, WidescreenContractSite::frame_end);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.thiscall<int>(
-                    reinterpret_cast<void*>(renderer));
+                       ? 0
+                       : hook->inline_hook.thiscall<int>(
+                           reinterpret_cast<void*>(renderer));
         }
 
         [[nodiscard]] bool BeginCompositorFrame(void* context) noexcept
@@ -950,8 +1201,8 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             return runtime == nullptr
-                ? RenderSpace::native_2d
-                : runtime->classifier.ClassifyTask(vtable);
+                       ? RenderSpace::native_2d
+                       : runtime->classifier.ClassifyTask(vtable);
         }
 
         [[nodiscard]] bool RequestRuntimeSpace(
@@ -996,18 +1247,28 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(*runtime, WidescreenContractSite::task_dispatch);
+                             ? nullptr
+                             : FindHook(*runtime, WidescreenContractSite::task_dispatch);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.thiscall<int>(
-                    reinterpret_cast<void*>(task_node));
+                       ? 0
+                       : hook->inline_hook.thiscall<int>(
+                           reinterpret_cast<void*>(task_node));
         }
 
         [[nodiscard]] bool ReadCurrentDimensions(
             void* context,
             RenderDimensions& dimensions) noexcept
         {
+            if (g_network_status_native_scope_depth != 0)
+            {
+                dimensions = RenderDimensions{
+                    .width = kNativeWidth,
+                    .height = kNativeHeight,
+                    .width_float = static_cast<float>(kNativeWidth),
+                    .height_float = static_cast<float>(kNativeHeight),
+                };
+                return true;
+            }
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             if (runtime == nullptr)
             {
@@ -1030,6 +1291,23 @@ namespace gc::windowed_widescreen
             if (runtime == nullptr)
             {
                 return false;
+            }
+            if (g_network_status_native_scope_depth != 0)
+            {
+                const auto centered = ResolveGameplayHudViewport(
+                    runtime->resolution.output_size(),
+                    GameplayHudPlacement::centered);
+                if (!centered)
+                {
+                    return false;
+                }
+                viewport = NativeViewport{
+                    .x = static_cast<float>(centered->x),
+                    .y = static_cast<float>(centered->y),
+                    .width = static_cast<float>(centered->width),
+                    .height = static_cast<float>(centered->height),
+                };
+                return true;
             }
             const auto current_space = runtime->compositor.CurrentSpace();
             const auto dimensions = runtime->compositor.CurrentDimensions();
@@ -1067,13 +1345,13 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(*runtime, WidescreenContractSite::viewport_reset);
+                             ? nullptr
+                             : FindHook(*runtime, WidescreenContractSite::viewport_reset);
             return hook == nullptr
-                ? 0
-                : hook->inline_hook.ccall<int>(
-                    reinterpret_cast<int*>(
-                        const_cast<NativeViewport*>(viewport)));
+                       ? 0
+                       : hook->inline_hook.ccall<int>(
+                           reinterpret_cast<int*>(
+                               const_cast<NativeViewport*>(viewport)));
         }
 
         [[noreturn]] void PublishRenderRuntimeFatal(
@@ -1083,6 +1361,458 @@ namespace gc::windowed_widescreen
             error.compositor_error = runtime.last_compositor_error;
             error.d3d_failure = runtime.device.last_failure();
             PublishRuntimeFatal(error);
+        }
+
+
+        [[nodiscard]] bool RuntimeCStringEquals(
+            const std::uintptr_t address,
+            const std::string_view expected) noexcept
+        {
+            std::array<char, 16> actual{};
+            if (address == 0 || expected.size() + 1 > actual.size())
+            {
+                return false;
+            }
+            const auto output = std::as_writable_bytes(std::span{actual}).
+                first(expected.size() + 1);
+            return ProductionRead(nullptr, address, output) &&
+                std::memcmp(actual.data(), expected.data(), expected.size()) ==
+                0 &&
+                actual[expected.size()] == '\0';
+        }
+
+        [[nodiscard]] NetworkStatusClip IdentifyNetworkStatusClip(
+            void* const movie_clip) noexcept
+        {
+            if (movie_clip == nullptr)
+            {
+                return NetworkStatusClip::none;
+            }
+
+            const auto address = reinterpret_cast<std::uintptr_t>(movie_clip);
+            std::uint32_t name_hash{};
+            if (!ProductionRead(
+                nullptr,
+                address + kMovieClipInstanceNameHashOffset,
+                std::as_writable_bytes(std::span{&name_hash, 1})))
+            {
+                return NetworkStatusClip::none;
+            }
+
+            NetworkStatusClip target = NetworkStatusClip::none;
+            std::string_view expected_name{};
+            if (name_hash == kNetworkStatusNesysClipHash)
+            {
+                target = NetworkStatusClip::nesys;
+                expected_name = kNetworkStatusNesysClipName;
+            }
+            else if (name_hash == kNetworkStatusLocalClipHash)
+            {
+                target = NetworkStatusClip::local;
+                expected_name = kNetworkStatusLocalClipName;
+            }
+            else
+            {
+                return NetworkStatusClip::none;
+            }
+
+            std::uintptr_t name_address{};
+            if (!ReadRuntimePointer(
+                    nullptr,
+                    address + kMovieClipInstanceNameOffset,
+                    name_address) ||
+                !RuntimeCStringEquals(name_address, expected_name))
+            {
+                return NetworkStatusClip::none;
+            }
+            return target;
+        }
+
+        [[nodiscard]] bool IsMovieClipDrawVisitor(
+            const WindowedWidescreenRuntime& runtime,
+            void* const visitor) noexcept
+        {
+            std::uintptr_t vtable{};
+            return visitor != nullptr &&
+                ReadRuntimePointer(
+                    nullptr,
+                    reinterpret_cast<std::uintptr_t>(visitor),
+                    vtable) &&
+                vtable == runtime.image_base +
+                kMovieClipDrawVisitorVtableRva;
+        }
+
+        [[nodiscard]] constexpr const char* NetworkStatusClipName(
+            const NetworkStatusClip clip) noexcept
+        {
+            return clip == NetworkStatusClip::nesys
+                       ? "imc_ico_n"
+                       : clip == NetworkStatusClip::local
+                       ? "imc_ico_l"
+                       : "none";
+        }
+
+        [[nodiscard]] bool NetworkStatusMatrixIsWritable(
+            const std::uintptr_t address) noexcept
+        {
+            MEMORY_BASIC_INFORMATION memory{};
+            if (address == 0 || VirtualQuery(
+                    reinterpret_cast<const void*>(address),
+                    &memory,
+                    sizeof(memory)) != sizeof(memory) ||
+                memory.State != MEM_COMMIT ||
+                (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+            {
+                return false;
+            }
+
+            const auto protection = memory.Protect & 0xFFU;
+            const bool writable = protection == PAGE_READWRITE ||
+                protection == PAGE_WRITECOPY ||
+                protection == PAGE_EXECUTE_READWRITE ||
+                protection == PAGE_EXECUTE_WRITECOPY;
+            const auto region_begin = reinterpret_cast<std::uintptr_t>(
+                memory.BaseAddress);
+            if (!writable || address < region_begin ||
+                memory.RegionSize >
+                std::numeric_limits<std::uintptr_t>::max() - region_begin)
+            {
+                return false;
+            }
+            const auto region_end = region_begin + memory.RegionSize;
+            constexpr auto matrix_size =
+                sizeof(float) * kNetworkStatusMatrixElementCount;
+            return address <= region_end && matrix_size <= region_end - address;
+        }
+
+        class ScopedLocalNetworkStatusMatrix final
+        {
+        public:
+            ScopedLocalNetworkStatusMatrix(
+                const WindowedWidescreenRuntime& runtime,
+                void* const visitor) noexcept
+            {
+                const auto output = runtime.resolution.output_size();
+                const auto native = runtime.resolution.native_rect();
+                if (visitor == nullptr || output.width <= kNativeWidth ||
+                    output.height != kNativeHeight || native.left < 0)
+                {
+                    return;
+                }
+
+                std::uintptr_t matrix_address{};
+                if (!ReadRuntimePointer(
+                        nullptr,
+                        reinterpret_cast<std::uintptr_t>(visitor) +
+                        kNetworkStatusVisitorMatrixStackOffset,
+                        matrix_address) ||
+                    !NetworkStatusMatrixIsWritable(matrix_address) ||
+                    !ProductionRead(
+                        nullptr,
+                        matrix_address,
+                        std::as_writable_bytes(std::span{original_})))
+                {
+                    return;
+                }
+
+                auto corrected = original_;
+                const auto horizontal_scale =
+                    static_cast<float>(kNativeWidth) /
+                    static_cast<float>(output.width);
+                corrected[0] *= horizontal_scale;
+                corrected[4] *= horizontal_scale;
+                corrected[8] *= horizontal_scale;
+                corrected[12] = horizontal_scale *
+                    (corrected[12] + static_cast<float>(native.left));
+
+                matrix_ = reinterpret_cast<float*>(matrix_address);
+                std::memcpy(
+                    matrix_,
+                    corrected.data(),
+                    sizeof(corrected));
+                applied_ = true;
+            }
+
+            ~ScopedLocalNetworkStatusMatrix() noexcept
+            {
+                if (applied_)
+                {
+                    std::memcpy(
+                        matrix_,
+                        original_.data(),
+                        sizeof(original_));
+                }
+            }
+
+            ScopedLocalNetworkStatusMatrix(
+                const ScopedLocalNetworkStatusMatrix&) = delete;
+            ScopedLocalNetworkStatusMatrix& operator=(
+                const ScopedLocalNetworkStatusMatrix&) = delete;
+
+            [[nodiscard]] bool applied() const noexcept
+            {
+                return applied_;
+            }
+
+        private:
+            std::array<float, kNetworkStatusMatrixElementCount> original_{};
+            float* matrix_{};
+            bool applied_{};
+        };
+
+        void CallShapeDrawVisitOriginal(
+            void* const visitor,
+            void* const definition) noexcept
+        {
+            const auto original = g_shape_draw_visit_original.load(
+                std::memory_order_acquire);
+            if (original == 0 || visitor == nullptr || definition == nullptr)
+            {
+                return;
+            }
+            using ShapeDrawVisit = void(__thiscall*)(void*, void*);
+            reinterpret_cast<ShapeDrawVisit>(original)(visitor, definition);
+        }
+
+        void __fastcall NetworkStatusShapeDrawVisitDetour(
+            void* const visitor,
+            void*,
+            void* const definition) noexcept
+        {
+            auto* const runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime != nullptr && RuntimeCallbacksAreActive(*runtime) &&
+                definition != nullptr &&
+                g_network_status_native_scope_depth != 0 &&
+                g_network_status_active_clip == NetworkStatusClip::local &&
+                runtime->gameplay_frame_active.load(std::memory_order_acquire))
+            {
+                const ScopedLocalNetworkStatusMatrix corrected{
+                    *runtime,
+                    visitor};
+                if (corrected.applied())
+                {
+                    g_network_status_local_matrix_corrected = true;
+                }
+                CallShapeDrawVisitOriginal(visitor, definition);
+                return;
+            }
+            CallShapeDrawVisitOriginal(visitor, definition);
+        }
+
+        [[nodiscard]] int CallMovieClipAcceptOriginal(
+            WindowedWidescreenRuntime* const runtime,
+            void* const movie_clip,
+            void* const visitor) noexcept
+        {
+            std::uintptr_t original =
+                g_movie_clip_accept_original.load(std::memory_order_acquire);
+            if (runtime != nullptr)
+            {
+                if (auto* const hook = FindHook(
+                        *runtime,
+                        WidescreenContractSite::
+                        network_status_movie_clip_accept);
+                    hook != nullptr && hook->vtable_hook.original != 0)
+                {
+                    original = hook->vtable_hook.original;
+                }
+            }
+            if (original == 0 || movie_clip == nullptr || visitor == nullptr)
+            {
+                return 0;
+            }
+            using AcceptFunction = int(__thiscall*)(void*, void*);
+            return reinterpret_cast<AcceptFunction>(original)(
+                movie_clip,
+                visitor);
+        }
+
+        void LogNetworkStatusCorrection(
+            WindowedWidescreenRuntime& runtime,
+            const NetworkStatusClip clip,
+            void* const movie_clip,
+            const RenderSpace space,
+            const char* const action,
+            const bool succeeded) noexcept
+        {
+            const auto clip_bit = clip == NetworkStatusClip::nesys ? 0U : 1U;
+            const auto outcome_bit = succeeded ? 0U : 2U;
+            const auto log_bit = 1U << (clip_bit + outcome_bit);
+            const auto previous = runtime.network_status_log_mask.fetch_or(
+                log_bit,
+                std::memory_order_relaxed);
+            if ((previous & log_bit) != 0)
+            {
+                return;
+            }
+            try
+            {
+                if (succeeded)
+                {
+                    PLOG_INFO
+                        << "WindowedWidescreen network-status clip correction"
+                        << " clip="
+                        << NetworkStatusClipName(clip)
+                        << " object=0x" << std::hex
+                        << reinterpret_cast<std::uintptr_t>(movie_clip)
+                        << std::dec
+                        << " frame="
+                        << runtime.frame_sequence.load(
+                            std::memory_order_relaxed)
+                        << " space=" << static_cast<int>(space)
+                        << " action=" << action;
+                }
+                else
+                {
+                    PLOG_WARNING
+                        << "WindowedWidescreen network-status clip correction"
+                        << " failed clip="
+                        << NetworkStatusClipName(clip)
+                        << " frame="
+                        << runtime.frame_sequence.load(
+                            std::memory_order_relaxed)
+                        << " space=" << static_cast<int>(space)
+                        << " action=" << action;
+                }
+            }
+            catch (...)
+            {
+            }
+        }
+
+        int __fastcall NetworkStatusMovieClipAcceptDetour(
+            void* const movie_clip,
+            void*,
+            void* const visitor) noexcept
+        {
+            auto* const runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            const auto original = [&]() noexcept
+            {
+                return CallMovieClipAcceptOriginal(
+                    runtime,
+                    movie_clip,
+                    visitor);
+            };
+            if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
+                !runtime->gameplay_frame_active.load(
+                    std::memory_order_acquire))
+            {
+                return original();
+            }
+
+            if (!IsMovieClipDrawVisitor(*runtime, visitor))
+            {
+                return original();
+            }
+            const auto clip = IdentifyNetworkStatusClip(movie_clip);
+            if (clip == NetworkStatusClip::none ||
+                !runtime->compositor.frame_active())
+            {
+                return original();
+            }
+            const auto current_space = runtime->compositor.CurrentSpace();
+            if (!current_space)
+            {
+                return original();
+            }
+
+            if (*current_space == RenderSpace::gameplay_hud)
+            {
+                const auto previous =
+                    runtime->compositor.gameplay_hud_placement();
+                if (!runtime->compositor.ReapplyGameplayHudPlacement(
+                        GameplayHudPlacement::centered))
+                {
+                    LogNetworkStatusCorrection(
+                        *runtime,
+                        clip,
+                        movie_clip,
+                        *current_space,
+                        "gameplay-hud-center-begin",
+                        false);
+                    return original();
+                }
+
+                int result{};
+                bool restored{};
+                bool local_matrix_corrected{};
+                {
+                    const NetworkStatusNativeScope native_scope{clip};
+                    result = original();
+                    local_matrix_corrected =
+                        native_scope.local_matrix_corrected();
+                    restored = runtime->compositor.
+                        ReapplyGameplayHudPlacement(previous).has_value();
+                }
+                const bool corrected = clip != NetworkStatusClip::local ||
+                    local_matrix_corrected;
+                LogNetworkStatusCorrection(
+                    *runtime,
+                    clip,
+                    movie_clip,
+                    *current_space,
+                    !restored
+                        ? "gameplay-hud-center-restore"
+                        : corrected
+                        ? clip == NetworkStatusClip::local
+                              ? "gameplay-hud-local-matrix"
+                              : "gameplay-hud-center"
+                        : "gameplay-hud-local-matrix-unavailable",
+                    restored && corrected);
+                return result;
+            }
+
+            if (*current_space != RenderSpace::physical_3d ||
+                runtime->compositor.physical_gameplay_hud_overlay_active())
+            {
+                return original();
+            }
+
+            const auto begun =
+                runtime->compositor.BeginPhysicalGameplayHudOverlay(
+                    GameplayHudPlacement::centered);
+            if (!begun)
+            {
+                LogNetworkStatusCorrection(
+                    *runtime,
+                    clip,
+                    movie_clip,
+                    *current_space,
+                    "physical-center-overlay-begin",
+                    false);
+                return original();
+            }
+
+            int result{};
+            bool ended{};
+            bool local_matrix_corrected{};
+            {
+                const NetworkStatusNativeScope native_scope{clip};
+                result = original();
+                local_matrix_corrected =
+                    native_scope.local_matrix_corrected();
+                const auto ended_result =
+                    runtime->compositor.EndPhysicalGameplayHudOverlay();
+                ended = ended_result.has_value();
+            }
+            const bool corrected = clip != NetworkStatusClip::local ||
+                local_matrix_corrected;
+            LogNetworkStatusCorrection(
+                *runtime,
+                clip,
+                movie_clip,
+                *current_space,
+                !ended
+                    ? "physical-center-overlay-end"
+                    : corrected
+                    ? clip == NetworkStatusClip::local
+                          ? "physical-local-matrix"
+                          : "physical-center-overlay"
+                    : "physical-local-matrix-unavailable",
+                ended && corrected);
+            return result;
         }
 
         int __fastcall TaskDispatchDetour(
@@ -1140,6 +1870,14 @@ namespace gc::windowed_widescreen
 
         void GameplayStageBackgroundMid(safetyhook::Context&) noexcept
         {
+            auto* runtime =
+                g_callback_runtime.load(std::memory_order_acquire);
+            if (runtime != nullptr && RuntimeCallbacksAreActive(*runtime))
+            {
+                runtime->gameplay_frame_active.store(
+                    true,
+                    std::memory_order_release);
+            }
             RequestGameplayPass(GameplayPass::stage_background);
         }
 
@@ -1154,14 +1892,14 @@ namespace gc::windowed_widescreen
             }
             if (context.ecx == 0 || runtime->active_gameplay_tune != 0 ||
                 runtime->gameplay_feedback_draw_scope !=
-                    GameplayFeedbackDrawScope::none ||
+                GameplayFeedbackDrawScope::none ||
                 runtime->note_tutorial_group_active)
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             runtime->active_gameplay_tune =
@@ -1180,7 +1918,7 @@ namespace gc::windowed_widescreen
                 kTuneEffectCollectionOffset + kPointerCollectionEndOffset;
             if (tune == 0 || effect == 0 ||
                 tune > std::numeric_limits<std::uintptr_t>::max() -
-                    collection_extent)
+                collection_extent)
             {
                 return false;
             }
@@ -1220,9 +1958,9 @@ namespace gc::windowed_widescreen
                 }
                 std::uintptr_t candidate{};
                 if (!ReadRuntimePointer(
-                        nullptr,
-                        begin + byte_offset,
-                        candidate))
+                    nullptr,
+                    begin + byte_offset,
+                    candidate))
                 {
                     return false;
                 }
@@ -1256,16 +1994,16 @@ namespace gc::windowed_widescreen
             }
             if (context.ecx == 0 || runtime->active_gameplay_tune == 0 ||
                 runtime->active_gameplay_tune !=
-                    static_cast<std::uintptr_t>(context.ecx) ||
+                static_cast<std::uintptr_t>(context.ecx) ||
                 runtime->gameplay_feedback_draw_scope !=
-                    GameplayFeedbackDrawScope::none ||
+                GameplayFeedbackDrawScope::none ||
                 runtime->note_tutorial_group_active)
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             RequestGameplayPass(GameplayPass::orthographic_effects);
@@ -1287,21 +2025,21 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             if (runtime->note_tutorial_group_active)
             {
                 runtime->note_tutorial_group_active = false;
                 if (!RequestRuntimeGameplayHudPlacement(
-                        *runtime,
-                        GameplayHudPlacement::centered))
+                    *runtime,
+                    GameplayHudPlacement::centered))
                 {
                     PublishRenderRuntimeFatal(
                         *runtime,
                         WindowedWidescreenError{
                             .stage = WindowedWidescreenOperationStage::
-                                gameplay_hud_placement,
+                            gameplay_hud_placement,
                         });
                 }
             }
@@ -1325,21 +2063,21 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
 
             bool is_player_one_judgement{};
             if (!TryMatchPlayerOneJudgementEffect(
-                    runtime->active_gameplay_tune,
-                    static_cast<std::uintptr_t>(context.ecx),
-                    is_player_one_judgement))
+                runtime->active_gameplay_tune,
+                static_cast<std::uintptr_t>(context.ecx),
+                is_player_one_judgement))
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             if (!is_player_one_judgement)
@@ -1357,7 +2095,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             runtime->gameplay_feedback_draw_scope =
@@ -1376,7 +2114,7 @@ namespace gc::windowed_widescreen
                 g_callback_runtime.load(std::memory_order_acquire);
             if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
                 runtime->gameplay_feedback_draw_scope ==
-                    GameplayFeedbackDrawScope::none)
+                GameplayFeedbackDrawScope::none)
             {
                 return;
             }
@@ -1387,7 +2125,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             const auto ended =
@@ -1399,7 +2137,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             runtime->gameplay_feedback_draw_scope =
@@ -1417,7 +2155,7 @@ namespace gc::windowed_widescreen
             }
             if (runtime->note_tutorial_group_active ||
                 runtime->gameplay_feedback_draw_scope !=
-                    GameplayFeedbackDrawScope::none ||
+                GameplayFeedbackDrawScope::none ||
                 !RequestRuntimeGameplayHudPlacement(
                     *runtime,
                     GameplayHudPlacement::right))
@@ -1426,7 +2164,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
             runtime->note_tutorial_group_active = true;
@@ -1449,14 +2187,14 @@ namespace gc::windowed_widescreen
             }
             runtime->note_tutorial_group_active = false;
             if (!RequestRuntimeGameplayHudPlacement(
-                    *runtime,
-                    GameplayHudPlacement::centered))
+                *runtime,
+                GameplayHudPlacement::centered))
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
         }
@@ -1484,7 +2222,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            render_transition,
+                        render_transition,
                     });
             }
 
@@ -1494,7 +2232,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            render_transition,
+                        render_transition,
                     });
             }
             runtime->test_mode_native_active = true;
@@ -1520,7 +2258,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            render_transition,
+                        render_transition,
                     });
             }
         }
@@ -1557,7 +2295,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage =
-                            WindowedWidescreenOperationStage::projection,
+                        WindowedWidescreenOperationStage::projection,
                     });
             }
         }
@@ -1602,7 +2340,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
         }
@@ -1616,14 +2354,14 @@ namespace gc::windowed_widescreen
                 return;
             }
             if (!RequestRuntimeGameplayHudPlacement(
-                    *runtime,
-                    GameplayHudPlacement::centered))
+                *runtime,
+                GameplayHudPlacement::centered))
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
                     WindowedWidescreenError{
                         .stage = WindowedWidescreenOperationStage::
-                            gameplay_hud_placement,
+                        gameplay_hud_placement,
                     });
             }
         }
@@ -1650,8 +2388,8 @@ namespace gc::windowed_widescreen
             if (runtime == nullptr)
             {
                 return axis == RenderDimensionAxis::width
-                    ? kNativeWidth
-                    : kNativeHeight;
+                           ? kNativeWidth
+                           : kNativeHeight;
             }
             if (!RuntimeCallbacksAreActive(*runtime))
             {
@@ -1684,8 +2422,8 @@ namespace gc::windowed_widescreen
             if (runtime == nullptr)
             {
                 return axis == RenderDimensionAxis::width
-                    ? static_cast<float>(kNativeWidth)
-                    : static_cast<float>(kNativeHeight);
+                           ? static_cast<float>(kNativeWidth)
+                           : static_cast<float>(kNativeHeight);
             }
             if (!RuntimeCallbacksAreActive(*runtime))
             {
@@ -1815,7 +2553,7 @@ namespace gc::windowed_widescreen
                     *runtime,
                     WindowedWidescreenError{
                         .stage =
-                            WindowedWidescreenOperationStage::clip_bypass,
+                        WindowedWidescreenOperationStage::clip_bypass,
                     });
             }
             auto instruction_pointer = context.eip;
@@ -1837,16 +2575,16 @@ namespace gc::windowed_widescreen
         {
             auto* runtime = static_cast<WindowedWidescreenRuntime*>(context);
             auto* hook = runtime == nullptr
-                ? nullptr
-                : FindHook(
-                    *runtime,
-                    WidescreenContractSite::mouse_debug_poll);
+                             ? nullptr
+                             : FindHook(
+                                 *runtime,
+                                 WidescreenContractSite::mouse_debug_poll);
             return hook == nullptr
-                ? 0
-                : reinterpret_cast<std::uintptr_t>(
-                    hook->inline_hook.thiscall<POINT*>(
-                        reinterpret_cast<void*>(owner),
-                        output));
+                       ? 0
+                       : reinterpret_cast<std::uintptr_t>(
+                           hook->inline_hook.thiscall<POINT*>(
+                               reinterpret_cast<void*>(owner),
+                               output));
         }
 
         POINT* __fastcall MouseDebugPollDetour(
@@ -1906,11 +2644,11 @@ namespace gc::windowed_widescreen
                     .context = runtime,
                     .call_original = &CallLogicalResolutionSetOriginal,
                     .set_target_width =
-                        &CallLogicalTargetDimensionSetOriginal<
-                            WidescreenContractSite::logical_target_width_set>,
+                    &CallLogicalTargetDimensionSetOriginal<
+                        WidescreenContractSite::logical_target_width_set>,
                     .set_target_height =
-                        &CallLogicalTargetDimensionSetOriginal<
-                            WidescreenContractSite::logical_target_height_set>,
+                    &CallLogicalTargetDimensionSetOriginal<
+                        WidescreenContractSite::logical_target_height_set>,
                 });
             if (!result)
             {
@@ -1941,7 +2679,7 @@ namespace gc::windowed_widescreen
                 LogicalTargetDimensionSetHookActions{
                     .context = runtime,
                     .call_original =
-                        &CallLogicalTargetDimensionSetOriginal<Site>,
+                    &CallLogicalTargetDimensionSetOriginal<Site>,
                 });
             if (!result)
             {
@@ -2037,6 +2775,10 @@ namespace gc::windowed_widescreen
                     runtime,
                     reinterpret_cast<std::uintptr_t>(renderer));
             }
+            runtime->frame_sequence.fetch_add(1, std::memory_order_relaxed);
+            runtime->gameplay_frame_active.store(
+                false,
+                std::memory_order_release);
             const auto result = RunFrameBoundaryHook(
                 reinterpret_cast<std::uintptr_t>(renderer),
                 FrameBoundaryHookActions{
@@ -2168,16 +2910,16 @@ namespace gc::windowed_widescreen
             return native_result;
         }
         if (!actions.validate_and_place(
-                actions.context,
-                renderer_owner))
+            actions.context,
+            renderer_owner))
         {
             return std::unexpected(WindowedWidescreenError{
                 .stage = WindowedWidescreenOperationStage::window_policy,
             });
         }
         if (!actions.activate_resources(
-                actions.context,
-                renderer_owner))
+            actions.context,
+            renderer_owner))
         {
             return std::unexpected(WindowedWidescreenError{
                 .stage = WindowedWidescreenOperationStage::resource_attach,
@@ -2231,7 +2973,7 @@ namespace gc::windowed_widescreen
         const WindowedWidescreenOperationStage stage) noexcept
     {
         if ((stage != WindowedWidescreenOperationStage::frame_begin &&
-             stage != WindowedWidescreenOperationStage::frame_end) ||
+                stage != WindowedWidescreenOperationStage::frame_end) ||
             actions.context == nullptr ||
             actions.run_compositor == nullptr ||
             actions.call_original == nullptr)
@@ -2293,8 +3035,8 @@ namespace gc::windowed_widescreen
             });
         }
         if (!actions.request_space(
-                actions.context,
-                PassClassifier::ClassifyGameplay(pass)))
+            actions.context,
+            PassClassifier::ClassifyGameplay(pass)))
         {
             return std::unexpected(WindowedWidescreenError{
                 .stage = WindowedWidescreenOperationStage::render_transition,
@@ -2307,8 +3049,8 @@ namespace gc::windowed_widescreen
         const bool compositor_frame_active) noexcept
     {
         return compositor_frame_active
-            ? RenderQueryRoute::frame_virtualized
-            : RenderQueryRoute::native_passthrough;
+                   ? RenderQueryRoute::frame_virtualized
+                   : RenderQueryRoute::native_passthrough;
     }
 
     std::expected<std::uint32_t, WindowedWidescreenError>
@@ -2331,8 +3073,8 @@ namespace gc::windowed_widescreen
             });
         }
         return axis == RenderDimensionAxis::width
-            ? dimensions.width
-            : dimensions.height;
+                   ? dimensions.width
+                   : dimensions.height;
     }
 
     std::expected<float, WindowedWidescreenError>
@@ -2355,8 +3097,8 @@ namespace gc::windowed_widescreen
             });
         }
         return axis == RenderDimensionAxis::width
-            ? dimensions.width_float
-            : dimensions.height_float;
+                   ? dimensions.width_float
+                   : dimensions.height_float;
     }
 
     std::expected<int, WindowedWidescreenError> RunViewportResetHook(
@@ -2413,7 +3155,7 @@ namespace gc::windowed_widescreen
     {
         if (image_base >
             std::numeric_limits<std::uint32_t>::max() -
-                live_continuation_rva)
+            live_continuation_rva)
         {
             return std::unexpected(WindowedWidescreenError{
                 .stage = WindowedWidescreenOperationStage::clip_bypass,
@@ -2496,10 +3238,10 @@ namespace gc::windowed_widescreen
 
         std::uint8_t expected{};
         if (!state.compare_exchange_strong(
-                expected,
-                1,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire))
+            expected,
+            1,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire))
         {
             while (state.load(std::memory_order_acquire) == 1)
             {
@@ -2513,8 +3255,8 @@ namespace gc::windowed_widescreen
         }
 
         const auto finish = [](
-                                const std::optional<
-                                    WindowedWidescreenError> error)
+            const std::optional<
+                WindowedWidescreenError> error)
             -> std::expected<void, WindowedWidescreenError>
         {
             stored_success = !error.has_value();
@@ -2524,9 +3266,10 @@ namespace gc::windowed_widescreen
             }
             state.store(2, std::memory_order_release);
             return error
-                ? std::expected<void, WindowedWidescreenError>{
-                      std::unexpected(*error)}
-                : std::expected<void, WindowedWidescreenError>{};
+                       ? std::expected<void, WindowedWidescreenError>{
+                           std::unexpected(*error)
+                       }
+                       : std::expected<void, WindowedWidescreenError>{};
         };
 
         bool enabled_initialization{};
@@ -2592,112 +3335,158 @@ namespace gc::windowed_widescreen
             const std::array requests{
                 WidescreenHookRequest{
                     WidescreenContractSite::config_apply,
-                    reinterpret_cast<void*>(&ConfigApplyDetour)},
+                    reinterpret_cast<void*>(&ConfigApplyDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::window_device_create,
-                    reinterpret_cast<void*>(&WindowDeviceDetour)},
+                    reinterpret_cast<void*>(&WindowDeviceDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::logical_resolution_set,
-                    reinterpret_cast<void*>(&LogicalResolutionSetDetour)},
+                    reinterpret_cast<void*>(&LogicalResolutionSetDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::logical_target_width_set,
                     reinterpret_cast<void*>(
                         &LogicalTargetDimensionSetDetour<
                             RenderDimensionAxis::width,
-                            WidescreenContractSite::logical_target_width_set>)},
+                            WidescreenContractSite::logical_target_width_set>)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::logical_target_height_set,
                     reinterpret_cast<void*>(
                         &LogicalTargetDimensionSetDetour<
                             RenderDimensionAxis::height,
-                            WidescreenContractSite::logical_target_height_set>)},
+                            WidescreenContractSite::logical_target_height_set>)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::frame_begin,
-                    reinterpret_cast<void*>(&FrameBeginDetour)},
+                    reinterpret_cast<void*>(&FrameBeginDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::frame_end,
-                    reinterpret_cast<void*>(&FrameEndDetour)},
+                    reinterpret_cast<void*>(&FrameEndDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::task_dispatch,
-                    reinterpret_cast<void*>(&TaskDispatchDetour)},
+                    reinterpret_cast<void*>(&TaskDispatchDetour)
+                },
+                WidescreenHookRequest{
+                    WidescreenContractSite::
+                    network_status_movie_clip_accept,
+                    reinterpret_cast<void*>(
+                        &NetworkStatusMovieClipAcceptDetour)
+                },
+                WidescreenHookRequest{
+                    WidescreenContractSite::
+                    network_status_shape_draw_visit,
+                    reinterpret_cast<void*>(
+                        &NetworkStatusShapeDrawVisitDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::test_mode_native_begin,
-                    reinterpret_cast<void*>(&TestModeNativeBeginMid)},
+                    reinterpret_cast<void*>(&TestModeNativeBeginMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::test_mode_native_end,
-                    reinterpret_cast<void*>(&TestModeNativeEndMid)},
+                    reinterpret_cast<void*>(&TestModeNativeEndMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::screen_width_int,
-                    reinterpret_cast<void*>(&ScreenWidthIntDetour)},
+                    reinterpret_cast<void*>(&ScreenWidthIntDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::screen_height_int,
-                    reinterpret_cast<void*>(&ScreenHeightIntDetour)},
+                    reinterpret_cast<void*>(&ScreenHeightIntDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::screen_width_float,
-                    reinterpret_cast<void*>(&ScreenWidthFloatDetour)},
+                    reinterpret_cast<void*>(&ScreenWidthFloatDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::screen_height_float,
-                    reinterpret_cast<void*>(&ScreenHeightFloatDetour)},
+                    reinterpret_cast<void*>(&ScreenHeightFloatDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::target_width_int,
-                    reinterpret_cast<void*>(&TargetWidthIntDetour)},
+                    reinterpret_cast<void*>(&TargetWidthIntDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::target_height_int,
-                    reinterpret_cast<void*>(&TargetHeightIntDetour)},
+                    reinterpret_cast<void*>(&TargetHeightIntDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::target_width_float,
-                    reinterpret_cast<void*>(&TargetWidthFloatDetour)},
+                    reinterpret_cast<void*>(&TargetWidthFloatDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::target_height_float,
-                    reinterpret_cast<void*>(&TargetHeightFloatDetour)},
+                    reinterpret_cast<void*>(&TargetHeightFloatDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::viewport_reset,
-                    reinterpret_cast<void*>(&ViewportResetDetour)},
+                    reinterpret_cast<void*>(&ViewportResetDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::mouse_debug_poll,
-                    reinterpret_cast<void*>(&MouseDebugPollDetour)},
+                    reinterpret_cast<void*>(&MouseDebugPollDetour)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_stage_background,
-                    reinterpret_cast<void*>(&GameplayStageBackgroundMid)},
+                    reinterpret_cast<void*>(&GameplayStageBackgroundMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_track,
-                    reinterpret_cast<void*>(&GameplayTrackMid)},
+                    reinterpret_cast<void*>(&GameplayTrackMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_effects,
-                    reinterpret_cast<void*>(&GameplayEffectsMid)},
+                    reinterpret_cast<void*>(&GameplayEffectsMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_effects_end,
-                    reinterpret_cast<void*>(&GameplayEffectsEndMid)},
+                    reinterpret_cast<void*>(&GameplayEffectsEndMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_hud_projection,
-                    reinterpret_cast<void*>(&GameplayHudProjectionMid)},
+                    reinterpret_cast<void*>(&GameplayHudProjectionMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::combo_begin,
-                    reinterpret_cast<void*>(&ComboBeginMid)},
+                    reinterpret_cast<void*>(&ComboBeginMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::combo_end,
-                    reinterpret_cast<void*>(&ComboEndMid)},
+                    reinterpret_cast<void*>(&ComboEndMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_feedback_draw_begin,
-                    reinterpret_cast<void*>(&GameplayFeedbackDrawBeginMid)},
+                    reinterpret_cast<void*>(&GameplayFeedbackDrawBeginMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::gameplay_feedback_draw_end,
-                    reinterpret_cast<void*>(&GameplayFeedbackDrawEndMid)},
+                    reinterpret_cast<void*>(&GameplayFeedbackDrawEndMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::note_tutorial_group_begin,
-                    reinterpret_cast<void*>(&NoteTutorialGroupBeginMid)},
+                    reinterpret_cast<void*>(&NoteTutorialGroupBeginMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::note_tutorial_group_end,
-                    reinterpret_cast<void*>(&NoteTutorialGroupEndMid)},
+                    reinterpret_cast<void*>(&NoteTutorialGroupEndMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::clip_gate,
-                    reinterpret_cast<void*>(&ClipGateMid)},
+                    reinterpret_cast<void*>(&ClipGateMid)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::reset_pre,
-                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)},
+                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)
+                },
                 WidescreenHookRequest{
                     WidescreenContractSite::reset_post,
-                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)},
+                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)
+                },
             };
             const auto installed = InstallWindowedWidescreenHooks(
                 image_base,
@@ -2714,18 +3503,18 @@ namespace gc::windowed_widescreen
                     .enable = &ProductionEnable,
                     .reset = &ProductionReset,
                     .detach_renderer_resource =
-                        &ProductionDetachRendererResource,
+                    &ProductionDetachRendererResource,
                     .clear_callback_context =
-                        &ProductionClearCallbackContext,
+                    &ProductionClearCallbackContext,
                     .publish_owner = &ProductionPublishOwner,
                 });
             if (!installed)
             {
                 WindowedWidescreenError error{
                     .stage = installed.error().stage ==
-                            WidescreenInstallStage::candidate_prepare
-                        ? WindowedWidescreenOperationStage::resource_attach
-                        : WindowedWidescreenOperationStage::hook_install,
+                             WidescreenInstallStage::candidate_prepare
+                                 ? WindowedWidescreenOperationStage::resource_attach
+                                 : WindowedWidescreenOperationStage::hook_install,
                     .install_error = installed.error(),
                 };
                 if (candidate)

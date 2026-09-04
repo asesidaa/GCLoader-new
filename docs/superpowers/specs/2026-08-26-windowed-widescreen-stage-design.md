@@ -61,7 +61,7 @@ express selected patch sites as RVAs with exact expected-byte guards.
 | `0x0045C1B0`, `0x0045C7D0` | Dispatch task rendering in priority order. | Contiguous task-level 2D and 3D regions can be classified centrally. |
 | `0x00662F10` | Interleaves orthographic and perspective gameplay rendering in one task. | Gameplay needs internal subpass transitions in addition to task classification. |
 | `0x006449F0`, `0x00641DE0` | Bind stage-background transforms and render the animated four-corner color quad using target width/height before the perspective track. | This is stage-owned output, not HUD; it must use physical space so the authored background fills the widened stage. |
-| `0x005E4503` through `0x005E4558` | Draws the ordinary per-entry CHAIN label and digits; entry is stored at `[ebp-0x14]`. The separate milestone branch is outside this window. | A guarded viewport window can move only the ordinary counter to the corresponding player side while leaving milestone presentation centered. |
+| `0x005E4503` through `0x005E4B58` | Draws the per-entry CHAIN label/digits and the later threshold or milestone layers that reuse the same combo value; entry is stored at `[ebp-0x14]`. | A guarded viewport window keeps the complete counter presentation together on the corresponding player side. |
 | `0x00662FA8` | Calls the perspective-track owner with CTune in `ecx` immediately before the player-visual function. | Capture CTune early enough to identify Player 1 judgement, which renders before the later gameplay-HUD pass. |
 | `0x006463F0` | Produces judgement effects only for native owner lanes `nn < 4`; grades 0 through 4 use CTune slot `93 + 5 * nn + grade`. | Player 1 is the first lane, slots 93 through 97. The other lanes are not interpreted as multiplayer participant capacity, and the producer is not hooked. |
 | `0x005F11E8` through `0x005F11ED` | Calls the generic effect-tree renderer with the current effect root in `ecx`. | An exact match for Player 1 judgement temporarily captures physical-3D D3D state, applies the right native HUD viewport for the complete tree, then restores the captured state. |
@@ -373,17 +373,42 @@ Mixed gameplay rendering is classified at verified call boundaries inside
 `CCommon3DTask` at priority 700 uses `Physical3D`.
 `CCommon2DTask` at priority 800 uses `Native2D`.
 
-Every target or gameplay-HUD viewport transition flushes the native queues and
-checks their actual pending-buffer state. A transition with a pending batch is
-rejected rather than submitting deferred geometry to the wrong target.
+Every target or gameplay-HUD viewport transition flushes the four native
+buffered queues through `0x005C9B10` before changing target or viewport. The
+final native pending-buffer check remains fail-closed. Generic compositor
+transitions do not finalize or execute the animation command manager: doing so
+changes RVB scheduling in ordinary menus.
 
-Within `GameplayHud`, RVA `0x001E4503` begins the ordinary combo-counter
-window before the CHAIN label and RVA `0x001E4558` restores the centered
-viewport after the normal digit call at RVA `0x001E4550`. Entry 0 selects the
-right viewport, entry 1 selects the left viewport, and an unexpected entry
-selects center. Both changes flush and verify native batches first. The
-milestone/celebration counter belongs to a separate branch outside this hook
-window and therefore retains its centered native presentation.
+The network-status exception is deliberately scoped to exact instances named
+`imc_ico_n` and `imc_ico_l`. The transaction guards and replaces only
+`MovieClipInstance::Accept` vtable slot VA `0x006BE0E0` (RVA `0x002BE0E0`),
+whose supported target is VA `0x004E0CD0`. The detour additionally requires the
+draw-traverse visitor vtable VA `0x006BB74C`, the frame-local gameplay latch,
+and an active gameplay render space. It verifies the zero-seeded 33x name hash
+and exact runtime string before changing any state; all other movie clips pass
+unchanged.
+
+During a qualifying `GameplayHud` visit, the compositor forcibly reapplies the
+physically centered 720 x 1280 hardware viewport even when its cached placement
+already says centered. The game-facing screen/target and viewport queries remain
+logical `(0,0,720,1280)` during the exact subtree. The subtree's pending native
+batches are drained before the preceding gameplay-HUD placement is forcibly
+reapplied. This is required because game rendering can overwrite D3D viewport
+state without updating the compositor's placement cache. Boot, attract, and
+ordinary-menu visits pass directly through because those frames never arm the
+latch. Missing identity, inactive compositor state, or an unavailable optional
+placement scope also fails open. The implementation does not finalize, wait on,
+execute, reset, or otherwise alter the animation command manager. The rejected
+panel `+0x0C` and full-`common.rvb` wrappers were broader or earlier than the
+actual clip traversal and did not correct the icons.
+
+Within `GameplayHud`, RVA `0x001E4503` begins the per-entry combo-counter
+window before the CHAIN label. RVA `0x001E4550` remains a read-only witness for
+the normal digit call, while RVA `0x001E4B58` restores the centered viewport at
+the shared join after the later threshold and milestone layers. Entry 0 selects
+the right viewport, entry 1 selects the left viewport, and an unexpected entry
+selects center. Both changes flush pending native work first, so the normal
+number and celebration number cannot split across viewports.
 
 The gameplay-track call at RVA `0x00262FA8` captures CTune before the
 player-visual function. Within that scope, the generic manager call at RVA
@@ -733,9 +758,8 @@ deployed build. It requires:
   native live-frustum branch;
 - correct Player 1 placement in the current one-player scope; multiplayer
   participant capacity is not inferred from the native judgement lanes;
-- ordinary entry-0 and entry-1 combo counters appear on their assigned right
-  and left sides without stretching, while milestone combo presentation stays
-  centered;
+- ordinary entry-0 and entry-1 combo counters and their celebration layers
+  remain together on their assigned right and left sides without stretching;
 - only Player 1's MISS/GOOD/COOL/GREAT effect follows the primary combo cluster,
   with opponent judgement effects unchanged;
 - all note-tutorial variants and their companion effect appear beside the
@@ -766,8 +790,10 @@ Verified perspective passes use that complete scene. Common 2D tasks render
 through the centered 720 x 1280 native texture; the direct Test Mode root-form
 render owns a standalone compositor frame around that same native space.
 Gameplay HUD/effects render at native logical scale on the wide scene through
-a 720 x 1280 viewport. The ordinary combo counter uses its existing per-entry
-side mapping. Player 1 judgement borrows the right native viewport with exact
+a 720 x 1280 viewport. The complete combo presentation uses its existing
+per-entry side mapping. The two persistent network-status clips retain their
+authored coordinates in the centered native-width viewport during gameplay
+only. Player 1 judgement borrows the right native viewport with exact
 physical-state restoration, while the concrete tutorial group-6 draw moves the
 gameplay-HUD viewport right and then back to center. The final
 scene copy is one-to-one and unrotated. The feature never asks the player to

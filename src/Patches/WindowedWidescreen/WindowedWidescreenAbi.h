@@ -60,6 +60,8 @@ namespace gc::windowed_widescreen
         config_minmax_setter,
         config_mode_setter,
         common_2d_render,
+        network_status_movie_clip_accept,
+        network_status_shape_draw_visit,
         common_3d_render,
     };
 
@@ -68,6 +70,7 @@ namespace gc::windowed_widescreen
         read_only,
         inline_hook,
         mid_hook,
+        vtable_hook,
     };
 
     struct BytePattern
@@ -78,8 +81,9 @@ namespace gc::windowed_widescreen
         [[nodiscard]] constexpr std::span<const std::byte> view()
         const noexcept
         {
-            return valid() ? std::span{bytes}.first(size)
-                           : std::span<const std::byte>{};
+            return valid()
+                       ? std::span{bytes}.first(size)
+                       : std::span<const std::byte>{};
         }
 
         [[nodiscard]] constexpr bool valid() const noexcept
@@ -128,7 +132,8 @@ namespace gc::windowed_widescreen
     {
         WidescreenContractSite site{WidescreenContractSite::none};
         WidescreenCallingConvention calling_convention{
-            WidescreenCallingConvention::read_only};
+            WidescreenCallingConvention::read_only
+        };
         std::uint8_t argument_count{};
     };
 
@@ -144,6 +149,14 @@ namespace gc::windowed_widescreen
     inline constexpr std::size_t kMouseXWord = 0;
     inline constexpr std::size_t kMouseYWord = 1;
     inline constexpr std::size_t kMouseValidWord = 6;
+    inline constexpr std::size_t kMovieClipInstanceVtableRva = 0x002BE0CC;
+    inline constexpr std::size_t kMovieClipAcceptVtableOffset = 0x14;
+    inline constexpr std::size_t kMovieClipAcceptTargetRva = 0x000E0CD0;
+    inline constexpr std::size_t kMovieClipDrawVisitorVtableRva = 0x002BB74C;
+    inline constexpr std::size_t kMovieClipShapeDrawVtableOffset = 0x4C;
+    inline constexpr std::size_t kMovieClipShapeDrawTargetRva = 0x000CC880;
+    inline constexpr std::size_t kMovieClipInstanceNameOffset = 0x120;
+    inline constexpr std::size_t kMovieClipInstanceNameHashOffset = 0x140;
 
     [[nodiscard]] std::span<const WidescreenByteContract>
     WindowedWidescreenByteContracts() noexcept;
