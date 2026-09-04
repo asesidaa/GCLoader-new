@@ -583,6 +583,7 @@ The coarse gc_runtime_patches target is divided only where dependency
 direction improves. The final internal target ownership is:
 
 - gc_platform_win32
+- gc_fatal_process
 - gc_hooking
 - gc_runtime_image
 - gc_game_version
@@ -591,6 +592,8 @@ direction improves. The final internal target ownership is:
 - gc_patch_song_unlock
 - gc_patch_framerate
 - gc_patch_countdown
+- gc_patch_absolute_judgement
+- gc_patch_switch_input
 - gc_test_mode_timing
 - gc_renderer_device_loss
 - gc_windowed_widescreen
@@ -676,6 +679,7 @@ Any failure invokes the fatal reporter and does not return.
 
 - Migrate AutoPlay and SongUnlock.
 - Migrate Switch input, Framerate, and Countdown.
+- Migrate Absolute Judgement and the game-versioned ASIO close hook.
 - Migrate Test Mode Timing.
 - Migrate Renderer Device Loss and Widescreen, including global VMT slots.
 - Migrate fixed-RVA NESYS behavior separately in the NESYS process.
@@ -748,6 +752,7 @@ Runtime acceptance is performed separately for:
 - Locale and crash handling.
 - DirectSound, WASAPI, and ASIO selections.
 - Framerate, Countdown, Switch input, AutoPlay, and SongUnlock.
+- Absolute Judgement and the game-versioned ASIO close hook.
 - Test Mode Timing.
 - Widescreen rendering, VMT hooks, and device-loss recovery.
 
