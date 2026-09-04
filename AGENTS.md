@@ -69,7 +69,9 @@ cmake --fresh --preset msvc32-debug
 - A runtime patch is a guarded executable-image change. Base it on current
   executable or IDB evidence; give every site a named RVA and expected original
   bytes; check address arithmetic, accessibility, and bytes before mutation;
-  and roll back earlier writes or hooks when a transaction fails.
+  validate all mandatory and enabled versioned sites before mutation; and
+  publish a fatal error and abort if any later write or hook installation
+  fails. Do not attempt reverse rollback in the doomed process.
 - Use "hook" only when a detour is installed. Direct checked byte writes are
   runtime patches, not hooks.
 - Preserve forwarded Win32 arguments, return values, and last-error behavior.
@@ -102,7 +104,7 @@ Every test must have a plausible regression it can catch. Prefer tests of:
 - boundary values, invalid input, and failure behavior;
 - protocol encoding, decoding, and state transitions;
 - concurrency, ownership, lifetime, and real-time invariants;
-- preflight rejection, partial failure, and transactional rollback;
+- preflight rejection, installation failure, and fatal-error reporting;
 - transformations whose expected result is independently derived.
 
 Do not add tests merely because a workflow requests tests. In particular, avoid:

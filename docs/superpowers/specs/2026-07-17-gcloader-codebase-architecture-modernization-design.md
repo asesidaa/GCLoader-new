@@ -4,6 +4,12 @@ Date: 2026-07-17
 
 Status: Approved umbrella design and Subproject 1 design contract
 
+Supersession note (2026-09-05): the Hooking, checked-image, rollback,
+atomicity, phased-delivery, and completion clauses are superseded by the
+[loader-wide cleanup design](2026-09-05-loader-codebase-cleanup-design.md).
+The source-layout, domain ownership, external-contract, and already-completed
+migration decisions in this document remain historical and authoritative.
+
 ## Context
 
 The RFID/JVS modernization established focused `Rfid`, `TestModeStorage`, and `Win32Hooks` source packages with explicit ownership. Most remaining production code still lives at the repository root even though it already forms recognizable audio, input, NESYS, configuration, runtime-patch, logging, and iDmac domains.
