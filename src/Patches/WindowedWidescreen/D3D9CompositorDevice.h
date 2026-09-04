@@ -57,7 +57,9 @@ namespace gc::windowed_widescreen
     class D3D9CompositorDevice final
     {
     public:
-        explicit D3D9CompositorDevice(ResolutionModel resolution) noexcept;
+        D3D9CompositorDevice(
+            ResolutionModel resolution,
+            GameplayHudPlacement base_gameplay_hud_placement) noexcept;
 
         D3D9CompositorDevice(const D3D9CompositorDevice&) = delete;
         D3D9CompositorDevice& operator=(const D3D9CompositorDevice&) = delete;
@@ -163,6 +165,8 @@ namespace gc::windowed_widescreen
             RenderSpace stable_space) noexcept;
 
         ResolutionModel resolution_;
+        GameplayHudPlacement base_gameplay_hud_placement_{
+            GameplayHudPlacement::center};
         NativeBatchActions native_batch_actions_{};
         D3D9CompositorFailure last_failure_{};
         bool active_{};

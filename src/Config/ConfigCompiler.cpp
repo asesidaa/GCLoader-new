@@ -593,6 +593,25 @@ namespace gc::config
                 document.experimental().widescreen_window_width());
             const auto widescreen_height = static_cast<std::uint64_t>(
                 document.experimental().widescreen_window_height());
+            const auto widescreen_hud_placement =
+                document.experimental().widescreen_hud_placement();
+            if (widescreen_hud_placement !=
+                    windowed_widescreen::GameplayHudPlacement::left &&
+                widescreen_hud_placement !=
+                    windowed_widescreen::GameplayHudPlacement::center &&
+                widescreen_hud_placement !=
+                    windowed_widescreen::GameplayHudPlacement::right)
+            {
+                errors.push_back({
+                    .path = ConfigPath{
+                        "experimental",
+                        "widescreen_hud_placement",
+                    },
+                    .code = ConfigErrorCode::unsupported_value,
+                    .message =
+                        "widescreen HUD placement must be left, center, or right",
+                });
+            }
             const bool widescreen_width_valid =
                 widescreen_width >= 720 &&
                 widescreen_width <=
@@ -958,6 +977,7 @@ namespace gc::config
                             .enable_windowed_widescreen_stage(),
                     static_cast<std::uint32_t>(widescreen_width),
                     static_cast<std::uint32_t>(widescreen_height),
+                    widescreen_hud_placement,
                 },
                 document.experimental().enable_auto_play(),
                 document.experimental()

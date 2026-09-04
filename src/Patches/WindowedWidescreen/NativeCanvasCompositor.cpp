@@ -20,10 +20,13 @@ namespace gc::windowed_widescreen
 
     NativeCanvasCompositor::NativeCanvasCompositor(
         const OutputSize output_size,
+        const GameplayHudPlacement base_gameplay_hud_placement,
         const RenderThreadIdProvider thread_id_provider,
         const CompositorDeviceActions actions) noexcept
         : render_space_policy_{output_size, thread_id_provider},
-          actions_{actions}
+          actions_{actions},
+          base_gameplay_hud_placement_{base_gameplay_hud_placement},
+          gameplay_hud_placement_{base_gameplay_hud_placement}
     {
     }
 
@@ -80,7 +83,7 @@ namespace gc::windowed_widescreen
         last_published_space_ = stable_space;
         if (stable_space == RenderSpace::gameplay_hud)
         {
-            gameplay_hud_placement_ = GameplayHudPlacement::centered;
+            gameplay_hud_placement_ = base_gameplay_hud_placement_;
         }
 
         return std::unexpected(CompositorError{
@@ -130,7 +133,7 @@ namespace gc::windowed_widescreen
                 RenderSpace::physical_3d,
                 true);
         }
-        gameplay_hud_placement_ = GameplayHudPlacement::centered;
+        gameplay_hud_placement_ = base_gameplay_hud_placement_;
         return {};
     }
 
@@ -502,7 +505,7 @@ namespace gc::windowed_widescreen
                 false);
         }
         last_published_space_ = requested_space;
-        gameplay_hud_placement_ = GameplayHudPlacement::centered;
+        gameplay_hud_placement_ = base_gameplay_hud_placement_;
         return {};
     }
 
@@ -642,7 +645,7 @@ namespace gc::windowed_widescreen
     {
         render_space_policy_.ResetForDeviceLoss();
         last_published_space_ = RenderSpace::physical_3d;
-        gameplay_hud_placement_ = GameplayHudPlacement::centered;
+        gameplay_hud_placement_ = base_gameplay_hud_placement_;
         physical_gameplay_hud_overlay_active_ = false;
     }
 } // namespace gc::windowed_widescreen

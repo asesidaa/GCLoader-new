@@ -1,19 +1,13 @@
 #pragma once
 
 #include "Patches/WindowedWidescreen/ResolutionModel.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 
 #include <cstdint>
 #include <expected>
 
 namespace gc::windowed_widescreen
 {
-    enum class GameplayHudPlacement : std::uint8_t
-    {
-        centered,
-        left,
-        right,
-    };
-
     struct GameplayHudViewport
     {
         std::uint32_t x{};

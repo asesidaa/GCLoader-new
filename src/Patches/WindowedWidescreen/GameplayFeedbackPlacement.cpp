@@ -16,7 +16,7 @@ namespace gc::windowed_widescreen
         std::uint32_t x{};
         switch (placement)
         {
-        case GameplayHudPlacement::centered:
+        case GameplayHudPlacement::center:
             x = (output.width - kNativeWidth) / 2;
             break;
         case GameplayHudPlacement::left:
@@ -45,7 +45,7 @@ namespace gc::windowed_widescreen
         case 1:
             return GameplayHudPlacement::left;
         default:
-            return GameplayHudPlacement::centered;
+            return GameplayHudPlacement::center;
         }
     }
 

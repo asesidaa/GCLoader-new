@@ -75,6 +75,7 @@ enable_nesys_service_adapter_patch = true
 enable_windowed_widescreen_stage = false
 widescreen_window_width = 1920
 widescreen_window_height = 1280
+widescreen_hud_placement = 'center'
 audio_backend = 'directsound'
 wasapi_exclusive_buffer_ms = 10
 asio_driver_name = ''

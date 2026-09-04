@@ -1689,8 +1689,8 @@ namespace
                 "Creates a fixed-size decorated window on an ordinary "
                 "unrotated desktop.\n"
                 "Perspective 3D uses the configured width at fixed 1280 "
-                "height; the "
-                "complete 2D canvas stays centered at 720 x 1280.\n"
+                "height. Menus and test mode stay centered at 720 x 1280; "
+                "the top gameplay HUD uses the selected horizontal position.\n"
                 "Fullscreen, live resizing, display rotation, and 2D "
                 "stretching are not enabled. Restart the game after changes.");
         }
@@ -1722,6 +1722,33 @@ namespace
         {
             ImGui::SetTooltip(
                 "Fixed at 1280 by the widescreen renderer contract.");
+        }
+        if (widescreen_enabled)
+        {
+            auto& hud_placement = experimental.widescreen_hud_placement();
+            int hud_placement_index = static_cast<int>(hud_placement);
+            constexpr const char* hud_placement_labels[]{
+                "Left",
+                "Center",
+                "Right",
+            };
+            if (ImGui::Combo(
+                "Widescreen top HUD position",
+                &hud_placement_index,
+                hud_placement_labels,
+                IM_ARRAYSIZE(hud_placement_labels)))
+            {
+                hud_placement = static_cast<
+                    gc::windowed_widescreen::GameplayHudPlacement>(
+                    hud_placement_index);
+                dirty = true;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "Moves the normal top gameplay HUD. Combo, judgement, "
+                    "and tutorial feedback keep their anti-chart position.");
+            }
         }
 
         bool absolute_time_judgement =

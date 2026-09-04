@@ -5,6 +5,7 @@
 #include "Config/RegistryConfig.h"
 #include "Logging/LoggingSettings.h"
 #include "Patches/Framerate/FrameratePolicy.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 
 #include <cstdint>
 #include <expected>
@@ -54,6 +55,11 @@ namespace gc::config
         widescreen_window_width{1920};
         rfl::Rename<"widescreen_window_height", unsigned long>
         widescreen_window_height{1280};
+        rfl::Rename<
+            "widescreen_hud_placement",
+            windowed_widescreen::GameplayHudPlacement>
+        widescreen_hud_placement{
+            windowed_widescreen::GameplayHudPlacement::center};
         rfl::Rename<"audio_backend", audio::AudioBackend>
         audio_backend{audio::AudioBackend::directsound};
         rfl::Rename<

@@ -130,9 +130,10 @@ namespace gc::windowed_widescreen
                           &ReportUnknownTaskCapacity,
                       }
                   },
-                  device{resolution},
+                  device{resolution, settings.gameplay_hud_placement()},
                   compositor{
                       resolution.output_size(),
+                      settings.gameplay_hud_placement(),
                       RenderThreadIdProvider{
                           .current = +[](void*) noexcept
                           {
@@ -1294,18 +1295,18 @@ namespace gc::windowed_widescreen
             }
             if (g_network_status_native_scope_depth != 0)
             {
-                const auto centered = ResolveGameplayHudViewport(
+                const auto base_hud = ResolveGameplayHudViewport(
                     runtime->resolution.output_size(),
-                    GameplayHudPlacement::centered);
-                if (!centered)
+                    runtime->settings.gameplay_hud_placement());
+                if (!base_hud)
                 {
                     return false;
                 }
                 viewport = NativeViewport{
-                    .x = static_cast<float>(centered->x),
-                    .y = static_cast<float>(centered->y),
-                    .width = static_cast<float>(centered->width),
-                    .height = static_cast<float>(centered->height),
+                    .x = static_cast<float>(base_hud->x),
+                    .y = static_cast<float>(base_hud->y),
+                    .width = static_cast<float>(base_hud->width),
+                    .height = static_cast<float>(base_hud->height),
                 };
                 return true;
             }
@@ -1493,9 +1494,11 @@ namespace gc::windowed_widescreen
                 void* const visitor) noexcept
             {
                 const auto output = runtime.resolution.output_size();
-                const auto native = runtime.resolution.native_rect();
+                const auto base_hud = ResolveGameplayHudViewport(
+                    output,
+                    runtime.settings.gameplay_hud_placement());
                 if (visitor == nullptr || output.width <= kNativeWidth ||
-                    output.height != kNativeHeight || native.left < 0)
+                    output.height != kNativeHeight || !base_hud)
                 {
                     return;
                 }
@@ -1523,7 +1526,7 @@ namespace gc::windowed_widescreen
                 corrected[4] *= horizontal_scale;
                 corrected[8] *= horizontal_scale;
                 corrected[12] = horizontal_scale *
-                    (corrected[12] + static_cast<float>(native.left));
+                    (corrected[12] + static_cast<float>(base_hud->x));
 
                 matrix_ = reinterpret_cast<float*>(matrix_address);
                 std::memcpy(
@@ -1723,14 +1726,14 @@ namespace gc::windowed_widescreen
                 const auto previous =
                     runtime->compositor.gameplay_hud_placement();
                 if (!runtime->compositor.ReapplyGameplayHudPlacement(
-                        GameplayHudPlacement::centered))
+                        runtime->settings.gameplay_hud_placement()))
                 {
                     LogNetworkStatusCorrection(
                         *runtime,
                         clip,
                         movie_clip,
                         *current_space,
-                        "gameplay-hud-center-begin",
+                        "gameplay-hud-base-begin",
                         false);
                     return original();
                 }
@@ -1754,11 +1757,11 @@ namespace gc::windowed_widescreen
                     movie_clip,
                     *current_space,
                     !restored
-                        ? "gameplay-hud-center-restore"
+                        ? "gameplay-hud-base-restore"
                         : corrected
                         ? clip == NetworkStatusClip::local
                               ? "gameplay-hud-local-matrix"
-                              : "gameplay-hud-center"
+                              : "gameplay-hud-base"
                         : "gameplay-hud-local-matrix-unavailable",
                     restored && corrected);
                 return result;
@@ -1772,7 +1775,7 @@ namespace gc::windowed_widescreen
 
             const auto begun =
                 runtime->compositor.BeginPhysicalGameplayHudOverlay(
-                    GameplayHudPlacement::centered);
+                    runtime->settings.gameplay_hud_placement());
             if (!begun)
             {
                 LogNetworkStatusCorrection(
@@ -1780,7 +1783,7 @@ namespace gc::windowed_widescreen
                     clip,
                     movie_clip,
                     *current_space,
-                    "physical-center-overlay-begin",
+                    "physical-base-overlay-begin",
                     false);
                 return original();
             }
@@ -1805,11 +1808,11 @@ namespace gc::windowed_widescreen
                 movie_clip,
                 *current_space,
                 !ended
-                    ? "physical-center-overlay-end"
+                    ? "physical-base-overlay-end"
                     : corrected
                     ? clip == NetworkStatusClip::local
                           ? "physical-local-matrix"
-                          : "physical-center-overlay"
+                          : "physical-base-overlay"
                     : "physical-local-matrix-unavailable",
                 ended && corrected);
             return result;
@@ -2033,7 +2036,7 @@ namespace gc::windowed_widescreen
                 runtime->note_tutorial_group_active = false;
                 if (!RequestRuntimeGameplayHudPlacement(
                     *runtime,
-                    GameplayHudPlacement::centered))
+                    runtime->settings.gameplay_hud_placement()))
                 {
                     PublishRenderRuntimeFatal(
                         *runtime,
@@ -2188,7 +2191,7 @@ namespace gc::windowed_widescreen
             runtime->note_tutorial_group_active = false;
             if (!RequestRuntimeGameplayHudPlacement(
                 *runtime,
-                GameplayHudPlacement::centered))
+                runtime->settings.gameplay_hud_placement()))
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
@@ -2355,7 +2358,7 @@ namespace gc::windowed_widescreen
             }
             if (!RequestRuntimeGameplayHudPlacement(
                 *runtime,
-                GameplayHudPlacement::centered))
+                runtime->settings.gameplay_hud_placement()))
             {
                 PublishRenderRuntimeFatal(
                     *runtime,
@@ -3534,6 +3537,9 @@ namespace gc::windowed_widescreen
                     << resolution->output_size().height
                     << " native_rect=" << native.left << ',' << native.top
                     << ',' << native.right << ',' << native.bottom
+                    << " hud_placement="
+                    << GameplayHudPlacementName(
+                        settings.gameplay_hud_placement())
                     << " authored_stage_clip=bypassed"
                     << " hook_count=" << requests.size();
             }

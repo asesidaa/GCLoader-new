@@ -66,6 +66,7 @@ namespace gc::windowed_widescreen
     public:
         NativeCanvasCompositor(
             OutputSize output_size,
+            GameplayHudPlacement base_gameplay_hud_placement,
             RenderThreadIdProvider thread_id_provider,
             CompositorDeviceActions actions) noexcept;
 
@@ -144,9 +145,11 @@ namespace gc::windowed_widescreen
 
         RenderSpacePolicy render_space_policy_;
         CompositorDeviceActions actions_{};
+        GameplayHudPlacement base_gameplay_hud_placement_{
+            GameplayHudPlacement::center};
         RenderSpace last_published_space_{RenderSpace::physical_3d};
         GameplayHudPlacement gameplay_hud_placement_{
-            GameplayHudPlacement::centered};
+            GameplayHudPlacement::center};
         bool physical_gameplay_hud_overlay_active_{};
     };
 } // namespace gc::windowed_widescreen

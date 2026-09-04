@@ -88,8 +88,10 @@ namespace gc::windowed_widescreen
     } // namespace
 
     D3D9CompositorDevice::D3D9CompositorDevice(
-        ResolutionModel resolution) noexcept
-        : resolution_{resolution}
+        ResolutionModel resolution,
+        const GameplayHudPlacement base_gameplay_hud_placement) noexcept
+        : resolution_{resolution},
+          base_gameplay_hud_placement_{base_gameplay_hud_placement}
     {
     }
 
@@ -632,7 +634,7 @@ namespace gc::windowed_widescreen
         if (space == RenderSpace::gameplay_hud)
         {
             return SetGameplayHudViewport(
-                GameplayHudPlacement::centered);
+                base_gameplay_hud_placement_);
         }
         const auto dimensions = SelectRenderDimensions(
             space,
