@@ -58,6 +58,7 @@ target_include_directories(iDmacDrv32 PRIVATE
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(iDmacDrv32 PRIVATE
+        gc_fatal_process
         gc_audio
         gc_crash_dump
         gc_input

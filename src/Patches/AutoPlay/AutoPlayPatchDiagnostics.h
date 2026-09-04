@@ -1,6 +1,7 @@
 #pragma once
 
-#include "Patches/GameCompatibility/GameBinaryPatch.h"
+#include "Patches/RuntimeImage/RuntimeImageError.h"
+#include <optional>
 
 #include <Windows.h>
 
@@ -11,19 +12,6 @@
 
 namespace gc::auto_play
 {
-    inline constexpr std::size_t kMaximumAutoPlayPatternBytes = 10;
-
-    struct AutoPlayBytePattern
-    {
-        std::array<std::byte, kMaximumAutoPlayPatternBytes> bytes{};
-        std::uint8_t size{};
-
-        [[nodiscard]] std::span<const std::byte> view() const noexcept
-        {
-            return {bytes.data(), static_cast<std::size_t>(size)};
-        }
-    };
-
     enum class AutoPlayContractSite : std::uint8_t
     {
         none,
@@ -50,19 +38,11 @@ namespace gc::auto_play
         AutoPlayPatchStage stage{AutoPlayPatchStage::none};
         AutoPlayContractSite site{AutoPlayContractSite::none};
         std::uint32_t rva{};
-        AutoPlayBytePattern expected_clean{};
-        AutoPlayBytePattern expected_patched{};
-        AutoPlayBytePattern actual{};
-        game_compatibility::GameBinaryMemoryStage memory_stage{
-            game_compatibility::GameBinaryMemoryStage::None};
-        DWORD win32_error{};
+        runtime_image::BytePattern expected_clean{};
+        runtime_image::BytePattern expected_patched{};
+        runtime_image::BytePattern actual{};
+        std::optional<runtime_image::RuntimeImageError> memory;
         std::uint32_t safetyhook_error{};
-        bool rollback_attempted{};
-        bool rollback_complete{};
-        AutoPlayContractSite rollback_site{AutoPlayContractSite::none};
-        game_compatibility::GameBinaryMemoryStage rollback_memory_stage{
-            game_compatibility::GameBinaryMemoryStage::None};
-        DWORD rollback_win32_error{};
     };
 
     [[nodiscard]] const char* AutoPlayPatchStageName(
@@ -70,8 +50,8 @@ namespace gc::auto_play
     [[nodiscard]] const char* AutoPlayContractSiteName(
         AutoPlayContractSite site) noexcept;
 
-    void PublishAutoPlaySetupFatal(
+    [[noreturn]] void PublishAutoPlaySetupFatal(
         const AutoPlayPatchError& error) noexcept;
-    void PublishAutoPlaySetupFallbackFatal() noexcept;
-    void PublishAutoPlayMarkerRuntimeFatal() noexcept;
+    [[noreturn]] void PublishAutoPlaySetupFallbackFatal() noexcept;
+    [[noreturn]] void PublishAutoPlayMarkerRuntimeFatal() noexcept;
 } // namespace gc::auto_play

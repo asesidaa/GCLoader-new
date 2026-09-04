@@ -1,6 +1,7 @@
 #include "AutoPlayPatchDiagnostics.h"
 
-#include "SystemPath/StartupFatal.h"
+#include "Diagnostics/FatalProcess.h"
+#include <utility>
 
 #include <atomic>
 #include <iomanip>
@@ -13,7 +14,6 @@ namespace gc::auto_play
 {
     namespace
     {
-        constexpr DWORD kAutoPlayFailureExitCode{30};
         constexpr std::wstring_view kSetupTitle{
             L"GCLoader auto play setup failed"};
         constexpr std::string_view kSetupFallbackLog{
@@ -30,15 +30,12 @@ namespace gc::auto_play
         constexpr std::wstring_view kMarkerFailureTitle{
             L"GCLoader auto play marker failed"};
 
-        std::atomic_bool g_setup_fatal_published{};
-        std::atomic_bool g_marker_fatal_published{};
 
         struct AutoPlayFatalDiagnostic
         {
             std::string log;
             std::wstring modal;
             std::wstring title;
-            DWORD exit_code{};
         };
 
         [[nodiscard]] std::string HexRva(const std::uint32_t rva)
@@ -49,7 +46,7 @@ namespace gc::auto_play
         }
 
         [[nodiscard]] std::string PatternHex(
-            const AutoPlayBytePattern& pattern)
+            const runtime_image::BytePattern& pattern)
         {
             std::ostringstream output;
             output << std::uppercase << std::hex << std::setfill('0');
@@ -70,7 +67,7 @@ namespace gc::auto_play
         void AppendPattern(
             std::ostringstream& output,
             const std::string_view name,
-            const AutoPlayBytePattern& pattern)
+            const runtime_image::BytePattern& pattern)
         {
             if (pattern.size != 0)
             {
@@ -92,46 +89,23 @@ namespace gc::auto_play
             AppendPattern(log, "expected_clean", error.expected_clean);
             AppendPattern(log, "expected_patched", error.expected_patched);
             AppendPattern(log, "actual", error.actual);
-            if (error.memory_stage !=
-                game_compatibility::GameBinaryMemoryStage::None)
+            if (error.memory)
             {
-                log << " memory_stage="
-                    << game_compatibility::GameBinaryMemoryStageName(
-                        error.memory_stage);
-            }
-            if (error.win32_error != ERROR_SUCCESS)
-            {
-                log << " win32_error=" << error.win32_error;
+                log << " memory_stage=" << runtime_image::MemoryStageName(error.memory->stage)
+                    << " address=0x" << std::hex << error.memory->address << std::dec
+                    << " win32_error=" << error.memory->win32_error
+                    << " memory_changed=" << error.memory->memory_changed
+                    << " restore_attempted=" << error.memory->restore_attempted
+                    << " restore_succeeded=" << error.memory->restore_succeeded;
             }
             if (error.safetyhook_error != 0)
             {
                 log << " safetyhook_error=" << error.safetyhook_error;
             }
-            log << " rollback_attempted=" << error.rollback_attempted
-                << " rollback_complete=" << error.rollback_complete;
-            if (error.rollback_site != AutoPlayContractSite::none)
-            {
-                log << " rollback_site="
-                    << AutoPlayContractSiteName(error.rollback_site);
-            }
-            if (error.rollback_memory_stage !=
-                game_compatibility::GameBinaryMemoryStage::None)
-            {
-                log << " rollback_memory_stage="
-                    << game_compatibility::GameBinaryMemoryStageName(
-                        error.rollback_memory_stage);
-            }
-            if (error.rollback_win32_error != ERROR_SUCCESS)
-            {
-                log << " rollback_win32_error="
-                    << error.rollback_win32_error;
-            }
-
             return {
                 .log = log.str(),
                 .modal = std::wstring{kSetupModal},
                 .title = std::wstring{kSetupTitle},
-                .exit_code = kAutoPlayFailureExitCode,
             };
         }
     } // namespace
@@ -172,43 +146,43 @@ namespace gc::auto_play
         return "unknown";
     }
 
-    void PublishAutoPlaySetupFatal(
-        const AutoPlayPatchError& error) noexcept
+    [[noreturn]] void PublishAutoPlaySetupFatal(const AutoPlayPatchError& error) noexcept
     {
         try
         {
-            const auto diagnostic = BuildDiagnostic(error);
-            system_path::PublishStartupFatal(
-                g_setup_fatal_published,
-                diagnostic.log,
-                diagnostic.modal,
-                diagnostic.title,
-                diagnostic.exit_code);
-            return;
+            auto diagnostic = BuildDiagnostic(error);
+            diagnostics::AbortProcess({std::move(diagnostic.log),
+                std::move(diagnostic.modal), std::move(diagnostic.title)});
         }
         catch (...)
         {
+            PublishAutoPlaySetupFallbackFatal();
         }
-        PublishAutoPlaySetupFallbackFatal();
     }
 
-    void PublishAutoPlaySetupFallbackFatal() noexcept
+    [[noreturn]] void PublishAutoPlaySetupFallbackFatal() noexcept
     {
-        system_path::PublishStartupFatal(
-            g_setup_fatal_published,
-            kSetupFallbackLog,
-            kSetupModal,
-            kSetupTitle,
-            kAutoPlayFailureExitCode);
+        try
+        {
+            diagnostics::AbortProcess({std::string{kSetupFallbackLog},
+                std::wstring{kSetupModal}, std::wstring{kSetupTitle}});
+        }
+        catch (...)
+        {
+            diagnostics::AbortProcess({});
+        }
     }
 
-    void PublishAutoPlayMarkerRuntimeFatal() noexcept
+    [[noreturn]] void PublishAutoPlayMarkerRuntimeFatal() noexcept
     {
-        system_path::PublishStartupFatal(
-            g_marker_fatal_published,
-            kMarkerFailureLog,
-            kMarkerFailureModal,
-            kMarkerFailureTitle,
-            kAutoPlayFailureExitCode);
+        try
+        {
+            diagnostics::AbortProcess({std::string{kMarkerFailureLog},
+                std::wstring{kMarkerFailureModal}, std::wstring{kMarkerFailureTitle}});
+        }
+        catch (...)
+        {
+            diagnostics::AbortProcess({});
+        }
     }
 } // namespace gc::auto_play

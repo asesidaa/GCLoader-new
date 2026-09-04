@@ -1,5 +1,6 @@
 #include "Patches/Framerate/FrameratePatch.h"
 
+#include "Diagnostics/FatalProcess.h"
 #include "Audio/AudioContractFatal.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
@@ -2469,9 +2470,45 @@ namespace gc::framerate
             << " direct_writes=" << direct_plan->view().size()
             << " hooks=" << hook_operations.view().size();
 
-        gc::timer_freeze::SetCountdownTimerFreezeEnabled(
-            timer_freeze_enabled);
-        gc::timer_freeze::CountdownTimerFreezeInit();
+        if (timer_freeze_enabled)
+        {
+            const auto image = runtime_image::RuntimeImage::MainModule();
+            const auto frozen = image
+                ? gc::timer_freeze::InstallCountdownTimerFreeze(*image, true)
+                : std::expected<void, runtime_image::RuntimeImageError>(
+                    std::unexpected(image.error()));
+            if (!frozen)
+            {
+                // Framerate installation has already mutated this process.
+                try
+                {
+                    const auto& error = frozen.error();
+                    std::string expected;
+                    std::string observed;
+                    for (const auto value : error.expected.view())
+                        expected += std::format("{:02x}", std::to_integer<unsigned>(value));
+                    for (const auto value : error.observed.view())
+                        observed += std::format("{:02x}", std::to_integer<unsigned>(value));
+                    gc::diagnostics::AbortProcess({
+                        .log = std::format(
+                            "Countdown: startup failed stage={} site={} rva=0x{:08x} "
+                            "address=0x{:08x} expected={} observed={} win32_error={} "
+                            "memory_changed={} restore_attempted={} restore_succeeded={}",
+                            runtime_image::MemoryStageName(error.stage),
+                            error.identity.site, error.identity.rva, error.address,
+                            expected, observed, error.win32_error, error.memory_changed,
+                            error.restore_attempted, error.restore_succeeded),
+                        .modal = L"GCLoader could not install the countdown patches. "
+                            L"See loader-log.txt for the failing site.",
+                        .title = L"GCLoader countdown setup error",
+                    });
+                }
+                catch (...)
+                {
+                    gc::diagnostics::AbortProcess({});
+                }
+            }
+        }
         return true;
     }
 } // namespace gc::framerate

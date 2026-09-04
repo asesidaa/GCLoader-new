@@ -1,3 +1,5 @@
+add_subdirectory(RuntimeImage)
+
 add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
         AbsoluteJudgement/AbsoluteJudgementPatch.cpp
@@ -43,6 +45,8 @@ target_include_directories(gc_runtime_patches PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_runtime_patches PUBLIC
+        gc_runtime_image
+        gc_fatal_process
         gc_audio
         gc_input
         gc_logging

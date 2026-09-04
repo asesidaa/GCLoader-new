@@ -13,7 +13,8 @@ namespace gc::game_compatibility
         [[nodiscard]] bool IsUnsupportedVersion(
             GameBinaryPatchStage stage) noexcept
         {
-            return stage == GameBinaryPatchStage::UnknownBytes;
+            return stage == GameBinaryPatchStage::UnknownBytes ||
+                stage == GameBinaryPatchStage::MixedState;
         }
 
         [[nodiscard]] std::string HexRva(std::uint32_t value)
@@ -27,7 +28,7 @@ namespace gc::game_compatibility
         }
 
         [[nodiscard]] std::string PatternHex(
-            const GameBinaryBytePattern& pattern)
+            const runtime_image::BytePattern& pattern)
         {
             std::string text;
             for (const auto value : pattern.view())
@@ -81,14 +82,18 @@ namespace gc::game_compatibility
             << " stage=" << GameBinaryPatchStageName(error.stage);
         AppendSiteLog(log, error);
         AppendPatternLog(log, error);
-        if (error.memory_stage != GameBinaryMemoryStage::None)
+        if (error.memory.has_value())
         {
             log << " memory_stage="
-                << GameBinaryMemoryStageName(error.memory_stage);
+                << runtime_image::MemoryStageName(error.memory->stage)
+                << " address=0x" << std::hex << error.memory->address << std::dec
+                << " memory_changed=" << error.memory->memory_changed
+                << " restore_attempted=" << error.memory->restore_attempted
+                << " restore_succeeded=" << error.memory->restore_succeeded;
         }
-        if (error.win32_error != ERROR_SUCCESS)
+        if (error.memory && error.memory->win32_error != ERROR_SUCCESS)
         {
-            log << " win32_error=" << error.win32_error;
+            log << " win32_error=" << error.memory->win32_error;
         }
 
         std::wostringstream modal;
@@ -105,8 +110,8 @@ namespace gc::game_compatibility
                     << L"RVA: " << WideHexRva(error.rva) << L"\n";
             }
             modal
-                << L"\nEvery required patch site must be either clean or "
-                L"already patched.\n\n"
+                << L"\nAll required patch sites must be clean, or all must already "
+                L"be patched. Mixed states are unsupported.\n\n"
                 << L"See loader-log.txt for the exact byte comparison.";
         }
         else
@@ -122,15 +127,15 @@ namespace gc::game_compatibility
                     << GameBinaryPatchSiteName(error.site) << L"\n"
                     << L"RVA: " << WideHexRva(error.rva) << L"\n";
             }
-            if (error.memory_stage != GameBinaryMemoryStage::None)
+            if (error.memory.has_value())
             {
                 modal
                     << L"Memory stage: "
-                    << GameBinaryMemoryStageName(error.memory_stage) << L"\n";
+                    << runtime_image::MemoryStageName(error.memory->stage) << L"\n";
             }
-            if (error.win32_error != ERROR_SUCCESS)
+            if (error.memory && error.memory->win32_error != ERROR_SUCCESS)
             {
-                modal << L"Windows error: " << error.win32_error << L"\n";
+                modal << L"Windows error: " << error.memory->win32_error << L"\n";
             }
             modal
                 << L"\nCheck loader-log.txt and verify that security software "

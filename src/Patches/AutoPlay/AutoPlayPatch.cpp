@@ -2,77 +2,59 @@
 
 #include "AutoPlayMarker.h"
 #include "AutoPlayPatchDiagnostics.h"
-#include "Patches/GameCompatibility/GameBinaryPatch.h"
+#include "Patches/RuntimeImage/RuntimeImage.h"
 
 #include <Windows.h>
-
 #include <safetyhook.hpp>
-
 #include "plog/Log.h"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstddef>
-#include <cstdint>
 #include <expected>
 #include <limits>
-#include <ranges>
-#include <span>
 #include <utility>
 
 namespace gc::auto_play
 {
     namespace
     {
-        template <std::uint8_t... Values>
-        consteval AutoPlayBytePattern Pattern() noexcept
-        {
-            static_assert(sizeof...(Values) <= kMaximumAutoPlayPatternBytes);
-            AutoPlayBytePattern pattern{};
-            std::size_t index{};
-            ((pattern.bytes[index++] = std::byte{Values}), ...);
-            pattern.size = static_cast<std::uint8_t>(sizeof...(Values));
-            return pattern;
-        }
-
         struct DirectContract
         {
             AutoPlayContractSite site;
             std::uint32_t rva;
-            AutoPlayBytePattern clean;
-            AutoPlayBytePattern patched;
+            runtime_image::BytePattern clean;
+            runtime_image::BytePattern patched;
         };
 
         struct ReadOnlyContract
         {
             AutoPlayContractSite site;
             std::uint32_t rva;
-            AutoPlayBytePattern native;
+            runtime_image::BytePattern native;
         };
 
         constexpr std::array<DirectContract, 3> kDirectContracts{
             DirectContract{
                 AutoPlayContractSite::do_not_save_card_data,
                 0x00269951U,
-                Pattern<0x0F, 0x95, 0xC1>(),
-                Pattern<0xB1, 0x01, 0x90>()},
+                runtime_image::PatternOf<0x0F, 0x95, 0xC1>(),
+                runtime_image::PatternOf<0xB1, 0x01, 0x90>()},
             DirectContract{
                 AutoPlayContractSite::complete_is_mute,
                 0x0003CAFAU,
-                Pattern<0x8A, 0x80, 0xA6, 0x00, 0x00, 0x00>(),
-                Pattern<0xB0, 0x01, 0x90, 0x90, 0x90, 0x90>()},
+                runtime_image::PatternOf<0x8A, 0x80, 0xA6, 0x00, 0x00, 0x00>(),
+                runtime_image::PatternOf<0xB0, 0x01, 0x90, 0x90, 0x90, 0x90>()},
             DirectContract{
                 AutoPlayContractSite::native_auto_play,
                 0x0003CADAU,
-                Pattern<0x8A, 0x80, 0xA5, 0x00, 0x00, 0x00>(),
-                Pattern<0xB0, 0x01, 0x90, 0x90, 0x90, 0x90>()},
+                runtime_image::PatternOf<0x8A, 0x80, 0xA5, 0x00, 0x00, 0x00>(),
+                runtime_image::PatternOf<0xB0, 0x01, 0x90, 0x90, 0x90, 0x90>()},
         };
 
         constexpr ReadOnlyContract kMarkerContract{
             AutoPlayContractSite::marker_seam,
             0x00058BE9U,
-            Pattern<
+            runtime_image::PatternOf<
                 0x8D,
                 0x44,
                 0x24,
@@ -88,7 +70,7 @@ namespace gc::auto_play
         constexpr ReadOnlyContract kNativeTextContract{
             AutoPlayContractSite::native_debug_text,
             0x00069650U,
-            Pattern<0x55, 0x8B, 0xEC, 0x6A, 0xFF>(),
+            runtime_image::PatternOf<0x55, 0x8B, 0xEC, 0x6A, 0xFF>(),
         };
 
         struct AutoPlayRuntime
@@ -116,90 +98,18 @@ namespace gc::auto_play
         AutoPlayRuntime g_runtime;
         std::atomic_bool g_already_enabled_logged{};
 
-        [[nodiscard]] bool CheckedAddress(
-            const std::uintptr_t image_base,
-            const std::uint32_t rva,
-            const std::size_t size,
-            std::uintptr_t& address) noexcept
+
+        runtime_image::SiteIdentity Identity(AutoPlayContractSite site, std::uint32_t rva) noexcept
         {
-            const auto maximum =
-                (std::numeric_limits<std::uintptr_t>::max)();
-            if (image_base == 0 || size == 0 || image_base > maximum - rva)
-            {
-                return false;
-            }
-            address = image_base + rva;
-            return size - 1 <= maximum - address;
+            return {"AutoPlay", AutoPlayContractSiteName(site), rva};
         }
 
-        [[nodiscard]] AutoPlayBytePattern CopyPattern(
-            const std::span<const std::byte> bytes) noexcept
+        [[nodiscard]] AutoPlayPatchError MemoryError(
+            AutoPlayPatchStage stage, AutoPlayContractSite site, std::uint32_t rva,
+            const runtime_image::RuntimeImageError& memory) noexcept
         {
-            AutoPlayBytePattern pattern{};
-            if (bytes.size() > pattern.bytes.size())
-            {
-                return pattern;
-            }
-            std::ranges::copy(bytes, pattern.bytes.begin());
-            pattern.size = static_cast<std::uint8_t>(bytes.size());
-            return pattern;
-        }
-
-        [[nodiscard]] bool Matches(
-            const std::span<const std::byte> actual,
-            const AutoPlayBytePattern& expected) noexcept
-        {
-            return std::ranges::equal(actual, expected.view());
-        }
-
-        [[nodiscard]] AutoPlayPatchError AddressError(
-            const AutoPlayContractSite site,
-            const std::uint32_t rva,
-            const AutoPlayBytePattern& clean,
-            const AutoPlayBytePattern& patched = {}) noexcept
-        {
-            return {
-                .stage = AutoPlayPatchStage::address_range,
-                .site = site,
-                .rva = rva,
-                .expected_clean = clean,
-                .expected_patched = patched,
-            };
-        }
-
-        [[nodiscard]] AutoPlayPatchError ReadError(
-            const AutoPlayContractSite site,
-            const std::uint32_t rva,
-            const AutoPlayBytePattern& clean,
-            const AutoPlayBytePattern& patched,
-            const game_compatibility::GameBinaryMemoryError& memory) noexcept
-        {
-            return {
-                .stage = AutoPlayPatchStage::preflight_read,
-                .site = site,
-                .rva = rva,
-                .expected_clean = clean,
-                .expected_patched = patched,
-                .memory_stage = memory.stage,
-                .win32_error = memory.win32_error,
-            };
-        }
-
-        [[nodiscard]] AutoPlayPatchError MismatchError(
-            const AutoPlayContractSite site,
-            const std::uint32_t rva,
-            const AutoPlayBytePattern& clean,
-            const AutoPlayBytePattern& patched,
-            const std::span<const std::byte> actual) noexcept
-        {
-            return {
-                .stage = AutoPlayPatchStage::byte_mismatch,
-                .site = site,
-                .rva = rva,
-                .expected_clean = clean,
-                .expected_patched = patched,
-                .actual = CopyPattern(actual),
-            };
+            return {.stage = stage, .site = site, .rva = rva, .actual = memory.observed,
+                    .memory = memory};
         }
 
         void AutoPlayMarkerMidHook(safetyhook::Context&) noexcept
@@ -225,19 +135,6 @@ namespace gc::auto_play
             }
         }
 
-        [[nodiscard]] std::expected<std::uintptr_t, DWORD>
-        ResolveImageBase() noexcept
-        {
-            const auto module = GetModuleHandleW(nullptr);
-            if (module == nullptr)
-            {
-                const auto error = GetLastError();
-                return std::unexpected(
-                    error == ERROR_SUCCESS ? ERROR_MOD_NOT_FOUND : error);
-            }
-            return reinterpret_cast<std::uintptr_t>(module);
-        }
-
         [[nodiscard]] std::expected<void, std::uint32_t>
         InstallMarkerHook(const std::uintptr_t address) noexcept
         {
@@ -261,259 +158,131 @@ namespace gc::auto_play
             }
         }
 
+
         [[nodiscard]] std::expected<InstallResult, AutoPlayPatchError>
         InstallAutoPlayPatch() noexcept
         {
             if (g_runtime.marker_active.load(std::memory_order_acquire))
             {
-                return InstallResult{
-                    .state = InstallState::already_enabled,
-                    .direct_patched = g_runtime.direct_patched,
-                    .direct_existing = g_runtime.direct_existing,
-                };
+                return InstallResult{InstallState::already_enabled,
+                    g_runtime.direct_patched, g_runtime.direct_existing};
             }
-
             g_runtime.native_text_address = 0;
             g_runtime.direct_patched = 0;
             g_runtime.direct_existing = 0;
 
-            const auto resolved = ResolveImageBase();
-            if (!resolved)
+            const auto image = runtime_image::RuntimeImage::MainModule();
+            if (!image)
             {
-                return std::unexpected(AutoPlayPatchError{
-                    .stage = AutoPlayPatchStage::resolve_image_base,
-                    .win32_error = resolved.error(),
-                });
-            }
-            const auto image_base = *resolved;
-            const auto memory =
-                game_compatibility::ProductionGameBinaryPatchActions();
-
-            std::array<std::uintptr_t, kDirectContracts.size()>
-                direct_addresses{};
-            for (std::size_t index = 0; index < kDirectContracts.size(); ++index)
-            {
-                const auto& contract = kDirectContracts[index];
-                if (!CheckedAddress(
-                        image_base,
-                        contract.rva,
-                        contract.clean.size,
-                        direct_addresses[index]))
-                {
-                    return std::unexpected(AddressError(
-                        contract.site,
-                        contract.rva,
-                        contract.clean,
-                        contract.patched));
-                }
-            }
-
-            std::uintptr_t marker_address{};
-            if (!CheckedAddress(
-                    image_base,
-                    kMarkerContract.rva,
-                    kMarkerContract.native.size,
-                    marker_address))
-            {
-                return std::unexpected(AddressError(
-                    kMarkerContract.site,
-                    kMarkerContract.rva,
-                    kMarkerContract.native));
-            }
-
-            std::uintptr_t native_text_address{};
-            if (!CheckedAddress(
-                    image_base,
-                    kNativeTextContract.rva,
-                    kNativeTextContract.native.size,
-                    native_text_address))
-            {
-                return std::unexpected(AddressError(
-                    kNativeTextContract.site,
-                    kNativeTextContract.rva,
-                    kNativeTextContract.native));
+                return std::unexpected(MemoryError(AutoPlayPatchStage::resolve_image_base,
+                    AutoPlayContractSite::none, 0, image.error()));
             }
 
             std::array<bool, kDirectContracts.size()> already_patched{};
-            std::array<std::byte, kMaximumAutoPlayPatternBytes> actual_bytes{};
             std::size_t direct_existing{};
             for (std::size_t index = 0; index < kDirectContracts.size(); ++index)
             {
                 const auto& contract = kDirectContracts[index];
-                auto actual =
-                    std::span{actual_bytes}.first(contract.clean.size);
-                const auto read = memory.read(
-                    memory.context,
-                    direct_addresses[index],
-                    actual);
-                if (!read)
+                const auto actual = image->Read(Identity(contract.site, contract.rva), contract.clean.size);
+                if (!actual)
                 {
-                    return std::unexpected(ReadError(
-                        contract.site,
-                        contract.rva,
-                        contract.clean,
-                        contract.patched,
-                        read.error()));
+                    auto error = MemoryError(AutoPlayPatchStage::preflight_read,
+                        contract.site, contract.rva, actual.error());
+                    error.expected_clean = contract.clean;
+                    error.expected_patched = contract.patched;
+                    return std::unexpected(error);
                 }
-                if (Matches(actual, contract.clean))
+                if (*actual == contract.clean)
                 {
                     continue;
                 }
-                if (Matches(actual, contract.patched))
+                if (*actual == contract.patched)
                 {
                     already_patched[index] = true;
                     ++direct_existing;
                     continue;
                 }
-                return std::unexpected(MismatchError(
-                    contract.site,
-                    contract.rva,
-                    contract.clean,
-                    contract.patched,
-                    actual));
+                return std::unexpected(AutoPlayPatchError{
+                    .stage = AutoPlayPatchStage::byte_mismatch, .site = contract.site,
+                    .rva = contract.rva, .expected_clean = contract.clean,
+                    .expected_patched = contract.patched, .actual = *actual});
             }
 
-            const auto preflight_read_only = [&memory, &actual_bytes](
-                                                 const ReadOnlyContract& contract,
-                                                 const std::uintptr_t address)
-                -> std::expected<void, AutoPlayPatchError>
+            const auto check_native = [&image](const ReadOnlyContract& contract)
+                -> std::expected<std::uintptr_t, AutoPlayPatchError>
             {
-                auto actual =
-                    std::span{actual_bytes}.first(contract.native.size);
-                const auto read =
-                    memory.read(memory.context, address, actual);
-                if (!read)
+                const auto identity = Identity(contract.site, contract.rva);
+                const auto actual = image->Read(identity, contract.native.size);
+                if (!actual)
                 {
-                    return std::unexpected(ReadError(
-                        contract.site,
-                        contract.rva,
-                        contract.native,
-                        {},
-                        read.error()));
+                    auto error = MemoryError(AutoPlayPatchStage::preflight_read,
+                        contract.site, contract.rva, actual.error());
+                    error.expected_clean = contract.native;
+                    return std::unexpected(error);
                 }
-                if (!Matches(actual, contract.native))
+                if (*actual != contract.native)
                 {
-                    return std::unexpected(MismatchError(
-                        contract.site,
-                        contract.rva,
-                        contract.native,
-                        {},
-                        actual));
+                    return std::unexpected(AutoPlayPatchError{
+                        .stage = AutoPlayPatchStage::byte_mismatch, .site = contract.site,
+                        .rva = contract.rva, .expected_clean = contract.native, .actual = *actual});
                 }
-                return {};
+                const auto address = image->Resolve(identity, contract.native.size);
+                if (!address)
+                {
+                    return std::unexpected(MemoryError(AutoPlayPatchStage::address_range,
+                        contract.site, contract.rva, address.error()));
+                }
+                return *address;
             };
-
-            if (const auto marker_preflight = preflight_read_only(
-                    kMarkerContract,
-                    marker_address);
-                !marker_preflight)
+            const auto marker_address = check_native(kMarkerContract);
+            if (!marker_address)
             {
-                return std::unexpected(marker_preflight.error());
+                return std::unexpected(marker_address.error());
             }
-            if (const auto text_preflight = preflight_read_only(
-                    kNativeTextContract,
-                    native_text_address);
-                !text_preflight)
+            const auto native_text = check_native(kNativeTextContract);
+            if (!native_text)
             {
-                return std::unexpected(text_preflight.error());
+                return std::unexpected(native_text.error());
             }
 
-            g_runtime.native_text_address = native_text_address;
-            std::array<std::size_t, kDirectContracts.size()> owned_indices{};
-            std::size_t owned_count{};
-
-            const auto rollback = [&memory, &direct_addresses, &owned_indices,
-                                   &owned_count](AutoPlayPatchError error)
-                -> std::expected<InstallResult, AutoPlayPatchError>
-            {
-                error.rollback_attempted = true;
-                error.rollback_complete = true;
-                try
-                {
-                    g_runtime.marker_hook.reset();
-                }
-                catch (...)
-                {
-                    error.rollback_complete = false;
-                    error.rollback_site = AutoPlayContractSite::marker_seam;
-                }
-
-                while (owned_count > 0)
-                {
-                    const auto index = owned_indices[--owned_count];
-                    const auto& contract = kDirectContracts[index];
-                    const auto restored = memory.write(
-                        memory.context,
-                        direct_addresses[index],
-                        contract.clean.view());
-                    if (!restored)
-                    {
-                        if (error.rollback_complete)
-                        {
-                            error.rollback_site = contract.site;
-                            error.rollback_memory_stage =
-                                restored.error().stage;
-                            error.rollback_win32_error =
-                                restored.error().win32_error;
-                        }
-                        error.rollback_complete = false;
-                    }
-                }
-
-                g_runtime.native_text_address = 0;
-                g_runtime.direct_patched = 0;
-                g_runtime.direct_existing = 0;
-                return std::unexpected(error);
-            };
-
-            const auto installed = InstallMarkerHook(marker_address);
+            // Keep the original ordering: publish text target, install marker,
+            // suppress saving, complete mute, then enable native auto play.
+            g_runtime.native_text_address = *native_text;
+            const auto installed = InstallMarkerHook(*marker_address);
             if (!installed)
             {
-                return rollback(AutoPlayPatchError{
+                PublishAutoPlaySetupFatal({
                     .stage = AutoPlayPatchStage::hook_install,
                     .site = AutoPlayContractSite::marker_seam,
-                    .rva = kMarkerContract.rva,
-                    .expected_clean = kMarkerContract.native,
-                    .safetyhook_error = installed.error(),
-                });
+                    .rva = kMarkerContract.rva, .expected_clean = kMarkerContract.native,
+                    .safetyhook_error = installed.error()});
             }
 
+            std::size_t direct_patched{};
             for (std::size_t index = 0; index < kDirectContracts.size(); ++index)
             {
                 if (already_patched[index])
                 {
                     continue;
                 }
-
                 const auto& contract = kDirectContracts[index];
-                owned_indices[owned_count++] = index;
-                const auto written = memory.write(
-                    memory.context,
-                    direct_addresses[index],
-                    contract.patched.view());
+                const auto written = image->Write(Identity(contract.site, contract.rva),
+                    contract.patched, runtime_image::MemoryKind::code);
                 if (!written)
                 {
-                    return rollback(AutoPlayPatchError{
-                        .stage = AutoPlayPatchStage::direct_write,
-                        .site = contract.site,
-                        .rva = contract.rva,
-                        .expected_clean = contract.clean,
-                        .expected_patched = contract.patched,
-                        .actual = contract.clean,
-                        .memory_stage = written.error().stage,
-                        .win32_error = written.error().win32_error,
-                    });
+                    auto error = MemoryError(AutoPlayPatchStage::direct_write,
+                        contract.site, contract.rva, written.error());
+                    error.expected_clean = contract.clean;
+                    error.expected_patched = contract.patched;
+                    PublishAutoPlaySetupFatal(error);
                 }
+                ++direct_patched;
             }
 
-            g_runtime.direct_patched = owned_count;
+            g_runtime.direct_patched = direct_patched;
             g_runtime.direct_existing = direct_existing;
             g_runtime.marker_active.store(true, std::memory_order_release);
-            return InstallResult{
-                .state = InstallState::enabled,
-                .direct_patched = owned_count,
-                .direct_existing = direct_existing,
-            };
+            return InstallResult{InstallState::enabled, direct_patched, direct_existing};
         }
     } // namespace
 

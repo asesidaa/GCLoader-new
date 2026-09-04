@@ -34,6 +34,7 @@
 #include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/AudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
+#include "Diagnostics/FatalProcess.h"
 #include "SystemPath/StartupFatal.h"
 #include "SystemPath/TtxInitGuard.h"
 
@@ -74,36 +75,22 @@ namespace
             << gc::logging::LoaderLogLevelName(level);
     }
 
-    void PublishGameBinaryPatchFatal(
+    [[noreturn]] void AbortGameBinaryPatchFatal(
         const gc::game_compatibility::GameBinaryPatchError& error) noexcept
     {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 26;
-
         try
         {
-            const auto diagnostic =
-                gc::game_compatibility::
-                BuildGameBinaryPatchFatalDiagnostic(error);
-            gc::system_path::PublishStartupFatal(
-                published,
-                diagnostic.log,
-                diagnostic.modal,
-                diagnostic.title,
-                diagnostic.exit_code);
-            return;
+            auto diagnostic =
+                gc::game_compatibility::BuildGameBinaryPatchFatalDiagnostic(error);
+            gc::diagnostics::AbortProcess({
+                std::move(diagnostic.log),
+                std::move(diagnostic.modal),
+                std::move(diagnostic.title)});
         }
         catch (...)
         {
+            gc::diagnostics::AbortProcess({});
         }
-
-        gc::system_path::PublishStartupFatal(
-            published,
-            "GameBinaryPatch: startup failure formatting failed",
-            L"GCLoader could not validate or patch the game executable. "
-            L"Check loader-log.txt for details.",
-            L"GCLoader game patch setup error",
-            exit_code);
     }
 
     std::wstring Utf8ToWideOrFallback(std::string_view value)
@@ -541,8 +528,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     gc::game_compatibility::GameBinaryPatchInit();
                 if (!game_binary_patch)
                 {
-                    PublishGameBinaryPatchFatal(game_binary_patch.error());
-                    return FALSE;
+                    AbortGameBinaryPatchFatal(game_binary_patch.error());
                 }
                 PLOG_INFO
                     << "GameBinaryPatch: state="

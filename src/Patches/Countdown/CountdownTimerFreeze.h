@@ -1,6 +1,7 @@
 #pragma once
 
-// ReSharper disable once CppUnusedIncludeDirective
+#include "Patches/RuntimeImage/RuntimeImage.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -53,22 +54,8 @@ inline constexpr CountdownDeltaPatchSite kCountdownDeltaPatchSites[] = {
     {0x0020B143, 0x0020B148},
 };
 
-inline const CountdownDeltaPatchSite* CountdownDeltaPatchForReturnRva(std::uintptr_t return_rva) noexcept {
-    for (const auto& site : kCountdownDeltaPatchSites) {
-        if (site.return_rva == return_rva) {
-            return &site;
-        }
-    }
-
-    return nullptr;
-}
-
-inline bool IsCountdownDeltaReturnRva(std::uintptr_t return_rva) noexcept {
-    return CountdownDeltaPatchForReturnRva(return_rva) != nullptr;
-}
-
-void SetCountdownTimerFreezeEnabled(bool enabled) noexcept;
-bool IsCountdownTimerFreezeEnabled() noexcept;
-void CountdownTimerFreezeInit();
+[[nodiscard]] std::expected<void, runtime_image::RuntimeImageError>
+InstallCountdownTimerFreeze(
+    const runtime_image::RuntimeImage& image, bool enabled) noexcept;
 
 } // namespace gc::timer_freeze
