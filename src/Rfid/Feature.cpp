@@ -1,10 +1,7 @@
 #include "Rfid/Feature.h"
 
 #include "Rfid/Runtime.h"
-#include "SystemPath/TtxInitGuard.h"
-#include "SystemPath/SystemPathRouter.h"
-#include "TestModeStorage/Hooks.h"
-#include "Win32Hooks/Kernel32Hooks.h"
+#include "Rfid/Win32ComHooks.h"
 #include "Input/Types/PhysicalKey.h"
 #include "Input/Win32/PhysicalKeyWin32.h"
 #include "plog/Log.h"
@@ -23,23 +20,10 @@ namespace gc::rfid
     {
         struct FeatureState
         {
-            FeatureState(
-                int virtual_key,
-                bool storage_enabled,
-                const gc::system_path::RuntimeRoot& system_root)
-                : rfid{virtual_key},
-                  storage{storage_enabled},
-                  system{system_root},
-                  kernel32{rfid, storage, system},
-                  ttx{system_root}
-            {
-            }
-
+            explicit FeatureState(int virtual_key)
+                : rfid{virtual_key}, com{rfid} {}
             Runtime rfid;
-            gc::testmode_storage::Hooks storage;
-            gc::system_path::SystemPathRouter system;
-            gc::win32_hooks::Kernel32Hooks kernel32;
-            gc::system_path::TtxInitGuard ttx;
+            Win32ComHooks com;
         };
 
         FeatureState* g_feature_state{};
@@ -80,9 +64,8 @@ namespace gc::rfid
         }
     } // namespace
 
-    std::expected<void, FeatureError> AddRfidHooks(
+    std::expected<Runtime*, FeatureError> AddRfidHooks(
         hooking::HookPlan& plan,
-        const gc::system_path::RuntimeRoot& system_root,
         FeatureSettings settings) noexcept
     {
         if (g_feature_state != nullptr)
@@ -92,20 +75,18 @@ namespace gc::rfid
         }
 
         int card_virtual_key{};
-        bool storage_enabled{};
         try
         {
             const auto card_read_key = settings.card_read_key();
             card_virtual_key = static_cast<int>(
                 gc::input::PhysicalKeyToVirtualKey(card_read_key));
-            storage_enabled = settings.testmode_storage_redirect_enabled();
 
             const auto token = gc::input::FormatPhysicalKey(card_read_key);
             const auto label = WideToUtf8(
                 gc::input::PhysicalKeyLabel(card_read_key));
 
             PLOG_INFO << "Test-mode storage redirect: "
-                << (storage_enabled ? "enabled" : "disabled");
+                << (settings.testmode_storage_redirect_enabled() ? "enabled" : "disabled");
             if (card_virtual_key == 0)
             {
                 PLOG_WARNING
@@ -134,7 +115,7 @@ namespace gc::rfid
         try
         {
             state = std::make_unique<FeatureState>(
-                card_virtual_key, storage_enabled, system_root);
+                card_virtual_key);
         }
         catch (const std::bad_alloc&)
         {
@@ -151,17 +132,12 @@ namespace gc::rfid
             });
         }
 
-        // Runtime and routing state outlive every registered original slot.
+        // Runtime and COM original storage outlive every registered hook.
         g_feature_state = state.release();
-        g_feature_state->kernel32.Activate();
-        const auto kernel32 = g_feature_state->kernel32.AddHooks(plan);
-        if (!kernel32)
+        const auto com = g_feature_state->com.AddHooks(plan);
+        if (!com)
             return std::unexpected(FeatureError{.stage = FeatureFailureStage::hook_plan,
-                .hook = kernel32.error()});
-        const auto ttx = g_feature_state->ttx.AddHook(plan);
-        if (!ttx)
-            return std::unexpected(FeatureError{.stage = FeatureFailureStage::hook_plan,
-                .hook = ttx.error()});
-        return {};
+                .hook = com.error()});
+        return &g_feature_state->rfid;
     }
 } // namespace gc::rfid

@@ -1,4 +1,5 @@
 #include "Loader/NonVersionedHookPlan.h"
+#include "Loader/GameWin32HookComposition.h"
 #include "Audio/AudioPatch.h"
 #include "Config/ConfigCompiler.h"
 #include "Diagnostics/CrashDumpHandler.h"
@@ -32,7 +33,7 @@ void InstallGameNonVersionedHooks(
         Require(locale_compatibility::AddJapaneseLocaleHooks(plan, nesys_service::ProcessRole::Game));
         Require(crash_dump::AddCrashDumpHook(plan));
         Require(input::AddRawInputRegistrationHook(plan));
-        const auto rfid = rfid::AddRfidHooks(plan, root, settings.rfid());
+        const auto rfid = rfid::AddRfidHooks(plan, settings.rfid());
         if (!rfid) {
             if (rfid.error().stage == rfid::FeatureFailureStage::hook_plan)
                 hooking::AbortHookError(rfid.error().hook);
@@ -42,6 +43,8 @@ void InstallGameNonVersionedHooks(
                 L"GCLoader could not prepare RFID and storage state. Check loader-log.txt.",
                 L"GCLoader feature setup error"});
         }
+        Require(AddGameWin32Hooks(plan, root,
+            settings.rfid().testmode_storage_redirect_enabled(), **rfid));
         Require(nesys_service::AddNesysHooks(plan, loader_module,
             nesys_service::ProcessRole::Game, settings.nesys()));
         Require(audio::AddAudioHooks(plan, settings.audio()));

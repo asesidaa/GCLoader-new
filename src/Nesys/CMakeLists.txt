@@ -3,13 +3,14 @@ target_include_directories(gc_nesys_process PUBLIC
         ${PROJECT_SOURCE_DIR}/src)
 
 add_library(gc_nesys_diagnostics STATIC
-        Diagnostics/RequestPipelineDiagnostics.cpp)
+        Diagnostics/RequestPipelineDiagnostics.cpp
+        Diagnostics/GamePipeWin32Observers.cpp)
 target_include_directories(gc_nesys_diagnostics PUBLIC
         ${PROJECT_SOURCE_DIR}/src
         ${plog_SOURCE_DIR}/include
 )
 
-target_link_libraries(gc_nesys_diagnostics PUBLIC gc_hooking)
+target_link_libraries(gc_nesys_diagnostics PUBLIC gc_hooking gc_win32_hooks)
 
 add_library(gc_nesys STATIC
         NesysServicePatch.cpp

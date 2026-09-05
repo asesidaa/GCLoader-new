@@ -786,3 +786,75 @@ not the final dependency direction.
   Its built ordinal is frozen above; none of the explicit source ordinals differ.
 - Runtime acceptance remains unperformed and requires a separately authorized
   deployed artifact and actual target-process observations.
+
+### After shared dispatch — 2026-09-05
+
+Plan 05 comparison against the frozen tables above and the pre-migration
+Kernel32 implementation. The neutral dispatcher owns 18 shared original
+slots; RFID owns the nine exclusive COM slots. Loader registers
+RFID -> SystemPath -> TestModeStorage pre-handlers, followed by NESYS
+post-observers, and freezes every chain before installing physical hooks.
+Disabled routing owners register nothing. The resulting export enable
+conditions remain the same (15 unconditional, up to 12 conditional).
+
+Each NESYS post registration includes a paired before-original bookkeeping
+callback and stack-owned observation state. This preserves tracked-handle
+lookup and start timing before the native call, after routing, without giving
+observers an original trampoline. Completion branches never activate this
+state. System-path matches explicitly bypass storage and pipe-open observation.
+The illustrative post-callback signature in Plan 05 is extended with this
+per-call state; no global mutable timing slot or fake API table was introduced.
+
+| Export | Comparison | Preserved contract and new owner |
+|---|---|---|
+| CreateFileA | preserved | RFID exact COM2 completion first, worker/open error and handle unchanged; system match selects W and bypasses storage/observation; otherwise storage A then original A; pipe identity remains the caller's original path. All seven arguments retained. |
+| CreateFileW | preserved | Same ordering with wide matching/routing; original W; null path retained. |
+| WriteFile | preserved | RFID initializes count before validation, rejects missing count/overlapped/nonzero null buffer, propagates port/overflow errors, writes transferred count. Native branch forwards all five arguments once; tracked-pipe timing and observation remain. |
+| ReadFile | preserved | RFID count initialization, validation, port read/remainder ownership and errors unchanged; native branch forwards all five arguments once without observation. |
+| FlushFileBuffers | preserved | Always native, including emulated handles; tracked-pipe timing and result/error observation retained. |
+| CloseHandle | preserved | Emulated close resets the same runtime and returns TRUE; native close is attempted once, then tracked-handle removal occurs regardless of its result. |
+| FindFirstFileA | preserved | Storage-only registration; null/path/find-data pointers and original A forwarding retained. |
+| FindFirstFileW | preserved | System route before storage, route failure sentinel/error retained, original W at most once. |
+| CreateDirectoryA | preserved | Storage-only routing; security pointer unchanged; original A once. |
+| CreateDirectoryW | preserved | System route before storage; FALSE/route error on failure; original W with unchanged security. |
+| DeleteFileA | preserved | System match selects W, otherwise storage then A; null path and route error retained. |
+| DeleteFileW | preserved | System before storage; original W; route failure retained. |
+| GetFileAttributesA | preserved | System match selects W, otherwise storage then A; INVALID_FILE_ATTRIBUTES and route error retained. |
+| GetFileAttributesW | preserved | System before storage; original W and same failure sentinel/error. |
+| GetDiskFreeSpaceExA | preserved | Storage-enabled directory is explicitly null; three output pointers are forwarded unchanged to original A. |
+| GetDiskFreeSpaceExW | preserved | Same explicit null directory and untouched outputs, original W. |
+| MoveFileA | preserved | Routes source then destination; neither match retains A and both original pointers. Either match selects W, converts only unmatched non-null operands, preserves null operands, propagates the first route/conversion error. |
+| MoveFileW | preserved | Routes source then destination; replaces only matched operands; null/unmatched pointers retained; first route error propagated. |
+| GetCommModemStatus | preserved | RFID rejects null status, assigns the same modem bits; normal handle directly forwards both arguments. |
+| EscapeCommFunction | preserved | Same port function policy/errors; normal handle directly forwards. |
+| ClearCommError | preserved | Independently optional error/status outputs, same zero/error and port-status assignment; normal handle directly forwards. |
+| SetCommMask | preserved | Same stored mask and port error behavior; normal handle directly forwards. |
+| SetupComm | preserved | Both queue sizes forwarded to the same port state or original; results/errors retained. |
+| GetCommState | preserved | Same null rejection and full DCB output assignment; normal handle directly forwards. |
+| SetCommState | preserved | Same null rejection, DCB validation/state, detailed failure log and error; normal handle directly forwards. |
+| SetCommTimeouts | preserved | Same null rejection and complete timeout state assignment; normal handle directly forwards. |
+| GetCommTimeouts | preserved | Same null rejection and full output assignment; normal handle directly forwards. |
+
+Error handling details: each shared original's result/error is captured
+immediately and restored after observers and replacement-string destruction.
+RFID successful completions capture the error left by the actual emulated
+operation; they do not substitute ERROR_SUCCESS or force the incoming error.
+The nine exclusive COM bodies retain their direct-original/error behavior.
+The approved common algorithm now explicitly restores incoming LastError
+after Write/Flush/Close observer bookkeeping; the baseline lacked that
+explicit restoration. Its bookkeeping consists of SRW-locked tracking lookup
+and GetTickCount64, with no explicit SetLastError. This is an intentional
+implementation change required by Plan 05, not a claim that undefined
+successful Win32 LastError values have acquired new API semantics.
+Unexpected C++ exceptions are converted to each API's existing failure
+sentinel plus ERROR_UNHANDLED_EXCEPTION, including exceptions in pre-handlers
+before their noexcept boundary. No native access-violation recovery was added.
+
+Dependency/include audits find no feature headers or feature target links in
+Win32Hooks, and no OriginalKernel32Api/coupled Kernel32Hooks remains. RFID
+runtime ownership no longer includes system-path, storage, or their hooks.
+Full Debug and RelWithDebInfo builds and all five existing CTest cases per
+configuration passed using build-cleanup-msvc32-debug and
+build-cleanup-msvc32-release. Existing dependency caches were left in place.
+No callback-recorder tests, native fake APIs, runtime deployment, or
+game/NESYS acceptance were performed.
