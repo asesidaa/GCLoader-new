@@ -11,6 +11,8 @@
 #include "Patches/SongUnlock/SongUnlockProfile.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/Countdown/CountdownProfile.h"
+#include "Patches/TestModeTiming/TestModeTimingProfile.h"
+#include "Patches/TestModeTiming/TimingSettingsPatch.h"
 #include "plog/Log.h"
 #include <format>
 
@@ -42,9 +44,14 @@ void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> p
                 *approved, *image, *judgement); !prepared)
             diagnostics::AbortProcess(FormatPlanError(prepared.error()));
     }
+    if (profile->feature == FeatureId::test_mode_timing) {
+        if (const auto prepared = test_mode_timing::PrepareTestModeTimingRuntime(*approved, *image); !prepared)
+            diagnostics::AbortProcess(FormatPlanError(prepared.error()));
+    }
     if (const auto result = InstallApprovedVersionedPlan(
             *approved, *image, hooking::HookRegistry::ProcessLifetime()); !result)
         diagnostics::AbortProcess(FormatStartupInstallError(result.error()));
+    if (profile->feature == FeatureId::test_mode_timing) test_mode_timing::CompleteTestModeTimingStartup();
     auto_play::ActivateAutoPlayMarker(*approved);
     switch_input::ActivateSwitchInput(*approved);
     if (judgement) absolute_judgement::CompleteAbsoluteJudgementStartup(*judgement);
@@ -127,6 +134,14 @@ void InstallTransitionalFramerate(const framerate::FramerateSettings& settings, 
                 *approved, *image, hooking::HookRegistry::ProcessLifetime()); !installed)
             diagnostics::AbortProcess(FormatStartupInstallError(installed.error()));
         framerate::CompleteFramerateStartup(*approved);
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalTestModeTiming() noexcept {
+    try {
+        if (!g_detection) diagnostics::AbortProcess({});
+        Install(std::visit([](const auto& selection) {
+            return test_mode_timing::BuildTestModeTimingPlan(selection.build, selection.variant);
+        }, *g_detection));
     } catch (...) { diagnostics::AbortProcess({}); }
 }
 void InstallTransitionalOptionalPatches(const config::ValidatedConfig& settings) noexcept {

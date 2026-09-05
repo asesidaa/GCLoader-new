@@ -382,3 +382,94 @@ Existing Framerate diagnostic action tables remain for their Plan08 migration.
 Debug and RelWithDebInfo builds and the five existing tests passed in both
 configurations. This is static/build proof; high-FPS pacing, countdown freeze,
 menu/effect motion and gameplay acceptance remain unperformed.
+
+## Plan06e: Test Mode Timing
+
+The saved read-only IDA batches `.codex-tmp/loader-cleanup-test-mode-timing-profile.py`
+and `loader-cleanup-test-mode-timing-layout.py` used short-lived clients of
+`game471.exe.i64`. IDA mapping compared all 15 original byte contracts, all
+13 four-byte vtable entries, and the row instruction independently against
+both executable variants recorded above; every comparison passed.
+
+| Native contract | RVA | Original bytes |
+| --- | --- | --- |
+| main constructor | 0x173EA0 | 55 8B EC 6A FF 68 A7 9A 67 00 64 A1 00 00 00 00 |
+| main render | 0x173C60 | 55 8B EC 81 EC 9C 00 00 00 A1 94 93 77 00 33 C5 |
+| sound constructor | 0x16AE80 | 55 8B EC 6A FF 68 97 71 67 00 64 A1 00 00 00 00 |
+| game allocator | 0x23BD20 | 55 8B EC 8B 45 08 50 E8 94 FE FF FF 83 C4 04 5D |
+| game deallocator | 0x23BD00 | 55 8B EC 8B 45 08 50 E8 44 FE FF FF 83 C4 04 5D |
+| register child | 0xC2C90 | 55 8B EC 51 89 4D FC 8B 45 FC 8B 48 2C 8B 55 08 |
+| base form update | 0xC2E40 | 55 8B EC 83 EC 0C 89 4D F4 C7 45 F8 00 00 00 00 |
+| set grid cell text | 0xC1200 | 55 8B EC 51 89 4D FC 8B 45 FC 8B 4D 08 3B 48 28 |
+| set selection | 0xC1C00 | 55 8B EC 51 89 4D FC 8B 45 FC 83 78 28 00 75 02 |
+| draw title | 0x176940 | 55 8B EC 83 7D 14 04 75 07 C7 45 14 00 00 00 00 |
+| set title position | 0x176900 | 55 8B EC 8B 45 0C 50 8B 4D 08 51 8B 0D 64 25 7F |
+| draw help | 0x176920 | 55 8B EC 8B 45 14 50 8B 4D 10 51 8B 55 0C 52 |
+| timing manager accessor | 0x1040 | 55 8B EC 6A FF 68 8E D6 67 00 64 A1 00 00 00 00 |
+| judgment timing setter | 0x259310 | 55 8B EC 51 89 4D FC 8B 4D FC E8 B1 7D DA FF 0F |
+| game timing setter | 0x259350 | 55 8B EC 51 89 4D FC 8B 4D FC E8 71 7D DA FF 0F |
+
+The main constructor hook protects five complete instruction bytes; its
+16-byte signature is retained. The main render hook protects nine complete
+bytes and retains its 16-byte signature. ECX is the receiver. Constructor
+takes one stack argument, returns the receiver in EAX, and uses RET 4;
+render takes frame/input, returns the receiver in EAX, and uses RET 8.
+
+The code write at RVA `0x173ED5` changes `6A 0B` to `6A 0C`: native
+Main construction passes 11 rows to GWTestModeSelectForm, and the patch
+expands the main menu to 12. The plan's sentence saying four to eleven is
+incorrect. The timing carrier separately has four editor rows. Existing
+row 10 timing entry, row 11 exit routing, temporary native selection 10,
+and degradation to the native 11-row menu on allocation failure are preserved.
+
+The SoundTest vtable at RVA `0x2FB864` contains these 13 target RVAs in order:
+`0x6AB20 0x6AB20 0xC9B0 0x4D070 0xC2680 0x16B0C0 0x16B440 0x16B290 0x16B230 0x16AD60 0x16AC20 0x16A9A0 0xC2F20`.
+Slot 3 is the scalar-deleting destructor: it runs the SoundTest destructor,
+then the game deallocator when flags bit 0 is set, returning the receiver.
+Slot 5's sound-specific update is replaced in the constructed carrier table
+by base update RVA `0x0C2E40`. Slots 2, 6, 7, 8, 9 and 10 receive the existing
+feature callbacks. This remains object construction; no native vtable slot
+is modified, and no SafetyHook VMT object is introduced.
+
+Native ownership/layout evidence:
+- Main constructor RVA `0x173EA0` allocates `0x1D4` bytes for SoundTest and
+  passes the constructor's parent. SoundTest constructor RVA `0x16AE80`
+  constructs a nine-row, two-column base form. Child registration RVA
+  `0x0C2C90` stores into the owner's child array. Raw allocation failure and
+  constructor failure retain their existing deallocator paths; prepared
+  object failure uses the scalar-deleting destructor.
+- GWTestModeSelectForm initialization RVA `0x0C2A00` owns pointer grid +28h,
+  pointer child array +2Ch, 32-bit row count +30h, active child +34h, and
+  flags +38h. VGWTestModeWindowList constructor RVA `0x0C0550` owns 32-bit
+  rows +28h, columns +2Ch and selection +4Ch. Main construction owns pointer
+  status +3Ch, help +40h and title +44h.
+- The CGameData accessor RVA `0x0010F0` returns VA `0x7D9848`.
+  System-config accessors RVAs `0x0011E0`/`0x0011D0`/`0x001170`
+  resolve CGameData +8. The timing config loader's named JudgTimeOffset and
+  GameTimeOffset reads store 32-bit integers at configuration +28h/+2Ch:
+  resulting RVAs `0x3D9878`/`0x3D987C`. They are mutable data, resolved
+  with checked bounds, not compared against a startup value.
+- Timing setters take ECX manager and one signed stack value. They check
+  manager availability and its active pointer, then forward judgement to
+  the active object's +14h field and game timing to +10h. Existing live
+  application order remains game global, judgement global, manager lookup,
+  game setter, judgement setter; setter return values are not reinterpreted.
+- Allocator/deallocator, title, title-position, help and timing-manager
+  accessor keep cdecl; SoundTest construction, registration, base update,
+  cell text, selection and timing setters keep thiscall.
+
+The profile contributes 31 common operations: 15 read-only byte contracts,
+one write, two inline hooks and 13 read-only pointer contracts. The readonly
+rows share the common identity/range validation and run in preflight; they
+do not claim mutation spans. RuntimeImage performs the row write before
+HookRegistry installs constructor then render. The approved ABI and stable
+carrier table are published before hook enable. Failure aborts through the
+common publisher; TimingPatchTransaction and its rollback/local mechanics
+are removed. Live/render/lifecycle/commit action tables remain for Plan08.
+
+The dormant complete plan requires this feature after GameCompatibility;
+its runtime path requires prepared system configuration. The temporary
+Loader adapter retains the current staging until Plan09's complete cutover.
+Debug and RelWithDebInfo builds and all five existing tests passed in both
+configurations. No test-mode UI, persistence, live setter or object-lifetime
+runtime acceptance was performed.

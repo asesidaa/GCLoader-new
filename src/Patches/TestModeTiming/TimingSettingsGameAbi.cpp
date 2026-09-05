@@ -1,108 +1,16 @@
 #include "Patches/TestModeTiming/TimingSettingsGameAbi.h"
-
+#include "Patches/TestModeTiming/TestModeTimingProfile.h"
 #include <Windows.h>
-
 #include <algorithm>
-#include <array>
-// ReSharper disable once CppUnusedIncludeDirective
-#include <cstring>
-#include <initializer_list>
 
 namespace gc::test_mode_timing {
-
 namespace {
-
-TimingBytePattern Pattern(
-    std::initializer_list<std::uint8_t> values) noexcept {
-    TimingBytePattern pattern{};
-    pattern.size = static_cast<std::uint8_t>(values.size());
-    std::ranges::transform(
-        values, pattern.bytes.begin(),
-        [](std::uint8_t value) { return static_cast<std::byte>(value); });
-    return pattern;
+const TimingGameAbi& AbiFromContext(void* context) noexcept {
+    return *static_cast<const TimingGameAbi*>(context);
 }
-
-TimingByteContract Contract(
-    std::uintptr_t base,
-    std::uint32_t rva,
-    const TimingBytePattern& expected,
-    const char* name) noexcept {
-    return {
-        .rva = rva,
-        .address = base + rva,
-        .expected = expected,
-        .name = name,
-    };
-}
-
-bool ProductionRead(
-    std::uintptr_t address,
-    std::span<std::byte> destination) noexcept {
-    __try {
-        std::memcpy(
-            destination.data(),
-            reinterpret_cast<const void*>(address),
-            destination.size());
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-bool CopyExecutableBytes(
-    std::uintptr_t address,
-    std::span<const std::byte> source) noexcept {
-    __try {
-        std::memcpy(
-            reinterpret_cast<void*>(address),
-            source.data(),
-            source.size());
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-bool ProductionWrite(
-    std::uintptr_t address,
-    std::span<const std::byte> source) noexcept {
-    if (source.empty()) {
-        return false;
-    }
-
-    auto* destination = reinterpret_cast<void*>(address);
-    DWORD previous_protection{};
-    if (!VirtualProtect(
-            destination,
-            source.size(),
-            PAGE_EXECUTE_READWRITE,
-            &previous_protection)) {
-        return false;
-    }
-
-    const bool copied = CopyExecutableBytes(address, source);
-    const bool flushed = copied &&
-        FlushInstructionCache(
-            GetCurrentProcess(), destination, source.size()) != FALSE;
-
-    DWORD temporary_protection{};
-    const bool restored = VirtualProtect(
-        destination,
-        source.size(),
-        previous_protection,
-        &temporary_protection) != FALSE;
-    return copied && flushed && restored &&
-        temporary_protection == PAGE_EXECUTE_READWRITE;
-}
-
-std::uintptr_t BaseFromContext(void* context) noexcept {
-    return reinterpret_cast<std::uintptr_t>(context);
-}
-
 bool ProductionWriteGameOffset(void* context, int value) noexcept {
     __try {
-        *reinterpret_cast<int*>(
-            BaseFromContext(context) + kGameTimeOffsetRva) = value;
+        *AbiFromContext(context).game_time_offset = value;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -111,8 +19,7 @@ bool ProductionWriteGameOffset(void* context, int value) noexcept {
 
 bool ProductionWriteJudgOffset(void* context, int value) noexcept {
     __try {
-        *reinterpret_cast<int*>(
-            BaseFromContext(context) + kJudgTimeOffsetRva) = value;
+        *AbiFromContext(context).judg_time_offset = value;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -121,8 +28,7 @@ bool ProductionWriteJudgOffset(void* context, int value) noexcept {
 
 void* ProductionGetTimingManager(void* context) noexcept {
     __try {
-        const auto get_manager = reinterpret_cast<TimingManagerFn>(
-            BaseFromContext(context) + kTimingManagerRva);
+        const auto get_manager = AbiFromContext(context).get_timing_manager;
         return get_manager();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
@@ -134,8 +40,7 @@ bool ProductionSetGameTime(
     void* manager,
     int value) noexcept {
     __try {
-        const auto setter = reinterpret_cast<TimingSetterFn>(
-            BaseFromContext(context) + kGameTimeSetterRva);
+        const auto setter = AbiFromContext(context).set_game_time;
         setter(manager, value);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -148,8 +53,7 @@ bool ProductionSetJudgTime(
     void* manager,
     int value) noexcept {
     __try {
-        const auto setter = reinterpret_cast<TimingSetterFn>(
-            BaseFromContext(context) + kJudgTimeSetterRva);
+        const auto setter = AbiFromContext(context).set_judg_time;
         setter(manager, value);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -157,417 +61,76 @@ bool ProductionSetJudgTime(
     }
 }
 
-} // namespace
 
-std::array<TimingByteContract, kTimingAbiContractCount>
-BuildTimingAbiContracts(std::uintptr_t image_base) noexcept {
-    return {{
-        Contract(image_base, kMainConstructorRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0xA7, 0x9A,
-            0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00,
-        }), "main constructor"),
-        Contract(image_base, kMainRenderRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x9C, 0x00, 0x00,
-            0x00, 0xA1, 0x94, 0x93, 0x77, 0x00, 0x33, 0xC5,
-        }), "main render"),
-        Contract(image_base, kSoundConstructorRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x97, 0x71,
-            0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00,
-        }), "sound constructor"),
-        Contract(image_base, kGameAllocatorRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x08, 0x50, 0xE8,
-            0x94, 0xFE, 0xFF, 0xFF, 0x83, 0xC4, 0x04, 0x5D,
-        }), "game allocator"),
-        Contract(image_base, kGameDeallocatorRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x08, 0x50, 0xE8,
-            0x44, 0xFE, 0xFF, 0xFF, 0x83, 0xC4, 0x04, 0x5D,
-        }), "game deallocator"),
-        Contract(image_base, kRegisterChildRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B,
-            0x45, 0xFC, 0x8B, 0x48, 0x2C, 0x8B, 0x55, 0x08,
-        }), "register child"),
-        Contract(image_base, kBaseUpdateRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x0C, 0x89, 0x4D,
-            0xF4, 0xC7, 0x45, 0xF8, 0x00, 0x00, 0x00, 0x00,
-        }), "base form update"),
-        Contract(image_base, kSetCellTextRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B,
-            0x45, 0xFC, 0x8B, 0x4D, 0x08, 0x3B, 0x48, 0x28,
-        }), "set grid cell text"),
-        Contract(image_base, kSetSelectionRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B,
-            0x45, 0xFC, 0x83, 0x78, 0x28, 0x00, 0x75, 0x02,
-        }), "set selection"),
-        Contract(image_base, kDrawTitleRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x83, 0x7D, 0x14, 0x04, 0x75,
-            0x07, 0xC7, 0x45, 0x14, 0x00, 0x00, 0x00, 0x00,
-        }), "draw title"),
-        Contract(image_base, kSetTitlePositionRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x0C, 0x50, 0x8B,
-            0x4D, 0x08, 0x51, 0x8B, 0x0D, 0x64, 0x25, 0x7F,
-        }), "set title position"),
-        Contract(image_base, kDrawHelpRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x14, 0x50, 0x8B,
-            0x4D, 0x10, 0x51, 0x8B, 0x55, 0x0C, 0x52,
-        }), "draw help"),
-        Contract(image_base, kTimingManagerRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x8E, 0xD6,
-            0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00,
-        }), "timing manager accessor"),
-        Contract(image_base, kJudgTimeSetterRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B,
-            0x4D, 0xFC, 0xE8, 0xB1, 0x7D, 0xDA, 0xFF, 0x0F,
-        }), "judgment timing setter"),
-        Contract(image_base, kGameTimeSetterRva, Pattern({
-            0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B,
-            0x4D, 0xFC, 0xE8, 0x71, 0x7D, 0xDA, 0xFF, 0x0F,
-        }), "game timing setter"),
-    }};
 }
-
-std::array<TimingCheckedWrite, kTimingCheckedWriteCount>
-BuildTimingCheckedWrites(std::uintptr_t image_base) noexcept {
-    return {{{
-        .rva = kMainRowCountRva,
-        .address = image_base + kMainRowCountRva,
-        .expected = Pattern({0x6A, 0x0B}),
-        .replacement = Pattern({0x6A, 0x0C}),
-        .name = "main row count",
-    }}};
-}
-
-std::array<std::uintptr_t, kSoundVtableSlots>
-ExpectedSoundVtable(std::uintptr_t image_base) noexcept {
-    std::array<std::uintptr_t, kSoundVtableSlots> result{};
-    std::ranges::transform(
-        kSoundVtableTargetRvas,
-        result.begin(),
-        [image_base](std::uint32_t rva) {
-            return image_base + rva;
-        });
-    return result;
-}
-
-TimingGameAbi BuildTimingGameAbi(std::uintptr_t image_base) noexcept {
-    return {
-        .image_base = image_base,
-        .allocate = reinterpret_cast<GameAllocateFn>(
-            image_base + kGameAllocatorRva),
-        .deallocate = reinterpret_cast<GameDeallocateFn>(
-            image_base + kGameDeallocatorRva),
-        .construct_sound = reinterpret_cast<SoundConstructorFn>(
-            image_base + kSoundConstructorRva),
-        .destroy_sound = reinterpret_cast<ScalarDeletingDestructorFn>(
-            image_base + kSoundVtableTargetRvas[3]),
-        .register_child = reinterpret_cast<RegisterChildFn>(
-            image_base + kRegisterChildRva),
-        .base_update = reinterpret_cast<BaseUpdateFn>(
-            image_base + kBaseUpdateRva),
-        .set_cell_text = reinterpret_cast<SetCellTextFn>(
-            image_base + kSetCellTextRva),
-        .set_selection = reinterpret_cast<SetSelectionFn>(
-            image_base + kSetSelectionRva),
-        .draw_title = reinterpret_cast<DrawTitleFn>(
-            image_base + kDrawTitleRva),
-        .set_title_position = reinterpret_cast<SetTitlePositionFn>(
-            image_base + kSetTitlePositionRva),
-        .draw_help = reinterpret_cast<DrawHelpFn>(
-            image_base + kDrawHelpRva),
-        .get_timing_manager = reinterpret_cast<TimingManagerFn>(
-            image_base + kTimingManagerRva),
-        .set_judg_time = reinterpret_cast<TimingSetterFn>(
-            image_base + kJudgTimeSetterRva),
-        .set_game_time = reinterpret_cast<TimingSetterFn>(
-            image_base + kGameTimeSetterRva),
-        .sound_vtable = reinterpret_cast<const std::uintptr_t*>(
-            image_base + kSoundVtableRva),
-        .judg_time_offset = reinterpret_cast<int*>(
-            image_base + kJudgTimeOffsetRva),
-        .game_time_offset = reinterpret_cast<int*>(
-            image_base + kGameTimeOffsetRva),
+std::expected<TimingGameAbi, game_version::PlanError> BuildTimingGameAbi(
+    const runtime_image::RuntimeImage& image, const TestModeTimingProfile& profile,
+    const game_version::ApprovedVersionedPlan& plan) noexcept {
+    using namespace game_version;
+    const auto invalid = [&](std::string_view site) {
+        return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+            .context = plan.context(), .feature = FeatureId::test_mode_timing, .site = site});
     };
-}
-
-TimingPatchTransaction::TimingPatchTransaction(
-    TimingMemoryApi memory) noexcept
-    : memory_{memory} {
-}
-
-std::expected<void, TimingInstallError> TimingPatchTransaction::Install(
-    std::span<const TimingByteContract> contracts,
-    std::uintptr_t sound_vtable_address,
-    std::span<const std::uintptr_t> expected_sound_vtable,
-    std::span<const TimingCheckedWrite> writes,
-    std::span<const TimingHookOperation> hooks) noexcept {
-    if (committed_ || memory_.read == nullptr || memory_.write == nullptr ||
-        contracts.size() != contracts_.size() ||
-        expected_sound_vtable.size() != expected_vtable_.size() ||
-        writes.size() != writes_.size() || hooks.size() != hooks_.size() ||
-        sound_vtable_address == 0) {
-        return std::unexpected(TimingInstallError{
-            .stage = TimingInstallStage::InvalidDescriptor,
+    if (plan.context().build != SelectedBuild{profile.build} ||
+        plan.context().variant != SelectedVariant{profile.variant} ||
+        image.base() != plan.image_base() || image.size() != plan.image_size())
+        return invalid("runtime_image_binding");
+    std::array<std::uintptr_t, 31> addresses{};
+    for (std::size_t i = 0; i < profile.operations.size(); ++i) {
+        const auto& expected = ContractOf(profile.operations[i]);
+        const auto site = std::ranges::find_if(plan.sites(), [&](const ApprovedSite& entry) {
+            const auto& actual = entry.contract();
+            return actual.feature == expected.feature && actual.site == expected.site &&
+                actual.rva == expected.rva && actual.kind == expected.kind;
         });
+        if (site == plan.sites().end()) return invalid(expected.site);
+        const auto resolved = image.Resolve({"test_mode_timing", expected.site, expected.rva},
+            std::max<std::size_t>(expected.protected_span, expected.original.size));
+        if (!resolved) return std::unexpected(PlanError{.stage = PlanStage::address_range,
+            .context = plan.context(), .feature = expected.feature, .site = expected.site,
+            .rva = expected.rva, .memory = resolved.error()});
+        if (*resolved != site->address) return invalid(expected.site);
+        addresses[i] = *resolved;
     }
-
-    for (std::size_t index = 0; index < contracts.size(); ++index) {
-        const auto& contract = contracts[index];
-        if (contract.address == 0 || contract.name == nullptr ||
-            contract.expected.size == 0 ||
-            contract.expected.size > kMaximumTimingPatternBytes) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::InvalidDescriptor,
-                .operation_index = index,
-                .operation_name = contract.name,
-            });
-        }
+    TimingGameAbi abi{.layout = profile.layout};
+    abi.allocate = reinterpret_cast<GameAllocateFn>(addresses[3]);
+    abi.deallocate = reinterpret_cast<GameDeallocateFn>(addresses[4]);
+    abi.construct_sound = reinterpret_cast<SoundConstructorFn>(addresses[2]);
+    abi.register_child = reinterpret_cast<RegisterChildFn>(addresses[5]);
+    abi.base_update = reinterpret_cast<BaseUpdateFn>(addresses[6]);
+    abi.set_cell_text = reinterpret_cast<SetCellTextFn>(addresses[7]);
+    abi.set_selection = reinterpret_cast<SetSelectionFn>(addresses[8]);
+    abi.draw_title = reinterpret_cast<DrawTitleFn>(addresses[9]);
+    abi.set_title_position = reinterpret_cast<SetTitlePositionFn>(addresses[10]);
+    abi.draw_help = reinterpret_cast<DrawHelpFn>(addresses[11]);
+    abi.get_timing_manager = reinterpret_cast<TimingManagerFn>(addresses[12]);
+    abi.set_judg_time = reinterpret_cast<TimingSetterFn>(addresses[13]);
+    abi.set_game_time = reinterpret_cast<TimingSetterFn>(addresses[14]);
+    for (std::size_t i = 0; i < abi.sound_vtable.size(); ++i) {
+        const auto& contract = ContractOf(profile.operations[18 + i]);
+        const auto target = image.Resolve({"test_mode_timing", contract.site, profile.sound_vtable_targets[i]}, 1);
+        if (!target) return std::unexpected(PlanError{.stage = PlanStage::address_range,
+            .context = plan.context(), .feature = FeatureId::test_mode_timing, .site = contract.site,
+            .rva = profile.sound_vtable_targets[i], .memory = target.error()});
+        abi.sound_vtable[i] = *target;
     }
-    for (std::size_t index = 0; index < writes.size(); ++index) {
-        const auto& write = writes[index];
-        if (write.address == 0 || write.name == nullptr ||
-            write.expected.size == 0 ||
-            write.expected.size != write.replacement.size ||
-            write.expected.size > kMaximumTimingPatternBytes) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::InvalidDescriptor,
-                .operation_index = index,
-                .operation_name = write.name,
-            });
-        }
-    }
-    for (std::size_t index = 0; index < hooks.size(); ++index) {
-        const auto& hook = hooks[index];
-        const auto expected_rva =
-            index == 0 ? kMainConstructorRva : kMainRenderRva;
-        const auto contract = std::ranges::find_if(
-            contracts,
-            [&hook](const TimingByteContract& candidate) {
-                return candidate.rva == hook.rva;
-            });
-        if (hook.rva != expected_rva || hook.address == 0 ||
-            hook.name == nullptr || hook.install == nullptr ||
-            hook.reset == nullptr || contract == contracts.end() ||
-            contract->address != hook.address) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::InvalidDescriptor,
-                .operation_index = index,
-                .operation_name = hook.name,
-            });
-        }
-    }
-
-    for (std::size_t index = 0; index < contracts.size(); ++index) {
-        const auto& contract = contracts[index];
-        std::array<std::byte, kMaximumTimingPatternBytes> actual{};
-        const auto destination = std::span{
-            actual.data(),
-            static_cast<std::size_t>(contract.expected.size),
-        };
-        if (!memory_.read(contract.address, destination)) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::PreflightRead,
-                .operation_index = index,
-                .operation_name = contract.name,
-            });
-        }
-        if (!std::ranges::equal(destination, contract.expected.view())) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::PreflightMismatch,
-                .operation_index = index,
-                .operation_name = contract.name,
-            });
-        }
-    }
-
-    for (std::size_t index = 0; index < expected_sound_vtable.size(); ++index) {
-        const auto address =
-            sound_vtable_address + index * sizeof(std::uintptr_t);
-        std::uintptr_t actual{};
-        auto destination = std::as_writable_bytes(
-            std::span{&actual, std::size_t{1}});
-        if (!memory_.read(address, destination)) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::PreflightRead,
-                .operation_index = index,
-                .operation_name = "sound vtable",
-            });
-        }
-        if (actual != expected_sound_vtable[index]) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::PreflightMismatch,
-                .operation_index = index,
-                .operation_name = "sound vtable",
-            });
-        }
-    }
-
-    for (std::size_t index = 0; index < writes.size(); ++index) {
-        const auto& write = writes[index];
-        std::array<std::byte, kMaximumTimingPatternBytes> actual{};
-        const auto destination = std::span{
-            actual.data(),
-            static_cast<std::size_t>(write.expected.size),
-        };
-        if (!memory_.read(write.address, destination)) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::PreflightRead,
-                .operation_index = index,
-                .operation_name = write.name,
-            });
-        }
-        if (!std::ranges::equal(destination, write.expected.view())) {
-            return std::unexpected(TimingInstallError{
-                .stage = TimingInstallStage::PreflightMismatch,
-                .operation_index = index,
-                .operation_name = write.name,
-            });
-        }
-    }
-
-    std::ranges::copy(contracts, contracts_.begin());
-    std::ranges::copy(expected_sound_vtable, expected_vtable_.begin());
-    std::ranges::copy(writes, writes_.begin());
-    std::ranges::copy(hooks, hooks_.begin());
-    contract_count_ = contracts.size();
-    vtable_count_ = expected_sound_vtable.size();
-    write_count_ = writes.size();
-    hook_count_ = hooks.size();
-    vtable_address_ = sound_vtable_address;
-
-    for (std::size_t index = 0; index < hook_count_; ++index) {
-        installed_hook_count_ = index + 1;
-        if (!hooks_[index].install(hooks_[index].context)) {
-            return Fail(
-                TimingInstallStage::HookInstall,
-                index,
-                hooks_[index].name);
-        }
-    }
-
-    for (std::size_t index = 0; index < write_count_; ++index) {
-        applied_write_count_ = index + 1;
-        if (!memory_.write(
-                writes_[index].address,
-                writes_[index].replacement.view())) {
-            return Fail(
-                TimingInstallStage::DirectWrite,
-                index,
-                writes_[index].name);
-        }
-    }
-
-    committed_ = true;
-    return {};
+    abi.destroy_sound = reinterpret_cast<ScalarDeletingDestructorFn>(abi.sound_vtable[abi.layout.destructor_slot]);
+    const auto judg = image.Resolve({"test_mode_timing", "judg_time_offset", profile.judg_time_offset}, sizeof(int));
+    if (!judg) return std::unexpected(PlanError{.stage = PlanStage::address_range,
+        .context = plan.context(), .feature = FeatureId::test_mode_timing, .site = "judg_time_offset",
+        .rva = profile.judg_time_offset, .memory = judg.error()});
+    const auto game = image.Resolve({"test_mode_timing", "game_time_offset", profile.game_time_offset}, sizeof(int));
+    if (!game) return std::unexpected(PlanError{.stage = PlanStage::address_range,
+        .context = plan.context(), .feature = FeatureId::test_mode_timing, .site = "game_time_offset",
+        .rva = profile.game_time_offset, .memory = game.error()});
+    abi.judg_time_offset = reinterpret_cast<int*>(*judg);
+    abi.game_time_offset = reinterpret_cast<int*>(*game);
+    return abi;
 }
-
-bool TimingPatchTransaction::PatternMatches(
-    std::uintptr_t address,
-    const TimingBytePattern& pattern) const noexcept {
-    if (pattern.size == 0 || pattern.size > kMaximumTimingPatternBytes) {
-        return false;
-    }
-    std::array<std::byte, kMaximumTimingPatternBytes> actual{};
-    const auto destination = std::span{
-        actual.data(), static_cast<std::size_t>(pattern.size)};
-    return memory_.read(address, destination) &&
-        std::ranges::equal(destination, pattern.view());
-}
-
-bool TimingPatchTransaction::PointerMatches(
-    std::uintptr_t address,
-    std::uintptr_t expected) const noexcept {
-    std::uintptr_t actual{};
-    auto destination = std::as_writable_bytes(
-        std::span{&actual, std::size_t{1}});
-    return memory_.read(address, destination) && actual == expected;
-}
-
-bool TimingPatchTransaction::VerifyOriginalState() const noexcept {
-    for (std::size_t index = 0; index < contract_count_; ++index) {
-        if (!PatternMatches(
-                contracts_[index].address,
-                contracts_[index].expected)) {
-            return false;
-        }
-    }
-    for (std::size_t index = 0; index < vtable_count_; ++index) {
-        if (!PointerMatches(
-                vtable_address_ + index * sizeof(std::uintptr_t),
-                expected_vtable_[index])) {
-            return false;
-        }
-    }
-    for (std::size_t index = 0; index < write_count_; ++index) {
-        if (!PatternMatches(
-                writes_[index].address,
-                writes_[index].expected)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool TimingPatchTransaction::RollbackInternal() noexcept {
-    bool writes_restored = true;
-    while (applied_write_count_ != 0) {
-        const auto index = --applied_write_count_;
-        if (!memory_.write(
-                writes_[index].address,
-                writes_[index].expected.view())) {
-            writes_restored = false;
-        }
-    }
-
-    while (installed_hook_count_ != 0) {
-        const auto index = --installed_hook_count_;
-        hooks_[index].reset(hooks_[index].context);
-    }
-
-    const bool verified = VerifyOriginalState();
-    contract_count_ = 0;
-    vtable_count_ = 0;
-    write_count_ = 0;
-    hook_count_ = 0;
-    vtable_address_ = 0;
-    committed_ = false;
-    return writes_restored && verified;
-}
-
-std::expected<void, TimingInstallError>
-TimingPatchTransaction::Rollback() noexcept {
-    const bool complete = RollbackInternal();
-    if (!complete) {
-        return std::unexpected(TimingInstallError{
-            .stage = TimingInstallStage::Rollback,
-            .operation_name = "timing patch rollback",
-            .rollback_attempted = true,
-            .rollback_complete = false,
-        });
-    }
-    return {};
-}
-
-std::expected<void, TimingInstallError> TimingPatchTransaction::Fail(
-    TimingInstallStage stage,
-    std::size_t index,
-    const char* name) noexcept {
-    const bool complete = RollbackInternal();
-    return std::unexpected(TimingInstallError{
-        .stage = stage,
-        .operation_index = index,
-        .operation_name = name,
-        .rollback_attempted = true,
-        .rollback_complete = complete,
-    });
-}
-
-TimingMemoryApi ProductionTimingMemoryApi() noexcept {
-    return {ProductionRead, ProductionWrite};
-}
-
 TimingLiveActions
-ProductionTimingLiveActions(std::uintptr_t image_base) noexcept {
+ProductionTimingLiveActions(const TimingGameAbi& abi) noexcept {
     return {
-        .context = reinterpret_cast<void*>(image_base),
+        .context = const_cast<TimingGameAbi*>(&abi),
         .write_game_time_offset = ProductionWriteGameOffset,
         .write_judg_time_offset = ProductionWriteJudgOffset,
         .get_timing_manager = ProductionGetTimingManager,
@@ -601,10 +164,10 @@ bool ApplyLiveTiming(
 }
 
 bool ApplyLiveTiming(
-    std::uintptr_t image_base,
+    const TimingGameAbi& abi,
     TimingOffsets offsets) noexcept {
     return ApplyLiveTiming(
-        offsets, ProductionTimingLiveActions(image_base));
+        offsets, ProductionTimingLiveActions(abi));
 }
 
 } // namespace gc::test_mode_timing

@@ -1,0 +1,127 @@
+#include "Patches/TestModeTiming/TestModeTimingProfile.h"
+#include "Patches/TestModeTiming/TimingSettingsPatch.h"
+
+namespace gc::test_mode_timing {
+namespace {
+using namespace game_version;
+using namespace runtime_image;
+constexpr std::size_t kAbiContracts = 15;
+constexpr std::size_t kWrites = 1;
+constexpr std::size_t kHooks = 2;
+constexpr std::size_t kPointerContracts = 13;
+static_assert(kAbiContracts == 15 && kWrites == 1 && kHooks == 2 && kPointerContracts == 13);
+static_assert(kAbiContracts + kWrites + kHooks == 18);
+static_assert(kAbiContracts + kWrites + kHooks + kPointerContracts == 31);
+constexpr SiteContract Read(std::string_view name, Rva rva, BytePattern bytes) {
+    return {FeatureId::test_mode_timing, name, VersionedOperationKind::read_only_contract,
+        rva, bytes.size, bytes, {}, 0, SiteDisposition::verify_only};
+}
+// Native evidence: CTestModeForm_Main allocates 11 rows (PUSH 0Bh).
+// The extra timing entry expands the main form to 12; its SoundTest-derived
+// carrier retains four editor rows and the native scalar-deleting destructor.
+TestModeTimingProfile Make(GameImageVariant variant) {
+    return {GameBuild::groove_coaster_471, variant, {{
+        ReadOnlyContractOperation{Read("main_constructor_abi", 0x173EA0, PatternOf<0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0xA7, 0x9A, 0x67, 0x0, 0x64, 0xA1, 0x0, 0x0, 0x0, 0x0>())},
+        ReadOnlyContractOperation{Read("main_render_abi", 0x173C60, PatternOf<0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x9C, 0x0, 0x0, 0x0, 0xA1, 0x94, 0x93, 0x77, 0x0, 0x33, 0xC5>())},
+        ReadOnlyContractOperation{Read("sound_constructor", 0x16AE80, PatternOf<0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x97, 0x71, 0x67, 0x0, 0x64, 0xA1, 0x0, 0x0, 0x0, 0x0>())},
+        ReadOnlyContractOperation{Read("game_allocator", 0x23BD20, PatternOf<0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x8, 0x50, 0xE8, 0x94, 0xFE, 0xFF, 0xFF, 0x83, 0xC4, 0x4, 0x5D>())},
+        ReadOnlyContractOperation{Read("game_deallocator", 0x23BD00, PatternOf<0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x8, 0x50, 0xE8, 0x44, 0xFE, 0xFF, 0xFF, 0x83, 0xC4, 0x4, 0x5D>())},
+        ReadOnlyContractOperation{Read("register_child", 0xC2C90, PatternOf<0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC, 0x8B, 0x48, 0x2C, 0x8B, 0x55, 0x8>())},
+        ReadOnlyContractOperation{Read("base_update", 0xC2E40, PatternOf<0x55, 0x8B, 0xEC, 0x83, 0xEC, 0xC, 0x89, 0x4D, 0xF4, 0xC7, 0x45, 0xF8, 0x0, 0x0, 0x0, 0x0>())},
+        ReadOnlyContractOperation{Read("set_cell_text", 0xC1200, PatternOf<0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC, 0x8B, 0x4D, 0x8, 0x3B, 0x48, 0x28>())},
+        ReadOnlyContractOperation{Read("set_selection", 0xC1C00, PatternOf<0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B, 0x45, 0xFC, 0x83, 0x78, 0x28, 0x0, 0x75, 0x2>())},
+        ReadOnlyContractOperation{Read("draw_title", 0x176940, PatternOf<0x55, 0x8B, 0xEC, 0x83, 0x7D, 0x14, 0x4, 0x75, 0x7, 0xC7, 0x45, 0x14, 0x0, 0x0, 0x0, 0x0>())},
+        ReadOnlyContractOperation{Read("set_title_position", 0x176900, PatternOf<0x55, 0x8B, 0xEC, 0x8B, 0x45, 0xC, 0x50, 0x8B, 0x4D, 0x8, 0x51, 0x8B, 0xD, 0x64, 0x25, 0x7F>())},
+        ReadOnlyContractOperation{Read("draw_help", 0x176920, PatternOf<0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x14, 0x50, 0x8B, 0x4D, 0x10, 0x51, 0x8B, 0x55, 0xC, 0x52>())},
+        ReadOnlyContractOperation{Read("timing_manager", 0x1040, PatternOf<0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0x8E, 0xD6, 0x67, 0x0, 0x64, 0xA1, 0x0, 0x0, 0x0, 0x0>())},
+        ReadOnlyContractOperation{Read("judg_time_setter", 0x259310, PatternOf<0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B, 0x4D, 0xFC, 0xE8, 0xB1, 0x7D, 0xDA, 0xFF, 0xF>())},
+        ReadOnlyContractOperation{Read("game_time_setter", 0x259350, PatternOf<0x55, 0x8B, 0xEC, 0x51, 0x89, 0x4D, 0xFC, 0x8B, 0x4D, 0xFC, 0xE8, 0x71, 0x7D, 0xDA, 0xFF, 0xF>())},
+        BytePatchOperation{
+            {FeatureId::test_mode_timing, "main_row_count", VersionedOperationKind::byte_patch,
+             0x173ED5, 2, PatternOf<0x6A, 0x0B>(), PatternOf<0x6A, 0x0C>(), 0},
+            PatternOf<0x6A, 0x0C>(), MemoryKind::code},
+        InlineHookOperation{
+            {FeatureId::test_mode_timing, "main_constructor", VersionedOperationKind::inline_hook,
+             0x173EA0, 5, PatternOf<0x55, 0x8B, 0xEC, 0x6A, 0xFF, 0x68, 0xA7, 0x9A, 0x67, 0x0, 0x64, 0xA1, 0x0, 0x0, 0x0, 0x0>(), {}, 1},
+            reinterpret_cast<void*>(&MainConstructorHook),
+            hooking::OriginalPublisher::To(&detail::g_originals.main_constructor)},
+        InlineHookOperation{
+            {FeatureId::test_mode_timing, "main_render", VersionedOperationKind::inline_hook,
+             0x173C60, 9, PatternOf<0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x9C, 0x0, 0x0, 0x0, 0xA1, 0x94, 0x93, 0x77, 0x0, 0x33, 0xC5>(), {}, 2},
+            reinterpret_cast<void*>(&MainRenderHook),
+            hooking::OriginalPublisher::To(&detail::g_originals.main_render)},
+        ReadOnlyContractOperation{Read("sound_vtable_0", 0x2FB864,
+            PatternOf<0x20, 0xAB, 0x46, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_1", 0x2FB868,
+            PatternOf<0x20, 0xAB, 0x46, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_2", 0x2FB86C,
+            PatternOf<0xB0, 0xC9, 0x40, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_3", 0x2FB870,
+            PatternOf<0x70, 0xD0, 0x44, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_4", 0x2FB874,
+            PatternOf<0x80, 0x26, 0x4C, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_5", 0x2FB878,
+            PatternOf<0xC0, 0xB0, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_6", 0x2FB87C,
+            PatternOf<0x40, 0xB4, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_7", 0x2FB880,
+            PatternOf<0x90, 0xB2, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_8", 0x2FB884,
+            PatternOf<0x30, 0xB2, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_9", 0x2FB888,
+            PatternOf<0x60, 0xAD, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_10", 0x2FB88C,
+            PatternOf<0x20, 0xAC, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_11", 0x2FB890,
+            PatternOf<0xA0, 0xA9, 0x56, 0x0>())},
+        ReadOnlyContractOperation{Read("sound_vtable_12", 0x2FB894,
+            PatternOf<0x20, 0x2F, 0x4C, 0x0>())},
+    }}, {0x6AB20, 0x6AB20, 0xC9B0, 0x4D070, 0xC2680, 0x16B0C0, 0x16B440, 0x16B290, 0x16B230, 0x16AD60, 0x16AC20, 0x16A9A0, 0xC2F20},
+    0x3D9878, 0x3D987C,
+    {
+        .sound_form_size = 0x1D4,
+        .form_grid = 0x28,
+        .form_children = 0x2C,
+        .form_row_count = 0x30,
+        .form_active_child = 0x34,
+        .form_flags = 0x38,
+        .grid_row_count = 0x28,
+        .grid_column_count = 0x2C,
+        .grid_selection = 0x4C,
+        .main_status_window = 0x3C,
+        .main_help_record = 0x40,
+        .main_title_record = 0x44,
+        .destructor_slot = 0x3,
+        .activate_slot = 0x2,
+        .update_slot = 0x5,
+        .render_slot = 0x6,
+        .confirm_slot = 0x7,
+        .back_slot = 0x8,
+        .increment_slot = 0x9,
+        .decrement_slot = 0xA,
+    }};
+}
+}
+const TestModeTimingProfile* ProfileFor(
+    game_version::GameBuild build, game_version::GameImageVariant variant) noexcept {
+    using namespace game_version;
+    if (build != GameBuild::groove_coaster_471) return nullptr;
+    static const auto clean = Make(GameImageVariant::clean);
+    static const auto patched = Make(GameImageVariant::legacy_patched);
+    static const auto verified = Make(GameImageVariant::locally_verified);
+    switch (variant) {
+    case GameImageVariant::clean: return &clean;
+    case GameImageVariant::legacy_patched: return &patched;
+    case GameImageVariant::locally_verified: return &verified;
+    }
+    return nullptr;
+}
+std::expected<game_version::FeaturePlan, game_version::PlanError> BuildTestModeTimingPlan(
+    game_version::GameBuild build, game_version::GameImageVariant variant) noexcept {
+    using namespace game_version;
+    const auto* profile = ProfileFor(build, variant);
+    if (!profile) return std::unexpected(PlanError{.stage = PlanStage::unsupported_feature,
+        .context = {build, variant}, .feature = FeatureId::test_mode_timing, .site = "profile"});
+    return FeaturePlan{FeatureId::test_mode_timing, profile->operations, {}};
+}
+}

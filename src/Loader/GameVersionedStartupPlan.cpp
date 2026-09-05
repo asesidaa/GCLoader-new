@@ -7,6 +7,7 @@
 #include "Patches/SongUnlock/SongUnlockProfile.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/Countdown/CountdownProfile.h"
+#include "Patches/TestModeTiming/TestModeTimingProfile.h"
 #include <array>
 
 namespace gc::loader {
@@ -80,7 +81,12 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
         if (const auto result = append(timer_freeze::BuildCountdownPlan(build, variant, true), after_framerate); !result)
             return std::unexpected(result.error());
     }
-    // Remaining families join in06e-06h. This entry point stays dormant until
+    if (const auto required = plans.Require({game_version::FeatureId::test_mode_timing, true, true}); !required)
+        return std::unexpected(StartupPlanError{.plan = required.error()});
+    if (const auto result = append(test_mode_timing::BuildTestModeTimingPlan(
+            build, variant), after_compatibility); !result)
+        return std::unexpected(result.error());
+    // Remaining families join in06f-06h. This entry point stays dormant until
     // Plan09 switches all versioned startup through one complete barrier.
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});

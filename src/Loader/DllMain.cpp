@@ -471,12 +471,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
             gc::loader::InstallGameNonVersionedHooks(hModule, settings, game.system_root);
 
-            if (!gc::test_mode_timing::TimingSettingsPatchInit())
-            {
-                PLOG_ERROR
-                    << "TestModeTiming: fail-closed DLL attach";
-                return FALSE;
-            }
+            gc::loader::InstallTransitionalTestModeTiming();
             PLOG_DEBUG
                 << "Test-mode timing settings initialization complete!";
 

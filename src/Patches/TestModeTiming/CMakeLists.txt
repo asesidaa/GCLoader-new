@@ -1,6 +1,7 @@
 add_library(gc_test_mode_timing STATIC
         TimingSettingsModel.cpp
         SystemConfigTimingStore.cpp
+        TestModeTimingProfile.cpp
         TimingSettingsGameAbi.cpp
         TimingSettingsPatch.cpp
 )
@@ -12,5 +13,6 @@ target_include_directories(gc_test_mode_timing PRIVATE
 )
 target_link_libraries(gc_test_mode_timing PRIVATE
         gc_runtime_patches
-        safetyhook::safetyhook
+        gc_game_version
+        gc_fatal_process
 )

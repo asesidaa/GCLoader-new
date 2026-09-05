@@ -5,7 +5,8 @@
 #include <Windows.h>
 
 #include <plog/Log.h>
-#include <safetyhook.hpp>
+#include "Patches/TestModeTiming/TestModeTimingProfile.h"
+#include "Diagnostics/FatalProcess.h"
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,8 @@
 #include <utility>
 
 namespace gc::test_mode_timing {
+
+namespace detail { TimingOriginals g_originals; }
 
 namespace {
 
@@ -36,22 +39,18 @@ const unsigned char* GameText(const char* text) noexcept {
 
 struct TimingRuntimeState {
     TimingRuntimeState(
-        std::uintptr_t image_base,
+        TimingGameAbi resolved_abi,
         std::filesystem::path config_path)
-        : abi{BuildTimingGameAbi(image_base)},
-          store{std::move(config_path)},
-          transaction{ProductionTimingMemoryApi()} {
+        : abi{std::move(resolved_abi)},
+          store{std::move(config_path)} {
     }
 
     TimingGameAbi abi{};
     SystemConfigTimingStore store;
     TimingSettingsModel model{};
-    TimingPatchTransaction transaction;
     std::optional<SystemConfigError> last_store_error{};
     void* carrier{};
     std::array<std::uintptr_t, kSoundVtableSlots> carrier_vtable{};
-    safetyhook::InlineHook main_constructor_hook{};
-    safetyhook::InlineHook main_render_hook{};
     bool carrier_ready{};
     std::atomic_bool callback_error_published{false};
 };
@@ -226,7 +225,7 @@ bool ReadCarrierGrid(
     void* self,
     void** grid) noexcept {
     return self == runtime.carrier &&
-        ReadPointerField(self, kFormGridOffset, grid) && *grid != nullptr;
+        ReadPointerField(self, runtime.abi.layout.form_grid, grid) && *grid != nullptr;
 }
 
 CarrierCallbacks RuntimeCarrierCallbacks() noexcept {
@@ -263,13 +262,9 @@ void* RuntimeConstruct(
 
 bool RuntimePrepare(void* opaque, void* carrier) noexcept {
     auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-    if (!PrepareCarrierLayout(carrier)) {
+    if (!PrepareCarrierLayout(carrier, runtime.abi.layout)) {
         return false;
     }
-    runtime.carrier_vtable = BuildCarrierVtable(
-        ExpectedSoundVtable(runtime.abi.image_base),
-        RuntimeCarrierCallbacks(),
-        runtime.abi.image_base);
     return WriteVtable(carrier, runtime.carrier_vtable.data());
 }
 
@@ -335,7 +330,7 @@ bool RuntimeSave(
 
 bool RuntimeApplyLive(void* opaque, TimingOffsets offsets) noexcept {
     const auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-    return ApplyLiveTiming(runtime.abi.image_base, offsets);
+    return ApplyLiveTiming(runtime.abi, offsets);
 }
 
 void RuntimeStatusChanged(void*, SaveStatus) noexcept {
@@ -398,70 +393,6 @@ TimingCommitActions ProductionCommitActions(
     };
 }
 
-bool InstallMainConstructor(void* opaque) noexcept {
-    try {
-        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-        runtime.main_constructor_hook = safetyhook::create_inline(
-            reinterpret_cast<void*>(
-                runtime.abi.image_base + kMainConstructorRva),
-            reinterpret_cast<void*>(&MainConstructorHook));
-        return static_cast<bool>(runtime.main_constructor_hook);
-    } catch (...) {
-        return false;
-    }
-}
-
-bool InstallMainRender(void* opaque) noexcept {
-    try {
-        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-        runtime.main_render_hook = safetyhook::create_inline(
-            reinterpret_cast<void*>(
-                runtime.abi.image_base + kMainRenderRva),
-            reinterpret_cast<void*>(&MainRenderHook));
-        return static_cast<bool>(runtime.main_render_hook);
-    } catch (...) {
-        return false;
-    }
-}
-
-void ResetMainConstructor(void* opaque) noexcept {
-    try {
-        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-        runtime.main_constructor_hook.reset();
-    } catch (...) {
-    }
-}
-
-void ResetMainRender(void* opaque) noexcept {
-    try {
-        auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-        runtime.main_render_hook.reset();
-    } catch (...) {
-    }
-}
-
-std::array<TimingHookOperation, kTimingHookCount> RuntimeHookOperations(
-    TimingRuntimeState& runtime) noexcept {
-    return {{
-        {
-            .rva = kMainConstructorRva,
-            .address = runtime.abi.image_base + kMainConstructorRva,
-            .name = "main constructor",
-            .context = &runtime,
-            .install = InstallMainConstructor,
-            .reset = ResetMainConstructor,
-        },
-        {
-            .rva = kMainRenderRva,
-            .address = runtime.abi.image_base + kMainRenderRva,
-            .name = "main render",
-            .context = &runtime,
-            .install = InstallMainRender,
-            .reset = ResetMainRender,
-        },
-    }};
-}
-
 std::expected<std::filesystem::path, DWORD> ResolveConfigPath() {
     constexpr wchar_t relative[] = L"data\\system.cfg";
     const DWORD required = GetFullPathNameW(relative, 0, nullptr, nullptr);
@@ -483,36 +414,6 @@ std::expected<std::filesystem::path, DWORD> ResolveConfigPath() {
     return std::filesystem::path{std::move(buffer)};
 }
 
-const char* InstallStageName(TimingInstallStage stage) noexcept {
-    switch (stage) {
-    case TimingInstallStage::None: return "none";
-    case TimingInstallStage::InvalidDescriptor: return "invalid_descriptor";
-    case TimingInstallStage::PreflightRead: return "preflight_read";
-    case TimingInstallStage::PreflightMismatch:
-        return "preflight_mismatch";
-    case TimingInstallStage::DirectWrite: return "direct_write";
-    case TimingInstallStage::HookInstall: return "hook_install";
-    case TimingInstallStage::Rollback: return "rollback";
-    }
-    return "unknown";
-}
-
-void LogInstallFailure(const TimingInstallError& error) noexcept {
-    try {
-        PLOG_ERROR << "TestModeTiming: install failed stage="
-                   << InstallStageName(error.stage) << " name="
-                   << (error.operation_name != nullptr
-                           ? error.operation_name
-                           : "<unnamed>")
-                   << " index=" << error.operation_index
-                   << " rollback_attempted="
-                   << (error.rollback_attempted ? "true" : "false")
-                   << " rollback_complete="
-                   << (error.rollback_complete ? "true" : "false");
-    } catch (...) {
-    }
-}
-
 bool SetMainMenuCell(
     TimingRuntimeState& runtime,
     void* grid,
@@ -525,8 +426,8 @@ void DegradeMainMenu(
     TimingRuntimeState& runtime,
     void* main_form,
     void* grid) noexcept {
-    WriteIntField(main_form, kFormRowCountOffset, 11);
-    WriteIntField(grid, kGridRowCountOffset, 11);
+    WriteIntField(main_form, runtime.abi.layout.form_row_count, 11);
+    WriteIntField(grid, runtime.abi.layout.grid_row_count, 11);
     SetMainMenuCell(runtime, grid, 10, "EXIT");
     runtime.carrier = nullptr;
     runtime.carrier_ready = false;
@@ -536,13 +437,15 @@ class SelectionGuard {
 public:
     SelectionGuard(
         void* grid,
+        std::size_t selection_offset,
         int native_selection,
         int actual_selection) noexcept
         : grid_{grid},
+          selection_offset_{selection_offset},
           actual_{actual_selection},
           changed_{native_selection != actual_selection},
           ready_{!changed_ || WriteIntField(
-              grid_, kGridSelectionOffset, native_selection)} {
+              grid_, selection_offset_, native_selection)} {
     }
 
     SelectionGuard(const SelectionGuard&) = delete;
@@ -554,13 +457,14 @@ public:
 
     void Restore() noexcept {
         if (changed_ && !restored_) {
-            WriteIntField(grid_, kGridSelectionOffset, actual_);
+            WriteIntField(grid_, selection_offset_, actual_);
             restored_ = true;
         }
     }
 
 private:
     void* grid_{};
+    std::size_t selection_offset_{};
     int actual_{};
     bool changed_{};
     bool ready_{};
@@ -572,16 +476,17 @@ private:
 std::array<std::uintptr_t, kSoundVtableSlots> BuildCarrierVtable(
     std::span<const std::uintptr_t, kSoundVtableSlots> native,
     const CarrierCallbacks& callbacks,
-    std::uintptr_t image_base) noexcept {
+    BaseUpdateFn base_update,
+    const TimingNativeLayout& layout) noexcept {
     std::array<std::uintptr_t, kSoundVtableSlots> result{};
     std::ranges::copy(native, result.begin());
-    result[2] = callbacks.activate;
-    result[5] = image_base + kBaseUpdateRva;
-    result[6] = callbacks.render;
-    result[7] = callbacks.confirm;
-    result[8] = callbacks.back;
-    result[9] = callbacks.increment;
-    result[10] = callbacks.decrement;
+    result[layout.activate_slot] = callbacks.activate;
+    result[layout.update_slot] = reinterpret_cast<std::uintptr_t>(base_update);
+    result[layout.render_slot] = callbacks.render;
+    result[layout.confirm_slot] = callbacks.confirm;
+    result[layout.back_slot] = callbacks.back;
+    result[layout.increment_slot] = callbacks.increment;
+    result[layout.decrement_slot] = callbacks.decrement;
     return result;
 }
 
@@ -625,7 +530,7 @@ bool RenderTimingSettings(
     return actions.draw_help(actions.context, help);
 }
 
-bool PrepareCarrierLayout(void* carrier) noexcept {
+bool PrepareCarrierLayout(void* carrier, const TimingNativeLayout& layout) noexcept {
     static_assert(sizeof(void*) == 4);
     if (carrier == nullptr) {
         return false;
@@ -633,16 +538,16 @@ bool PrepareCarrierLayout(void* carrier) noexcept {
 
     __try {
         auto* bytes = static_cast<std::byte*>(carrier);
-        void* grid = *reinterpret_cast<void**>(bytes + kFormGridOffset);
+        void* grid = *reinterpret_cast<void**>(bytes + layout.form_grid);
         if (grid == nullptr) {
             return false;
         }
-        *reinterpret_cast<int*>(bytes + kFormRowCountOffset) = 4;
-        *reinterpret_cast<int*>(bytes + kFormActiveChildOffset) = -1;
+        *reinterpret_cast<int*>(bytes + layout.form_row_count) = 4;
+        *reinterpret_cast<int*>(bytes + layout.form_active_child) = -1;
         *reinterpret_cast<int*>(
-            static_cast<std::byte*>(grid) + kGridRowCountOffset) = 4;
+            static_cast<std::byte*>(grid) + layout.grid_row_count) = 4;
         *reinterpret_cast<int*>(
-            static_cast<std::byte*>(grid) + kGridSelectionOffset) = 0;
+            static_cast<std::byte*>(grid) + layout.grid_selection) = 0;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -653,7 +558,8 @@ bool CreateTimingCarrier(
     void* constructor_parent,
     void* owner,
     const CarrierLifecycleActions& actions,
-    void** carrier_out) noexcept {
+    void** carrier_out,
+    const TimingNativeLayout& layout) noexcept {
     if (carrier_out == nullptr) {
         return false;
     }
@@ -665,7 +571,7 @@ bool CreateTimingCarrier(
         return false;
     }
 
-    void* raw = actions.allocate(actions.context, kSoundFormSize);
+    void* raw = actions.allocate(actions.context, layout.sound_form_size);
     if (raw == nullptr) {
         return false;
     }
@@ -753,21 +659,6 @@ int CancelTimingEdit(TimingSettingsModel& model) noexcept {
     return 1;
 }
 
-std::expected<void, TimingInstallError> InstallTimingPatch(
-    TimingPatchTransaction& transaction,
-    std::uintptr_t image_base,
-    std::span<const TimingHookOperation, kTimingHookCount> hooks) noexcept {
-    const auto contracts = BuildTimingAbiContracts(image_base);
-    const auto vtable = ExpectedSoundVtable(image_base);
-    const auto writes = BuildTimingCheckedWrites(image_base);
-    return transaction.Install(
-        contracts,
-        image_base + kSoundVtableRva,
-        vtable,
-        writes,
-        hooks);
-}
-
 void* __fastcall CarrierActivate(void* self, void*) noexcept {
     try {
         if (g_runtime == nullptr || self != g_runtime->carrier) {
@@ -804,7 +695,7 @@ void* __fastcall CarrierRender(
         void* grid = nullptr;
         int selection = -1;
         if (!ReadCarrierGrid(*g_runtime, self, &grid) ||
-            !ReadIntField(grid, kGridSelectionOffset, &selection) ||
+            !ReadIntField(grid, g_runtime->abi.layout.grid_selection, &selection) ||
             !SynchronizeSelection(*g_runtime, selection) ||
             !RenderTimingSettings(
                 g_runtime->model,
@@ -911,17 +802,17 @@ void* __fastcall MainConstructorHook(
     void*,
     void* parent) noexcept {
     try {
-        if (g_runtime == nullptr || !g_runtime->main_constructor_hook) {
+        if (g_runtime == nullptr || !detail::g_originals.main_constructor) {
             return nullptr;
         }
         gc::absolute_judgement::
             EndAbsoluteJudgementSemanticStageForTestMode();
         void* result =
-            g_runtime->main_constructor_hook.unsafe_thiscall<void*>(
+            detail::g_originals.main_constructor(
                 self, parent);
         void* main_form = result != nullptr ? result : self;
         void* grid = nullptr;
-        if (!ReadPointerField(main_form, kFormGridOffset, &grid) ||
+        if (!ReadPointerField(main_form, g_runtime->abi.layout.form_grid, &grid) ||
             grid == nullptr ||
             !SetMainMenuCell(*g_runtime, grid, 10, kTimingTitle) ||
             !SetMainMenuCell(*g_runtime, grid, 11, "EXIT")) {
@@ -937,7 +828,7 @@ void* __fastcall MainConstructorHook(
                 parent,
                 main_form,
                 RuntimeLifecycleActions(*g_runtime),
-                &carrier)) {
+                &carrier, g_runtime->abi.layout)) {
             DegradeMainMenu(*g_runtime, main_form, grid);
             LogCallbackFailure("main_constructor_carrier");
             return result;
@@ -957,14 +848,14 @@ void* __fastcall MainRenderHook(
     int frame,
     int input) noexcept {
     try {
-        if (g_runtime == nullptr || !g_runtime->main_render_hook) {
+        if (g_runtime == nullptr || !detail::g_originals.main_render) {
             return nullptr;
         }
         void* grid = nullptr;
         int actual = -1;
-        if (!ReadPointerField(self, kFormGridOffset, &grid) ||
+        if (!ReadPointerField(self, g_runtime->abi.layout.form_grid, &grid) ||
             grid == nullptr ||
-            !ReadIntField(grid, kGridSelectionOffset, &actual)) {
+            !ReadIntField(grid, g_runtime->abi.layout.grid_selection, &actual)) {
             LogCallbackFailure("main_render_selection");
             return nullptr;
         }
@@ -972,12 +863,12 @@ void* __fastcall MainRenderHook(
         const auto route = g_runtime->carrier_ready
             ? RouteMainSelection(actual)
             : MainRenderRoute{actual, false};
-        SelectionGuard guard{grid, route.native_selection, actual};
+        SelectionGuard guard{grid, g_runtime->abi.layout.grid_selection, route.native_selection, actual};
         if (!guard.ready()) {
             LogCallbackFailure("main_render_route");
             return nullptr;
         }
-        void* result = g_runtime->main_render_hook.unsafe_thiscall<void*>(
+        void* result = detail::g_originals.main_render(
             self, frame, input);
         guard.Restore();
         if (route.draw_timing_help && g_runtime->carrier_ready &&
@@ -991,69 +882,45 @@ void* __fastcall MainRenderHook(
     }
 }
 
-bool TimingSettingsPatchInit() noexcept {
-    static std::atomic_bool attempted{false};
-    static std::atomic_bool stored_result{false};
-    bool expected = false;
-    if (!attempted.compare_exchange_strong(expected, true)) {
-        return stored_result.load(std::memory_order_acquire);
-    }
-
+std::expected<void, game_version::PlanError> PrepareTestModeTimingRuntime(
+    const game_version::ApprovedVersionedPlan& plan,
+    const runtime_image::RuntimeImage& image) noexcept {
+    using namespace game_version;
+    const auto invalid = [&](std::string_view site, PlanStage stage = PlanStage::invalid_plan) {
+        return std::unexpected(PlanError{.stage = stage, .context = plan.context(),
+            .feature = FeatureId::test_mode_timing, .site = site});
+    };
     try {
-        const auto module = GetModuleHandleW(nullptr);
-        const auto image_base = reinterpret_cast<std::uintptr_t>(module);
-        if (module == nullptr || image_base != kPreferredImageBase) {
-            try {
-                PLOG_ERROR << "TestModeTiming: unsupported executable base="
-                           << reinterpret_cast<void*>(image_base)
-                           << " expected="
-                           << reinterpret_cast<void*>(kPreferredImageBase);
-            } catch (...) {
-            }
-            stored_result.store(false, std::memory_order_release);
-            return false;
+        if (g_runtime) return invalid("runtime_already_prepared");
+        const auto* build = std::get_if<GameBuild>(&plan.context().build);
+        const auto* variant = std::get_if<GameImageVariant>(&plan.context().variant);
+        const auto* profile = build && variant ? ProfileFor(*build, *variant) : nullptr;
+        if (!profile) return invalid("profile", PlanStage::unsupported_feature);
+        auto abi = BuildTimingGameAbi(image, *profile, plan);
+        if (!abi) return std::unexpected(abi.error());
+        auto path = ResolveConfigPath();
+        if (!path) {
+            PLOG_ERROR << "TestModeTiming: config path resolution failed win32=" << path.error();
+            return invalid("config_path");
         }
-
-        auto config_path = ResolveConfigPath();
-        if (!config_path) {
-            try {
-                PLOG_ERROR << "TestModeTiming: path resolution failed"
-                           << " win32=" << config_path.error();
-            } catch (...) {
-            }
-            stored_result.store(false, std::memory_order_release);
-            return false;
-        }
-
-        auto candidate = std::make_unique<TimingRuntimeState>(
-            image_base, std::move(*config_path));
-        const auto hooks = RuntimeHookOperations(*candidate);
-        auto installed = InstallTimingPatch(
-            candidate->transaction, image_base, hooks);
-        if (!installed) {
-            LogInstallFailure(installed.error());
-            stored_result.store(false, std::memory_order_release);
-            return false;
-        }
-
+        auto candidate = std::make_unique<TimingRuntimeState>(std::move(*abi), std::move(*path));
+        candidate->carrier_vtable = BuildCarrierVtable(candidate->abi.sound_vtable,
+            RuntimeCarrierCallbacks(), candidate->abi.base_update, candidate->abi.layout);
+        // The owner and constructed table stay at stable addresses for native callbacks.
+        // Actual game allocation/construction still happens in MainConstructorHook.
         g_runtime_owner = std::move(candidate);
         g_runtime = g_runtime_owner.get();
-        stored_result.store(true, std::memory_order_release);
-        try {
-            PLOG_INFO
-                << "TestModeTiming: transaction committed carrier_slot=10";
-        } catch (...) {
-        }
-        return true;
+        return {};
     } catch (...) {
-        try {
-            PLOG_ERROR
-                << "TestModeTiming: initialization exception before publish";
-        } catch (...) {
-        }
-        stored_result.store(false, std::memory_order_release);
-        return false;
+        return invalid("runtime_allocation", PlanStage::allocation);
     }
+}
+void CompleteTestModeTimingStartup() noexcept {
+    if (!g_runtime || !detail::g_originals.main_constructor || !detail::g_originals.main_render)
+        diagnostics::AbortProcess({"TestModeTiming: startup publication is incomplete",
+            L"GCLoader could not initialize test-mode timing. Check loader-log.txt.",
+            L"GCLoader executable validation error"});
+    try { PLOG_INFO << "TestModeTiming: installed carrier_slot=10 hooks=2"; } catch (...) {}
 }
 
 } // namespace gc::test_mode_timing

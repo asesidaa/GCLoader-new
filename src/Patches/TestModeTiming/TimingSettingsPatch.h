@@ -49,7 +49,8 @@ struct CarrierCallbacks {
 BuildCarrierVtable(
     std::span<const std::uintptr_t, kSoundVtableSlots> native,
     const CarrierCallbacks& callbacks,
-    std::uintptr_t image_base) noexcept;
+    BaseUpdateFn base_update,
+    const TimingNativeLayout& layout) noexcept;
 
 struct TimingRenderActions {
     void* context{};
@@ -65,7 +66,7 @@ struct TimingRenderActions {
     void* grid,
     const TimingRenderActions& actions) noexcept;
 
-[[nodiscard]] bool PrepareCarrierLayout(void* carrier) noexcept;
+[[nodiscard]] bool PrepareCarrierLayout(void* carrier, const TimingNativeLayout& layout) noexcept;
 
 struct CarrierLifecycleActions {
     void* context{};
@@ -81,7 +82,8 @@ struct CarrierLifecycleActions {
     void* constructor_parent,
     void* owner,
     const CarrierLifecycleActions& actions,
-    void** carrier_out) noexcept;
+    void** carrier_out,
+    const TimingNativeLayout& layout) noexcept;
 
 struct TimingCommitActions {
     void* context{};
@@ -99,12 +101,6 @@ struct TimingCommitActions {
     const TimingCommitActions& actions) noexcept;
 
 [[nodiscard]] int CancelTimingEdit(TimingSettingsModel& model) noexcept;
-
-[[nodiscard]] std::expected<void, TimingInstallError>
-InstallTimingPatch(
-    TimingPatchTransaction& transaction,
-    std::uintptr_t image_base,
-    std::span<const TimingHookOperation, kTimingHookCount> hooks) noexcept;
 
 void* __fastcall CarrierActivate(void* self, void*) noexcept;
 void* __fastcall CarrierRender(
@@ -146,6 +142,8 @@ void* __fastcall MainRenderHook(
     int frame,
     int input) noexcept;
 
-[[nodiscard]] bool TimingSettingsPatchInit() noexcept;
+[[nodiscard]] std::expected<void, game_version::PlanError> PrepareTestModeTimingRuntime(
+    const game_version::ApprovedVersionedPlan&, const runtime_image::RuntimeImage&) noexcept;
+void CompleteTestModeTimingStartup() noexcept;
 
 } // namespace gc::test_mode_timing
