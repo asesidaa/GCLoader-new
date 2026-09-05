@@ -2,8 +2,10 @@
 #include "Config/ConfigCompiler.h"
 #include "Config/ConfigDocument.h"
 #include "Config/ConfigError.h"
+#include "Config/DeclaredEnum.h"
 #include "Input/Switch/SwitchInputSettings.h"
 #include "Input/Types/InputSettings.h"
+#include "Input/Types/PhysicalKey.h"
 #include "Input/Win32/ControllerBindingEvaluator.h"
 #include "Logging/LoggingSettings.h"
 #include "Nesys/NesysSettings.h"
@@ -113,6 +115,140 @@ namespace
             keys.emplace_back(error.path.Render(), error.code);
         }
         return keys;
+    }
+
+
+    std::string WithEnumToken(
+        std::string_view field, std::string_view token)
+    {
+        auto text = ReadDistributedConfig();
+        const auto marker = "\n" + std::string{field} + " = '";
+        const auto field_start = text.find(marker);
+        Expect(field_start != std::string::npos, "enum field exists");
+        if (field_start == std::string::npos)
+        {
+            return {};
+        }
+        Expect(text.find(marker, field_start + 1) == std::string::npos,
+               "exactly one enum field is replaced");
+        const auto value_start = field_start + marker.size();
+        const auto value_end = text.find('\'', value_start);
+        Expect(value_end != std::string::npos, "quoted enum token ends");
+        if (value_end == std::string::npos)
+        {
+            return {};
+        }
+        text.replace(value_start, value_end - value_start, token);
+        return text;
+    }
+
+    void CompilerRejectsUndeclaredNumericEnumTokens()
+    {
+        const std::pair<std::string_view, std::string_view> cases[]{
+            {"input_mode", "input_mode"},
+            {"gameplay_input_style", "gameplay_input_style"},
+            {"backend", "controller.backend"},
+            {"country", "registry.game.country"},
+            {"level", "logging.level"},
+            {"widescreen_hud_placement", "experimental.widescreen_hud_placement"},
+            {"audio_backend", "experimental.audio_backend"},
+        };
+        for (const auto& [field, path] : cases)
+        {
+            const auto parsed =
+                gc::config::ParseConfigDocument(WithEnumToken(field, "99"));
+            Expect(parsed.has_value(), "numeric enum token parses at syntax layer");
+            if (!parsed)
+            {
+                continue;
+            }
+            const auto compiled =
+                gc::config::ConfigCompiler::Compile(parsed->document);
+            Expect(!compiled.has_value(), "undeclared numeric enum is rejected");
+            if (!compiled)
+            {
+                Expect(
+                    ErrorKeys(compiled.error()) == std::vector<ErrorKey>{
+                        {std::string{path}, gc::config::ConfigErrorCode::unsupported_value},
+                    },
+                    "undeclared enum reports its production field and code");
+            }
+        }
+    }
+
+    template <class Enum>
+    void CompilerAcceptsEveryDeclaredEnum(std::string_view field)
+    {
+        for (const auto& [name, value] : gc::config::DeclaredEnumValues<Enum>())
+        {
+            // Names and declared numeric values must agree at the compiler
+            // boundary; no test-local enumerator list is maintained.
+            const auto numeric = std::to_string(
+                static_cast<std::underlying_type_t<Enum>>(value));
+            for (const auto token : {name, std::string_view{numeric}})
+            {
+                auto parsed =
+                    gc::config::ParseConfigDocument(WithEnumToken(field, token));
+                Expect(parsed.has_value(), "declared enum token parses");
+                if (!parsed)
+                {
+                    continue;
+                }
+                parsed->document.experimental().asio_driver_name = "Contract driver";
+                parsed->document.experimental().asio_buffer_frames = 512;
+                // Binding compatibility is a separate domain rule. Both
+                // controller backends accept an empty binding set and ID "0".
+                if constexpr (std::is_same_v<Enum, gc::input::ControllerBackend>)
+                {
+                    parsed->document.controller().bindings().clear();
+                }
+                const auto compiled =
+                    gc::config::ConfigCompiler::Compile(parsed->document);
+                Expect(compiled.has_value(), "every declared enum compiles");
+                if (!compiled)
+                {
+                    std::cerr << field << " = " << token << '\n';
+                    for (const auto& error : compiled.error())
+                    {
+                        std::cerr << error.path.Render() << ": " << error.message << '\n';
+                    }
+                }
+            }
+        }
+    }
+
+    void DeclaredConfigEnumsAgreeWithCompiler()
+    {
+        CompilerAcceptsEveryDeclaredEnum<gc::input::InputMode>("input_mode");
+        CompilerAcceptsEveryDeclaredEnum<gc::input::GameplayInputStyle>("gameplay_input_style");
+        CompilerAcceptsEveryDeclaredEnum<gc::input::ControllerBackend>("backend");
+        CompilerAcceptsEveryDeclaredEnum<GameCountry>("country");
+        CompilerAcceptsEveryDeclaredEnum<gc::logging::LoaderLogLevel>("level");
+        CompilerAcceptsEveryDeclaredEnum<gc::windowed_widescreen::GameplayHudPlacement>(
+            "widescreen_hud_placement");
+        CompilerAcceptsEveryDeclaredEnum<gc::audio::AudioBackend>("audio_backend");
+    }
+
+    void PhysicalKeyCodecPreservesExternalTokens()
+    {
+        for (const auto token : {"sc:001e", "e0:0048", "e1:001d"})
+        {
+            const auto key = gc::input::ParsePhysicalKey(token);
+            Expect(key.has_value(), "physical key token parses");
+            if (key)
+            {
+                Expect(gc::input::FormatPhysicalKey(*key) == token,
+                       "physical key token round trips exactly");
+            }
+        }
+        for (const auto token : {"zz:001e", "SC:001e", "sc:00xz", "sc:0000", "sc:001"})
+        {
+            Expect(!gc::input::ParsePhysicalKey(token),
+                   "invalid prefix, hex, zero or shape is rejected");
+        }
+        Expect(gc::input::FormatPhysicalKey({
+                   0x1e, static_cast<gc::input::ScanCodePrefix>(99)}) == "sc:001e",
+               "unknown formatter prefix retains the sc fallback");
     }
 
     class ActiveXInputAView final : public gc::input::ControllerStateView
@@ -718,6 +854,9 @@ namespace
 int main()
 {
     DistributedConfigStrictlyParses();
+    CompilerRejectsUndeclaredNumericEnumTokens();
+    DeclaredConfigEnumsAgreeWithCompiler();
+    PhysicalKeyCodecPreservesExternalTokens();
     SemanticInvalidityDoesNotDestroyDocumentShape();
     CompilerReturnsEveryIndependentErrorInDocumentOrder();
     CompilerChecksSelectedWasapiBuffer();

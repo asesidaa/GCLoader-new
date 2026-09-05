@@ -59,7 +59,6 @@ set_target_properties(iDmacDrv32 PROPERTIES
 )
 target_include_directories(iDmacDrv32 PRIVATE
         ${PROJECT_SOURCE_DIR}/src
-        ${reflectcpp_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(iDmacDrv32 PRIVATE
@@ -85,7 +84,6 @@ target_link_libraries(iDmacDrv32 PRIVATE
         miniaudio
         safetyhook::safetyhook
         tomlplusplus::tomlplusplus
-        reflectcpp
 )
 
 set(DEF_FILE

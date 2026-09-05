@@ -53,7 +53,6 @@ if(MSVC)
 endif()
 target_include_directories(ConfigGUI PRIVATE
         ${PROJECT_SOURCE_DIR}/src
-        ${reflectcpp_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(ConfigGUI PRIVATE
@@ -61,7 +60,6 @@ target_link_libraries(ConfigGUI PRIVATE
         gc_config
         ntdll
         tomlplusplus::tomlplusplus
-        reflectcpp
         imgui
         gc_config_gui_asio_mode_host
         gc_config_gui_host

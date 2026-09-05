@@ -998,3 +998,64 @@ Full Debug and RelWithDebInfo builds and all five existing CTest cases per
 configuration passed. No fake executable memory, mock hooks or copied binary
 fixtures were added. No ASIO shutdown, audio quality, NESYS ping/child-process,
 network or request-pipeline runtime acceptance was performed.
+
+## Configuration enum and token audit (Plan07)
+
+This audit distinguishes declared schema membership from semantic subsets,
+wire values and presentation. Only gc_config directly includes or links
+reflect-cpp. Loader and ConfigGUI consume the public schema through gc_config;
+their redundant reflect-cpp include paths and direct link entries were removed.
+
+| Enum / owner | Direction and contract | Production caller | Allocation constraint | Disposition |
+|---|---|---|---|---|
+| LoaderLogLevel / Logging | TOML name or numeric string -> schema value -> membership | ConfigDocument / ConfigCompiler, logging.level | Config startup may allocate; membership is constexpr | replace_with_reflection |
+| GameplayHudPlacement / Widescreen | TOML name or numeric string -> schema value -> membership | ConfigDocument / ConfigCompiler, experimental.widescreen_hud_placement | Config startup may allocate; membership is constexpr | replace_with_reflection |
+| AudioBackend / Audio | TOML name or numeric string -> schema value -> membership | ConfigDocument / ConfigCompiler, experimental.audio_backend | Config startup may allocate; membership is constexpr | replace_with_reflection |
+| InputMode, GameplayInputStyle, ControllerBackend / Input | Reflected TOML conversion and full declared membership | ConfigCompiler top-level input and controller fields | Config startup; constexpr membership | replace_with_reflection; these three additional chains were also full membership checks |
+| GameCountry / Config | Reflected TOML conversion, then registry DWORD projection | ConfigCompiler registry.game.country | Config startup | add missing reflected membership check before registry projection |
+| LogicalAction / Input | Reflected config conversion; controller gameplay-action subset; enum -> GUI label | IsGameplayAction, ConfigCompiler bindings, ConfigGUI ActionLabel | Subset and labels allocate nothing | keep explicit subset; Count and service actions are not valid gameplay bindings |
+| DigitalControlType / Input | Reflected config conversion; enum -> binding-specific allowed fields/backend subset | BindingFieldsValid, IsXInputType, controller compiler/evaluator | No allocation in subset decisions | keep semantic switch and subset |
+| XInputControl / Input | Reflected config conversion; button/axis/trigger subsets; enum -> GUI labels | IsXInputButton/Axis/Trigger, ConfigGUI control labels | No allocation in subset/label functions | keep semantic ranges and presentation |
+| ControlDirection / Input | Reflected config conversion; cardinal/axis subsets; enum -> GUI labels | IsAxisDirection/IsCardinalDirection, ConfigGUI direction labels | No allocation | keep semantic subsets and presentation |
+| ScanCodePrefix / Input | sc/e0/e1 <-> prefix within exact seven-character physical-key codec | ParsePhysicalKey / FormatPhysicalKey, config Reflector, GUI capture | Parse lookup allocates nothing; formatting returns a string | one_table; preserve named sc fallback for unknown formatter values |
+| LoaderLogLevel / Logging | enum -> stable Info/Debug/Verbose/Unknown label | LoaderLogLevelName, DllMain logging | constexpr string_view, no allocation | keep one-way diagnostic contract |
+| AudioBackend / Audio | enum -> stable directsound/wasapi_exclusive/asio/unknown label | AudioBackendName, runtime diagnostics and GUI | constexpr string_view, no allocation | keep one-way diagnostic contract |
+| GameplayHudPlacement / Widescreen | enum -> stable left/center/right/unknown label | GameplayHudPlacementName, startup diagnostics | constexpr string_view, no allocation | keep one-way diagnostic contract |
+| AsioProbeMode, AsioFailureStage, AsioResultDomain, MessageKind / ASIO protocol | numeric wire encode/decode and accepted protocol ranges | AsioProbeProtocol request/report/failure codecs | Bounded protocol buffers; numeric checks allocate nothing | keep explicit wire contract; not an external token pair |
+| ASIOSampleType / vendor ASIO SDK | signed wire values -> accepted vendor values; enum -> sample labels | AsioProbeProtocol, ConfigGUI AudioBackendEditorModel, ASIO backend | No allocation in numeric checks/labels | keep vendor values, supported sample-format subset and GUI labels |
+| AsioInternalMode / ASIO | enum -> ConfigGUI child-mode command arguments; CLI flag selection -> request type | AsioIsolatedProcess, ConfigGUI probe/control-panel entry points | Process-launch command construction may allocate | keep mode dispatch; separate entry-point flags are not an enum string codec |
+| ProcessRole / NESYS | process identity -> role; enum -> stable diagnostic label | NesysServiceProcess detection, ProcessRoleName | Detection may allocate; labels do not | keep role policy and one-way label |
+| ConfigErrorCode, load/persistence/root stages, StartupConfigurationStage/Change | typed result -> error/diagnostic text | ConfigDocument, ConfigError, StartupConfiguration, SystemRoot | Error-path formatting may allocate | keep stable structured-error/presentation contract |
+| HookStage, MemoryStage, Detection/Identity/Plan/Install stages, FeatureId, build/variant/proof | enum -> stable install/identity diagnostic labels | HookDiagnostics, RuntimeImageError, GameVersion diagnostics, Loader | Labels allocate nothing; fatal rendering may allocate | keep one-way diagnostic contract |
+| Audio failure/render/publication/domain enums, AbsoluteJudgement fatal/scope enums | enum -> stable diagnostics and numeric telemetry | Audio runtime/reporters, ExactJudgementTimeline, AbsoluteJudgementDiagnostics | Callback recording remains allocation-free; no successful-path per-call logging added | keep owning-domain labels and state decisions |
+| Framerate timing/clock/transform enums; Widescreen render/compositor/pass enums; Renderer resource states | policy results -> dispatch or diagnostics | Owning policy, callback and resource-lifecycle modules | Hot paths remain allocation-free | keep domain switches; not config membership |
+| RFID/JVS framing, encoding and connection enums; iDmac operation enums | wire/native numeric decode and feature dispatch; one-way diagnostics | JVS codec, ComPortState, CardReaderInterface, iDmac adapters | Protocol/polling constraints unchanged | keep stable protocol/native contracts |
+| Input worker/capture/control/source enums; ASIO/WASAPI lifecycle enums | internal state -> dispatch/diagnostic result | Polling, capture, audio backend state machines | Hot-path decisions do not allocate | keep owning state machines |
+| ConfigGUI catalog/inspection/operation/advisor/exit enums; CardReader client send status | UI state -> display/dispatch or exit code | GUI models, workers, entry points and client | UI formatting may allocate | keep presentation and lifecycle contracts |
+
+No additional production bidirectional enum/token codec was found. Reflected
+schema serialization already uses reflect-cpp; no second exact-name parser or
+generic mapping target was added. Domain labels are not alternate schema
+serializers, even when today's spelling matches an enumerator.
+
+The three required compiler chains and the three additional full-membership
+chains now enumerate reflected rows without assuming contiguity. The audit also
+found a missing GameCountry guard: previously a syntax-valid country = '99'
+could reach a registry DWORD. The compiler now rejects it at
+registry.game.country / unsupported_value in declaration order. Existing
+error messages, paths, codes and relative ordering for all existing rules are
+unchanged. Binding subsets and backend/dependency checks remain explicit.
+
+Production ConfigContract cases mutate one quoted field in the distributed
+config, prove '99' parses at the syntax layer, then require its structured
+compiler rejection for all seven schema enums. Every reflected name and
+declared numeric value is compiled with valid dependent settings (including
+ASIO driver name and nonzero buffer frames). No test-local enumerator list or
+full config fixture was copied. Codec checks cover all three external prefixes,
+invalid prefix/case/hex/shape/zero and the existing unknown-formatter fallback.
+
+Full Debug and RelWithDebInfo builds and all five CTest cases in each
+configuration passed after this migration. The dependency audit finds all
+direct reflect-cpp includes and links only under src/Config. These checks
+cover the production configuration and codec contracts, not GUI or game
+runtime acceptance.

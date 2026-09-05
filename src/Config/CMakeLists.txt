@@ -2,6 +2,7 @@ add_library(gc_config STATIC
         ConfigCompiler.cpp
         ConfigDocument.cpp
         ConfigError.cpp
+        DeclaredEnum.h
         RegistryConfig.cpp
 )
 target_include_directories(gc_config PUBLIC

@@ -1,5 +1,6 @@
 #include "Config/ConfigCompiler.h"
 
+#include "Config/DeclaredEnum.h"
 #include "Config/RegistryConfig.h"
 #include "Nesys/Network/NesysNetworkConfig.h"
 #include "Patches/Framerate/FrameratePolicy.h"
@@ -386,8 +387,7 @@ namespace gc::config
                 "expected one of 125, 250, 500, or 1000",
                 errors);
             const bool mode_valid =
-                document.input_mode() == input::InputMode::Keyboard ||
-                document.input_mode() == input::InputMode::Controller;
+                IsDeclaredEnumValue(document.input_mode());
             if (!mode_valid)
             {
                 errors.push_back({
@@ -396,10 +396,7 @@ namespace gc::config
                     .message = "unsupported input mode",
                 });
             }
-            if (document.gameplay_input_style() !=
-                input::GameplayInputStyle::Arcade &&
-                document.gameplay_input_style() !=
-                input::GameplayInputStyle::Switch)
+            if (!IsDeclaredEnumValue(document.gameplay_input_style()))
             {
                 errors.push_back({
                     .path = ConfigPath{"gameplay_input_style"},
@@ -445,9 +442,7 @@ namespace gc::config
             }
 
             const auto backend = document.controller().backend();
-            const bool backend_valid =
-                backend == input::ControllerBackend::XInput ||
-                backend == input::ControllerBackend::RawHid;
+            const bool backend_valid = IsDeclaredEnumValue(backend);
             if (!backend_valid)
             {
                 errors.push_back({
@@ -533,6 +528,15 @@ namespace gc::config
                 });
             }
 
+            if (!IsDeclaredEnumValue(document.registry().game().country()))
+            {
+                errors.push_back({
+                    .path = ConfigPath{"registry", "game", "country"},
+                    .code = ConfigErrorCode::unsupported_value,
+                    .message = "unsupported game country",
+                });
+            }
+
             ValidateLeaf<RegistryDwordValidator>(
                 document.registry().nesys().game_kind(),
                 ConfigPath{"registry", "nesys", "game_kind"},
@@ -569,9 +573,7 @@ namespace gc::config
             }
 
             const auto log_level = document.logging().level();
-            if (log_level != logging::LoaderLogLevel::Info &&
-                log_level != logging::LoaderLogLevel::Debug &&
-                log_level != logging::LoaderLogLevel::Verbose)
+            if (!IsDeclaredEnumValue(log_level))
             {
                 errors.push_back({
                     .path = ConfigPath{"logging", "level"},
@@ -595,12 +597,7 @@ namespace gc::config
                 document.experimental().widescreen_window_height());
             const auto widescreen_hud_placement =
                 document.experimental().widescreen_hud_placement();
-            if (widescreen_hud_placement !=
-                    windowed_widescreen::GameplayHudPlacement::left &&
-                widescreen_hud_placement !=
-                    windowed_widescreen::GameplayHudPlacement::center &&
-                widescreen_hud_placement !=
-                    windowed_widescreen::GameplayHudPlacement::right)
+            if (!IsDeclaredEnumValue(widescreen_hud_placement))
             {
                 errors.push_back({
                     .path = ConfigPath{
@@ -665,9 +662,7 @@ namespace gc::config
             const auto audio_backend =
                 document.experimental().audio_backend();
             const bool audio_backend_valid =
-                audio_backend == audio::AudioBackend::directsound ||
-                audio_backend == audio::AudioBackend::wasapi_exclusive ||
-                audio_backend == audio::AudioBackend::asio;
+                IsDeclaredEnumValue(audio_backend);
             if (!audio_backend_valid)
             {
                 errors.push_back({
