@@ -2,7 +2,7 @@
 #include "Platform/Win32/UniqueHandle.h"
 
 #include <bcrypt.h>
-#include <limits>
+#include "Patches/RuntimeImage/RuntimeImage.h"
 #include <vector>
 
 namespace gc::game_version {
@@ -16,13 +16,7 @@ struct IdentityResources final {
         if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
     }
 };
-template <typename T>
-bool ReadHeader(std::uintptr_t address, T& value) noexcept {
-    SIZE_T count{};
-    return address <= std::numeric_limits<std::uintptr_t>::max() - sizeof(T) &&
-        ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
-                          &value, sizeof(T), &count) && count == sizeof(T);
-}
+
 }
 
 std::expected<LoadedImageIdentity, IdentityError>
@@ -44,25 +38,13 @@ ReadLoadedExecutableIdentity(HMODULE module) noexcept {
             path.resize(path.size() * 2);
         }
 
-        const auto base = reinterpret_cast<std::uintptr_t>(module);
-        IMAGE_DOS_HEADER dos{};
-        IMAGE_NT_HEADERS32 nt{};
-        if (!ReadHeader(base, dos) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
-            dos.e_lfanew < static_cast<LONG>(sizeof(dos)) ||
-            static_cast<std::uintptr_t>(dos.e_lfanew) > std::numeric_limits<std::uintptr_t>::max() - base ||
-            !ReadHeader(base + static_cast<std::uintptr_t>(dos.e_lfanew), nt) ||
-            nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
-            nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER32) ||
-            nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
-            !nt.OptionalHeader.SizeOfImage ||
-            nt.OptionalHeader.SizeOfImage > std::numeric_limits<std::uintptr_t>::max() - base ||
-            static_cast<std::uint32_t>(dos.e_lfanew) > nt.OptionalHeader.SizeOfImage ||
-            sizeof(nt) > nt.OptionalHeader.SizeOfImage - static_cast<std::uint32_t>(dos.e_lfanew))
+        const auto headers = runtime_image::ReadLoadedImageHeaders(module);
+        if (!headers)
             return std::unexpected(IdentityError{IdentityStage::pe_headers, ERROR_BAD_EXE_FORMAT});
-        identity.machine = nt.FileHeader.Machine;
-        identity.time_date_stamp = nt.FileHeader.TimeDateStamp;
-        identity.preferred_image_base = nt.OptionalHeader.ImageBase;
-        identity.size_of_image = nt.OptionalHeader.SizeOfImage;
+        identity.machine = headers->machine;
+        identity.time_date_stamp = headers->time_date_stamp;
+        identity.preferred_image_base = headers->preferred_image_base;
+        identity.size_of_image = headers->size_of_image;
 
         IdentityResources resources;
         resources.file.reset(CreateFileW(identity.path.c_str(), GENERIC_READ,

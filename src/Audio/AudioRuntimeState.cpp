@@ -81,18 +81,6 @@ IAudioEngineController* GetOrCreatePublishedAudioController() noexcept
     return state ? state->GetOrCreateController() : nullptr;
 }
 
-std::expected<void, hooking::HookError> AddPublishedAudioRuntimeHook(
-    hooking::HookPlan& hooks) noexcept
-{
-    auto* state = g_runtime.load(std::memory_order_acquire);
-    if (!g_prepared.load(std::memory_order_acquire))
-        return std::unexpected(hooking::HookError{
-            .stage = hooking::HookStage::invalid_plan,
-            .identity = {"Audio", "runtime_not_prepared"}, .win32_error = ERROR_INVALID_STATE});
-    if (!state) return {};
-    return AddDirectSoundHook(hooks);
-}
-
 void ReleaseAudioRuntimeAtOrdinaryAsioClose(std::uintptr_t site_rva) noexcept
 {
     auto* owner = g_runtime.exchange(nullptr, std::memory_order_acq_rel);

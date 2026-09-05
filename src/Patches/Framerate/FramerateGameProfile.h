@@ -45,6 +45,8 @@ struct FramerateGameProfile final {
     FramerateNativeLayout layout;
     EffectTimingManifestSummary effect_timing;
 };
+[[nodiscard]] std::expected<game_version::VersionedOperation, game_version::PlanError>
+BindFramerateHook(const FramerateHookContract&) noexcept;
 [[nodiscard]] const FramerateGameProfile* ProfileFor(
     game_version::GameBuild, game_version::GameImageVariant) noexcept;
 }

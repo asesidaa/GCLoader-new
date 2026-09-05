@@ -1,5 +1,5 @@
 #include "Nesys/Diagnostics/GamePipeWin32Observers.h"
-#include "Nesys/Diagnostics/RequestPipelineDiagnostics.h"
+#include "Nesys/Diagnostics/RequestTracking.h"
 
 namespace gc::nesys_service::diagnostics {
 namespace {

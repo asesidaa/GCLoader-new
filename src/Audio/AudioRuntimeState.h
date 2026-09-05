@@ -4,7 +4,7 @@
 namespace gc::audio {
 class IAudioEngineController;
 [[nodiscard]] IAudioEngineController* GetOrCreatePublishedAudioController() noexcept;
-enum class AudioRuntimeStage : std::uint8_t { already_prepared, construction };
+enum class AudioRuntimeStage : std::uint8_t { already_prepared, construction, missing_hook_route };
 struct AudioRuntimeError final {
     AudioRuntimeStage stage{};
     DWORD win32_error{};
@@ -12,7 +12,5 @@ struct AudioRuntimeError final {
 [[nodiscard]] std::expected<void, AudioRuntimeError>
 PrepareAndPublishAudioRuntime(AudioSettings settings) noexcept;
 [[nodiscard]] bool IsAsioRuntimePublished() noexcept;
-[[nodiscard]] std::expected<void, hooking::HookError>
-AddPublishedAudioRuntimeHook(hooking::HookPlan&) noexcept;
 void ReleaseAudioRuntimeAtOrdinaryAsioClose(std::uintptr_t site_rva) noexcept;
 }

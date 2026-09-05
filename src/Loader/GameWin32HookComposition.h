@@ -1,5 +1,5 @@
 #pragma once
-#include "Platform/Win32/Hooking/HookPlan.h"
+#include "Loader/StartupFailure.h"
 #include "SystemPath/SystemRoot.h"
 #include "Win32Hooks/HandlerChain.h"
 namespace gc::rfid { class Runtime; }
@@ -10,6 +10,6 @@ namespace gc::loader {
 [[nodiscard]] std::expected<void, win32_hooks::RegistrationError> ComposeGameWin32Handlers(
     win32_hooks::Kernel32Dispatcher&, rfid::Runtime&,
     system_path::SystemPathRouter&, testmode_storage::Hooks&) noexcept;
-[[nodiscard]] std::expected<void, hooking::HookError> AddGameWin32Hooks(
+[[nodiscard]] std::expected<void, StartupError> AddGameWin32Hooks(
     hooking::HookPlan&, const system_path::RuntimeRoot&, bool storage_enabled, rfid::Runtime&) noexcept;
 }

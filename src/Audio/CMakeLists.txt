@@ -15,7 +15,7 @@ add_library(gc_audio STATIC
         Wasapi/ExactWasapiClock.cpp
         Wasapi/ExclusiveAudioEngine.cpp
         Wasapi/OutputPacingTracker.cpp
-        AudioPatch.cpp
+        AudioFeature.cpp
         AudioRuntimeState.cpp
         AudioBackendComposition.cpp
         AudioDiagnostics.cpp
@@ -34,7 +34,6 @@ target_link_libraries(gc_audio PUBLIC
         gc_game_version
         gc_asio
         gc_timing
-        safetyhook::safetyhook
         miniaudio
         dsound
         dxguid

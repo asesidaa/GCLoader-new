@@ -2,7 +2,7 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementProfile.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
 #include "Patches/AbsoluteJudgement/JudgementScope.h"
-#include "Audio/AudioPatch.h"
+#include "Audio/AudioFeature.h"
 #include "Input/Polling/GameplayTransitionJournal.h"
 #include "Diagnostics/FatalProcess.h"
 #include <Windows.h>
@@ -362,9 +362,9 @@ std::expected<void, game_version::PlanError> PrepareAbsoluteJudgementRuntime(
         AbortStartup(AbsoluteJudgementFatalPredicate::InputTransportRateNot1000,
             std::format("stage=capability configured_rate_hz={}", settings.input_rate_hz()));
     const bool observe_lifecycle = enabled || backend == audio::AudioBackend::asio;
-    if (observe_lifecycle && !audio::IsAudioHookCommitted())
+    if (observe_lifecycle && !audio::IsAudioRoutePrepared(backend))
         AbortStartup(AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
-            "stage=capability audio_hook_committed=0");
+            "stage=capability audio_route_prepared=0");
     JudgementDiagnostics().SetStartupTargetFps(settings.target_fps());
     InitializeAbsoluteJudgementRuntime(profile->layout, targets, backend, enabled, expected_domain);
     g_layout = profile->layout;
@@ -373,6 +373,10 @@ std::expected<void, game_version::PlanError> PrepareAbsoluteJudgementRuntime(
 }
 
 void CompleteAbsoluteJudgementStartup(const JudgementSettings& settings) noexcept {
+    if ((settings.enabled() || settings.audio_backend() == audio::AudioBackend::asio) &&
+        !audio::IsAudioHookCommitted())
+        AbortStartup(AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
+            "stage=publication audio_hook_committed=0");
     const bool enabled = settings.enabled();
     if (enabled && (!detail::g_originals.pressed || !detail::g_originals.held ||
         !detail::g_originals.released || !detail::g_originals.direction ||

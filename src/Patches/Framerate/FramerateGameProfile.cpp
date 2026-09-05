@@ -1,4 +1,7 @@
 #include "Patches/Framerate/FramerateGameProfile.h"
+#include "Patches/Framerate/FrameTimingHooks.h"
+#include "Patches/Framerate/EffectTimingHooks.h"
+#include "Patches/Framerate/MenuTimingHooks.h"
 namespace gc::framerate {
 namespace {
 using namespace game_version;
@@ -839,6 +842,128 @@ FramerateGameProfile MakeProfile(GameImageVariant variant) noexcept {
     }, SummarizeNativeEffectTiming()};
 }
 }
+
+
+[[nodiscard]] std::expected<game_version::VersionedOperation, game_version::PlanError>
+BindFramerateHook(const FramerateHookContract& contract) noexcept {
+    using namespace game_version;
+    using namespace detail;
+    switch (contract.id) {
+    case FramerateHookId::MovieClipGoto:
+        return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookMovieClipGoto),
+            hooking::OriginalPublisher::To(&g_frame_originals.movieclip_goto)};
+    case FramerateHookId::MovieClipAdvance:
+        return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookMovieClipAdvance),
+            hooking::OriginalPublisher::To(&g_frame_originals.movieclip_advance)};
+    case FramerateHookId::PaletteCompare:
+        return MidHookOperation{contract.site, HookPaletteCompare};
+    case FramerateHookId::StageClipFrame:
+        return MidHookOperation{contract.site, HookStageClipFrame};
+    case FramerateHookId::IfblWait:
+        return MidHookOperation{contract.site, HookIfblWait};
+    case FramerateHookId::StageBgmPreload:
+        return MidHookOperation{contract.site, HookStageBgmPreload};
+    case FramerateHookId::TuneCountdownCompare:
+        return MidHookOperation{contract.site, HookTuneCountdownCompare};
+    case FramerateHookId::AudioSkipMargin:
+        return MidHookOperation{contract.site, HookAudioSkipMargin};
+    case FramerateHookId::AudioSkipInterval:
+        return MidHookOperation{contract.site, HookAudioSkipInterval};
+    case FramerateHookId::AudioResyncPolicy:
+        return MidHookOperation{contract.site, HookAudioResyncPolicy};
+    case FramerateHookId::GameplaySongClock:
+        return MidHookOperation{contract.site, HookGameplaySongClock};
+    case FramerateHookId::GameplayEffectAdvance:
+        return MidHookOperation{contract.site, HookGameplayEffectAdvance};
+    case FramerateHookId::EffectCadence6:
+        return MidHookOperation{contract.site, HookEffectCadence6};
+    case FramerateHookId::EffectCadence5:
+        return MidHookOperation{contract.site, HookEffectCadence5};
+    case FramerateHookId::EffectCadence4:
+        return MidHookOperation{contract.site, HookEffectCadence4};
+    case FramerateHookId::EffectCadence16A:
+        return MidHookOperation{contract.site, HookEffectCadence16A};
+    case FramerateHookId::EffectCadence16B:
+        return MidHookOperation{contract.site, HookEffectCadence16B};
+    case FramerateHookId::EffectCadence8:
+        return MidHookOperation{contract.site, HookEffectCadence8};
+    case FramerateHookId::RemoteCadenceA:
+        return MidHookOperation{contract.site, HookRemoteCadenceA};
+    case FramerateHookId::RemoteCadenceB:
+        return MidHookOperation{contract.site, HookRemoteCadenceB};
+    case FramerateHookId::GameplayBlink:
+        return MidHookOperation{contract.site, HookGameplayBlink};
+    case FramerateHookId::GreatGoodLifetimeOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEax};
+    case FramerateHookId::GreatGoodFrameOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEcx};
+    case FramerateHookId::EffectLifetimeAOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEcx};
+    case FramerateHookId::EffectFrameAOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEdx};
+    case FramerateHookId::EffectLifetimeBOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEcx};
+    case FramerateHookId::EffectFrameBOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEdx};
+    case FramerateHookId::DirectEffectFrameOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEdx};
+    case FramerateHookId::ChartEffectFrameAOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEcx};
+    case FramerateHookId::ChartEffectFrameBOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEcx};
+    case FramerateHookId::ChartEffectFrameCOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEdx};
+    case FramerateHookId::ChartEffectFrameDOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEax};
+    case FramerateHookId::FixedVisualFrameOperand:
+        return MidHookOperation{contract.site, HookAuthoredOperandEcx};
+    case FramerateHookId::GameplayCountdownAssetFrame:
+        return MidHookOperation{contract.site, HookGameplayCountdownAssetFrame};
+    case FramerateHookId::PlayerPositionInitA:
+        return MidHookOperation{contract.site, HookPlayerPositionInitialization};
+    case FramerateHookId::PlayerPositionInitB:
+        return MidHookOperation{contract.site, HookPlayerPositionInitialization};
+    case FramerateHookId::PlayerPositionInitC:
+        return MidHookOperation{contract.site, HookPlayerPositionInitialization};
+    case FramerateHookId::PlayerPositionInitD:
+        return MidHookOperation{contract.site, HookPlayerPositionInitialization};
+    case FramerateHookId::PlayerPositionAssetFrame:
+        return MidHookOperation{contract.site, HookPlayerPositionAssetFrame};
+    case FramerateHookId::PlayerPositionDenominatorA:
+        return MidHookOperation{contract.site, HookPlayerPositionDenominator};
+    case FramerateHookId::PlayerPositionDenominatorB:
+        return MidHookOperation{contract.site, HookPlayerPositionDenominator};
+    case FramerateHookId::EffectFlowItemFrame:
+        return MidHookOperation{contract.site, HookEffectFlowItemFrame};
+    case FramerateHookId::EffectTutorialElapsed:
+        return MidHookOperation{contract.site, HookEffectTutorialElapsed};
+    case FramerateHookId::EffectChartPreRollDuration:
+        return MidHookOperation{contract.site, HookEffectChartPreRollDuration};
+    case FramerateHookId::EffectPlayerModuloDividend:
+        return MidHookOperation{contract.site, HookEffectPlayerModuloDividend};
+    case FramerateHookId::MovieClipPreprocessVisit:
+        return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookMovieClipPreprocessVisit),
+            hooking::OriginalPublisher::To(&g_menu_originals.movieclip_preprocess_visit)};
+    case FramerateHookId::RankingEntryCounterStore:
+        return MidHookOperation{contract.site, HookRankingEntryCounterStore};
+    case FramerateHookId::HitChartEntryCounterStore:
+        return MidHookOperation{contract.site, HookHitChartEntryCounterStore};
+    case FramerateHookId::UnlockRewardCountdownStore:
+        return MidHookOperation{contract.site, HookUnlockRewardCountdownStore};
+    case FramerateHookId::UnlockRewardPrimaryStateStore:
+        return MidHookOperation{contract.site, HookUnlockRewardPrimaryStateStore};
+    case FramerateHookId::UnlockRewardSecondaryStateStore:
+        return MidHookOperation{contract.site, HookUnlockRewardSecondaryStateStore};
+    case FramerateHookId::NavigatorAdvance:
+        return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookNavigatorAdvance),
+            hooking::OriginalPublisher::To(&g_effect_originals.navigator_advance)};
+    case FramerateHookId::OuterFrame:
+        return MidHookOperation{contract.site, HookOuterFrame};
+    }
+    return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+        .feature = FeatureId::framerate, .site = contract.site.site});
+}
+
 const FramerateGameProfile* ProfileFor(GameBuild build, GameImageVariant variant) noexcept {
     static const std::array profiles{
         MakeProfile(GameImageVariant::clean), MakeProfile(GameImageVariant::legacy_patched),

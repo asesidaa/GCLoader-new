@@ -1,5 +1,5 @@
 #pragma once
-#include "Loader/GameVersionedStartupPlan.h"
+#include "Loader/StartupPlanError.h"
 namespace gc::nesys_service { class NesysSettings; }
 namespace gc::loader {
 struct PreparedNesysVersionedStartup final {

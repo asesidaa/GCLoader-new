@@ -27,67 +27,76 @@ target_link_libraries(gc_rfid_feature PUBLIC
 
 add_subdirectory(Patches)
 
+# Common configuration, process logging, validation diagnostics, and installation.
+# Role-specific feature composition belongs only to the two roots below.
 add_library(gc_loader_startup STATIC
         Loader/StartupConfiguration.cpp
-        Loader/GameVersionedStartupPlan.cpp
-        Loader/NesysVersionedStartupPlan.cpp
+        Loader/StartupFailure.cpp
+        Loader/ProcessStartup.cpp
         Loader/VersionedStartupExecutor.cpp
 )
-target_include_directories(gc_loader_startup PUBLIC
-        ${PROJECT_SOURCE_DIR}/src
-)
-target_link_libraries(gc_loader_startup PUBLIC
-        gc_game_version
-        gc_runtime_patches
-        gc_config
-        gc_system_path
-        gc_test_mode_storage
+target_include_directories(gc_loader_startup PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gc_loader_startup
+        PUBLIC gc_config gc_system_path gc_test_mode_storage gc_game_version gc_fatal_process
+        PRIVATE gc_logging gc_platform_win32
 )
 
-target_link_libraries(gc_loader_startup PRIVATE gc_audio gc_nesys)
+add_library(gc_game_startup STATIC
+        Loader/GameStartup.cpp
+        Loader/GameVersionedStartupPlan.cpp
+        Loader/NonVersionedHookPlan.cpp
+        Loader/GameWin32HookComposition.cpp
+)
+target_include_directories(gc_game_startup PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gc_game_startup
+        PUBLIC gc_loader_startup
+        PRIVATE
+        gc_audio
+        gc_crash_dump
+        gc_input
+        gc_japanese_locale_compatibility
+        gc_logging
+        gc_nesys
+        gc_rfid_feature
+        gc_win32_hooks
+        gc_patch_game_compatibility
+        gc_patch_auto_play
+        gc_patch_song_unlock
+        gc_patch_absolute_judgement
+        gc_patch_framerate
+        gc_patch_countdown
+        gc_patch_switch_input
+        gc_test_mode_timing
+        gc_renderer_device_loss
+        gc_windowed_widescreen
+)
+
+add_library(gc_nesys_startup STATIC
+        Loader/NesysStartup.cpp
+        Loader/NesysVersionedStartupPlan.cpp
+)
+target_include_directories(gc_nesys_startup PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(gc_nesys_startup
+        PUBLIC gc_loader_startup
+        PRIVATE gc_nesys gc_japanese_locale_compatibility gc_logging
+)
 
 add_library(iDmacDrv32 SHARED
         Loader/DllMain.cpp
-        Loader/NonVersionedHookPlan.cpp
-        Loader/GameWin32HookComposition.cpp
-        Loader/TransitionalVersionedStartup.cpp
         Driver/iDmac/iDmacDrv32.cpp
 )
 set_target_properties(iDmacDrv32 PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${GC_DIST_DIR}"
         PDB_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
 )
-target_include_directories(iDmacDrv32 PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${plog_SOURCE_DIR}/include
-)
+target_include_directories(iDmacDrv32 PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(iDmacDrv32 PRIVATE
-        gc_fatal_process
-        gc_audio
-        gc_crash_dump
+        gc_game_startup
+        gc_nesys_startup
         gc_input
-        gc_japanese_locale_compatibility
-        gc_loader_startup
         gc_logging
-        gc_nesys
-        gc_rfid_feature
-        gc_runtime_patches
-        gc_system_path
-        gc_test_mode_timing
-        dsound
-        dxguid
-        ntdll
-        ole32
-        uuid
-        avrt
-        propsys
-        miniaudio
-        safetyhook::safetyhook
-        tomlplusplus::tomlplusplus
 )
-
 target_link_libraries(gc_rfid_feature PRIVATE gc_platform_win32)
-target_link_libraries(iDmacDrv32 PRIVATE gc_platform_win32)
 
 set(DEF_FILE
         "${CMAKE_CURRENT_SOURCE_DIR}/Driver/iDmac/iDmacDrv32.def")

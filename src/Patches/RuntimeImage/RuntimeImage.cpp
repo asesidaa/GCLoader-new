@@ -133,9 +133,8 @@ bool GuardedExchange(void* address, void* expected, void* replacement,
 
 } // namespace
 
-std::expected<RuntimeImage, RuntimeImageError> RuntimeImage::MainModule() noexcept {
-    constexpr SiteIdentity identity{"RuntimeImage", "main_module", 0};
-    const auto module = GetModuleHandleW(nullptr);
+std::expected<LoadedImageHeaders, RuntimeImageError> ReadLoadedImageHeaders(HMODULE module) noexcept {
+    constexpr SiteIdentity identity{"RuntimeImage", "module_headers", 0};
     if (module == nullptr) {
         return std::unexpected(Error(MemoryStage::resolve_module, identity, 0, 0, GetLastError()));
     }
@@ -168,7 +167,14 @@ std::expected<RuntimeImage, RuntimeImageError> RuntimeImage::MainModule() noexce
         return std::unexpected(Error(MemoryStage::parse_image, identity, nt_address,
                                      sizeof(nt), ERROR_BAD_EXE_FORMAT));
     }
-    return RuntimeImage{base, nt.OptionalHeader.SizeOfImage};
+    return LoadedImageHeaders{base, nt.FileHeader.Machine, nt.FileHeader.TimeDateStamp,
+        nt.OptionalHeader.ImageBase, nt.OptionalHeader.SizeOfImage};
+}
+
+std::expected<RuntimeImage, RuntimeImageError> RuntimeImage::MainModule() noexcept {
+    const auto headers = ReadLoadedImageHeaders(GetModuleHandleW(nullptr));
+    if (!headers) return std::unexpected(headers.error());
+    return RuntimeImage{headers->base, headers->size_of_image};
 }
 
 std::expected<std::uintptr_t, RuntimeImageError> RuntimeImage::Resolve(

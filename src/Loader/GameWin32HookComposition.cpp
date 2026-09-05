@@ -1,12 +1,10 @@
 #include "Loader/GameWin32HookComposition.h"
-#include "Diagnostics/FatalProcess.h"
 #include "Nesys/Diagnostics/GamePipeWin32Observers.h"
 #include "Rfid/Win32FileHandlers.h"
 #include "SystemPath/TtxInitGuard.h"
 #include "SystemPath/Win32PathHandlers.h"
 #include "TestModeStorage/Win32PathHandlers.h"
 #include "Win32Hooks/Kernel32Dispatcher.h"
-#include <format>
 
 namespace gc::loader {
 namespace {
@@ -17,15 +15,6 @@ struct GamePathState final {
     testmode_storage::Hooks storage;
     system_path::TtxInitGuard ttx;
 };
-[[noreturn]] void AbortRegistration(const win32_hooks::RegistrationError& error) noexcept {
-    try {
-        diagnostics::AbortProcess({
-            std::format("Win32 handler registration failed stage={} feature={} site={}",
-                static_cast<unsigned>(error.stage), error.identity.feature, error.identity.site),
-            L"GCLoader could not compose its Win32 handlers. Check loader-log.txt.",
-            L"GCLoader hook setup error"});
-    } catch (...) { diagnostics::AbortProcess({}); }
-}
 }
 std::expected<void, win32_hooks::RegistrationError> ComposeGameWin32Handlers(
     win32_hooks::Kernel32Dispatcher& dispatcher, rfid::Runtime& rfid,
@@ -39,7 +28,7 @@ std::expected<void, win32_hooks::RegistrationError> ComposeGameWin32Handlers(
         return result;
     return dispatcher.Publish();
 }
-std::expected<void, hooking::HookError> AddGameWin32Hooks(
+std::expected<void, StartupError> AddGameWin32Hooks(
     hooking::HookPlan& plan, const system_path::RuntimeRoot& root,
     bool storage_enabled, rfid::Runtime& rfid) noexcept {
     try {
@@ -47,9 +36,14 @@ std::expected<void, hooking::HookError> AddGameWin32Hooks(
         auto* state = new GamePathState(root, storage_enabled);
         auto& dispatcher = win32_hooks::Kernel32Dispatcher::ProcessLifetime();
         if (const auto result = ComposeGameWin32Handlers(dispatcher, rfid, state->system, state->storage); !result)
-            AbortRegistration(result.error());
-        if (const auto result = AddSharedKernel32Hooks(plan, dispatcher); !result) return result;
-        return state->ttx.AddHook(plan);
-    } catch (...) { diagnostics::AbortProcess({}); }
+            return std::unexpected(StartupError{.registration = result.error()});
+        if (const auto result = AddSharedKernel32Hooks(plan, dispatcher); !result)
+            return std::unexpected(StartupError{.hook = result.error()});
+        if (const auto result = state->ttx.AddHook(plan); !result)
+            return std::unexpected(StartupError{.hook = result.error()});
+        return {};
+    } catch (...) {
+        return std::unexpected(StartupError{.stage = StartupStage::exception, .feature = "GameWin32"});
+    }
 }
 }

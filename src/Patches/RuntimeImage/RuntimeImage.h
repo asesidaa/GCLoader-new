@@ -15,6 +15,18 @@ struct BytePatch final {
     MemoryKind memory_kind{MemoryKind::code};
 };
 
+struct LoadedImageHeaders final {
+    std::uintptr_t base{};
+    std::uint16_t machine{};
+    std::uint32_t time_date_stamp{};
+    std::uint32_t preferred_image_base{};
+    std::uint32_t size_of_image{};
+};
+
+// Shared checked PE parsing for executable identity and patch bounds.
+[[nodiscard]] std::expected<LoadedImageHeaders, RuntimeImageError>
+ReadLoadedImageHeaders(HMODULE module) noexcept;
+
 class RuntimeImage final {
 public:
     [[nodiscard]] static std::expected<RuntimeImage, RuntimeImageError>

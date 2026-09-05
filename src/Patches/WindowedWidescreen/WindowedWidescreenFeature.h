@@ -50,32 +50,8 @@ namespace gc::windowed_widescreen
         D3D9CompositorFailure d3d_failure{};
     };
 
-    enum class RenderDimensionAxis : std::uint8_t
-    {
-        width,
-        height,
-    };
-
-    enum class RenderQueryRoute : std::uint8_t
-    {
-        native_passthrough,
-        frame_virtualized,
-    };
-
-    [[nodiscard]] RenderQueryRoute ResolveRenderQueryRoute(
-        bool compositor_frame_active) noexcept;
-
-    void ApplyNativeHudOrthographicArguments(
-        HudOrthographicArguments& arguments) noexcept;
-
-    [[nodiscard]] std::expected<void, WindowedWidescreenError>
-    ApplyClipGateHook(
-        std::uintptr_t continuation,
-        std::uint32_t& instruction_pointer) noexcept;
-
     [[nodiscard]] std::expected<void, WindowedWidescreenError> PrepareWidescreenRuntime(
         WindowedWidescreenSettings, const game_version::ApprovedVersionedPlan&,
         const runtime_image::RuntimeImage&) noexcept;
     void CompleteWidescreenStartup() noexcept;
-    [[noreturn]] void AbortWidescreenStartup(const WindowedWidescreenError&) noexcept;
 } // namespace gc::windowed_widescreen

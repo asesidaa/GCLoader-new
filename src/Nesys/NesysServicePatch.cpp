@@ -1,6 +1,6 @@
 #include "Nesys/NesysServicePatch.h"
 #include "Nesys/ThreadPriorityOverride.h"
-#include "Nesys/Diagnostics/RequestPipelineDiagnostics.h"
+#include "Nesys/Diagnostics/RequestHooks.h"
 #include "Nesys/Launcher/NesysServiceLauncher.h"
 #include "Nesys/Registry/RegistryConfigOverride.h"
 #include "Nesys/Network/ServerAddressOverride.h"

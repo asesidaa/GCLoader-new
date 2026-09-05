@@ -1226,3 +1226,205 @@ renderer reset, ASIO/WASAPI hardware, child processes, RFID/storage and GUI
 acceptance are untested. The game still uses the explicitly temporary startup
 adapter until the complete Plan 09 cutover; this intermediate DLL is not a
 deployment checkpoint.
+
+## After: Plan 09 final architecture and static closeout
+
+Completed 2026-09-05 after Plans 01 through 08. The preceding baseline and
+intermediate-plan sections are historical evidence. The complete game barrier
+is now active, and the temporary per-family startup adapter has been removed.
+
+### Startup and publication
+
+`DllMain.cpp` now contains only the x86 ABI boundary, thread-notification
+disable request, common preparation, role dispatch, and terminal exception
+handling. `ProcessStartup` selects the process log, compiles strict
+configuration, verifies the configuration variant, and applies logging settings.
+It does not initialize game features in the service role.
+
+`GameStartup` detects the image, collects every mandatory and enabled native
+feature, validates the complete set, resolves and collision-checks the export
+plan, prepares runtime bindings, installs the approved native operations,
+installs exports, and completes feature activation. The frozen relative native
+order is explicit: GameCompatibility, optional AutoPlay, optional SongUnlock,
+conditional ASIO close, Test Mode Timing, Renderer Device Loss, optional
+Widescreen, Absolute Judgement lifecycle, Framerate, optional Countdown, then
+optional Switch input. Dependencies bridge disabled optional features.
+All versioned installation now precedes export installation, as required by
+the final cutover. Export contribution order and shared handler order remain
+the Plan 01 / Plan 05 order.
+
+Plan contributions retain stable process-lifetime original-slot and Win32
+handler storage while assembling requests; these addresses are required by
+the concrete plan. Complete native validation precedes this preparation.
+All export targets resolve before native runtime binding and audio publication,
+and no executable mutation or hook installation occurs during either stage.
+Audio owns the prepared backend settings and optional ASIO-close contribution.
+Absolute Judgement checks the prepared audio route before installation and
+the committed DirectSound hook after export installation.
+
+`NesysStartup` validates the optional service ping plan first, prepares only
+service hooks/state, installs ping when enabled, then installs the service
+export plan. A disabled fixed-RVA feature contributes no sites and does not
+trigger NESYS build detection. It has no game input/audio/RFID/renderer
+initialization calls.
+
+`StartupFailure` formats configuration, image detection, native-plan/memory,
+installation, export-hook, shared-handler registration, and feature-preparation
+errors. Both roots return preparation errors to the ABI boundary; after
+installation starts, failures immediately use the common terminal reporter.
+There is no recoverable startup FALSE branch or reverse patch rollback.
+Feature invariant failures still depend directly on `gc_fatal_process`.
+
+### Local ownership after extraction
+
+| Domain | Final owners and preserved boundaries |
+|---|---|
+| Audio | AudioFeature owns startup contribution/publication; AudioBackendComposition owns concrete backend dependencies; AudioDiagnostics owns reporting; DirectSound, WASAPI, ASIO and mixer implementations retain their lifetimes. AudioPatch is removed. |
+| Framerate | FramerateFeature and FramerateTimingRuntime own composition/shared cadence state. FrameTimingHooks owns 11 manifest callbacks, EffectTimingHooks owns 34 plus NavigatorAdvance/OuterFrame, MenuTimingHooks owns 6. The profile owns all 53 bindings and 17 write contracts. Typed originals belong to their callback group. |
+| Widescreen | WindowedWidescreenFeature owns startup and the runtime lifetime; WindowHooks, RenderHooks, GameplayHudHooks and NetworkStatusHooks own their respective callbacks/originals. One profile still supplies all 49 operations, including 13 read-only dependencies. |
+| Configuration | Validation/InputValidation, RegistryValidation and ExperimentalValidation own domain checks. CommonValidation retains leaf validation and ValidationContext owns the error sink. ConfigCompiler retains immutable settings construction and original cross-domain ordering. |
+| NESYS diagnostics | RequestTracking owns bounded tracking tables, locks, correlation and rate policy; RequestFormatting consumes emission snapshots; RequestHooks owns 15 detours and their typed originals. GamePipeWin32Observers remains the shared-dispatch adapter. |
+
+The old FrameratePatch, WindowedWidescreenPatch, RequestPipelineDiagnostics,
+AudioPatch and TransitionalVersionedStartup source/header pairs are removed.
+Source comparisons against the Plan 08 snapshot found 59 Framerate helper/
+callback bodies unchanged after original-owner renaming and moving a default
+argument to its declaration; its binder and one enum moved to their owning
+profile/header. All 83 Widescreen helper/callback bodies match after typed
+original-owner renaming. All 57 NESYS diagnostics functions match after
+whitespace normalization, including the 15 API adapters. The comparison is a
+source audit, not native execution evidence.
+
+### Target graph after cleanup
+
+All arrows below mean a direct downward dependency; common include roots are
+omitted. No feature or shared target depends on Loader, either startup root,
+or iDmac.
+
+| Target | Ownership / relevant direct project dependencies |
+|---|---|
+| gc_platform_win32 | Strict UTF conversion, Win32 error text, CloseHandle-only UniqueHandle |
+| gc_fatal_process | Common log-once/modal-once/abort policy |
+| gc_hooking | Concrete export resolution, collision validation and process-lifetime SafetyHook ownership; depends on gc_fatal_process |
+| gc_runtime_image | Checked PE headers, image bounds, byte reads/writes, page protection, instruction-cache flush and global vtable-slot exchange |
+| gc_game_version | Executable identity/hash, build selection and complete-plan validation; gc_runtime_image, gc_hooking, gc_platform_win32 |
+| gc_patch_game_compatibility, gc_patch_song_unlock, gc_patch_countdown | Respective profiles; gc_game_version |
+| gc_patch_auto_play | Profile, marker and callbacks; gc_game_version, gc_fatal_process |
+| gc_patch_absolute_judgement | Profile, native adapter, clock/history/scheduler; gc_game_version, gc_audio, gc_input, gc_timing, gc_fatal_process |
+| gc_patch_framerate | Timing profile, policies and callback groups; gc_game_version, gc_audio, gc_patch_absolute_judgement, gc_timing, gc_fatal_process, gc_platform_win32 |
+| gc_patch_switch_input | Switch profile, callbacks and policy moved out of gc_input; gc_game_version, gc_input_types, gc_fatal_process |
+| gc_test_mode_timing | Profile, carrier ABI, timing model/store/callbacks; gc_patch_absolute_judgement, gc_game_version, gc_fatal_process |
+| gc_renderer_device_loss | Renderer profile, callbacks and resource lifecycle; gc_game_version, gc_fatal_process |
+| gc_windowed_widescreen | Profile, callback groups, compositor/window/render policies; gc_game_version, gc_renderer_device_loss, gc_fatal_process |
+| gc_loader_startup | Common configuration/process preparation, typed failures and approved-plan executor; gc_config, gc_system_path, gc_test_mode_storage, gc_game_version, gc_fatal_process, gc_logging, gc_platform_win32 |
+| gc_game_startup | GameStartup, complete game plan, game export plan and Win32 handler composition; gc_loader_startup, all game feature targets, gc_audio, gc_input, gc_nesys, gc_rfid_feature, gc_win32_hooks, gc_japanese_locale_compatibility, gc_crash_dump, gc_logging |
+| gc_nesys_startup | NesysStartup and optional NESYS versioned plan; gc_loader_startup, gc_nesys, gc_japanese_locale_compatibility, gc_logging |
+| iDmacDrv32 | DllMain and unchanged exported driver entry points; gc_game_startup, gc_nesys_startup, gc_input, gc_logging |
+
+The coherent Audio, Input, Config, RFID, Logging, NESYS and related domain
+targets remain. `gc_runtime_patches` is gone. Only `gc_hooking` directly names
+`safetyhook::safetyhook`; its callback ABI types are available transitively.
+Only `gc_config` names reflect-cpp's target/include root. ConfigGUI consumes it
+through gc_config. The final DLL directly links project-owned targets only.
+
+### Final legacy and native ownership audit
+
+- No MinHook name, MH_* API, dependency, source-package input or library link
+  remains in CMakeLists.txt, cmake, src, tests or tools.
+- No native PatchTransaction/HookTransaction owner, reverse rollback operation,
+  transitional startup entry, or coarse patch target remains.
+  `StartupHookTransactionInvalid` is a retained Absolute Judgement diagnostic
+  predicate/string for missing originals; it is not a transaction implementation.
+  Renderer/compositor restoration describes device state, not executable rollback.
+- SafetyHook object construction/ownership is confined to
+  Platform/Win32/Hooking. Feature profiles carry callbacks and original publishers.
+- All loaded-image Win32 memory mechanics are in RuntimeImage. The duplicate
+  ImageIdentity PE reader was removed; both image bounds and executable identity
+  use ReadLoadedImageHeaders. NESYS launcher's remaining WriteProcessMemory
+  writes its DLL-path argument into a suspended child, the pre-existing
+  non-image-patch exception documented above.
+- Win32Hooks contains no RFID/storage/system-path/NESYS implementation include.
+  Feature handlers and observer composition remain in their owners and Loader.
+- Version-specific RVAs, byte/pointer contracts, continuation targets and native
+  layout values remain profile-owned. Plan 09 changes profile callback binding
+  locality without changing the native facts established in Plans 06a-06h.
+  Each enabled family reaches exactly one role-specific barrier.
+- The 72-row seam ledger above remains final: 48 removed, 24 retained, zero
+  undecided. Every removed symbol was searched again across src/tests/tools
+  with no remaining declaration or caller. All retained rows' paths still name
+  their current production owners; OriginalKernel32Api remains the documented
+  private dispatcher-slot rename. UTF and HANDLE exceptions above still apply.
+
+The versioned union remains 171 mutation/interception sites: 170 game sites and
+one NESYS ping site. Game profiles additionally own 64 read-only dependencies
+(234 total game union rows); enabled configuration/backend plans select the
+appropriate subset. Framerate retains 17 writes/53 detours, Widescreen retains
+18 inline/16 mid/2 global-slot mutations plus 13 dependencies, and ASIO close
+retains its single ordinary-close site. The frozen non-versioned export
+inventory and role gates are unchanged.
+
+### Final build, artifact and packaging evidence
+
+Fresh verification used new empty directories
+`build-cleanup-final-msvc32-debug` and
+`build-cleanup-final-msvc32-release`. The existing presets were used with
+`-B` overrides and all seven FETCHCONTENT_SOURCE_DIR overrides copied from the
+existing cleanup Debug cache. Existing build and dependency caches were kept;
+no `--fresh`, shell file deletion, or filesystem move was used. Source
+removals used CLion patch operations.
+
+| Configuration | Fresh configure/build | Final CTest | CRT / optimization |
+|---|---|---|---|
+| Debug | Exit 0; 571 full build steps; final registration-formatting change rebuilt successfully | 6/6, exit 0 | /MTd, /Od, /RTC1 |
+| RelWithDebInfo | Exit 0; 571 full build steps on final source | 6/6, exit 0 | /MT, /O2, /DNDEBUG |
+
+Tests are Win32Primitives, ExactWasapiClockCompatibility, ExactHistoryIsolation,
+ImeSuppression, ConfigContract and ConfigStartup. Configuration extraction also
+passed ConfigContract separately after each domain move. No native fake,
+binary fixture, hook engine mock, source-grep test or target-process test was
+introduced. The fresh dependency builds each emitted 16 D9025 warning-level
+override warnings and one SafetyHook NOMINMAX redefinition warning; configure
+emitted the existing Zydis/Zycore minimum-version deprecations. No project-source
+compiler warning or build error remains.
+
+Final Release dumpbin /headers, /exports and /dependents agree with the ABI
+baseline: 14C x86, PE32 10B, file characteristics 2102, GUI subsystem 2, DLL
+characteristics 140, image base 10000000, 15 names/functions with ordinal base 1.
+Debug and Release retain every name/ordinal in the frozen table, including
+iDmacDrvProgramDownload at 15 and the undecorated __cdecl export names.
+The driver source, .def, presets and CRT options are unchanged. No dynamic
+MSVC CRT import appears.
+
+| Final DLL | SHA-256 |
+|---|---|
+| Debug | FB0648D8680B87AF72B639F9814F0D146C94218BDFA2FBEC80C324DCD5ECEAEF |
+| RelWithDebInfo | 9D173A60753107AA7A23976E9CA53E9BD1DAB8A5C1CD10DF377179704166E95C |
+
+Both dist directories contain exactly iDmacDrv32.dll, ConfigGUI.exe,
+config.toml and card.txt. CardReaderTestClient.exe remains under its tool build
+directory. Output paths, target/test names and runtime file set are preserved.
+The corresponding-source target and archive implementation are unchanged;
+both fresh configurations generated the exact seven-dependency input manifest,
+including revisions and tree hashes, with no MinHook input. This is packaging
+metadata/source review; a new corresponding-source ZIP was not generated.
+
+Build/CTest/ABI logs are under the session TEMP directory with
+`gcloader-cleanup-09-fresh-{debug,release}-{configure,build,tests}.log`,
+`gcloader-cleanup-09-final-debug-{build,tests}.log`, and
+`gcloader-cleanup-09-final-abi.txt`. Final diff whitespace checks passed.
+
+### Runtime acceptance still pending
+
+| Runtime row | Status |
+|---|---|
+| Known clean and legacy-patched game 4.71 startup; unknown-hash rejection/complete local verification | Untested in a target process |
+| NESYS 2.97 startup, enabled/disabled ping, request diagnostics and child launch | Untested in a target process |
+| Shared Win32 consumers, locale, crash handling, RFID and storage routing | Untested in a target process |
+| DirectSound, WASAPI and ASIO hardware/callback/ordinary-close lifetimes | Untested in a target process |
+| AutoPlay, unlocks, Switch input, Absolute Judgement, Framerate and Countdown | Untested in a target process |
+| Test Mode Timing persistence/carrier, renderer reset and widescreen window/HUD/network behavior | Untested in a target process |
+| ConfigGUI interaction and every future older-build profile | Untested; older profiles still require complete native evidence |
+
+The cleanup is complete at the source/build boundary. Nothing was deployed,
+and no game, NESYS or GUI acceptance run was performed. Those checks remain
+a separate explicitly authorized task.

@@ -1,3 +1,7 @@
+#include "Patches/WindowedWidescreen/WindowHooks.h"
+#include "Patches/WindowedWidescreen/GameplayHudHooks.h"
+#include "Patches/WindowedWidescreen/NetworkStatusHooks.h"
+#include "Patches/WindowedWidescreen/RenderHooks.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenProfile.h"
 #include <algorithm>
 namespace gc::windowed_widescreen {
@@ -271,4 +275,123 @@ std::expected<PreparedWidescreenPlan, game_version::PlanError> BuildWidescreenPl
             result.operations[result.count++] = ReadOnlyContractOperation{row.contract};
     return result;
 }
+}
+
+namespace gc::windowed_widescreen {
+    game_version::VersionedOperation detail::BindWidescreenHook(
+        WidescreenContractSite site, const game_version::SiteContract& contract, void* expected) noexcept {
+        using namespace game_version;
+        using namespace detail;
+        switch (site) {
+        case WidescreenContractSite::config_apply:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&ConfigApplyDetour),
+                hooking::OriginalPublisher::To(&g_window_originals.config_apply)};
+        case WidescreenContractSite::window_device_create:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&WindowDeviceDetour),
+                hooking::OriginalPublisher::To(&g_window_originals.window_device_create)};
+        case WidescreenContractSite::logical_resolution_set:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&LogicalResolutionSetDetour),
+                hooking::OriginalPublisher::To(&g_window_originals.logical_resolution_set)};
+        case WidescreenContractSite::logical_target_width_set:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&LogicalTargetDimensionSetDetour< RenderDimensionAxis::width, WidescreenContractSite::logical_target_width_set>),
+                hooking::OriginalPublisher::To(&g_window_originals.logical_target_width_set)};
+        case WidescreenContractSite::logical_target_height_set:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&LogicalTargetDimensionSetDetour< RenderDimensionAxis::height, WidescreenContractSite::logical_target_height_set>),
+                hooking::OriginalPublisher::To(&g_window_originals.logical_target_height_set)};
+        case WidescreenContractSite::frame_begin:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&FrameBeginDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.frame_begin)};
+        case WidescreenContractSite::frame_end:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&FrameEndDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.frame_end)};
+        case WidescreenContractSite::task_dispatch:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&TaskDispatchDetour),
+                hooking::OriginalPublisher::To(&g_gameplay_originals.task_dispatch)};
+        case WidescreenContractSite::network_status_movie_clip_accept: {
+            auto bound = contract;
+            auto* replacement = reinterpret_cast<void*>(&NetworkStatusMovieClipAcceptDetour);
+            bound.original.size = sizeof(expected);
+            std::memcpy(bound.original.bytes.data(), &expected, sizeof(expected));
+            bound.installed.size = sizeof(replacement);
+            std::memcpy(bound.installed.bytes.data(), &replacement, sizeof(replacement));
+            return GlobalVtableSlotOperation{bound, expected, replacement,
+                runtime_image::VtableOriginalPublisher::To(&g_network_originals.network_status_movie_clip_accept)};
+        }
+        case WidescreenContractSite::network_status_shape_draw_visit: {
+            auto bound = contract;
+            auto* replacement = reinterpret_cast<void*>(&NetworkStatusShapeDrawVisitDetour);
+            bound.original.size = sizeof(expected);
+            std::memcpy(bound.original.bytes.data(), &expected, sizeof(expected));
+            bound.installed.size = sizeof(replacement);
+            std::memcpy(bound.installed.bytes.data(), &replacement, sizeof(replacement));
+            return GlobalVtableSlotOperation{bound, expected, replacement,
+                runtime_image::VtableOriginalPublisher::To(&g_network_originals.network_status_shape_draw_visit)};
+        }
+        case WidescreenContractSite::test_mode_native_begin:
+            return MidHookOperation{contract, &TestModeNativeBeginMid};
+        case WidescreenContractSite::test_mode_native_end:
+            return MidHookOperation{contract, &TestModeNativeEndMid};
+        case WidescreenContractSite::screen_width_int:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&ScreenWidthIntDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.screen_width_int)};
+        case WidescreenContractSite::screen_height_int:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&ScreenHeightIntDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.screen_height_int)};
+        case WidescreenContractSite::screen_width_float:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&ScreenWidthFloatDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.screen_width_float)};
+        case WidescreenContractSite::screen_height_float:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&ScreenHeightFloatDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.screen_height_float)};
+        case WidescreenContractSite::target_width_int:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&TargetWidthIntDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.target_width_int)};
+        case WidescreenContractSite::target_height_int:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&TargetHeightIntDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.target_height_int)};
+        case WidescreenContractSite::target_width_float:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&TargetWidthFloatDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.target_width_float)};
+        case WidescreenContractSite::target_height_float:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&TargetHeightFloatDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.target_height_float)};
+        case WidescreenContractSite::viewport_reset:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&ViewportResetDetour),
+                hooking::OriginalPublisher::To(&g_render_originals.viewport_reset)};
+        case WidescreenContractSite::mouse_debug_poll:
+            return InlineHookOperation{contract, reinterpret_cast<void*>(&MouseDebugPollDetour),
+                hooking::OriginalPublisher::To(&g_window_originals.mouse_debug_poll)};
+        case WidescreenContractSite::gameplay_stage_background:
+            return MidHookOperation{contract, &GameplayStageBackgroundMid};
+        case WidescreenContractSite::gameplay_track:
+            return MidHookOperation{contract, &GameplayTrackMid};
+        case WidescreenContractSite::gameplay_effects:
+            return MidHookOperation{contract, &GameplayEffectsMid};
+        case WidescreenContractSite::gameplay_effects_end:
+            return MidHookOperation{contract, &GameplayEffectsEndMid};
+        case WidescreenContractSite::gameplay_hud_projection:
+            return MidHookOperation{contract, &GameplayHudProjectionMid};
+        case WidescreenContractSite::combo_begin:
+            return MidHookOperation{contract, &ComboBeginMid};
+        case WidescreenContractSite::combo_end:
+            return MidHookOperation{contract, &ComboEndMid};
+        case WidescreenContractSite::gameplay_feedback_draw_begin:
+            return MidHookOperation{contract, &GameplayFeedbackDrawBeginMid};
+        case WidescreenContractSite::gameplay_feedback_draw_end:
+            return MidHookOperation{contract, &GameplayFeedbackDrawEndMid};
+        case WidescreenContractSite::note_tutorial_group_begin:
+            return MidHookOperation{contract, &NoteTutorialGroupBeginMid};
+        case WidescreenContractSite::note_tutorial_group_end:
+            return MidHookOperation{contract, &NoteTutorialGroupEndMid};
+        case WidescreenContractSite::clip_gate:
+            return MidHookOperation{contract, &ClipGateMid};
+        case WidescreenContractSite::reset_pre:
+            return MidHookOperation{contract, &renderer_device_loss::OnWidescreenBeforeReset};
+        case WidescreenContractSite::reset_post:
+            return MidHookOperation{contract, &renderer_device_loss::OnWidescreenAfterReset};
+        default: return ReadOnlyContractOperation{contract};
+        }
+    }
+
+
 }

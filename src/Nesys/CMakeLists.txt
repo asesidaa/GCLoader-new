@@ -3,7 +3,9 @@ target_include_directories(gc_nesys_process PUBLIC
         ${PROJECT_SOURCE_DIR}/src)
 
 add_library(gc_nesys_diagnostics STATIC
-        Diagnostics/RequestPipelineDiagnostics.cpp
+        Diagnostics/RequestTracking.cpp
+        Diagnostics/RequestFormatting.cpp
+        Diagnostics/RequestHooks.cpp
         Diagnostics/GamePipeWin32Observers.cpp)
 target_include_directories(gc_nesys_diagnostics PUBLIC
         ${PROJECT_SOURCE_DIR}/src
@@ -31,6 +33,5 @@ target_link_libraries(gc_nesys PUBLIC
         gc_nesys_process
         gc_nesys_diagnostics
         gc_nesys_network_config
-        safetyhook::safetyhook
 )
 target_link_libraries(gc_nesys PRIVATE gc_platform_win32)

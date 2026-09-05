@@ -1,5 +1,8 @@
 add_library(gc_config STATIC
         ConfigCompiler.cpp
+        Validation/InputValidation.cpp
+        Validation/RegistryValidation.cpp
+        Validation/ExperimentalValidation.cpp
         ConfigDocument.cpp
         ConfigError.cpp
         DeclaredEnum.h
