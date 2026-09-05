@@ -13,9 +13,9 @@ add_library(gc_runtime_patches STATIC
         AutoPlay/AutoPlayMarker.cpp
         AutoPlay/AutoPlayPatch.cpp
         AutoPlay/AutoPlayPatchDiagnostics.cpp
-        GameCompatibility/GameBinaryPatch.cpp
-        GameCompatibility/GameBinaryPatchDiagnostics.cpp
-        SongUnlock/SongUnlockPatch.cpp
+        AutoPlay/AutoPlayProfile.cpp
+        GameCompatibility/GameCompatibilityProfile.cpp
+        SongUnlock/SongUnlockProfile.cpp
         Framerate/FramerateAuthoredClock.cpp
         Framerate/GameplaySongClock.cpp
         Framerate/FramerateDiagnostics.cpp
@@ -47,6 +47,7 @@ target_include_directories(gc_runtime_patches PUBLIC
 )
 target_link_libraries(gc_runtime_patches PUBLIC
         gc_runtime_image
+        gc_game_version
         gc_fatal_process
         gc_audio
         gc_input

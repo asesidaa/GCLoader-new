@@ -59,7 +59,7 @@ std::expected<void, HookError> HookRegistry::Install(const ValidatedHookPlan& pl
                     detour && detour->publishes_original) {
                     current.stage = HookStage::publish_original;
                     if (!detour->original.publish(detour->original.storage,
-                            std::get<safetyhook::InlineHook>(shared->hook))) AbortHookError(current);
+                            std::get<safetyhook::InlineHook>(shared->hook))) return std::unexpected(current);
                 }
                 continue;
             }
@@ -72,30 +72,30 @@ std::expected<void, HookError> HookRegistry::Install(const ValidatedHookPlan& pl
                 auto created = safetyhook::InlineHook::create(
                     reinterpret_cast<void*>(request.target.address), detour->detour,
                     safetyhook::InlineHook::StartDisabled);
-                if (!created) AbortHookError(LibraryError(HookStage::create, request, created.error()));
+                if (!created) return std::unexpected(LibraryError(HookStage::create, request, created.error()));
                 auto& hook = record.hook.emplace<safetyhook::InlineHook>(std::move(*created));
                 current.stage = HookStage::publish_original;
                 if (detour->publishes_original &&
-                    !detour->original.publish(detour->original.storage, hook)) AbortHookError(current);
+                    !detour->original.publish(detour->original.storage, hook)) return std::unexpected(current);
                 current.stage = HookStage::enable;
                 const auto enabled = hook.enable();
-                if (!enabled) AbortHookError(LibraryError(HookStage::enable, request, enabled.error()));
+                if (!enabled) return std::unexpected(LibraryError(HookStage::enable, request, enabled.error()));
             } else {
                 auto created = safetyhook::MidHook::create(
                     reinterpret_cast<void*>(request.target.address), std::get<MidDetour>(request.payload).callback,
                     safetyhook::MidHook::StartDisabled);
-                if (!created) AbortHookError(LibraryError(HookStage::create, request, created.error()));
+                if (!created) return std::unexpected(LibraryError(HookStage::create, request, created.error()));
                 auto& hook = record.hook.emplace<safetyhook::MidHook>(std::move(*created));
                 current.stage = HookStage::enable;
                 const auto enabled = hook.enable();
-                if (!enabled) AbortHookError(LibraryError(HookStage::enable, request, enabled.error()));
+                if (!enabled) return std::unexpected(LibraryError(HookStage::enable, request, enabled.error()));
             }
             record.enabled = true;
         }
         return {};
     } catch (...) {
         current.win32_error = ERROR_NOT_ENOUGH_MEMORY;
-        AbortHookError(current);
+        return std::unexpected(current);
     }
 }
 bool HookRegistry::IsInstalled(HookIdentity identity) noexcept {

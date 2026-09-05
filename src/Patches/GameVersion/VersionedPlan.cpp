@@ -1,10 +1,40 @@
 #include "Patches/GameVersion/VersionedPlan.h"
 #include <algorithm>
 #include <numeric>
+#include <cstring>
 #include <type_traits>
 
 namespace gc::game_version {
+const SiteContract& ContractOf(const VersionedOperation& operation) noexcept {
+    return std::visit([](const auto& value) -> const SiteContract& { return value.contract; }, operation);
+}
 namespace {
+bool PointerMatches(const runtime_image::BytePattern& bytes, const void* pointer) noexcept {
+    if (bytes.size != sizeof(void*)) return false;
+    return std::memcmp(bytes.bytes.data(), &pointer, sizeof(pointer)) == 0;
+}
+bool ValidPayload(const VersionedOperation& operation) noexcept {
+    return std::visit([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        const auto& contract = value.contract;
+        if constexpr (std::is_same_v<T, BytePatchOperation>) {
+            return contract.kind == VersionedOperationKind::byte_patch &&
+                value.replacement == contract.installed &&
+                (value.memory_kind == runtime_image::MemoryKind::code ||
+                 value.memory_kind == runtime_image::MemoryKind::data);
+        } else if constexpr (std::is_same_v<T, InlineHookOperation>) {
+            return contract.kind == VersionedOperationKind::inline_hook &&
+                value.detour && value.original.storage && value.original.publish;
+        } else if constexpr (std::is_same_v<T, MidHookOperation>) {
+            return contract.kind == VersionedOperationKind::mid_hook && value.callback;
+        } else if constexpr (std::is_same_v<T, GlobalVtableSlotOperation>) {
+            return contract.kind == VersionedOperationKind::global_vtable_slot &&
+                value.expected && value.replacement &&
+                PointerMatches(contract.original, value.expected) &&
+                PointerMatches(contract.installed, value.replacement);
+        } else return contract.kind == VersionedOperationKind::read_only_contract;
+    }, operation);
+}
 bool ValidFeature(FeatureId feature) noexcept {
     return feature >= FeatureId::game_compatibility && feature <= FeatureId::nesys_ping;
 }
@@ -56,13 +86,13 @@ std::expected<void, PlanError> VersionedPlanSet::Require(FeatureRequirement requ
     catch (...) { return std::unexpected(PlanError{.stage = PlanStage::allocation, .feature = requirement.feature}); }
 }
 std::expected<void, PlanError> VersionedPlanSet::Add(FeaturePlan plan) noexcept {
-    if (!ValidFeature(plan.feature) || plan.sites.empty())
+    if (!ValidFeature(plan.feature) || plan.operations.empty())
         return std::unexpected(PlanError{.stage = PlanStage::invalid_plan, .feature = plan.feature});
     for (const auto& existing : features_)
         if (existing.feature == plan.feature)
             return std::unexpected(PlanError{.stage = PlanStage::duplicate_feature, .feature = plan.feature});
     try {
-        features_.push_back({plan.feature, {plan.sites.begin(), plan.sites.end()},
+        features_.push_back({plan.feature, {plan.operations.begin(), plan.operations.end()},
             {plan.install_after.begin(), plan.install_after.end()}});
         return {};
     } catch (...) {
@@ -102,15 +132,18 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
                 !std::ranges::any_of(requirements_, [&](const auto& r) { return r.feature == feature.feature; }))
                 return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
                     .context = context, .feature = feature.feature});
-            for (std::size_t i = 0; i < feature.sites.size(); ++i) {
-                const auto& site = feature.sites[i];
+            for (std::size_t i = 0; i < feature.operations.size(); ++i) {
+                const auto& operation = feature.operations[i];
+                const auto& site = ContractOf(operation);
                 const bool hook = site.kind == VersionedOperationKind::inline_hook ||
                     site.kind == VersionedOperationKind::mid_hook;
                 const bool patch = site.kind == VersionedOperationKind::byte_patch ||
                     site.kind == VersionedOperationKind::global_vtable_slot;
-                if (site.feature != feature.feature || site.site.empty() || !site.rva ||
+                if (!ValidPayload(operation) || site.feature != feature.feature || site.site.empty() || !site.rva ||
                     !site.protected_span || !ValidPattern(site.original) ||
                     site.original.size > site.protected_span ||
+                    (hook && site.protected_span < 5) ||
+                    ((hook || ReadOnly(site)) && site.installed.size != 0) ||
                     (!hook && !patch && !ReadOnly(site)) ||
                     (patch && (!ValidPattern(site.installed) ||
                         site.original.size != site.installed.size ||
@@ -125,7 +158,7 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
                         site.known_disposition == SiteDisposition::already_installed))
                     return std::unexpected(Error(PlanStage::invalid_plan, context, site));
                 for (std::size_t j = 0; j < i; ++j)
-                    if (feature.sites[j].site == site.site)
+                    if (ContractOf(feature.operations[j]).site == site.site)
                         return std::unexpected(Error(PlanStage::duplicate_site, context, site));
             }
             for (std::size_t i = 0; i < feature.install_after.size(); ++i) {
@@ -158,7 +191,8 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
         std::vector<ApprovedSite> sites;
         for (const auto index : order) {
             const auto begin = sites.size();
-            for (const auto& contract : features_[index].sites) {
+            for (const auto& operation : features_[index].operations) {
+                const auto& contract = ContractOf(operation);
                 const runtime_image::SiteIdentity identity{FeatureName(contract.feature), contract.site, contract.rva};
                 const auto address = image.Resolve(identity, contract.protected_span);
                 if (!address) {
@@ -169,10 +203,10 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
                 }
                 const auto disposition = ReadOnly(contract) ? SiteDisposition::verify_only :
                     context.proof == DetectionProof::exact_known_hash ? contract.known_disposition : SiteDisposition::install;
-                sites.push_back({contract, disposition, *address});
+                sites.push_back({operation, disposition, *address});
             }
             std::stable_sort(sites.begin() + begin, sites.end(), [](const auto& left, const auto& right) {
-                return left.contract.install_order < right.contract.install_order;
+                return left.contract().install_order < right.contract().install_order;
             });
         }
         std::vector<std::size_t> addresses(sites.size());
@@ -182,31 +216,31 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
         });
         for (std::size_t i = 0; i < addresses.size(); ++i) {
             const auto& left = sites[addresses[i]];
-            if (ReadOnly(left.contract)) continue;
+            if (ReadOnly(left.contract())) continue;
             for (std::size_t j = i + 1; j < addresses.size(); ++j) {
                 const auto& right = sites[addresses[j]];
-                if (right.address >= left.address + left.contract.protected_span) break;
-                if (ReadOnly(right.contract)) continue;
+                if (right.address >= left.address + left.contract().protected_span) break;
+                if (ReadOnly(right.contract())) continue;
                 // Identical vtable registration is one physical mutation.
-                if (left.contract.kind == VersionedOperationKind::global_vtable_slot &&
-                    right.contract.kind == VersionedOperationKind::global_vtable_slot &&
-                    left.address == right.address && left.contract.original == right.contract.original &&
-                    left.contract.installed == right.contract.installed && left.disposition == right.disposition)
+                if (left.contract().kind == VersionedOperationKind::global_vtable_slot &&
+                    right.contract().kind == VersionedOperationKind::global_vtable_slot &&
+                    left.address == right.address && left.contract().original == right.contract().original &&
+                    left.contract().installed == right.contract().installed && left.disposition == right.disposition)
                     continue;
-                auto error = Error(PlanStage::overlap, context, right.contract);
+                auto error = Error(PlanStage::overlap, context, right.contract());
                 error.address = right.address;
-                error.peer_feature = left.contract.feature;
-                error.peer_site = left.contract.site;
+                error.peer_feature = left.contract().feature;
+                error.peer_site = left.contract().site;
                 return std::unexpected(error);
             }
         }
         if (context.proof == DetectionProof::complete_local_contract) {
             for (const auto& site : sites) {
                 const auto actual = image.Read(
-                    {FeatureName(site.contract.feature), site.contract.site, site.contract.rva},
-                    site.contract.original.size);
-                if (!actual || *actual != site.contract.original) {
-                    auto error = Error(PlanStage::contract_mismatch, context, site.contract);
+                    {FeatureName(site.contract().feature), site.contract().site, site.contract().rva},
+                    site.contract().original.size);
+                if (!actual || *actual != site.contract().original) {
+                    auto error = Error(PlanStage::contract_mismatch, context, site.contract());
                     error.address = site.address;
                     error.observed = actual ? *actual : actual.error().observed;
                     if (!actual) error.memory = actual.error();
@@ -217,17 +251,17 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
         // Matching vtable consumers share the first physical exchange. Keep
         // every original contract in preflight, but execute the slot only once.
         for (std::size_t i = 0; i < sites.size(); ++i) {
-            if (sites[i].contract.kind != VersionedOperationKind::global_vtable_slot) continue;
+            if (sites[i].contract().kind != VersionedOperationKind::global_vtable_slot) continue;
             for (std::size_t j = 0; j < i; ++j) {
-                if (sites[j].contract.kind == VersionedOperationKind::global_vtable_slot &&
+                if (sites[j].contract().kind == VersionedOperationKind::global_vtable_slot &&
                     sites[j].address == sites[i].address) {
                     sites[i].disposition = SiteDisposition::verify_only;
                     break;
                 }
             }
         }
-        // Approval owns a copy of every contract. No writes or hooks occur above.
-        return ApprovedVersionedPlan{context, std::move(sites)};
+        // Approval owns a copy of every contract and concrete operation. No writes or hooks occur above.
+        return ApprovedVersionedPlan{context, image, std::move(sites)};
     } catch (...) {
         return std::unexpected(PlanError{.stage = PlanStage::allocation, .context = context});
     }

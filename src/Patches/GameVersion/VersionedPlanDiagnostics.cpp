@@ -2,8 +2,7 @@
 #include <format>
 
 namespace gc::game_version {
-namespace {
-std::string Bytes(const runtime_image::BytePattern& pattern) {
+std::string FormatContractBytes(const runtime_image::BytePattern& pattern) {
     std::string result;
     for (const auto value : pattern.view()) {
         if (!result.empty()) result += ' ';
@@ -11,6 +10,7 @@ std::string Bytes(const runtime_image::BytePattern& pattern) {
     }
     return result;
 }
+namespace {
 const char* BuildName(const SelectedBuild& build) noexcept {
     return std::holds_alternative<GameBuild>(build) ? "groove_coaster_471" : "nesys_current_supported";
 }
@@ -29,6 +29,11 @@ const char* VariantName(const SelectedVariant& variant) noexcept {
     }
     return "unknown";
 }
+}
+std::string FormatPlanContext(const PlanContext& context) {
+    return std::format("build={} variant={} proof={}",
+        BuildName(context.build), VariantName(context.variant),
+        context.proof == DetectionProof::exact_known_hash ? "exact_known_hash" : "complete_local_contract");
 }
 const char* PlanStageName(PlanStage stage) noexcept {
     switch (stage) {
@@ -52,7 +57,7 @@ diagnostics::FatalProcessReport FormatPlanError(const PlanError& error) {
         PlanStageName(error.stage), BuildName(error.context.build), VariantName(error.context.variant),
         error.context.proof == DetectionProof::exact_known_hash ? "exact_known_hash" : "complete_local_contract",
         FeatureName(error.feature), error.site, error.rva, error.address,
-        Bytes(error.expected_original), Bytes(error.expected_installed), Bytes(error.observed));
+        FormatContractBytes(error.expected_original), FormatContractBytes(error.expected_installed), FormatContractBytes(error.observed));
     if (error.peer_feature)
         log += std::format(" peer_feature={} peer_site={}", FeatureName(*error.peer_feature), error.peer_site);
     if (error.memory)

@@ -1,8 +1,13 @@
 #include "Loader/GameVersionedStartupPlan.h"
+#include "Config/ConfigCompiler.h"
+#include "Patches/GameCompatibility/GameCompatibilityProfile.h"
+#include "Patches/AutoPlay/AutoPlayProfile.h"
+#include "Patches/SongUnlock/SongUnlockProfile.h"
+#include <array>
 
 namespace gc::loader {
 std::expected<PreparedGameVersionedStartup, StartupPlanError>
-PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfig&) noexcept {
+PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfig& settings) noexcept {
     if (process_module != GetModuleHandleW(nullptr))
         return std::unexpected(StartupPlanError{.detection = game_version::DetectionError{
             game_version::DetectionStage::identity,
@@ -14,8 +19,36 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
     game_version::VersionedPlanSet plans;
     if (const auto required = plans.Require({game_version::FeatureId::game_compatibility, true, true}); !required)
         return std::unexpected(StartupPlanError{.plan = required.error()});
-    // Plans 06a-06h add feature builders explicitly here. Until they do, the
-    // missing mandatory profile rejects preparation; this entry point is dormant.
+    const auto build = std::visit([](const auto& value) { return value.build; }, *detected);
+    const auto variant = std::visit([](const auto& value) { return value.variant; }, *detected);
+    const auto append = [&](std::expected<game_version::FeaturePlan, game_version::PlanError> profile,
+                            std::span<const game_version::FeatureId> dependencies = {})
+        -> std::expected<void, StartupPlanError> {
+        if (!profile) return std::unexpected(StartupPlanError{.plan = profile.error()});
+        profile->install_after = dependencies;
+        if (const auto added = plans.Add(*profile); !added)
+            return std::unexpected(StartupPlanError{.plan = added.error()});
+        return {};
+    };
+    if (const auto result = append(game_compatibility::BuildGameCompatibilityPlan(build, variant)); !result)
+        return std::unexpected(result.error());
+    constexpr std::array after_compatibility{game_version::FeatureId::game_compatibility};
+    constexpr std::array after_auto_play{game_version::FeatureId::auto_play};
+    if (settings.enable_auto_play()) {
+        if (const auto required = plans.Require({game_version::FeatureId::auto_play, false, true}); !required)
+            return std::unexpected(StartupPlanError{.plan = required.error()});
+        if (const auto result = append(auto_play::BuildAutoPlayPlan(build, variant, true), after_compatibility); !result)
+            return std::unexpected(result.error());
+    }
+    if (settings.unlock_all_songs_and_difficulties()) {
+        if (const auto required = plans.Require({game_version::FeatureId::song_unlock, false, true}); !required)
+            return std::unexpected(StartupPlanError{.plan = required.error()});
+        if (const auto result = append(song_unlock::BuildSongUnlockPlan(build, variant, true),
+                settings.enable_auto_play() ? after_auto_play : after_compatibility); !result)
+            return std::unexpected(result.error());
+    }
+    // Remaining families join in06b-06h. This entry point stays dormant until
+    // Plan09 switches all versioned startup through one complete barrier.
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});
     auto selection = std::visit([&](auto& value) {

@@ -17,10 +17,7 @@
 #include "plog/Log.h"
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
-#include "Patches/AutoPlay/AutoPlayPatch.h"
-#include "Patches/GameCompatibility/GameBinaryPatch.h"
-#include "Patches/GameCompatibility/GameBinaryPatchDiagnostics.h"
-#include "Patches/SongUnlock/SongUnlockPatch.h"
+#include "Loader/TransitionalVersionedStartup.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
@@ -74,24 +71,6 @@ namespace
         PLOG_INFO
             << "Loader log level="
             << gc::logging::LoaderLogLevelName(level);
-    }
-
-    [[noreturn]] void AbortGameBinaryPatchFatal(
-        const gc::game_compatibility::GameBinaryPatchError& error) noexcept
-    {
-        try
-        {
-            auto diagnostic =
-                gc::game_compatibility::BuildGameBinaryPatchFatalDiagnostic(error);
-            gc::diagnostics::AbortProcess({
-                std::move(diagnostic.log),
-                std::move(diagnostic.modal),
-                std::move(diagnostic.title)});
-        }
-        catch (...)
-        {
-            gc::diagnostics::AbortProcess({});
-        }
     }
 
     std::wstring Utf8ToWideOrFallback(std::string_view value)
@@ -384,17 +363,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     << " api=ImmDisableIME"
                     << " thread_selector=all";
 
-                const auto game_binary_patch =
-                    gc::game_compatibility::GameBinaryPatchInit();
-                if (!game_binary_patch)
-                {
-                    AbortGameBinaryPatchFatal(game_binary_patch.error());
-                }
-                PLOG_INFO
-                    << "GameBinaryPatch: state="
-                    << gc::game_compatibility::GameBinaryImageStateName(
-                        game_binary_patch->state)
-                    << " sites=" << game_binary_patch->site_count;
+                gc::loader::InstallTransitionalGameCompatibility();
             }
 
             std::error_code current_path_error;
@@ -501,19 +470,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 return FALSE;
             }
 
-            if (!gc::auto_play::AutoPlayPatchInit(
-                    settings.enable_auto_play()))
-            {
-                PLOG_ERROR << "AutoPlayPatch: fail-closed DLL attach";
-                return FALSE;
-            }
-
-            if (!gc::song_unlock::SongUnlockPatchInit(
-                settings.unlock_all_songs_and_difficulties()))
-            {
-                PLOG_ERROR << "SongUnlockPatch: fail-closed DLL attach";
-                return FALSE;
-            }
+            gc::loader::InstallTransitionalOptionalPatches(settings);
 
             gc::loader::InstallGameNonVersionedHooks(hModule, settings, game.system_root);
 

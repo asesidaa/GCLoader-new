@@ -7,6 +7,8 @@ namespace gc::hooking {
 class HookRegistry final {
 public:
     [[nodiscard]] static HookRegistry& ProcessLifetime() noexcept;
+    // Failure retains created hooks; the caller must publish and abort without
+    // proceeding to another operation. There is no retry or rollback path.
     [[nodiscard]] std::expected<void, HookError> Install(const ValidatedHookPlan&) noexcept;
     [[nodiscard]] bool IsInstalled(HookIdentity) noexcept;
     HookRegistry(const HookRegistry&) = delete;

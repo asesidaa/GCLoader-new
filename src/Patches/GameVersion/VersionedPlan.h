@@ -1,6 +1,7 @@
 #pragma once
 #include "Patches/GameVersion/BuildDetector.h"
 #include "Patches/RuntimeImage/RuntimeImage.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 #include <vector>
 
 namespace gc::game_version {
@@ -20,9 +21,29 @@ struct SiteContract final {
     std::uint32_t install_order{};
     SiteDisposition known_disposition{SiteDisposition::install};
 };
+struct BytePatchOperation final {
+    SiteContract contract;
+    runtime_image::BytePattern replacement;
+    runtime_image::MemoryKind memory_kind{runtime_image::MemoryKind::code};
+};
+struct InlineHookOperation final {
+    SiteContract contract;
+    void* detour{};
+    hooking::OriginalPublisher original;
+};
+struct MidHookOperation final { SiteContract contract; safetyhook::MidHookFn callback{}; };
+struct GlobalVtableSlotOperation final {
+    SiteContract contract;
+    void* expected{};
+    void* replacement{};
+};
+struct ReadOnlyContractOperation final { SiteContract contract; };
+using VersionedOperation = std::variant<BytePatchOperation, InlineHookOperation,
+    MidHookOperation, GlobalVtableSlotOperation, ReadOnlyContractOperation>;
+[[nodiscard]] const SiteContract& ContractOf(const VersionedOperation&) noexcept;
 struct FeaturePlan final {
     FeatureId feature;
-    std::span<const SiteContract> sites;
+    std::span<const VersionedOperation> operations;
     std::span<const FeatureId> install_after;
 };
 using SelectedBuild = std::variant<GameBuild, nesys_service::NesysBuild>;
@@ -51,20 +72,26 @@ struct PlanError final {
     std::optional<runtime_image::RuntimeImageError> memory;
 };
 struct ApprovedSite final {
-    SiteContract contract;
+    VersionedOperation operation;
     SiteDisposition disposition;
     std::uintptr_t address{};
+    [[nodiscard]] const SiteContract& contract() const noexcept { return ContractOf(operation); }
 };
 class VersionedPlanSet;
 class ApprovedVersionedPlan final {
 public:
     [[nodiscard]] std::span<const ApprovedSite> sites() const noexcept { return sites_; }
     [[nodiscard]] const PlanContext& context() const noexcept { return context_; }
+    [[nodiscard]] std::uintptr_t image_base() const noexcept { return image_base_; }
+    [[nodiscard]] std::uint32_t image_size() const noexcept { return image_size_; }
 private:
     friend class VersionedPlanSet;
-    ApprovedVersionedPlan(PlanContext context, std::vector<ApprovedSite> sites)
-        : context_(context), sites_(std::move(sites)) {}
+    ApprovedVersionedPlan(PlanContext context, const runtime_image::RuntimeImage& image,
+                          std::vector<ApprovedSite> sites)
+        : context_(context), image_base_(image.base()), image_size_(image.size()), sites_(std::move(sites)) {}
     PlanContext context_;
+    std::uintptr_t image_base_{};
+    std::uint32_t image_size_{};
     std::vector<ApprovedSite> sites_;
 };
 class VersionedPlanSet final {
@@ -78,7 +105,7 @@ public:
 private:
     struct OwnedFeature final {
         FeatureId feature;
-        std::vector<SiteContract> sites;
+        std::vector<VersionedOperation> operations;
         std::vector<FeatureId> install_after;
     };
     [[nodiscard]] std::expected<ApprovedVersionedPlan, PlanError>
