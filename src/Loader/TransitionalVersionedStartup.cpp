@@ -2,6 +2,8 @@
 #include "Loader/VersionedStartupExecutor.h"
 #include "Config/ConfigCompiler.h"
 #include "Input/Switch/SwitchInputPatch.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementProfile.h"
 #include "Patches/GameVersion/VersionedPlanDiagnostics.h"
 #include "Patches/GameCompatibility/GameCompatibilityProfile.h"
 #include "Patches/AutoPlay/AutoPlayProfile.h"
@@ -16,7 +18,8 @@ namespace {
 // and post-config optional slots until every family joins the dormant complete
 // plan. Delete this adapter at Plan09; intermediate DLLs are not release checkpoints.
 std::optional<game_version::GameDetection> g_detection;
-void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> profile) {
+void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> profile,
+             const absolute_judgement::JudgementSettings* judgement = nullptr) {
     using namespace game_version;
     if (!profile) diagnostics::AbortProcess(FormatPlanError(profile.error()));
     const auto image = runtime_image::RuntimeImage::MainModule();
@@ -32,11 +35,17 @@ void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> p
     if (!approved) diagnostics::AbortProcess(FormatPlanError(approved.error()));
     if (const auto prepared = auto_play::PrepareAutoPlayRuntime(*approved); !prepared)
         diagnostics::AbortProcess(FormatPlanError(prepared.error()));
+    if (judgement) {
+        if (const auto prepared = absolute_judgement::PrepareAbsoluteJudgementRuntime(
+                *approved, *image, *judgement); !prepared)
+            diagnostics::AbortProcess(FormatPlanError(prepared.error()));
+    }
     if (const auto result = InstallApprovedVersionedPlan(
             *approved, *image, hooking::HookRegistry::ProcessLifetime()); !result)
         diagnostics::AbortProcess(FormatStartupInstallError(result.error()));
     auto_play::ActivateAutoPlayMarker(*approved);
     switch_input::ActivateSwitchInput(*approved);
+    if (judgement) absolute_judgement::CompleteAbsoluteJudgementStartup(*judgement);
 }
 }
 void InstallTransitionalGameCompatibility() noexcept {
@@ -69,6 +78,15 @@ void InstallTransitionalSwitchInput(const switch_input::SwitchInputSettings& set
         Install(std::visit([&](const auto& selection) {
             return switch_input::BuildSwitchInputPlan(selection.build, selection.variant, settings);
         }, *g_detection));
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalAbsoluteJudgement(const absolute_judgement::JudgementSettings& settings) noexcept {
+    try {
+        if (!g_detection) diagnostics::AbortProcess({});
+        Install(std::visit([&](const auto& selection) {
+            return absolute_judgement::BuildAbsoluteJudgementPlan(
+                selection.build, selection.variant, settings.enabled());
+        }, *g_detection), &settings);
     } catch (...) { diagnostics::AbortProcess({}); }
 }
 void InstallTransitionalOptionalPatches(const config::ValidatedConfig& settings) noexcept {

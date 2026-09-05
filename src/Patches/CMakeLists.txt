@@ -4,6 +4,7 @@ add_subdirectory(GameVersion)
 add_library(gc_runtime_patches STATIC
         AbsoluteJudgement/AbsoluteJudgementDiagnostics.cpp
         AbsoluteJudgement/AbsoluteJudgementPatch.cpp
+        AbsoluteJudgement/AbsoluteJudgementProfile.cpp
         AbsoluteJudgement/AbsoluteJudgementRuntime.cpp
         AbsoluteJudgement/JudgementClockResolver.cpp
         AbsoluteJudgement/JudgementHistory.cpp

@@ -1,6 +1,6 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
 
-#include "Audio/AudioContractFatal.h"
+#include "Diagnostics/FatalProcess.h"
 
 #include <plog/Log.h>
 
@@ -1780,12 +1780,10 @@ namespace gc::absolute_judgement
                 static_cast<std::size_t>(result.size), emergency.size() - 1);
             emergency[size] = '\0';
             PLOG_FATAL << std::string_view(emergency.data(), size);
-            gc::audio::FailAudioContract(
-                gc::audio::AudioContractFatalReason::AbsoluteJudgementContractFailure,
-                static_cast<std::uint64_t>(record.predicate),
-                record.stage_generation,
-                static_cast<std::uint64_t>(record.category),
-                record.operand_count > 0 ? record.operands[0] : 0);
+            gc::diagnostics::AbortProcess({
+                "AbsoluteJudgement: aborting after active-stage-fatal",
+                L"GCLoader stopped after an absolute judgement invariant failed. Check loader-log.txt.",
+                L"GCLoader absolute judgement runtime error"});
         }
 
         const auto counters = diagnostics.SnapshotCounters();
@@ -1887,11 +1885,9 @@ namespace gc::absolute_judgement
             PLOG_FATAL << "AbsoluteJudgement: fatal_record_truncated=1";
         }
 
-        gc::audio::FailAudioContract(
-            gc::audio::AudioContractFatalReason::AbsoluteJudgementContractFailure,
-            static_cast<std::uint64_t>(record.predicate),
-            record.stage_generation,
-            static_cast<std::uint64_t>(record.category),
-            record.operand_count > 0 ? record.operands[0] : 0);
+        gc::diagnostics::AbortProcess({
+                "AbsoluteJudgement: aborting after active-stage-fatal",
+                L"GCLoader stopped after an absolute judgement invariant failed. Check loader-log.txt.",
+                L"GCLoader absolute judgement runtime error"});
     }
 } // namespace gc::absolute_judgement

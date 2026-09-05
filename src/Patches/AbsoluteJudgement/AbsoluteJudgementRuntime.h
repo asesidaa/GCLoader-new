@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Audio/AudioSettings.h"
+#include "Patches/AbsoluteJudgement/NativeJudgementAbi.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Audio/ExactJudgementTimeline.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
@@ -15,7 +16,8 @@
 namespace gc::absolute_judgement
 {
     void InitializeAbsoluteJudgementRuntime(
-        std::uintptr_t executable_base,
+        const native_abi::NativeLayout& layout,
+        const native_abi::NativeTargets& targets,
         gc::audio::AudioBackend audio_backend,
         bool absolute_judgement_enabled,
         std::optional<gc::audio::ExactJudgementTimelineDomain>

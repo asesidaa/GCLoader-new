@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Patches/AbsoluteJudgement/JudgementSettings.h"
+#include "Patches/AbsoluteJudgement/NativeJudgementAbi.h"
+#include "Patches/GameVersion/VersionedPlan.h"
 
 #include <cstdint>
 
@@ -8,8 +10,21 @@
 
 namespace gc::absolute_judgement
 {
-    void InitializeAbsoluteJudgementOrFatal(
-        JudgementSettings settings) noexcept;
+    namespace detail {
+        struct QueryOriginals final {
+            native_abi::PressedFn pressed{};
+            native_abi::HeldFn held{};
+            native_abi::ReleasedFn released{};
+            native_abi::DirectionFn direction{};
+            native_abi::HeldAgeFn held_age{};
+            native_abi::TimingGradeFn timing_grade{};
+        };
+        extern QueryOriginals g_originals;
+    }
+    [[nodiscard]] std::expected<void, game_version::PlanError>
+    PrepareAbsoluteJudgementRuntime(const game_version::ApprovedVersionedPlan&,
+        const runtime_image::RuntimeImage&, const JudgementSettings&) noexcept;
+    void CompleteAbsoluteJudgementStartup(const JudgementSettings&) noexcept;
 
     void HookGameplayInitialization(safetyhook::Context& context) noexcept;
     void HookSemanticStageEntry(safetyhook::Context& context) noexcept;

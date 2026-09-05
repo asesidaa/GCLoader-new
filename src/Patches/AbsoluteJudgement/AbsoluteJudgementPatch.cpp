@@ -1,219 +1,30 @@
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
-
-#include "Audio/AudioPatch.h"
-#include "Input/Polling/GameplayTransitionJournal.h"
-#include "Patches/AbsoluteJudgement/AbsoluteJudgementDiagnostics.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementProfile.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
 #include "Patches/AbsoluteJudgement/JudgementScope.h"
-#include "Patches/AbsoluteJudgement/NativeJudgementAbi.h"
-#include "Logging/SessionLog.h"
-#include "SystemPath/StartupFatal.h"
-
+#include "Audio/AudioPatch.h"
+#include "Input/Polling/GameplayTransitionJournal.h"
+#include "Diagnostics/FatalProcess.h"
 #include <Windows.h>
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-// ReSharper disable once CppUnusedIncludeDirective
-#include <cstdlib>
 #include <format>
 #include <limits>
-#include <optional>
-#include <span>
 #include <string_view>
-#include <utility>
-
 #include "plog/Log.h"
 
-namespace gc::absolute_judgement
-{
-    namespace
-    {
-        using namespace native_abi;
+namespace gc::absolute_judgement {
+namespace detail { QueryOriginals g_originals; }
+namespace {
+native_abi::NativeLayout g_layout{};
+bool g_observe_lifecycle{};
 
-        enum class NativeSite : std::size_t
-        {
-            GameplayInitialization,
-            SemanticStageEntry,
-            SemanticStageExit,
-            LoopGuard,
-            Pressed,
-            Held,
-            Released,
-            Direction,
-            HeldAge,
-        };
-
-        enum class InstallStage : std::size_t
-        {
-            Preflight,
-            Create,
-            Enable,
-        };
-
-        struct NativeSiteContract final
-        {
-            NativeSite site{};
-            std::uintptr_t rva{};
-            std::span<const std::uint8_t> expected;
-        };
-
-        struct InstallFailure final
-        {
-            InstallStage stage{};
-            NativeSite site{};
-        };
-
-        struct AbsoluteJudgementHooks final
-        {
-            safetyhook::MidHook gameplay_initialization;
-            safetyhook::MidHook semantic_stage_entry;
-            safetyhook::MidHook semantic_stage_exit;
-            safetyhook::MidHook loop_guard;
-            safetyhook::InlineHook pressed;
-            safetyhook::InlineHook held;
-            safetyhook::InlineHook released;
-            safetyhook::InlineHook direction;
-            safetyhook::InlineHook held_age;
-            safetyhook::InlineHook timing_grade;
-        };
-
-        inline constexpr std::array<NativeSiteContract, 9> kSiteContracts{
-            {
-                {
-                    NativeSite::GameplayInitialization,
-                    kGameplayInitializationRva,
-                    kGameplayInitializationPrefix
-                },
-                {
-                    NativeSite::SemanticStageEntry,
-                    kSemanticStageEntryRva,
-                    kSemanticStageEntryPrefix
-                },
-                {
-                    NativeSite::SemanticStageExit,
-                    kSemanticStageExitRva,
-                    kSemanticStageExitPrefix
-                },
-                {NativeSite::LoopGuard, kLoopGuardRva, kLoopGuardPrefix},
-                {NativeSite::Pressed, kPressedRva, kPressedPrefix},
-                {NativeSite::Held, kHeldRva, kHeldPrefix},
-                {NativeSite::Released, kReleasedRva, kReleasedPrefix},
-                {NativeSite::Direction, kDirectionRva, kDirectionPrefix},
-                {NativeSite::HeldAge, kHeldAgeRva, kHeldAgePrefix},
-            }
-        };
-
-        inline constexpr std::array<std::string_view, 9> kSiteNames{
-            {
-                "gameplay_initialization",
-                "semantic_stage_entry",
-                "semantic_stage_exit",
-                "loop_guard",
-                "pressed",
-                "held",
-                "released",
-                "direction",
-                "held_age",
-            }
-        };
-
-        AbsoluteJudgementHooks g_hooks;
-        AbsoluteJudgementHooks* g_active_hooks{};
-        std::atomic_bool g_startup_fatal_published{false};
-
-        [[noreturn]] void PublishStartupFatal(
-            const AbsoluteJudgementFatalPredicate predicate,
-            const std::string_view details) noexcept
-        {
-            std::array < char, 1024 > log{};
-            const auto formatted = std::format_to_n(
-                log.data(),
-                log.size() - 1,
-                "AbsoluteJudgement: startup-fatal predicate_id={} predicate={} {}",
-                static_cast<unsigned>(predicate),
-                AbsoluteJudgementFatalPredicateName(predicate),
-                details);
-            const auto size = (std::min)(
-                static_cast<std::size_t>(formatted.size), log.size() - 1);
-            log[size] = '\0';
-            gc::system_path::PublishStartupFatal(
-                g_startup_fatal_published,
-                std::string_view(log.data(), size),
-                L"GCLoader could not install the absolute-time judgement patch. "
-                L"The supported game executable and enabled-mode configuration are "
-                L"required. Check loader-log.txt for the exact failed stage and site.",
-                L"GCLoader absolute-time judgement setup error",
-                27);
-            PLOG_FATAL << std::format(
-                "AbsoluteJudgement: startup-fatal predicate_id={} predicate={}"
-                " prior_predicate_id={} prior_predicate={}"
-                " expression=startup_fatal_publisher_returned",
-                static_cast<unsigned>(
-                    AbsoluteJudgementFatalPredicate::StartupFatalPublisherReturned),
-                AbsoluteJudgementFatalPredicateName(
-                    AbsoluteJudgementFatalPredicate::StartupFatalPublisherReturned),
-                static_cast<unsigned>(predicate),
-                AbsoluteJudgementFatalPredicateName(predicate));
-            gc::session_log::FlushActiveProcessLog();
-            SetLastError(ERROR_SUCCESS);
-            const auto terminated = TerminateProcess(GetCurrentProcess(), 0xA7);
-            const auto last_error = GetLastError();
-            PLOG_FATAL << std::format(
-                "AbsoluteJudgement: startup-fatal predicate_id={} predicate={}"
-                " return_value={} last_error={}",
-                static_cast<unsigned>(
-                    AbsoluteJudgementFatalPredicate::TerminateProcessReturned),
-                AbsoluteJudgementFatalPredicateName(
-                    AbsoluteJudgementFatalPredicate::TerminateProcessReturned),
-                terminated,
-                last_error);
-            gc::session_log::FlushActiveProcessLog();
-            RaiseFailFastException(nullptr, nullptr, 0);
-            std::abort();
-        }
-
-        [[noreturn]] void PublishInstallFailure(
-            const InstallFailure failure) noexcept
-        {
-            const auto site = static_cast<std::size_t>(failure.site);
-            if (site >= kSiteNames.size())
-            {
-                PublishStartupFatal(
-                    AbsoluteJudgementFatalPredicate::StartupHookTransactionInvalid,
-                    "stage=unknown site=out_of_range");
-            }
-            switch (failure.stage)
-            {
-            case InstallStage::Preflight:
-                PublishStartupFatal(
-                    AbsoluteJudgementFatalPredicate::StartupSitePrefixMismatch,
-                    std::format(
-                        "stage=preflight site={} rva={}",
-                        kSiteNames[site],
-                        kSiteContracts[site].rva));
-            case InstallStage::Create:
-                PublishStartupFatal(
-                    AbsoluteJudgementFatalPredicate::StartupHookCreateFailed,
-                    std::format(
-                        "stage=create site={} rva={}",
-                        kSiteNames[site],
-                        kSiteContracts[site].rva));
-            case InstallStage::Enable:
-                PublishStartupFatal(
-                    AbsoluteJudgementFatalPredicate::StartupHookEnableFailed,
-                    std::format(
-                        "stage=enable site={} rva={}",
-                        kSiteNames[site],
-                        kSiteContracts[site].rva));
-            }
-            PublishStartupFatal(
-                AbsoluteJudgementFatalPredicate::StartupHookTransactionInvalid,
-                std::format(
-                    "stage={} site={}",
-                    static_cast<std::size_t>(failure.stage),
-                    site));
-        }
+[[noreturn]] void PublishStartupFatal(
+    AbsoluteJudgementFatalPredicate predicate, std::string_view details) noexcept {
+    diagnostics::AbortProcess({
+        std::format("AbsoluteJudgement: startup-fatal predicate_id={} predicate={} {}",
+            static_cast<unsigned>(predicate), AbsoluteJudgementFatalPredicateName(predicate), details),
+        L"GCLoader could not prepare absolute-time judgement. Check loader-log.txt.",
+        L"GCLoader absolute-time judgement setup error"});
+}
 
         [[nodiscard]] bool AddAddress(
             const std::uintptr_t base,
@@ -277,7 +88,7 @@ namespace gc::absolute_judgement
             std::uint32_t tune_manager{};
             if (!AddSignedAddress(
                 static_cast<std::uintptr_t>(context.ebp),
-                kSemanticStageTuneStackOffset,
+                g_layout.semantic_stage_tune_stack_offset,
                 &slot) || !ReadU32Safe(slot, &tune_manager))
             {
                 FailAbsoluteJudgementActiveStage(
@@ -285,7 +96,7 @@ namespace gc::absolute_judgement
                     AbsoluteJudgementFatalReason::NativeStateMismatch,
                     {
                         context.ebp,
-                        static_cast<std::uint64_t>(kSemanticStageTuneStackOffset)
+                        static_cast<std::uint64_t>(g_layout.semantic_stage_tune_stack_offset)
                     });
             }
             if (tune_manager == 0)
@@ -296,276 +107,6 @@ namespace gc::absolute_judgement
                     {slot, tune_manager});
             }
             return static_cast<std::uintptr_t>(tune_manager);
-        }
-
-        [[nodiscard]] bool PrefixMatchesSafe(
-            const std::uintptr_t address,
-            const std::span<const std::uint8_t> expected) noexcept
-        {
-            if (address == 0 || expected.empty())
-            {
-                return false;
-            }
-            __try
-            {
-                const auto* bytes = reinterpret_cast<volatile const std::uint8_t*>(
-                    address);
-                for (std::size_t index = 0; index < expected.size(); ++index)
-                {
-                    if (bytes[index] != expected[index])
-                    {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                return false;
-            }
-        }
-
-        template <typename Hook>
-        [[nodiscard]] bool EnableHook(Hook& hook)
-        {
-            const auto result = hook.enable();
-            return result.has_value();
-        }
-
-        [[nodiscard]] std::optional<InstallFailure> InstallHooks(
-            const std::uintptr_t executable_base,
-            const bool install_judgement_hooks)
-        {
-            const std::span<const NativeSiteContract> contracts =
-                install_judgement_hooks
-                    ? std::span<const NativeSiteContract>{kSiteContracts}
-                    : std::span<const NativeSiteContract>{kSiteContracts}.first(3);
-            for (const auto& contract : contracts)
-            {
-                std::uintptr_t address{};
-                if (!AddAddress(executable_base, contract.rva, &address) ||
-                    !PrefixMatchesSafe(address, contract.expected))
-                {
-                    return InstallFailure{
-                        .stage = InstallStage::Preflight,
-                        .site = contract.site,
-                    };
-                }
-            }
-
-            // Install directly into stable process-lifetime storage. Once any hook is
-            // enabled its handler must never observe a moved-from trampoline owner.
-            auto& pending = g_hooks;
-            auto created_gameplay_initialization = safetyhook::MidHook::create(
-                reinterpret_cast<void*>(
-                    executable_base + kGameplayInitializationRva),
-                &HookGameplayInitialization,
-                safetyhook::MidHook::StartDisabled);
-            if (!created_gameplay_initialization)
-            {
-                return InstallFailure{
-                    InstallStage::Create, NativeSite::GameplayInitialization
-                };
-            }
-            pending.gameplay_initialization =
-                std::move(*created_gameplay_initialization);
-
-            auto created_semantic_stage_entry = safetyhook::MidHook::create(
-                reinterpret_cast<void*>(
-                    executable_base + kSemanticStageEntryRva),
-                &HookSemanticStageEntry,
-                safetyhook::MidHook::StartDisabled);
-            if (!created_semantic_stage_entry)
-            {
-                return InstallFailure{
-                    InstallStage::Create, NativeSite::SemanticStageEntry
-                };
-            }
-            pending.semantic_stage_entry =
-                std::move(*created_semantic_stage_entry);
-
-            auto created_semantic_stage_exit = safetyhook::MidHook::create(
-                reinterpret_cast<void*>(
-                    executable_base + kSemanticStageExitRva),
-                &HookSemanticStageExit,
-                safetyhook::MidHook::StartDisabled);
-            if (!created_semantic_stage_exit)
-            {
-                return InstallFailure{
-                    InstallStage::Create, NativeSite::SemanticStageExit
-                };
-            }
-            pending.semantic_stage_exit = std::move(*created_semantic_stage_exit);
-
-            if (!install_judgement_hooks)
-            {
-                g_active_hooks = &pending;
-                if (!EnableHook(pending.semantic_stage_exit))
-                {
-                    return InstallFailure{
-                        InstallStage::Enable, NativeSite::SemanticStageExit
-                    };
-                }
-                if (!EnableHook(pending.gameplay_initialization))
-                {
-                    return InstallFailure{
-                        InstallStage::Enable,
-                        NativeSite::GameplayInitialization
-                    };
-                }
-                if (!EnableHook(pending.semantic_stage_entry))
-                {
-                    return InstallFailure{
-                        InstallStage::Enable, NativeSite::SemanticStageEntry
-                    };
-                }
-                return std::nullopt;
-            }
-
-            auto created_loop_guard = safetyhook::MidHook::create(
-                reinterpret_cast<void*>(executable_base + kLoopGuardRva),
-                &HookLoopGuard,
-                safetyhook::MidHook::StartDisabled);
-            if (!created_loop_guard)
-            {
-                return InstallFailure{InstallStage::Create, NativeSite::LoopGuard};
-            }
-            pending.loop_guard = std::move(*created_loop_guard);
-
-            auto created_pressed = safetyhook::InlineHook::create(
-                reinterpret_cast<void*>(executable_base + kPressedRva),
-                reinterpret_cast<void*>(&HookPressed),
-                safetyhook::InlineHook::StartDisabled);
-            if (!created_pressed)
-            {
-                return InstallFailure{InstallStage::Create, NativeSite::Pressed};
-            }
-            pending.pressed = std::move(*created_pressed);
-
-            auto created_held = safetyhook::InlineHook::create(
-                reinterpret_cast<void*>(executable_base + kHeldRva),
-                reinterpret_cast<void*>(&HookHeld),
-                safetyhook::InlineHook::StartDisabled);
-            if (!created_held)
-            {
-                return InstallFailure{InstallStage::Create, NativeSite::Held};
-            }
-            pending.held = std::move(*created_held);
-
-            auto created_released = safetyhook::InlineHook::create(
-                reinterpret_cast<void*>(executable_base + kReleasedRva),
-                reinterpret_cast<void*>(&HookReleased),
-                safetyhook::InlineHook::StartDisabled);
-            if (!created_released)
-            {
-                return InstallFailure{InstallStage::Create, NativeSite::Released};
-            }
-            pending.released = std::move(*created_released);
-
-            auto created_direction = safetyhook::InlineHook::create(
-                reinterpret_cast<void*>(executable_base + kDirectionRva),
-                reinterpret_cast<void*>(&HookDirection),
-                safetyhook::InlineHook::StartDisabled);
-            if (!created_direction)
-            {
-                return InstallFailure{InstallStage::Create, NativeSite::Direction};
-            }
-            pending.direction = std::move(*created_direction);
-
-            auto created_held_age = safetyhook::InlineHook::create(
-                reinterpret_cast<void*>(executable_base + kHeldAgeRva),
-                reinterpret_cast<void*>(&HookHeldAge),
-                safetyhook::InlineHook::StartDisabled);
-            if (!created_held_age)
-            {
-                return InstallFailure{InstallStage::Create, NativeSite::HeldAge};
-            }
-            pending.held_age = std::move(*created_held_age);
-
-            g_active_hooks = &pending;
-            if (!EnableHook(pending.pressed))
-            {
-                return InstallFailure{InstallStage::Enable, NativeSite::Pressed};
-            }
-            if (!EnableHook(pending.held))
-            {
-                return InstallFailure{InstallStage::Enable, NativeSite::Held};
-            }
-            if (!EnableHook(pending.released))
-            {
-                return InstallFailure{InstallStage::Enable, NativeSite::Released};
-            }
-            if (!EnableHook(pending.direction))
-            {
-                return InstallFailure{InstallStage::Enable, NativeSite::Direction};
-            }
-            if (!EnableHook(pending.held_age))
-            {
-                return InstallFailure{InstallStage::Enable, NativeSite::HeldAge};
-            }
-            if (!EnableHook(pending.loop_guard))
-            {
-                return InstallFailure{InstallStage::Enable, NativeSite::LoopGuard};
-            }
-            if (!EnableHook(pending.semantic_stage_exit))
-            {
-                return InstallFailure{
-                    InstallStage::Enable, NativeSite::SemanticStageExit
-                };
-            }
-            if (!EnableHook(pending.gameplay_initialization))
-            {
-                return InstallFailure{
-                    InstallStage::Enable, NativeSite::GameplayInitialization
-                };
-            }
-            // The semantic entry hook is the final operational commit point.
-            if (!EnableHook(pending.semantic_stage_entry))
-            {
-                return InstallFailure{
-                    InstallStage::Enable, NativeSite::SemanticStageEntry
-                };
-            }
-
-            return std::nullopt;
-        }
-
-        [[nodiscard]] bool InstallTimingGradeDiagnosticHook(
-            const std::uintptr_t executable_base)
-        {
-            std::uintptr_t address{};
-            if (!AddAddress(executable_base, kTimingGradeRva, &address) ||
-                !PrefixMatchesSafe(address, kTimingGradePrefix))
-            {
-                PLOG_WARNING << std::format(
-                    "AbsoluteJudgement: diagnostic-hook feature=timing_grade"
-                    " available=0 stage=preflight rva={:#x}",
-                    kTimingGradeRva);
-                return false;
-            }
-
-            auto created = safetyhook::InlineHook::create(
-                reinterpret_cast<void*>(address),
-                reinterpret_cast<void*>(&HookTimingGrade),
-                safetyhook::InlineHook::StartDisabled);
-            if (!created)
-            {
-                PLOG_WARNING << std::format(
-                    "AbsoluteJudgement: diagnostic-hook feature=timing_grade"
-                    " available=0 stage=create rva={:#x}",
-                    kTimingGradeRva);
-                return false;
-            }
-            g_hooks.timing_grade = std::move(*created);
-            if (!EnableHook(g_hooks.timing_grade))
-            {
-                PLOG_WARNING << std::format(
-                    "AbsoluteJudgement: diagnostic-hook feature=timing_grade"
-                    " available=0 stage=enable rva={:#x}",
-                    kTimingGradeRva);
-                return false;
-            }
-            return true;
         }
 
         template <typename Value>
@@ -589,6 +130,7 @@ namespace gc::absolute_judgement
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
     void HookGameplayInitialization(safetyhook::Context& context) noexcept
     {
+        if (!g_observe_lifecycle) return;
         ObserveAbsoluteJudgementGameplayInitialization(context.ecx);
     }
 
@@ -596,6 +138,7 @@ namespace gc::absolute_judgement
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
     void HookSemanticStageEntry(safetyhook::Context& context) noexcept
     {
+        if (!g_observe_lifecycle) return;
         BeginAbsoluteJudgementSemanticStage(
             ReadSemanticTuneManagerOrFatal(context));
     }
@@ -604,6 +147,7 @@ namespace gc::absolute_judgement
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
     void HookSemanticStageExit(safetyhook::Context& context) noexcept
     {
+        if (!g_observe_lifecycle) return;
         EndAbsoluteJudgementSemanticStage(
             ReadSemanticTuneManagerOrFatal(context));
     }
@@ -627,14 +171,14 @@ namespace gc::absolute_judgement
     {
         if (ActiveJudgementScopeData() == nullptr)
         {
-            return g_active_hooks->pressed.unsafe_thiscall<std::uint8_t>(
+            return detail::g_originals.pressed(
                 self, id, frame);
         }
         const auto query = QueryJudgementPressed(
             self, AbsoluteJudgementStageGeneration(), id, frame);
         if (query.disposition == JudgementQueryDisposition::Inactive)
         {
-            return g_active_hooks->pressed.unsafe_thiscall<std::uint8_t>(
+            return detail::g_originals.pressed(
                 self, id, frame);
         }
         return AnswerQueryOrFatal(query);
@@ -648,14 +192,14 @@ namespace gc::absolute_judgement
     {
         if (ActiveJudgementScopeData() == nullptr)
         {
-            return g_active_hooks->held.unsafe_thiscall<std::uint8_t>(
+            return detail::g_originals.held(
                 self, id, frame);
         }
         const auto query = QueryJudgementHeld(
             self, AbsoluteJudgementStageGeneration(), id, frame);
         if (query.disposition == JudgementQueryDisposition::Inactive)
         {
-            return g_active_hooks->held.unsafe_thiscall<std::uint8_t>(
+            return detail::g_originals.held(
                 self, id, frame);
         }
         return AnswerQueryOrFatal(query);
@@ -669,14 +213,14 @@ namespace gc::absolute_judgement
     {
         if (ActiveJudgementScopeData() == nullptr)
         {
-            return g_active_hooks->released.unsafe_thiscall<std::uint8_t>(
+            return detail::g_originals.released(
                 self, id, frame);
         }
         const auto query = QueryJudgementReleased(
             self, AbsoluteJudgementStageGeneration(), id, frame);
         if (query.disposition == JudgementQueryDisposition::Inactive)
         {
-            return g_active_hooks->released.unsafe_thiscall<std::uint8_t>(
+            return detail::g_originals.released(
                 self, id, frame);
         }
         return AnswerQueryOrFatal(query);
@@ -692,7 +236,7 @@ namespace gc::absolute_judgement
     {
         if (ActiveJudgementScopeData() == nullptr)
         {
-            return g_active_hooks->direction.unsafe_thiscall<int>(
+            return detail::g_originals.direction(
                 self, booster, x, y, frame);
         }
         const auto query = QueryJudgementDirection(
@@ -704,7 +248,7 @@ namespace gc::absolute_judgement
             frame);
         if (query.disposition == JudgementQueryDisposition::Inactive)
         {
-            return g_active_hooks->direction.unsafe_thiscall<int>(
+            return detail::g_originals.direction(
                 self, booster, x, y, frame);
         }
         return AnswerQueryOrFatal(query);
@@ -717,13 +261,13 @@ namespace gc::absolute_judgement
     {
         if (ActiveJudgementScopeData() == nullptr)
         {
-            return g_active_hooks->held_age.unsafe_thiscall<int>(self, id);
+            return detail::g_originals.held_age(self, id);
         }
         const auto query = QueryJudgementHeldAge(
             self, AbsoluteJudgementStageGeneration(), id);
         if (query.disposition == JudgementQueryDisposition::Inactive)
         {
-            return g_active_hooks->held_age.unsafe_thiscall<int>(self, id);
+            return detail::g_originals.held_age(self, id);
         }
         return AnswerQueryOrFatal(query);
     }
@@ -740,11 +284,11 @@ namespace gc::absolute_judgement
         if (record)
         {
             note_target_ms = static_cast<std::int32_t>(
-                note[kTimingGradeNoteTargetFloatIndex]);
+                note[g_layout.timing_grade_note_target_float_index]);
         }
 
         const int native_grade =
-            g_active_hooks->timing_grade.unsafe_thiscall<int>(
+            detail::g_originals.timing_grade(
                 self, note, recognition_ms);
         if (record)
         {
@@ -757,105 +301,94 @@ namespace gc::absolute_judgement
         return native_grade;
     }
 
-    void InitializeAbsoluteJudgementOrFatal(
-        // The patch boundary owns its immutable startup snapshot.
-        // ReSharper disable once CppPassValueParameterByConstReference
-        JudgementSettings settings) noexcept
-    {
-        const bool enabled = settings.enabled();
-        if (!gc::input::PrepareGameplayTransitionTransport(enabled))
-        {
-            PublishStartupFatal(
-                AbsoluteJudgementFatalPredicate::
-                InputQpcFrequencyInvalidAtStageEntry,
-                "stage=transport_prepare qpc_frequency_unavailable=1");
-        }
 
-        const auto target_fps = settings.target_fps();
-        const auto input_rate_hz = settings.input_rate_hz();
-        const auto backend = settings.audio_backend();
-        const bool audio_hook_committed = gc::audio::IsAudioHookCommitted();
-        const bool lifecycle_hooks_required =
-            enabled || backend == gc::audio::AudioBackend::asio;
-        JudgementDiagnostics().SetStartupTargetFps(target_fps);
-        if (!lifecycle_hooks_required)
-        {
-            JudgementDiagnostics().LogStartup({
-                .enabled = false,
-                .target_fps = target_fps,
-                .input_rate_hz = input_rate_hz,
-                .backend = gc::audio::AudioBackendName(backend),
-                .audio_hook_committed = audio_hook_committed,
-                .installed_site_count = 0,
-                .timing_grade_diagnostic_hook = false,
-            });
-            if (target_fps != 60)
-            {
-                PLOG_WARNING
-                    << "AbsoluteJudgement: stock judgement at non-60 target FPS "
-                    "has no FPS-independent judgement guarantee";
-            }
-            return;
-        }
+std::expected<void, game_version::PlanError> PrepareAbsoluteJudgementRuntime(
+    const game_version::ApprovedVersionedPlan& plan,
+    const runtime_image::RuntimeImage& image, const JudgementSettings& settings) noexcept {
+    using namespace game_version;
+    const auto invalid = [&](std::string_view site) {
+        return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+            .context = plan.context(), .feature = FeatureId::absolute_judgement, .site = site});
+    };
+    const auto* build = std::get_if<GameBuild>(&plan.context().build);
+    const auto* variant = std::get_if<GameImageVariant>(&plan.context().variant);
+    const auto* profile = build && variant ? ProfileFor(*build, *variant) : nullptr;
+    if (!profile || image.base() != plan.image_base() || image.size() != plan.image_size())
+        return invalid("runtime_image_binding");
 
-        const auto expected_domain = settings.expected_clock_domain();
-        if (enabled && backend == gc::audio::AudioBackend::wasapi_exclusive &&
-            !expected_domain.has_value())
-        {
-            PublishStartupFatal(
-                AbsoluteJudgementFatalPredicate::
-                AudioBackendUnsupportedForAbsoluteJudgement,
-                std::format(
-                    "stage=capability configured_backend={}",
-                    static_cast<std::uint32_t>(backend)));
-        }
-        if (enabled && input_rate_hz != 1000)
-        {
-            PublishStartupFatal(
-                AbsoluteJudgementFatalPredicate::InputTransportRateNot1000,
-                std::format(
-                    "stage=capability configured_rate_hz={}", input_rate_hz));
-        }
-        if (!audio_hook_committed)
-        {
-            PublishStartupFatal(
-                AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
-                "stage=capability audio_hook_committed=0");
-        }
-
-        const auto executable_base = reinterpret_cast<std::uintptr_t>(
-            GetModuleHandleW(nullptr));
-        if (executable_base == 0)
-        {
-            PublishStartupFatal(
-                AbsoluteJudgementFatalPredicate::GameImageAddressInvalid,
-                "stage=executable_base module_handle=0");
-        }
-        InitializeAbsoluteJudgementRuntime(
-            executable_base, backend, enabled, expected_domain);
-        if (const auto installation = InstallHooks(executable_base, enabled);
-            installation)
-        {
-            PublishInstallFailure(*installation);
-        }
-        const bool timing_grade_diagnostic_hook = enabled &&
-            InstallTimingGradeDiagnosticHook(executable_base);
-
-        JudgementDiagnostics().LogStartup({
-            .enabled = enabled,
-            .target_fps = target_fps,
-            .input_rate_hz = input_rate_hz,
-            .backend = gc::audio::AudioBackendName(backend),
-            .audio_hook_committed = audio_hook_committed,
-            .installed_site_count = enabled ? kSiteContracts.size() : 3,
-            .timing_grade_diagnostic_hook =
-            timing_grade_diagnostic_hook,
-        });
-        if (!enabled && target_fps != 60)
-        {
-            PLOG_WARNING
-                << "AbsoluteJudgement: stock judgement at non-60 target FPS "
-                   "has no FPS-independent judgement guarantee";
-        }
+    native_abi::NativeTargets targets{};
+    std::size_t contracts{}, read_targets{};
+    for (const auto& site : plan.sites()) {
+        const auto& contract = site.contract();
+        if (contract.feature != FeatureId::absolute_judgement) continue;
+        ++contracts;
+        if (contract.kind != VersionedOperationKind::read_only_contract) continue;
+        const auto resolved = image.Resolve(
+            {"absolute_judgement", contract.site, contract.rva}, contract.protected_span);
+        if (!resolved) return std::unexpected(PlanError{.stage = PlanStage::address_range,
+            .context = plan.context(), .feature = contract.feature, .site = contract.site,
+            .rva = contract.rva, .memory = resolved.error()});
+        if (*resolved != site.address) return invalid(contract.site);
+        ++read_targets;
+        using namespace native_abi;
+        if (contract.site == "loop_tail") targets.loop_tail = *resolved;
+        else if (contract.site == "recognition") targets.recognition = reinterpret_cast<RecognitionFn>(*resolved);
+        else if (contract.site == "score") targets.score = reinterpret_cast<ScoreFn>(*resolved);
+        else if (contract.site == "get_input_manager") targets.get_input_manager = reinterpret_cast<AccessorFn>(*resolved);
+        else if (contract.site == "get_global") targets.get_global = reinterpret_cast<AccessorFn>(*resolved);
+        else if (contract.site == "get_config") targets.get_config = reinterpret_cast<AccessorFn>(*resolved);
+        else if (contract.site == "get_sound_manager") targets.get_sound_manager = reinterpret_cast<AccessorFn>(*resolved);
+        else if (contract.site == "get_group_cursor") targets.get_group_cursor = reinterpret_cast<GetGroupCursorFn>(*resolved);
+        else return invalid(contract.site);
     }
+    const bool enabled = settings.enabled();
+    if (contracts != (enabled ? 18u : 4u) || read_targets != (enabled ? 8u : 1u) ||
+        !targets.get_config || (enabled && (!targets.loop_tail || !targets.recognition ||
+            !targets.score || !targets.get_input_manager || !targets.get_global ||
+            !targets.get_sound_manager || !targets.get_group_cursor)))
+        return invalid("native_targets");
+
+    // These concrete capabilities must be prepared before any lifecycle hook enables.
+    // Input and audio own their ordinary APIs and do not depend on versioning.
+    if (!input::PrepareGameplayTransitionTransport(enabled))
+        PublishStartupFatal(AbsoluteJudgementFatalPredicate::InputQpcFrequencyInvalidAtStageEntry,
+            "stage=transport_prepare qpc_frequency_unavailable=1");
+    const auto backend = settings.audio_backend();
+    const auto expected_domain = settings.expected_clock_domain();
+    if (enabled && backend == audio::AudioBackend::wasapi_exclusive && !expected_domain)
+        PublishStartupFatal(AbsoluteJudgementFatalPredicate::AudioBackendUnsupportedForAbsoluteJudgement,
+            std::format("stage=capability configured_backend={}", static_cast<std::uint32_t>(backend)));
+    if (enabled && settings.input_rate_hz() != 1000)
+        PublishStartupFatal(AbsoluteJudgementFatalPredicate::InputTransportRateNot1000,
+            std::format("stage=capability configured_rate_hz={}", settings.input_rate_hz()));
+    const bool observe_lifecycle = enabled || backend == audio::AudioBackend::asio;
+    if (observe_lifecycle && !audio::IsAudioHookCommitted())
+        PublishStartupFatal(AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
+            "stage=capability audio_hook_committed=0");
+    JudgementDiagnostics().SetStartupTargetFps(settings.target_fps());
+    InitializeAbsoluteJudgementRuntime(profile->layout, targets, backend, enabled, expected_domain);
+    g_layout = profile->layout;
+    g_observe_lifecycle = observe_lifecycle;
+    return {};
+}
+
+void CompleteAbsoluteJudgementStartup(const JudgementSettings& settings) noexcept {
+    const bool enabled = settings.enabled();
+    if (enabled && (!detail::g_originals.pressed || !detail::g_originals.held ||
+        !detail::g_originals.released || !detail::g_originals.direction ||
+        !detail::g_originals.held_age || !detail::g_originals.timing_grade))
+        PublishStartupFatal(AbsoluteJudgementFatalPredicate::StartupHookTransactionInvalid,
+            "stage=publication original_missing=1");
+    JudgementDiagnostics().LogStartup({
+        .enabled = enabled, .target_fps = settings.target_fps(),
+        .input_rate_hz = settings.input_rate_hz(),
+        .backend = audio::AudioBackendName(settings.audio_backend()),
+        .audio_hook_committed = audio::IsAudioHookCommitted(),
+        .installed_site_count = enabled ? 10u : 3u,
+        .timing_grade_diagnostic_hook = enabled,
+    });
+    if (!enabled && settings.target_fps() != 60)
+        PLOG_WARNING << "AbsoluteJudgement: stock judgement at non-60 target FPS "
+                        "has no FPS-independent judgement guarantee";
+}
 } // namespace gc::absolute_judgement

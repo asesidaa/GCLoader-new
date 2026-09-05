@@ -18,7 +18,6 @@
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
 #include "Loader/TransitionalVersionedStartup.h"
-#include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
 #include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatch.h"
@@ -520,7 +519,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             PLOG_DEBUG
                 << "Windowed widescreen initialization complete!";
 
-            gc::absolute_judgement::InitializeAbsoluteJudgementOrFatal(
+            gc::loader::InstallTransitionalAbsoluteJudgement(
                 settings.judgement());
 
             if (!gc::framerate::FrameratePatchInit(

@@ -3,6 +3,7 @@
 #include "Input/Switch/SwitchInputProfile.h"
 #include "Patches/GameCompatibility/GameCompatibilityProfile.h"
 #include "Patches/AutoPlay/AutoPlayProfile.h"
+#include "Patches/AbsoluteJudgement/AbsoluteJudgementProfile.h"
 #include "Patches/SongUnlock/SongUnlockProfile.h"
 #include <array>
 
@@ -55,7 +56,15 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
                 settings.enable_auto_play() ? after_auto_play : after_compatibility); !result)
             return std::unexpected(result.error());
     }
-    // Remaining families join in06b-06h. This entry point stays dormant until
+    // Lifecycle contracts are mandatory even when judgement replacement is off.
+    // Runtime publication later requires prepared transition transport and the
+    // selected committed audio route; those capabilities remain feature APIs.
+    if (const auto required = plans.Require({game_version::FeatureId::absolute_judgement, true, true}); !required)
+        return std::unexpected(StartupPlanError{.plan = required.error()});
+    if (const auto result = append(absolute_judgement::BuildAbsoluteJudgementPlan(
+            build, variant, settings.judgement().enabled()), after_compatibility); !result)
+        return std::unexpected(result.error());
+    // Remaining families join in06d-06h. This entry point stays dormant until
     // Plan09 switches all versioned startup through one complete barrier.
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});

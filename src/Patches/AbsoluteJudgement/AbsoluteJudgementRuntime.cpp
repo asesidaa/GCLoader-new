@@ -124,18 +124,20 @@ namespace gc::absolute_judgement
         }
 
         void ExpirePreviousTransientSoundPublications(
-            const std::uintptr_t judgement_state) noexcept
+            const std::uintptr_t judgement_state,
+            const native_abi::NativeLayout& layout) noexcept
         {
             auto* const bytes =
                 reinterpret_cast<volatile std::uint8_t*>(judgement_state);
-            bytes[kJudgementArrangePublicationOffset] = 0;
-            bytes[kJudgementLeftFreeTapPublicationOffset] = 0;
-            bytes[kJudgementRightFreeTapPublicationOffset] = 0;
+            bytes[layout.judgement_arrange_publication_offset] = 0;
+            bytes[layout.judgement_left_free_tap_publication_offset] = 0;
+            bytes[layout.judgement_right_free_tap_publication_offset] = 0;
         }
 
         [[nodiscard]] bool ResolvePointerCollectionElementSafe(
             const std::uintptr_t owner,
             const std::size_t collection_offset,
+            const native_abi::NativeLayout& layout,
             const std::uint32_t index,
             std::uintptr_t* const element) noexcept
         {
@@ -156,9 +158,9 @@ namespace gc::absolute_judgement
             std::uint32_t begin_raw{};
             std::uint32_t end_raw{};
             if (!ReadFieldU32Safe(
-                    collection, kPointerCollectionBeginOffset, &begin_raw) ||
+                    collection, layout.pointer_collection_begin_offset, &begin_raw) ||
                 !ReadFieldU32Safe(
-                    collection, kPointerCollectionEndOffset, &end_raw))
+                    collection, layout.pointer_collection_end_offset, &end_raw))
             {
                 return false;
             }
@@ -270,13 +272,15 @@ namespace gc::absolute_judgement
         {
         public:
             void Initialize(
-                const std::uintptr_t executable_base,
+                const native_abi::NativeLayout& layout,
+                const native_abi::NativeTargets& targets,
                 const gc::audio::AudioBackend audio_backend,
                 const bool absolute_judgement_enabled,
                 const std::optional<gc::audio::ExactJudgementTimelineDomain>
                 expected_domain) noexcept
             {
-                executable_base_ = executable_base;
+                layout_ = layout;
+                targets_ = targets;
                 audio_backend_ = audio_backend;
                 expected_domain_ = expected_domain;
                 scheduler_.Configure(
@@ -470,16 +474,14 @@ namespace gc::absolute_judgement
                 // owned call. Expire that completed call's values before recognition
                 // can publish the next call's values; neighboring judgement state is
                 // deliberately untouched.
-                ExpirePreviousTransientSoundPublications(native.judgement_state);
+                ExpirePreviousTransientSoundPublications(native.judgement_state, layout_);
 
                 std::optional<gc::audio::GameplayAudioCursorObservation> observation;
                 bool group2_cursor_selected{};
                 {
                     gc::audio::ScopedGameplayAudioCursorQuery cursor_query;
-                    const auto get_sound_manager = reinterpret_cast<AccessorFn>(
-                        executable_base_ + kGetSoundManagerRva);
-                    const auto get_group_cursor = reinterpret_cast<GetGroupCursorFn>(
-                        executable_base_ + kGetGroupCursorRva);
+                    const auto get_sound_manager = targets_.get_sound_manager;
+                    const auto get_group_cursor = targets_.get_group_cursor;
                     void* const sound_manager = get_sound_manager();
                     if (sound_manager == nullptr)
                     {
@@ -489,7 +491,7 @@ namespace gc::absolute_judgement
                             AbsoluteJudgementFatalReason::NativeStateMismatch);
                     }
                     const int cursor_sign = get_group_cursor(
-                        sound_manager, kGameplaySoundGroup);
+                        sound_manager, layout_.gameplay_sound_group);
                     observation = cursor_query.Consume();
                     group2_cursor_selected = cursor_sign >= 0;
                     if (!group2_cursor_selected)
@@ -520,24 +522,14 @@ namespace gc::absolute_judgement
                 }
                 scheduler_.FinishOuterCall();
 
-                std::uintptr_t tail{};
-                if (!AddAddress(executable_base_, kLoopTailRva, &tail) ||
-                    tail > (std::numeric_limits<std::uint32_t>::max)())
-                {
-                    Fail(
-                        AbsoluteJudgementFatalPredicate::GameImageAddressInvalid,
-                        AbsoluteJudgementFatalReason::NativeStateMismatch,
-                        {executable_base_, kLoopTailRva});
-                }
-                context.eip = static_cast<std::uint32_t>(tail);
+                context.eip = static_cast<std::uint32_t>(targets_.loop_tail);
             }
 
         private:
             [[nodiscard]] NativeJudgementConfiguration
             ReadConfigurationOrFatal() const noexcept
             {
-                const auto get_config = reinterpret_cast<AccessorFn>(
-                    executable_base_ + kGetConfigRva);
+                const auto get_config = targets_.get_config;
                 void* const config = get_config();
                 std::uint32_t game_time_offset{};
                 std::uint32_t hold_safe_frame{};
@@ -551,30 +543,30 @@ namespace gc::absolute_judgement
                 const auto config_address =
                     reinterpret_cast<std::uintptr_t>(config);
                 if (!ReadFieldU32Safe(
-                    config_address, kGameTimeOffsetOffset, &game_time_offset))
+                    config_address, layout_.game_time_offset_offset, &game_time_offset))
                 {
                     Fail(
                         AbsoluteJudgementFatalPredicate::GameConfigurationReadFailed,
                         AbsoluteJudgementFatalReason::NativeStateMismatch,
-                        {config_address, kGameTimeOffsetOffset});
+                        {config_address, layout_.game_time_offset_offset});
                 }
                 if (!ReadFieldU32Safe(
-                    config_address, kHoldSafeFrameOffset, &hold_safe_frame))
+                    config_address, layout_.hold_safe_frame_offset, &hold_safe_frame))
                 {
                     Fail(
                         AbsoluteJudgementFatalPredicate::GameConfigurationReadFailed,
                         AbsoluteJudgementFatalReason::NativeStateMismatch,
-                        {config_address, kHoldSafeFrameOffset});
+                        {config_address, layout_.hold_safe_frame_offset});
                 }
                 if (!ReadFieldU32Safe(
                     config_address,
-                    kSlideHoldSafeFrameOffset,
+                    layout_.slide_hold_safe_frame_offset,
                     &slide_hold_safe_frame))
                 {
                     Fail(
                         AbsoluteJudgementFatalPredicate::GameConfigurationReadFailed,
                         AbsoluteJudgementFatalReason::NativeStateMismatch,
-                        {config_address, kSlideHoldSafeFrameOffset});
+                        {config_address, layout_.slide_hold_safe_frame_offset});
                 }
                 return {
                     .game_time_offset_ms =
@@ -600,7 +592,7 @@ namespace gc::absolute_judgement
                 }
                 if (!AddSignedAddress(
                     static_cast<std::uintptr_t>(context.ebp),
-                    kTuneStackOffset,
+                    layout_.tune_stack_offset,
                     &tune_slot) || !ReadU32Safe(tune_slot, &tune_raw))
                 {
                     Fail(
@@ -608,7 +600,7 @@ namespace gc::absolute_judgement
                         AbsoluteJudgementFatalReason::NativeStateMismatch,
                         {
                             context.ebp,
-                            static_cast<std::uint64_t>(kTuneStackOffset)
+                            static_cast<std::uint64_t>(layout_.tune_stack_offset)
                         });
                 }
                 if (tune_raw == 0)
@@ -620,8 +612,7 @@ namespace gc::absolute_judgement
                 }
                 const auto tune = static_cast<std::uintptr_t>(tune_raw);
 
-                const auto get_global = reinterpret_cast<AccessorFn>(
-                    executable_base_ + kGetGlobalRva);
+                const auto get_global = targets_.get_global;
                 void* const global = get_global();
                 std::uint32_t player{};
                 if (global == nullptr)
@@ -633,7 +624,7 @@ namespace gc::absolute_judgement
                 }
                 if (!ReadFieldU32Safe(
                     reinterpret_cast<std::uintptr_t>(global),
-                    kGlobalPlayerIndexOffset,
+                    layout_.global_player_index_offset,
                     &player))
                 {
                     Fail(
@@ -653,7 +644,8 @@ namespace gc::absolute_judgement
                 std::uintptr_t score_state{};
                 if (!ResolvePointerCollectionElementSafe(
                     tune,
-                    kTuneJudgementStatesOffset,
+                    layout_.tune_judgement_states_offset,
+                    layout_,
                     player,
                     &judgement_state))
                 {
@@ -664,7 +656,8 @@ namespace gc::absolute_judgement
                 }
                 if (!ResolvePointerCollectionElementSafe(
                     tune,
-                    kTuneScoreStatesOffset,
+                    layout_.tune_score_states_offset,
+                    layout_,
                     player,
                     &score_state))
                 {
@@ -674,8 +667,7 @@ namespace gc::absolute_judgement
                         {tune, player});
                 }
 
-                const auto get_input_manager = reinterpret_cast<AccessorFn>(
-                    executable_base_ + kGetInputManagerRva);
+                const auto get_input_manager = targets_.get_input_manager;
                 void* const input_manager = get_input_manager();
                 std::uint32_t booster_raw{};
                 if (input_manager == nullptr)
@@ -687,7 +679,7 @@ namespace gc::absolute_judgement
                 }
                 if (!ReadFieldU32Safe(
                     reinterpret_cast<std::uintptr_t>(input_manager),
-                    kInputManagerBoosterOffset,
+                    layout_.input_manager_booster_offset,
                     &booster_raw))
                 {
                     Fail(
@@ -721,19 +713,19 @@ namespace gc::absolute_judgement
                 };
             }
 
-            [[nodiscard]] static
+            [[nodiscard]]
             std::optional<AbsoluteJudgementNativeScoreCounters>
-            ReadScoreCounters(const std::uintptr_t score_state) noexcept
+            ReadScoreCounters(const std::uintptr_t score_state) const noexcept
             {
                 AbsoluteJudgementNativeScoreCounters counters{};
                 if (!ReadFieldU32Safe(
-                        score_state, kScoreMissOffset, &counters.miss) ||
+                        score_state, layout_.score_miss_offset, &counters.miss) ||
                     !ReadFieldU32Safe(
-                        score_state, kScoreGoodOffset, &counters.good) ||
+                        score_state, layout_.score_good_offset, &counters.good) ||
                     !ReadFieldU32Safe(
-                        score_state, kScoreCoolOffset, &counters.cool) ||
+                        score_state, layout_.score_cool_offset, &counters.cool) ||
                     !ReadFieldU32Safe(
-                        score_state, kScoreGreatOffset, &counters.great))
+                        score_state, layout_.score_great_offset, &counters.great))
                 {
                     JudgementDiagnostics().RecordScoreObservationReadFailure();
                     return std::nullopt;
@@ -839,8 +831,7 @@ namespace gc::absolute_judgement
                             scheduler_.ObserveNativeScoreCounters(*score_before));
                     }
 
-                    const auto recognition = reinterpret_cast<RecognitionFn>(
-                        executable_base_ + kRecognitionRva);
+                    const auto recognition = targets_.recognition;
                     recognition(
                         reinterpret_cast<void*>(native.judgement_state),
                         scope.native_ms,
@@ -848,8 +839,7 @@ namespace gc::absolute_judgement
                     IncrementDiagnostic(
                         JudgementDiagnostics().stage_counters().recognition_calls);
 
-                    const auto score = reinterpret_cast<ScoreFn>(
-                        executable_base_ + kScoreRva);
+                    const auto score = targets_.score;
                     score(
                         reinterpret_cast<void*>(native.score_state),
                         scope.native_ms);
@@ -861,15 +851,15 @@ namespace gc::absolute_judgement
                     std::uint8_t right_free_tap{};
                     const bool transient_read = ReadFieldU8Safe(
                             native.judgement_state,
-                            kJudgementArrangePublicationOffset,
+                            layout_.judgement_arrange_publication_offset,
                             &arrange) &&
                         ReadFieldU8Safe(
                             native.judgement_state,
-                            kJudgementLeftFreeTapPublicationOffset,
+                            layout_.judgement_left_free_tap_publication_offset,
                             &left_free_tap) &&
                         ReadFieldU8Safe(
                             native.judgement_state,
-                            kJudgementRightFreeTapPublicationOffset,
+                            layout_.judgement_right_free_tap_publication_offset,
                             &right_free_tap);
                     if (!transient_read)
                     {
@@ -976,7 +966,8 @@ namespace gc::absolute_judgement
                 });
             }
 
-            std::uintptr_t executable_base_{};
+            native_abi::NativeLayout layout_{};
+            native_abi::NativeTargets targets_{};
             std::uintptr_t native_manager_{};
             gc::audio::AudioBackend audio_backend_{
                 gc::audio::AudioBackend::wasapi_exclusive};
@@ -993,14 +984,16 @@ namespace gc::absolute_judgement
     } // namespace
 
     void InitializeAbsoluteJudgementRuntime(
-        const std::uintptr_t executable_base,
+        const native_abi::NativeLayout& layout,
+        const native_abi::NativeTargets& targets,
         const gc::audio::AudioBackend audio_backend,
         const bool absolute_judgement_enabled,
         const std::optional<gc::audio::ExactJudgementTimelineDomain>
         expected_domain) noexcept
     {
         Runtime().Initialize(
-            executable_base,
+            layout,
+            targets,
             audio_backend,
             absolute_judgement_enabled,
             expected_domain);
