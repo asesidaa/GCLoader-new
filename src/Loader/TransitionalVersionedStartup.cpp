@@ -1,6 +1,7 @@
 #include "Loader/TransitionalVersionedStartup.h"
 #include "Loader/VersionedStartupExecutor.h"
 #include "Config/ConfigCompiler.h"
+#include "Input/Switch/SwitchInputPatch.h"
 #include "Patches/GameVersion/VersionedPlanDiagnostics.h"
 #include "Patches/GameCompatibility/GameCompatibilityProfile.h"
 #include "Patches/AutoPlay/AutoPlayProfile.h"
@@ -35,6 +36,7 @@ void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> p
             *approved, *image, hooking::HookRegistry::ProcessLifetime()); !result)
         diagnostics::AbortProcess(FormatStartupInstallError(result.error()));
     auto_play::ActivateAutoPlayMarker(*approved);
+    switch_input::ActivateSwitchInput(*approved);
 }
 }
 void InstallTransitionalGameCompatibility() noexcept {
@@ -54,6 +56,18 @@ void InstallTransitionalGameCompatibility() noexcept {
         g_detection = std::move(*detection);
         Install(std::visit([](const auto& selection) {
             return game_compatibility::BuildGameCompatibilityPlan(selection.build, selection.variant);
+        }, *g_detection));
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalSwitchInput(const switch_input::SwitchInputSettings& settings) noexcept {
+    try {
+        if (settings.style() == input::GameplayInputStyle::Arcade) {
+            PLOG_INFO << "SwitchInputPatch: requested_style=Arcade active_style=Arcade";
+            return;
+        }
+        if (!g_detection) diagnostics::AbortProcess({});
+        Install(std::visit([&](const auto& selection) {
+            return switch_input::BuildSwitchInputPlan(selection.build, selection.variant, settings);
         }, *g_detection));
     } catch (...) { diagnostics::AbortProcess({}); }
 }

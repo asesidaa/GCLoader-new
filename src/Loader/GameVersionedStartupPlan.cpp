@@ -1,5 +1,6 @@
 #include "Loader/GameVersionedStartupPlan.h"
 #include "Config/ConfigCompiler.h"
+#include "Input/Switch/SwitchInputProfile.h"
 #include "Patches/GameCompatibility/GameCompatibilityProfile.h"
 #include "Patches/AutoPlay/AutoPlayProfile.h"
 #include "Patches/SongUnlock/SongUnlockProfile.h"
@@ -33,6 +34,13 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
     if (const auto result = append(game_compatibility::BuildGameCompatibilityPlan(build, variant)); !result)
         return std::unexpected(result.error());
     constexpr std::array after_compatibility{game_version::FeatureId::game_compatibility};
+    if (settings.switch_input().style() == input::GameplayInputStyle::Switch) {
+        if (const auto required = plans.Require({game_version::FeatureId::switch_input, false, true}); !required)
+            return std::unexpected(StartupPlanError{.plan = required.error()});
+        if (const auto result = append(switch_input::BuildSwitchInputPlan(
+                build, variant, settings.switch_input()), after_compatibility); !result)
+            return std::unexpected(result.error());
+    }
     constexpr std::array after_auto_play{game_version::FeatureId::auto_play};
     if (settings.enable_auto_play()) {
         if (const auto required = plans.Require({game_version::FeatureId::auto_play, false, true}); !required)

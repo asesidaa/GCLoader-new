@@ -141,7 +141,7 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
                     site.kind == VersionedOperationKind::global_vtable_slot;
                 if (!ValidPayload(operation) || site.feature != feature.feature || site.site.empty() || !site.rva ||
                     !site.protected_span || !ValidPattern(site.original) ||
-                    site.original.size > site.protected_span ||
+                    (!hook && site.original.size > site.protected_span) ||
                     (hook && site.protected_span < 5) ||
                     ((hook || ReadOnly(site)) && site.installed.size != 0) ||
                     (!hook && !patch && !ReadOnly(site)) ||
@@ -194,7 +194,8 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
             for (const auto& operation : features_[index].operations) {
                 const auto& contract = ContractOf(operation);
                 const runtime_image::SiteIdentity identity{FeatureName(contract.feature), contract.site, contract.rva};
-                const auto address = image.Resolve(identity, contract.protected_span);
+                const auto address = image.Resolve(identity,
+                    std::max<std::uint32_t>(contract.protected_span, contract.original.size));
                 if (!address) {
                     auto error = Error(PlanStage::address_range, context, contract);
                     error.address = address.error().address;

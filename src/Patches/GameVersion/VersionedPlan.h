@@ -15,6 +15,7 @@ struct SiteContract final {
     std::string_view site;
     VersionedOperationKind kind;
     runtime_image::Rva rva{};
+    // Mutation/overlap span. A hook's read-only signature may extend beyond it.
     std::uint32_t protected_span{};
     runtime_image::BytePattern original{};
     runtime_image::BytePattern installed{};

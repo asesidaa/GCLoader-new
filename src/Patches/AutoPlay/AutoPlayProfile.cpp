@@ -13,7 +13,7 @@ constexpr std::array<VersionedOperation, 5> kOperations{
         VersionedOperationKind::read_only_contract, 0x00069650, 5,
         PatternOf<0x55, 0x8B, 0xEC, 0x6A, 0xFF>(), {}, 0, SiteDisposition::verify_only}},
     MidHookOperation{{FeatureId::auto_play, "marker_seam",
-        VersionedOperationKind::mid_hook, 0x00058BE9, 10,
+        VersionedOperationKind::mid_hook, 0x00058BE9, 5,
         PatternOf<0x8D, 0x44, 0x24, 0x08, 0x50, 0xE8, 0x8D, 0x03, 0x00, 0x00>(),
         {}, 1}, AutoPlayMarkerMidHook},
     BytePatchOperation{{FeatureId::auto_play, "do_not_save_card_data",

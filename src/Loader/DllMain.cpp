@@ -28,7 +28,6 @@
 #include "Logging/SessionLog.h"
 #include "Input/Win32/ImeSuppression.h"
 #include "Input/Polling/InputPollingRuntime.h"
-#include "Input/Switch/SwitchInputPatch.h"
 #include "Audio/AudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
 #include "Diagnostics/FatalProcess.h"
@@ -535,7 +534,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             PLOG_DEBUG
                 << "Framerate runtime initialization complete!";
 
-            gc::switch_input::SwitchInputPatchInit(
+            gc::loader::InstallTransitionalSwitchInput(
                 settings.switch_input());
             PLOG_DEBUG
                 << "Switch gameplay input patch init complete!"

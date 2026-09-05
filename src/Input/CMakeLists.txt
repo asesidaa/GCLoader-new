@@ -29,6 +29,7 @@ add_library(gc_input STATIC
         Polling/InputSnapshotState.cpp
         Polling/InputWorkerWait.cpp
         Switch/SwitchInputPatch.cpp
+        Switch/SwitchInputProfile.cpp
         Switch/SwitchInputPolicy.cpp
         Win32/RawInputRegistrationGuard.cpp
 )
@@ -38,6 +39,7 @@ target_include_directories(gc_input PUBLIC
 )
 target_link_libraries(gc_input PUBLIC
         gc_hooking
+        gc_game_version
         gc_input_win32
         ntdll
         safetyhook::safetyhook
