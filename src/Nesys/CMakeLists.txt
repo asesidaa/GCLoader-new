@@ -18,6 +18,7 @@ add_library(gc_nesys STATIC
         Launcher/NesysServiceLauncher.cpp
         Network/ServerAddressOverride.cpp
         Network/SyntheticNetworkAdapter.cpp
+        Network/NesysPingProfile.cpp
         Registry/RegistryConfigOverride.cpp
 )
 target_include_directories(gc_nesys PUBLIC
@@ -25,6 +26,7 @@ target_include_directories(gc_nesys PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_nesys PUBLIC
+        gc_game_version
         gc_hooking
         gc_nesys_process
         gc_nesys_diagnostics

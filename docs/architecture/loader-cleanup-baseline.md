@@ -882,3 +882,119 @@ are recorded in loader-cleanup-versioned-native-evidence.md.
 
 Both full builds and all five existing CTest cases per configuration passed.
 This is static/build evidence only; no game or GUI runtime acceptance occurred.
+
+## Post-migration ASIO close, NESYS ping and fixed-site totals (Plan06h)
+
+### ASIO ordinary close
+
+The IDA-CLI batch `.codex-tmp/loader-cleanup-asio-close-profile.py` confirms
+the 16-byte original prefix at game RVA 0x0023C853 in the IDB and both known
+game executable files:
+
+```text
+FF 15 3C D6 6A 00 8B E5 5D C3 CC CC CC 55 8B EC
+```
+
+The containing function at VA 0x0063C5B0 tears down game/task/render resources,
+then calls imported CoUninitialize through VA 0x006AD63C. The hook span is the
+six-byte indirect call. Its only native caller is the main loop at VA
+0x00458C10: successful initialization enters the update/render/present loop;
+ordinary loop exit calls cleanup after virtual shutdown +0x18 and before
+virtual shutdown +0x1C and final task/window cleanup. Failed initial entry
+returns without this path. This is ordinary game shutdown, not DLL detach
+or a driver-error-only branch.
+
+The no-throw mid callback leaves the saved register state untouched. It
+exchanges the published non-DirectSound owner with null using acquire/release,
+fails with AsioOwnershipFailure and the approved site's RVA if no owner
+exists, then deletes the owner before the relocated CoUninitialize executes.
+Controller/factory/member destruction order is unchanged. The owner and
+factory/reporting dependencies now live in AudioRuntimeState; diagnostics
+and observer callback-table copies are preserved for the later locality split.
+The game-facing gc_audio target compiles the profile/callback; reusable
+gc_asio gained no GameVersion/RuntimeImage/startup dependency.
+
+Only ASIO contributes this game profile. DirectSound/WASAPI contribute no
+ASIO-close site. Audio preparation publishes state and appends the ordinary
+DirectSoundCreate8 export request without installing any hook. The export
+plan is collision-validated before the transitional ASIO plan installs; a
+failed install aborts without destroying published audio state or undoing
+an earlier mutation. Plan09 replaces the temporary game adapter with the
+complete game barrier.
+
+### NESYS 2.97 service ping
+
+The actual NesysService.exe FileVersion and ProductVersion are both 2.97,
+with product name NesysService. The build enum is now NesysBuild::service_297;
+it is not a game-version label. The known identity remains size 368640 and
+SHA-256 487402D4ABDEF6A857A397CF25C9D681CB6F6052965C500361B0FD14D00913F2.
+
+The IDA-CLI batch `.codex-tmp/loader-cleanup-nesys-ping-profile.py` confirms
+the exact 32-byte IDB/file prefix at NESYS RVA 0x00008E40:
+
+```text
+51 53 55 56 57 50 8B D9 8D 6B 04 6A 10 55 C7 44
+24 1C 00 00 00 00 E8 02 73 02 00 83 C4 0C 8D 73
+```
+
+Function VA 0x00408E40 is the Ping.cpp ICMP request path. ECX is the ping
+object and EAX is the source address string. Its first five one-byte
+instructions save ECX/EBX/EBP/ESI/EDI (protected span five); the next instruction
+pushes EAX as strcpy_s's Source. strcpy_s copies at most 0x10 bytes into
+object+4. Native callers at VAs 0x00407CAA and 0x0040DDB3 establish EAX from
+EDI and ECX as their stack-resident ping object. The callback changes only
+SafetyHook Context.eax to the stable semantic string "127.0.0.1", so the
+resumed native copy and ICMP path receive loopback; all other context fields
+and existing first-use diagnostics are unchanged.
+
+ResolveNesysFeaturePlan still enables service_ping_redirect only for the
+service role with network virtualization enabled. The game role and a
+registry-only service build no NESYS versioned plan and perform no NESYS
+identity detection. When enabled, the complete ping contract is validated
+before any ping/export hook installation. Known hash selection and unknown
+structural-candidate plus complete original-contract validation stay distinct
+from successful hook creation/enable. Immutable NESYS state and all export
+requests are prepared first; both plans validate, the ping hook installs,
+then export hooks install in their existing relative order. All failure paths
+use the terminal reporter. No ping prepare/activate/rollback state remains.
+
+### Final profile inventory before the Plan09 startup cutover
+
+These are profile-union contract rows, not the number installed on every
+launch. Framerate's native-60/backend selection and all optional feature
+gates remain effective. Shared read-only native helpers can appear under
+different semantic feature contracts; the validator checks each enabled row.
+
+| Feature | Mutation/hook sites | Read-only contracts | Profile rows | Gate |
+| --- | ---: | ---: | ---: | --- |
+| GameCompatibility | 4 | 0 | 4 | mandatory |
+| AutoPlay | 4 | 1 | 5 | AutoPlay enabled |
+| SongUnlock | 1 | 0 | 1 | SongUnlock enabled |
+| SwitchInput | 3 | 0 | 3 | Switch input selected |
+| AbsoluteJudgement | 10 | 8 | 18 | enabled; disabled retains 3 lifecycle hooks and 1 read-only target |
+| Framerate | 70 | 10 | 80 | union of 17 writes and 53 hooks; backend/timing selects a subset |
+| Countdown | 32 | 0 | 32 | timer freeze enabled |
+| TestModeTiming | 3 | 28 | 31 | mandatory, including carrier-vtable read-only targets |
+| RendererDeviceLoss | 6 | 4 | 10 | mandatory |
+| WindowedWidescreen | 36 | 13 | 49 | enabled; includes exactly 2 global slots |
+| AsioClose | 1 | 0 | 1 | ASIO selected |
+| NESYS service ping | 1 | 0 | 1 | service role and network virtualization |
+
+The game profile union contains 170 mutation/hook sites and 64 read-only
+contracts (234 rows). NESYS has one mutation/hook site and no additional
+read-only row. The 171 combined mutation/hook sites reconcile to the frozen
+baseline. Test Mode's one carrier-vtable construction is a separate runtime
+object mechanism and is not an additional global slot mutation.
+
+The fixed-site ownership search now finds actual InlineHook/MidHook creation
+only in Platform/Win32/Hooking/HookRegistry. Other SafetyHook matches are
+callback types, typed original publication and error/record types in the
+shared hooking layer or common VersionedOperation definition. There are no
+remaining local ASIO-close or NESYS ping installers, byte readers, preflight
+helpers, or rollback entry points. API/export requests have address-collision
+validation and remain outside executable byte-pattern preflight.
+
+Full Debug and RelWithDebInfo builds and all five existing CTest cases per
+configuration passed. No fake executable memory, mock hooks or copied binary
+fixtures were added. No ASIO shutdown, audio quality, NESYS ping/child-process,
+network or request-pipeline runtime acceptance was performed.

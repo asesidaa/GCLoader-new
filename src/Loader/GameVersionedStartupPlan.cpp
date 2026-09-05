@@ -10,6 +10,7 @@
 #include "Patches/TestModeTiming/TestModeTimingProfile.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossProfile.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenProfile.h"
+#include "Audio/Asio/AsioCloseProfile.h"
 #include <array>
 
 namespace gc::loader {
@@ -103,7 +104,13 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
         if (const auto result = append(widescreen->feature_plan(), after_renderer_and_test_mode); !result)
             return std::unexpected(result.error());
     }
-    // Remaining families join in06h. This entry point stays dormant until
+    if (settings.audio().backend() == audio::AudioBackend::asio) {
+        if (const auto required = plans.Require({game_version::FeatureId::asio_close, false, true}); !required)
+            return std::unexpected(StartupPlanError{.plan = required.error()});
+        if (const auto result = append(audio::asio::BuildAsioClosePlan(build, variant), after_compatibility); !result)
+            return std::unexpected(result.error());
+    }
+    // Every fixed-site family is now represented. This entry point stays dormant until
     // Plan09 switches all versioned startup through one complete barrier.
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});

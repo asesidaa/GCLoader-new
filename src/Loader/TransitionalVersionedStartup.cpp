@@ -1,6 +1,7 @@
 #include "Loader/TransitionalVersionedStartup.h"
 #include "Loader/VersionedStartupExecutor.h"
 #include "Config/ConfigCompiler.h"
+#include "Audio/Asio/AsioCloseProfile.h"
 #include "Input/Switch/SwitchInputPatch.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementPatch.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementProfile.h"
@@ -52,6 +53,10 @@ void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> p
     }
     if (profile->feature == FeatureId::renderer_device_loss) {
         if (const auto prepared = renderer_device_loss::PrepareRendererDeviceLossRuntime(*approved, *image); !prepared)
+            diagnostics::AbortProcess(FormatPlanError(prepared.error()));
+    }
+    if (profile->feature == FeatureId::asio_close) {
+        if (const auto prepared = audio::asio::PrepareAsioCloseRuntime(*approved); !prepared)
             diagnostics::AbortProcess(FormatPlanError(prepared.error()));
     }
     if (const auto result = InstallApprovedVersionedPlan(
@@ -183,6 +188,15 @@ void InstallTransitionalWidescreen(const windowed_widescreen::WindowedWidescreen
                 *approved, *image, hooking::HookRegistry::ProcessLifetime()); !installed)
             diagnostics::AbortProcess(FormatStartupInstallError(installed.error()));
         windowed_widescreen::CompleteWidescreenStartup();
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalAsioClose(audio::AudioBackend backend) noexcept {
+    if (backend != audio::AudioBackend::asio) return;
+    try {
+        if (!g_detection) diagnostics::AbortProcess({});
+        Install(std::visit([](const auto& selection) {
+            return audio::asio::BuildAsioClosePlan(selection.build, selection.variant);
+        }, *g_detection));
     } catch (...) { diagnostics::AbortProcess({}); }
 }
 void InstallTransitionalOptionalPatches(const config::ValidatedConfig& settings) noexcept {

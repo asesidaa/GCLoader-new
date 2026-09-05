@@ -1,8 +1,15 @@
 #include "Loader/NesysVersionedStartupPlan.h"
+#include "Nesys/NesysSettings.h"
+#include "Nesys/NesysServiceProcess.h"
+#include "Nesys/Network/NesysPingProfile.h"
 
 namespace gc::loader {
-std::expected<PreparedNesysVersionedStartup, StartupPlanError>
-PrepareNesysVersionedStartup(HMODULE process_module, const nesys_service::NesysSettings&) noexcept {
+std::expected<std::optional<PreparedNesysVersionedStartup>, StartupPlanError>
+PrepareNesysVersionedStartup(HMODULE process_module, const nesys_service::NesysSettings& settings) noexcept {
+    const auto features = nesys_service::ResolveNesysFeaturePlan(
+        nesys_service::ProcessRole::Service, settings.adapter_patch_enabled(),
+        settings.registry_override().has_value());
+    if (!features.service_ping_redirect) return std::optional<PreparedNesysVersionedStartup>{};
     if (process_module != GetModuleHandleW(nullptr))
         return std::unexpected(StartupPlanError{.detection = game_version::DetectionError{
             game_version::DetectionStage::identity,
@@ -14,7 +21,12 @@ PrepareNesysVersionedStartup(HMODULE process_module, const nesys_service::NesysS
     game_version::VersionedPlanSet plans;
     if (const auto required = plans.Require({game_version::FeatureId::nesys_ping, true, true}); !required)
         return std::unexpected(StartupPlanError{.plan = required.error()});
-    // The NESYS builder is added in Plan 06h; no game builder belongs here.
+    const auto profile = std::visit([](const auto& selection) {
+        return nesys_service::BuildNesysPingPlan(selection.build, selection.variant);
+    }, *detected);
+    if (!profile) return std::unexpected(StartupPlanError{.plan = profile.error()});
+    if (const auto added = plans.Add(*profile); !added)
+        return std::unexpected(StartupPlanError{.plan = added.error()});
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});
     auto selection = std::visit([&](auto& value) {

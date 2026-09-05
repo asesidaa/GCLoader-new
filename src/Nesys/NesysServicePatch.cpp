@@ -14,7 +14,6 @@
 namespace gc::nesys_service {
 namespace {
 std::atomic_bool g_prepared{};
-bool g_pending_ping{};
 decltype(&ExitProcess) g_original_exit_process{};
         __declspec(noreturn) void WINAPI service_exit_process_detour(
             UINT exit_code)
@@ -95,7 +94,6 @@ std::expected<void, hooking::HookError> AddNesysHooks(
         }
         if (hooks.size() - before != plan.api_hook_count)
             return std::unexpected(StateError("hook_count"));
-        g_pending_ping = plan.service_ping_redirect;
         PLOG_INFO << "NesysServicePatch: role hooks prepared"
             << " role=" << ProcessRoleName(role)
             << " network=" << plan.network_virtualization
@@ -105,14 +103,5 @@ std::expected<void, hooking::HookError> AddNesysHooks(
     } catch (...) {
         return std::unexpected(StateError("prepare", ERROR_NOT_ENOUGH_MEMORY));
     }
-}
-void InstallPendingNesysPing() noexcept {
-    if (!g_pending_ping) return;
-    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-    if (!base || !PreflightServicePingRedirect(base) ||
-        !PrepareServicePingRedirect(base) || !ActivateServicePingRedirect())
-        hooking::AbortHookError({.stage = hooking::HookStage::create,
-            .identity = {"NesysPing", "service_ping"}, .win32_error = ERROR_INVALID_DATA});
-    g_pending_ping = false;
 }
 } // namespace gc::nesys_service

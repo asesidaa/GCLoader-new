@@ -7,6 +7,4 @@
 namespace gc::nesys_service {
 [[nodiscard]] std::expected<void, hooking::HookError> AddNesysHooks(
     hooking::HookPlan&, HMODULE loader_module, ProcessRole, NesysSettings) noexcept;
-// Temporary fixed-RVA entry point, migrated behind the global barrier in 06h.
-void InstallPendingNesysPing() noexcept;
 }

@@ -66,7 +66,7 @@ bool ValidContext(const PlanContext& context) noexcept {
               *variant == GameImageVariant::locally_verified));
     }
     const auto* variant = std::get_if<nesys_service::NesysImageVariant>(&context.variant);
-    return std::get<nesys_service::NesysBuild>(context.build) == nesys_service::NesysBuild::current_supported &&
+    return std::get<nesys_service::NesysBuild>(context.build) == nesys_service::NesysBuild::service_297 &&
         variant && ((context.proof == DetectionProof::exact_known_hash &&
                      *variant == nesys_service::NesysImageVariant::original) ||
                     (context.proof == DetectionProof::complete_local_contract &&

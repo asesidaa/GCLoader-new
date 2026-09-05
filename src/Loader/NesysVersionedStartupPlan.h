@@ -7,7 +7,7 @@ struct PreparedNesysVersionedStartup final {
     runtime_image::RuntimeImage image;
     game_version::ApprovedVersionedPlan plan;
 };
-[[nodiscard]] std::expected<PreparedNesysVersionedStartup, StartupPlanError>
+[[nodiscard]] std::expected<std::optional<PreparedNesysVersionedStartup>, StartupPlanError>
 PrepareNesysVersionedStartup(
     HMODULE process_module, const nesys_service::NesysSettings& settings) noexcept;
 }

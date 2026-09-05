@@ -16,6 +16,9 @@ add_library(gc_audio STATIC
         Wasapi/ExclusiveAudioEngine.cpp
         Wasapi/OutputPacingTracker.cpp
         AudioPatch.cpp
+        AudioRuntimeState.cpp
+        Asio/AsioCloseHook.cpp
+        Asio/AsioCloseProfile.cpp
         Wasapi/WasapiAudioTypes.cpp
         Wasapi/WasapiEndpoint.cpp
         Wasapi/WasapiPresentedOutputClock.cpp
@@ -26,6 +29,7 @@ target_include_directories(gc_audio PUBLIC
 )
 target_link_libraries(gc_audio PUBLIC
         gc_hooking
+        gc_game_version
         gc_asio
         gc_timing
         safetyhook::safetyhook

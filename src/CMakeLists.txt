@@ -44,6 +44,8 @@ target_link_libraries(gc_loader_startup PUBLIC
         gc_test_mode_storage
 )
 
+target_link_libraries(gc_loader_startup PRIVATE gc_audio gc_nesys)
+
 add_library(iDmacDrv32 SHARED
         Loader/DllMain.cpp
         Loader/NonVersionedHookPlan.cpp

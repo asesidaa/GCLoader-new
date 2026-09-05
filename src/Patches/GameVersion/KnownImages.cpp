@@ -23,7 +23,7 @@ constexpr KnownGameImage kGameImages[]{
      3691008, IMAGE_FILE_MACHINE_I386, 0x00400000, 0x00433000, 0x5FA90825},
 };
 constexpr KnownNesysImage kNesysImages[]{
-    {nesys_service::NesysBuild::current_supported, nesys_service::NesysImageVariant::original,
+    {nesys_service::NesysBuild::service_297, nesys_service::NesysImageVariant::original,
      Digest("487402D4ABDEF6A857A397CF25C9D681CB6F6052965C500361B0FD14D00913F2"),
      368640, IMAGE_FILE_MACHINE_I386, 0x00400000, 0x0005C000, 0x5AB4CFB7},
 };
