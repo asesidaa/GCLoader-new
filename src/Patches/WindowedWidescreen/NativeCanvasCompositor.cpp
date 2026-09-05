@@ -380,6 +380,54 @@ namespace gc::windowed_widescreen
         return {};
     }
 
+
+    std::expected<void, CompositorError>
+    NativeCanvasCompositor::BeginGameplayHudDraw(
+        const GameplayHudPlacement placement) noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current) return PolicyFailure(current.error(), RenderSpace::gameplay_hud);
+        if ((*current != RenderSpace::physical_3d && *current != RenderSpace::gameplay_hud) ||
+            gameplay_hud_draw_active_ || physical_gameplay_hud_overlay_active_ ||
+            !actions_.capture_hud_draw_state || !actions_.restore_hud_draw_state ||
+            !actions_.flush_hud_draw_batches)
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current, .requested_space = RenderSpace::gameplay_hud});
+        if (!actions_.flush_hud_draw_batches(actions_.context))
+            return FailAction(CompositorStage::flush_native_batches, *current, *current, false);
+        if (!actions_.native_batches_are_empty(actions_.context))
+            return FailAction(CompositorStage::pending_native_batches, *current, *current, false);
+        if (!actions_.capture_hud_draw_state(actions_.context))
+            return FailAction(CompositorStage::capture_game_state, *current, *current, false);
+        if (!actions_.set_gameplay_hud_viewport(actions_.context, placement))
+            return FailAction(CompositorStage::set_gameplay_hud_viewport, *current, *current, false);
+        enclosing_hud_placement_ = gameplay_hud_placement_;
+        gameplay_hud_placement_ = placement;
+        gameplay_hud_draw_active_ = true;
+        return {};
+    }
+
+    std::expected<void, CompositorError>
+    NativeCanvasCompositor::EndGameplayHudDraw() noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current) return PolicyFailure(current.error(), RenderSpace::gameplay_hud);
+        if (!gameplay_hud_draw_active_ || !actions_.restore_hud_draw_state)
+            return std::unexpected(CompositorError{
+                .stage = CompositorStage::invalid_destination,
+                .stable_space = *current, .requested_space = *current});
+        if (!actions_.flush_hud_draw_batches(actions_.context))
+            return FailAction(CompositorStage::flush_native_batches, *current, *current, false);
+        if (!actions_.native_batches_are_empty(actions_.context))
+            return FailAction(CompositorStage::pending_native_batches, *current, *current, false);
+        if (!actions_.restore_hud_draw_state(actions_.context))
+            return FailAction(CompositorStage::restore_game_state, *current, *current, false);
+        gameplay_hud_placement_ = enclosing_hud_placement_;
+        gameplay_hud_draw_active_ = false;
+        return {};
+    }
+
     std::expected<void, CompositorError>
     NativeCanvasCompositor::Transition(
         const RenderSpace stable_space,
@@ -643,6 +691,8 @@ namespace gc::windowed_widescreen
 
     void NativeCanvasCompositor::ResetForDeviceLoss() noexcept
     {
+        gameplay_hud_draw_active_ = false;
+        enclosing_hud_placement_ = base_gameplay_hud_placement_;
         render_space_policy_.ResetForDeviceLoss();
         last_published_space_ = RenderSpace::physical_3d;
         gameplay_hud_placement_ = base_gameplay_hud_placement_;

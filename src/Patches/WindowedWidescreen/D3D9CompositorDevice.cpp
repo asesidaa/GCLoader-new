@@ -348,6 +348,7 @@ namespace gc::windowed_widescreen
 
     void D3D9CompositorDevice::Release() noexcept
     {
+        hud_draw_state_captured_ = false;
         game_state_captured_ = false;
         bound_target_ = BoundTarget::none;
         active_ = false;
@@ -383,6 +384,9 @@ namespace gc::windowed_widescreen
             .bind_real_backbuffer = &BindRealBackbuffer,
             .capture_game_state = &CaptureState,
             .restore_game_state = &RestoreState,
+            .capture_hud_draw_state = &CaptureHudDrawStateAction,
+            .restore_hud_draw_state = &RestoreHudDrawStateAction,
+            .flush_hud_draw_batches = &FlushHudDrawBatches,
             .draw_scene_center_to_native = &DrawSceneCenterToNative,
             .draw_native_to_scene_center = &DrawNativeToSceneCenter,
             .draw_scene_to_backbuffer = &DrawSceneToBackbuffer,
@@ -654,6 +658,63 @@ namespace gc::windowed_widescreen
                 .height = dimensions->height,
             },
             space == RenderSpace::native_2d);
+    }
+
+
+    bool D3D9CompositorDevice::CaptureHudDrawState() noexcept
+    {
+        if (!active_ || !device_ || hud_draw_state_captured_) return false;
+        if (FAILED(device_->GetViewport(&hud_draw_viewport_)) ||
+            FAILED(device_->GetScissorRect(&hud_draw_scissor_)) ||
+            FAILED(device_->GetRenderState(D3DRS_ZENABLE, &hud_draw_depth_)) ||
+            FAILED(device_->GetRenderState(D3DRS_ZWRITEENABLE, &hud_draw_depth_write_)) ||
+            FAILED(device_->GetRenderState(D3DRS_STENCILENABLE, &hud_draw_stencil_)))
+            return false;
+        hud_draw_state_captured_ = true;
+        return true;
+    }
+
+    bool D3D9CompositorDevice::FlushHudDrawBatches(void* context) noexcept
+    {
+        auto* owner = static_cast<D3D9CompositorDevice*>(context);
+        if (!owner || !owner->active_ || !owner->native_batch_actions_.empty ||
+            !owner->native_batch_actions_.flush) return false;
+        const auto& batches = owner->native_batch_actions_;
+        if (batches.empty(batches.context)) return true;
+        if (owner->game_state_captured_ || !owner->copy_state_block_ ||
+            FAILED(owner->copy_state_block_->Capture())) return false;
+        // 5C8FA0 changes streams, declarations and shaders. Preserve the
+        // selected call's pipeline across a necessary general-batch flush.
+        // This flush does not change render targets or drain effect packets.
+        owner->game_state_captured_ = true;
+        const bool flushed = batches.flush(batches.context);
+        const bool restored = SUCCEEDED(owner->copy_state_block_->Apply());
+        owner->game_state_captured_ = false;
+        return flushed && restored;
+    }
+
+    bool D3D9CompositorDevice::RestoreHudDrawState() noexcept
+    {
+        if (!active_ || !device_ || !hud_draw_state_captured_) return false;
+        // Restore only state changed by placement. Native texture/matrix/blend
+        // changes inside the selected draw retain their normal lifetime.
+        const bool restored = SUCCEEDED(device_->SetViewport(&hud_draw_viewport_)) &&
+            SUCCEEDED(device_->SetScissorRect(&hud_draw_scissor_)) &&
+            SUCCEEDED(device_->SetRenderState(D3DRS_ZENABLE, hud_draw_depth_)) &&
+            SUCCEEDED(device_->SetRenderState(D3DRS_ZWRITEENABLE, hud_draw_depth_write_)) &&
+            SUCCEEDED(device_->SetRenderState(D3DRS_STENCILENABLE, hud_draw_stencil_));
+        hud_draw_state_captured_ = false;
+        return restored;
+    }
+
+    bool D3D9CompositorDevice::CaptureHudDrawStateAction(void* context) noexcept
+    {
+        return context && static_cast<D3D9CompositorDevice*>(context)->CaptureHudDrawState();
+    }
+
+    bool D3D9CompositorDevice::RestoreHudDrawStateAction(void* context) noexcept
+    {
+        return context && static_cast<D3D9CompositorDevice*>(context)->RestoreHudDrawState();
     }
 
     bool D3D9CompositorDevice::SetGameplayHudViewport(

@@ -1,12 +1,17 @@
 #pragma once
 #include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
 namespace gc::windowed_widescreen {
-// Native carriers: four batch queues, a 4x4 matrix, and five player-one effect slots.
+// Native carriers and exact CTune effect ownership for selected feedback.
 using NativeBatchCounts = std::array<std::uint32_t, 4>;
 using NativeNetworkMatrix = std::array<float, 16>;
 inline constexpr std::array<std::size_t, 3> kNativeMatrixHorizontalComponents{0, 4, 8};
 inline constexpr std::size_t kNativeMatrixTranslation = 12;
-inline constexpr std::array<std::uint32_t, 5> kPlayerOneJudgementSlots{93, 94, 95, 96, 97};
+// 648D40: primary score display, current/previous successful grade (1..3).
+// Slot = 9 + 3 * grade + 12 * history; these are separate from track effects.
+inline constexpr std::array<std::uint32_t, 6> kPlayerOneJudgementTextSlots{
+    12, 15, 18, 24, 27, 30};
+inline constexpr std::array<std::uint32_t, 9> kNoteTutorialSlots{
+    0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB9, 0xBA, 0xBB, 0xC0};
     struct NativeViewport
     {
         float x{};
@@ -35,14 +40,14 @@ struct WidescreenPointerContract final {
 struct WindowedWidescreenProfile final {
     game_version::GameBuild build;
     game_version::GameImageVariant variant;
-    std::array<WidescreenByteContract, 40> byte_contracts;
+    std::array<WidescreenByteContract, 86> byte_contracts;
     std::array<WidescreenPointerContract, 9> pointer_contracts;
-    std::array<WidescreenFunctionAbi, 36> function_abis;
-    std::array<WidescreenContractSite, 36> hook_order;
+    std::array<WidescreenFunctionAbi, 83> function_abis;
+    std::array<WidescreenContractSite, 83> hook_order;
     WidescreenNativeLayout layout;
 };
 struct PreparedWidescreenPlan final {
-    std::array<game_version::VersionedOperation, 49> operations;
+    std::array<game_version::VersionedOperation, 95> operations;
     std::size_t count{};
     [[nodiscard]] game_version::FeaturePlan feature_plan() const noexcept {
         return {game_version::FeatureId::windowed_widescreen,

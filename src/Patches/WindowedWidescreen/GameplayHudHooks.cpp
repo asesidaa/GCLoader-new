@@ -2,7 +2,6 @@
 #include "Patches/WindowedWidescreen/WidescreenRuntime.h"
 #include "Patches/WindowedWidescreen/RenderHooks.h"
 #include "Patches/WindowedWidescreen/GameplayFeedbackPlacement.h"
-#include <plog/Log.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -20,7 +19,10 @@ void ResetScopedRenderState(
         std::memory_order_release);
     runtime.gameplay_feedback_draw_scope =
         GameplayFeedbackDrawScope::none;
-    runtime.note_tutorial_group_active = false;
+    runtime.effect_root_active = false;
+    runtime.effect_root_owner = GameplayEffectOwner::none;
+    runtime.effect_packets.clear();
+    runtime.gameplay_render_thread = 0;
     runtime.test_mode_native_active = false;
 }
 
@@ -77,6 +79,7 @@ void GameplayStageBackgroundMid(safetyhook::Context&) noexcept
         g_callback_runtime.load(std::memory_order_acquire);
     if (runtime != nullptr && RuntimeCallbacksAreActive(*runtime))
     {
+        runtime->gameplay_render_thread = GetCurrentThreadId();
         runtime->gameplay_frame_active.store(
             true,
             std::memory_order_release);
@@ -95,8 +98,7 @@ void GameplayTrackMid(safetyhook::Context& context) noexcept
     }
     if (context.ecx == 0 || runtime->active_gameplay_tune != 0 ||
         runtime->gameplay_feedback_draw_scope !=
-        GameplayFeedbackDrawScope::none ||
-        runtime->note_tutorial_group_active)
+        GameplayFeedbackDrawScope::none)
     {
         PublishRenderRuntimeFatal(
             *runtime,
@@ -172,15 +174,6 @@ template <std::size_t SlotCount>
     return true;
 }
 
-[[nodiscard]] bool TryMatchPlayerOneJudgementEffect(
-    const WidescreenNativeLayout& layout, const std::uintptr_t tune,
-    const std::uintptr_t effect,
-    bool& matches) noexcept
-{
-    return TryMatchEffectSlots(layout, tune, effect, kPlayerOneJudgementSlots, matches);
-
-}
-
 void GameplayEffectsMid(safetyhook::Context& context) noexcept
 {
     auto* runtime =
@@ -193,8 +186,7 @@ void GameplayEffectsMid(safetyhook::Context& context) noexcept
         runtime->active_gameplay_tune !=
         static_cast<std::uintptr_t>(context.ecx) ||
         runtime->gameplay_feedback_draw_scope !=
-        GameplayFeedbackDrawScope::none ||
-        runtime->note_tutorial_group_active)
+        GameplayFeedbackDrawScope::none)
     {
         PublishRenderRuntimeFatal(
             *runtime,
@@ -206,194 +198,163 @@ void GameplayEffectsMid(safetyhook::Context& context) noexcept
     RequestGameplayPass(GameplayPass::orthographic_effects);
 }
 
+
+namespace {
+[[noreturn]] void PlacementFailure(WindowedWidescreenRuntime& runtime) noexcept
+{
+    PublishRenderRuntimeFatal(runtime, {
+        .stage = WindowedWidescreenOperationStage::gameplay_hud_placement});
+}
+
+WindowedWidescreenRuntime* GameplayRuntime() noexcept
+{
+    auto* runtime = g_callback_runtime.load(std::memory_order_acquire);
+    return runtime && RuntimeCallbacksAreActive(*runtime) && runtime->active_gameplay_tune &&
+        runtime->gameplay_render_thread == GetCurrentThreadId() ? runtime : nullptr;
+}
+
+void BeginSelectedDraw(WindowedWidescreenRuntime& runtime,
+    GameplayHudPlacement placement, GameplayFeedbackDrawScope owner) noexcept
+{
+    if (runtime.gameplay_feedback_draw_scope != GameplayFeedbackDrawScope::none)
+        PlacementFailure(runtime);
+    const auto result = runtime.compositor.BeginGameplayHudDraw(placement);
+    if (!result) {
+        runtime.last_compositor_error = result.error();
+        PlacementFailure(runtime);
+    }
+    runtime.gameplay_feedback_draw_scope = owner;
+}
+
+void EndSelectedDraw(WindowedWidescreenRuntime& runtime,
+    GameplayFeedbackDrawScope owner) noexcept
+{
+    if (runtime.gameplay_feedback_draw_scope != owner) PlacementFailure(runtime);
+    const auto result = runtime.compositor.EndGameplayHudDraw();
+    if (!result) {
+        runtime.last_compositor_error = result.error();
+        PlacementFailure(runtime);
+    }
+    runtime.gameplay_feedback_draw_scope = GameplayFeedbackDrawScope::none;
+}
+
+GameplayEffectOwner TakePacketOwner(WindowedWidescreenRuntime& runtime,
+    std::uintptr_t address) noexcept
+{
+    auto& packets = runtime.effect_packets;
+    for (std::size_t i = 0; i < packets.size(); ++i) {
+        if (packets[i].address != address) continue;
+        const auto owner = packets[i].owner;
+        packets[i] = packets.back();
+        packets.pop_back();
+        return owner;
+    }
+    return GameplayEffectOwner::none;
+}
+}
+
 void GameplayEffectsEndMid(safetyhook::Context&) noexcept
 {
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
-    {
-        return;
-    }
-    if (runtime->gameplay_feedback_draw_scope !=
-        GameplayFeedbackDrawScope::none ||
-        runtime->compositor.physical_gameplay_hud_overlay_active())
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-    if (runtime->note_tutorial_group_active)
-    {
-        runtime->note_tutorial_group_active = false;
-        if (!RequestRuntimeGameplayHudPlacement(
-            *runtime,
-            runtime->settings.gameplay_hud_placement()))
-        {
-            PublishRenderRuntimeFatal(
-                *runtime,
-                WindowedWidescreenError{
-                    .stage = WindowedWidescreenOperationStage::
-                    gameplay_hud_placement,
-                });
-        }
-    }
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (runtime->gameplay_feedback_draw_scope != GameplayFeedbackDrawScope::none ||
+        runtime->compositor.gameplay_hud_draw_active() ||
+        runtime->compositor.physical_gameplay_hud_overlay_active() ||
+        runtime->effect_root_active || !runtime->effect_packets.empty())
+        PlacementFailure(*runtime);
     runtime->active_gameplay_tune = 0;
 }
 
-void GameplayFeedbackDrawBeginMid(
-    safetyhook::Context& context) noexcept
+void GameplayFeedbackDrawBeginMid(safetyhook::Context& context) noexcept
 {
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
-        runtime->active_gameplay_tune == 0)
-    {
-        return;
-    }
-    if (runtime->gameplay_feedback_draw_scope !=
-        GameplayFeedbackDrawScope::none)
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-
-    bool is_player_one_judgement{};
-    if (!TryMatchPlayerOneJudgementEffect(
-        runtime->abi.layout, runtime->active_gameplay_tune,
-        static_cast<std::uintptr_t>(context.ecx),
-        is_player_one_judgement))
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-    if (!is_player_one_judgement)
-    {
-        return;
-    }
-
-    const auto begun =
-        runtime->compositor.BeginPhysicalGameplayHudOverlay(
-            GameplayHudPlacement::right);
-    if (!begun)
-    {
-        runtime->last_compositor_error = begun.error();
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-    runtime->gameplay_feedback_draw_scope =
-        GameplayFeedbackDrawScope::physical_gameplay_hud_overlay;
-    if (!runtime->judgement_scope_reported)
-    {
-        runtime->judgement_scope_reported = true;
-        PLOG_INFO
-            << "WindowedWidescreen diagnostic: Player 1 judgement root entered right HUD overlay";
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (runtime->effect_root_active) PlacementFailure(*runtime);
+    bool judgement_text{}, tutorial{};
+    const auto root = static_cast<std::uintptr_t>(context.ecx);
+    if (!TryMatchEffectSlots(runtime->abi.layout, runtime->active_gameplay_tune,
+            root, kPlayerOneJudgementTextSlots, judgement_text) ||
+        !TryMatchEffectSlots(runtime->abi.layout, runtime->active_gameplay_tune,
+            root, kNoteTutorialSlots, tutorial))
+        PlacementFailure(*runtime);
+    runtime->effect_root_active = true;
+    // Track-position grade effects (slots 93..97) retain the native 3D viewport.
+    runtime->effect_root_owner = judgement_text ? GameplayEffectOwner::judgement_text :
+        tutorial ? GameplayEffectOwner::tutorial : GameplayEffectOwner::none;
+    if (runtime->effect_root_owner != GameplayEffectOwner::none) {
+        std::uintptr_t manager{};
+        const auto offset = runtime->abi.layout.effect_root_manager_offset;
+        if (root > std::numeric_limits<std::uintptr_t>::max() - offset ||
+            !ReadRuntimePointer(nullptr, root + offset, manager))
+            PlacementFailure(*runtime);
+        // Managed roots queue their children; placement is applied at submission.
+        if (!manager)
+            BeginSelectedDraw(*runtime, GameplayHudPlacement::right,
+                GameplayFeedbackDrawScope::direct_effect);
     }
 }
 
 void GameplayFeedbackDrawEndMid(safetyhook::Context&) noexcept
 {
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
-        runtime->gameplay_feedback_draw_scope ==
-        GameplayFeedbackDrawScope::none)
-    {
-        return;
-    }
-    if (runtime->gameplay_feedback_draw_scope !=
-        GameplayFeedbackDrawScope::physical_gameplay_hud_overlay)
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-    const auto ended =
-        runtime->compositor.EndPhysicalGameplayHudOverlay();
-    if (!ended)
-    {
-        runtime->last_compositor_error = ended.error();
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-    runtime->gameplay_feedback_draw_scope =
-        GameplayFeedbackDrawScope::none;
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (!runtime->effect_root_active) PlacementFailure(*runtime);
+    if (runtime->gameplay_feedback_draw_scope == GameplayFeedbackDrawScope::direct_effect)
+        EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::direct_effect);
+    runtime->effect_root_active = false;
+    runtime->effect_root_owner = GameplayEffectOwner::none;
 }
 
-void NoteTutorialGroupBeginMid(safetyhook::Context&) noexcept
+void EffectPacketAllocatedMid(safetyhook::Context& context) noexcept
 {
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
-        runtime->active_gameplay_tune == 0)
-    {
-        return;
-    }
-    if (runtime->note_tutorial_group_active ||
-        runtime->gameplay_feedback_draw_scope !=
-        GameplayFeedbackDrawScope::none ||
-        !RequestRuntimeGameplayHudPlacement(
-            *runtime,
-            GameplayHudPlacement::right))
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
-    runtime->note_tutorial_group_active = true;
-    if (!runtime->note_tutorial_scope_reported)
-    {
-        runtime->note_tutorial_scope_reported = true;
-        PLOG_INFO
-            << "WindowedWidescreen diagnostic: note tutorial group entered right HUD viewport";
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (context.eax) {
+        // Every allocation invalidates an old address, including unselected roots.
+        (void)TakePacketOwner(*runtime, context.eax);
+        if (runtime->effect_root_active &&
+            runtime->effect_root_owner != GameplayEffectOwner::none) {
+            try {
+                runtime->effect_packets.push_back({context.eax, runtime->effect_root_owner});
+            } catch (...) {
+                PlacementFailure(*runtime);
+            }
+        }
     }
 }
 
-void NoteTutorialGroupEndMid(safetyhook::Context&) noexcept
+void EffectPacketSubmitMid(safetyhook::Context& context) noexcept
 {
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime) ||
-        !runtime->note_tutorial_group_active)
-    {
-        return;
-    }
-    runtime->note_tutorial_group_active = false;
-    if (!RequestRuntimeGameplayHudPlacement(
-        *runtime,
-        runtime->settings.gameplay_hud_placement()))
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (TakePacketOwner(*runtime, context.ecx) != GameplayEffectOwner::none)
+        BeginSelectedDraw(*runtime, GameplayHudPlacement::right,
+            GameplayFeedbackDrawScope::effect_packet);
+}
+
+void EffectPacketEndMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (runtime->gameplay_feedback_draw_scope == GameplayFeedbackDrawScope::effect_packet)
+        EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::effect_packet);
+}
+
+void BarDrawBeginMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    BeginSelectedDraw(*runtime, runtime->settings.gameplay_hud_placement(),
+        GameplayFeedbackDrawScope::bar);
+}
+
+void BarDrawEndMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    // Some post-call entries are also branch targets that bypass the draw.
+    if (runtime->gameplay_feedback_draw_scope == GameplayFeedbackDrawScope::none) return;
+    EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::bar);
 }
 
 void TestModeNativeBeginMid(safetyhook::Context&) noexcept
@@ -517,51 +478,41 @@ void GameplayHudProjectionMid(safetyhook::Context& context) noexcept
     }
 }
 
-void ComboBeginMid(safetyhook::Context& context) noexcept
-{
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
-    {
-        return;
-    }
 
+namespace {
+void BeginCounterDraw(safetyhook::Context& context) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
     std::int32_t entry{};
-    if (!TryReadComboEntry(runtime->abi.layout, context.ebp, entry) ||
-        !RequestRuntimeGameplayHudPlacement(
-            *runtime,
-            ResolveComboHudPlacement(entry)))
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
+    if (!TryReadComboEntry(runtime->abi.layout, context.ebp, entry)) PlacementFailure(*runtime);
+    BeginSelectedDraw(*runtime, ResolveComboHudPlacement(entry), GameplayFeedbackDrawScope::counter);
+}
 }
 
-void ComboEndMid(safetyhook::Context&) noexcept
+void ChainLabelBeginMid(safetyhook::Context& context) noexcept
 {
-    auto* runtime =
-        g_callback_runtime.load(std::memory_order_acquire);
-    if (runtime == nullptr || !RuntimeCallbacksAreActive(*runtime))
-    {
-        return;
-    }
-    if (!RequestRuntimeGameplayHudPlacement(
-        *runtime,
-        runtime->settings.gameplay_hud_placement()))
-    {
-        PublishRenderRuntimeFatal(
-            *runtime,
-            WindowedWidescreenError{
-                .stage = WindowedWidescreenOperationStage::
-                gameplay_hud_placement,
-            });
-    }
+    BeginCounterDraw(context);
 }
-
+void ChainDigitsBeginMid(safetyhook::Context& context) noexcept
+{
+    BeginCounterDraw(context);
+}
+void ChainGlowBeginMid(safetyhook::Context& context) noexcept
+{
+    BeginCounterDraw(context);
+}
+void HundredDigitsBeginMid(safetyhook::Context& context) noexcept
+{
+    BeginCounterDraw(context);
+}
+void CounterDrawEndMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    if (runtime->gameplay_feedback_draw_scope == GameplayFeedbackDrawScope::none) return;
+    EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::counter);
+}
 void ClipGateMid(safetyhook::Context& context) noexcept
 {
     auto* runtime =

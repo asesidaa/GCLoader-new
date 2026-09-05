@@ -1,5 +1,33 @@
 # Windowed Widescreen Stage Design
 
+## Placement containment correction, 2026-09-06
+
+Initial runtime observations showed that the placement scopes were too broad.
+The top-bar setting must affect only identified bar draws. The stage-start
+image/title/player introduction, staff roll, hundred-chain expanding rectangle,
+and stage-finish announcements must remain centered, and song visualizers must
+retain their native placement. Group 6 and the combined HUD/counter function
+are not exclusive owners of the elements we want to move.
+
+The operator's diagnostic run confirmed the broad scopes and deferred judgment
+viewport loss. The correction is now implemented with twenty explicit bar draw
+pairs, separate label/digit/glow/hundred-number pairs, and exact judgment/tutorial
+ownership carried to packet submission. The orthographic baseline is centered;
+group 6 and the combined HUD function are not placement scopes. Diagnostic logs
+established these boundaries, and the operator reported most placement correct. A follow-up adds fixed-position judgment text roots
+12,15,18,24,27,30 decimal: the earlier 93–97 selection covers track-position
+grade effects, not these text roots. See the
+[judgment text evidence and correction](../../reverse-engineering/widescreen-judgment-text-followup-2026-09-06.md).
+The operator now confirms GREAT text placement. Slots 93–97 are removed from
+placement selection so their rotating, expanding grade effects retain the native
+track position. The operator confirms the right-side flash is gone. The fix is
+accepted for closeout; temporary trace storage, logging, and eight diagnostic-only
+hooks are removed. The final enabled profile has 83 permanent hooks. See the
+[right-side flash follow-up](../../reverse-engineering/widescreen-right-flash-followup-2026-09-06.md).
+This supersedes older placement boundaries below. See the
+[implemented boundaries and closed diagnostic record](../../reverse-engineering/widescreen-placement-diagnostics.md)
+and [implementation plan](../plans/2026-09-06-widescreen-exact-draw-placement.md).
+
 ## Context
 
 Groove Coaster's supported runtime is already an upright, windowed 720 x 1280
@@ -61,11 +89,11 @@ express selected patch sites as RVAs with exact expected-byte guards.
 | `0x0045C1B0`, `0x0045C7D0` | Dispatch task rendering in priority order. | Contiguous task-level 2D and 3D regions can be classified centrally. |
 | `0x00662F10` | Interleaves orthographic and perspective gameplay rendering in one task. | Gameplay needs internal subpass transitions in addition to task classification. |
 | `0x006449F0`, `0x00641DE0` | Bind stage-background transforms and render the animated four-corner color quad using target width/height before the perspective track. | This is stage-owned output, not HUD; it must use physical space so the authored background fills the widened stage. |
-| `0x005E4503` through `0x005E4B58` | Draws the per-entry CHAIN label/digits and the later threshold or milestone layers that reuse the same combo value; entry is stored at `[ebp-0x14]`. | A guarded viewport window keeps the complete counter presentation together on the corresponding player side. |
+| `0x005E4503` through `0x005E4B58` | CHAIN label, ordinary digits, numeric glow, enlarged hundred-number burst, and separate expanding rectangular lines; entry at `[ebp-0x14]`. | The current bracket also moves the rectangle and must be narrowed to exact selected draws. |
 | `0x00662FA8` | Calls the perspective-track owner with CTune in `ecx` immediately before the player-visual function. | Capture CTune early enough to identify Player 1 judgement, which renders before the later gameplay-HUD pass. |
 | `0x006463F0` | Produces judgement effects only for native owner lanes `nn < 4`; grades 0 through 4 use CTune slot `93 + 5 * nn + grade`. | Player 1 is the first lane, slots 93 through 97. The other lanes are not interpreted as multiplayer participant capacity, and the producer is not hooked. |
 | `0x005F11E8` through `0x005F11ED` | Calls the generic effect-tree renderer with the current effect root in `ecx`. | An exact match for Player 1 judgement temporarily captures physical-3D D3D state, applies the right native HUD viewport for the complete tree, then restores the captured state. |
-| `0x0064A2D5` through `0x0064A2DA` | Draws tutorial group 6 inside the gameplay-effects routine. | The concrete tutorial group uses the right gameplay-HUD viewport and restores center immediately after the call. |
+| `0x0064A2D5` through `0x0064A2DA` | Draws effect-manager group 6, including tutorials and stage-finish announcements. | Whole-group movement is too broad; identify selected roots and their submitted packets. |
 | `0x0063AA89` through `0x0063AA8E` | Calls `0x00576660`, which renders the Test Mode `CRootWindow`, before continuing LoopLastTask bookkeeping. | A guarded call bracket can render the complete Test Mode form through the centered native canvas without resizing or stretching the wide output. |
 
 The `_clip.dat` parser accepts a header plus one byte for each
@@ -92,7 +120,9 @@ though it would work for normally projected geometry.
 - Keep the gameplay HUD centered except while drawing an ordinary combo
   counter: entry 0 uses the right 720-pixel viewport and entry 1 uses the left.
   Move Player 1's tutorial group and judgement roots to the right viewport;
-  opponent judgement and milestone combo effects remain centered.
+  opponent judgement, hundred-chain rectangular lines, and finish announcements
+  remain centered. Numeric glow and enlarged hundred-number draws are distinct
+  from the rectangular lines.
 - Let the verified stage-owned color background fill the physical stage before
   the native UI overlay is composited.
 - Render verified perspective stage passes across the complete output.
@@ -402,29 +432,30 @@ execute, reset, or otherwise alter the animation command manager. The rejected
 panel `+0x0C` and full-`common.rvb` wrappers were broader or earlier than the
 actual clip traversal and did not correct the icons.
 
-Within `GameplayHud`, RVA `0x001E4503` begins the per-entry combo-counter
-window before the CHAIN label. RVA `0x001E4550` remains a read-only witness for
-the normal digit call, while RVA `0x001E4B58` restores the centered viewport at
-the shared join after the later threshold and milestone layers. Entry 0 selects
-the right viewport, entry 1 selects the left viewport, and an unexpected entry
-selects center. Both changes flush pending native work first, so the normal
-number and celebration number cannot split across viewports.
+Within `GameplayHud`, RVA `0x001E4503` currently begins the per-entry counter
+window before the CHAIN label. RVA `0x001E4550` is the ordinary digit call and
+is temporarily instrumented by a read-only diagnostic detour on every widescreen run. RVA
+`0x001E4B58` restores configured HUD placement at the shared join after numeric
+glow, enlarged hundred-number drawing, and the separate expanding rectangle.
+Entry 0 selects right, entry 1 left, and an unexpected entry center. The
+rectangle's inclusion in this interval is an observed containment defect.
 
 The gameplay-track call at RVA `0x00262FA8` captures CTune before the
 player-visual function. Within that scope, the generic manager call at RVA
 `0x001F11E8` receives its current effect root in `ecx`. Exact pointer
 matches against Player 1 slots 93 through 97 capture the current physical-3D
-D3D state and temporarily apply the right native HUD viewport. Because
-`sub_5F1F70` renders child effects before returning, the complete judgement
-tree moves together. RVA `0x001F11ED` flushes that tree and restores the exact
-captured state; unrelated gameplay effects remain in physical 3D.
+D3D state and temporarily apply the right native HUD viewport. `sub_5F1F70`
+visits children, but can enqueue their sprites in the manager's private queue.
+RVA `0x001F11ED` restores the captured state after flushing the four general
+native queues. That flush does not establish completion of the private queue;
+the diagnostic run pairs allocation and later submission to observe this gap.
 
 The gameplay-effects call at RVA `0x00263041` then enters `GameplayHud`.
 Within `GC120FPS_GameplayRender_Effects_FrameDomainTiming`, the direct group-6
-call at RVA `0x0024A2D5` owns the note-tutorial family. That concrete bracket
-selects Player 1's right viewport, and RVA `0x0024A2DA` restores the centered
-gameplay-HUD viewport. This avoids depending on individual tutorial-root
-matching.
+call at RVA `0x0024A2D5` currently selects Player 1's right viewport, and RVA
+`0x0024A2DA` restores configured gameplay-HUD placement. Group 6 also contains
+stage-finish roots and other effects. The final correction must select exact
+tutorial owners at their actual draw boundary.
 
 Test Mode is a direct root-form traversal rather than a common-task vtable
 dispatch. `sub_453120` returns the renderer's `IDirect3DDevice9*` from
@@ -758,10 +789,11 @@ deployed build. It requires:
   native live-frustum branch;
 - correct Player 1 placement in the current one-player scope; multiplayer
   participant capacity is not inferred from the native judgement lanes;
-- ordinary entry-0 and entry-1 combo counters and their celebration layers
-  remain together on their assigned right and left sides without stretching;
-- only Player 1's MISS/GOOD/COOL/GREAT effect follows the primary combo cluster,
-  with opponent judgement effects unchanged;
+- entry-0 and entry-1 CHAIN labels and counter digits follow their assigned
+  sides without stretching; numeric glow and hundred-number drawing are
+  checked separately, and hundred-chain rectangular lines remain centered;
+- Player 1's fixed-position judgment text follows the primary combo cluster,
+  with track-position grade effects and opponent feedback unchanged;
 - all note-tutorial variants and their companion effect appear beside the
   local player's feedback cluster, while non-tutorial gameplay effects remain
   centered;
@@ -790,13 +822,23 @@ Verified perspective passes use that complete scene. Common 2D tasks render
 through the centered 720 x 1280 native texture; the direct Test Mode root-form
 render owns a standalone compositor frame around that same native space.
 Gameplay HUD/effects render at native logical scale on the wide scene through
-a 720 x 1280 viewport. The complete combo presentation uses its existing
-per-entry side mapping. The two persistent network-status clips retain their
-authored coordinates in the centered native-width viewport during gameplay
-only. Player 1 judgement borrows the right native viewport with exact
-physical-state restoration, while the concrete tutorial group-6 draw moves the
-gameplay-HUD viewport right and then back to center. The final
-scene copy is one-to-one and unrotated. The feature never asks the player to
+a centered 720 x 1280 viewport. Only twenty identified top-bar calls use the
+configured bar placement. Separate CHAIN label, ordinary digit, numeric glow,
+and hundred-number calls use the existing per-entry side mapping, restoring
+the actual enclosing state after each call. The expanding rectangle remains
+centered. The two persistent network-status clips retain their existing
+gameplay-only placement policy.
+
+Primary fixed-position judgment text slots 12,15,18,24,27,30 decimal and the
+identified tutorial slots use the right native viewport at actual drawing.
+Managed roots carry ownership through allocation to packet submission; direct
+roots use a matching immediate scope. Track-position grade effects 93–97,
+other group-6 roots, introductions, staff rolls, and result announcements
+receive no placement override. The operator confirmed GREAT text placement
+and disappearance of the right-side flash. Temporary diagnostics are removed;
+the profile retains 83 permanent hooks.
+
+The final scene copy is one-to-one and unrotated. The feature never asks the player to
 rotate the display and exposes no rotation or fullscreen setting. While
 enabled, authored `_clip.dat` bounds are always bypassed in favor of the game's
 existing live-frustum path; this behavior is not configurable.

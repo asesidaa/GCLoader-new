@@ -19,12 +19,18 @@ void GameplayEffectsEndMid(safetyhook::Context&) noexcept;
 void GameplayFeedbackDrawBeginMid(
     safetyhook::Context& context) noexcept;
 void GameplayFeedbackDrawEndMid(safetyhook::Context&) noexcept;
-void NoteTutorialGroupBeginMid(safetyhook::Context&) noexcept;
-void NoteTutorialGroupEndMid(safetyhook::Context&) noexcept;
 void TestModeNativeBeginMid(safetyhook::Context&) noexcept;
 void TestModeNativeEndMid(safetyhook::Context&) noexcept;
 void GameplayHudProjectionMid(safetyhook::Context& context) noexcept;
-void ComboBeginMid(safetyhook::Context& context) noexcept;
-void ComboEndMid(safetyhook::Context&) noexcept;
+void ChainLabelBeginMid(safetyhook::Context& context) noexcept;
+void ChainDigitsBeginMid(safetyhook::Context&) noexcept;
+void ChainGlowBeginMid(safetyhook::Context&) noexcept;
+void HundredDigitsBeginMid(safetyhook::Context&) noexcept;
+void CounterDrawEndMid(safetyhook::Context&) noexcept;
+void BarDrawBeginMid(safetyhook::Context&) noexcept;
+void BarDrawEndMid(safetyhook::Context&) noexcept;
+void EffectPacketAllocatedMid(safetyhook::Context&) noexcept;
+void EffectPacketSubmitMid(safetyhook::Context&) noexcept;
+void EffectPacketEndMid(safetyhook::Context&) noexcept;
 void ClipGateMid(safetyhook::Context& context) noexcept;
 }

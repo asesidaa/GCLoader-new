@@ -9,6 +9,104 @@ namespace {
 using namespace game_version;
 using namespace runtime_image;
 constexpr std::array kBytes{
+    WidescreenByteContract{WidescreenContractSite::bar_difficulty_a_begin, {FeatureId::windowed_widescreen, "bar_difficulty_a_begin", VersionedOperationKind::mid_hook,
+             0x1E3F48, 5, PatternOf<0xE8, 0x33, 0x46, 0xF8, 0xFF>(), {}, 47}},
+    WidescreenByteContract{WidescreenContractSite::bar_difficulty_a_end, {FeatureId::windowed_widescreen, "bar_difficulty_a_end", VersionedOperationKind::mid_hook,
+             0x1E3F4D, 5, PatternOf<0x83, 0xC4, 0x18, 0xEB, 0x36>(), {}, 48}},
+    WidescreenByteContract{WidescreenContractSite::bar_difficulty_b_begin, {FeatureId::windowed_widescreen, "bar_difficulty_b_begin", VersionedOperationKind::mid_hook,
+             0x1E3F80, 5, PatternOf<0xE8, 0xFB, 0x45, 0xF8, 0xFF>(), {}, 49}},
+    WidescreenByteContract{WidescreenContractSite::bar_difficulty_b_end, {FeatureId::windowed_widescreen, "bar_difficulty_b_end", VersionedOperationKind::mid_hook,
+             0x1E3F88, 5, PatternOf<0xE8, 0x93, 0xF1, 0xE6, 0xFF>(), {}, 50}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_480_begin, {FeatureId::windowed_widescreen, "bar_panel_480_begin", VersionedOperationKind::mid_hook,
+             0x1E3FB0, 5, PatternOf<0xE8, 0xFB, 0xD5, 0xFF, 0xFF>(), {}, 51}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_480_end, {FeatureId::windowed_widescreen, "bar_panel_480_end", VersionedOperationKind::mid_hook,
+             0x1E3FB5, 5, PatternOf<0xE8, 0x16, 0xD2, 0xE1, 0xFF>(), {}, 52}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_524_begin, {FeatureId::windowed_widescreen, "bar_panel_524_begin", VersionedOperationKind::mid_hook,
+             0x1E3FD7, 5, PatternOf<0xE8, 0xD4, 0xD5, 0xFF, 0xFF>(), {}, 53}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_524_end, {FeatureId::windowed_widescreen, "bar_panel_524_end", VersionedOperationKind::mid_hook,
+             0x1E3FDC, 5, PatternOf<0xE8, 0x3F, 0xF1, 0xE6, 0xFF>(), {}, 54}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_568_begin, {FeatureId::windowed_widescreen, "bar_panel_568_begin", VersionedOperationKind::mid_hook,
+             0x1E4026, 5, PatternOf<0xE8, 0x85, 0xD5, 0xFF, 0xFF>(), {}, 55}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_568_end, {FeatureId::windowed_widescreen, "bar_panel_568_end", VersionedOperationKind::mid_hook,
+             0x1E402B, 5, PatternOf<0xE8, 0xA0, 0xD1, 0xE1, 0xFF>(), {}, 56}},
+    WidescreenByteContract{WidescreenContractSite::bar_stage_panel_begin, {FeatureId::windowed_widescreen, "bar_stage_panel_begin", VersionedOperationKind::mid_hook,
+             0x1E4063, 5, PatternOf<0xE8, 0x48, 0xD5, 0xFF, 0xFF>(), {}, 57}},
+    WidescreenByteContract{WidescreenContractSite::bar_stage_panel_end, {FeatureId::windowed_widescreen, "bar_stage_panel_end", VersionedOperationKind::mid_hook,
+             0x1E4068, 6, PatternOf<0x51, 0xD9, 0xE8, 0xD9, 0x1C, 0x24>(), {}, 58}},
+    WidescreenByteContract{WidescreenContractSite::bar_stage_current_begin, {FeatureId::windowed_widescreen, "bar_stage_current_begin", VersionedOperationKind::mid_hook,
+             0x1E40D0, 5, PatternOf<0xE8, 0x8B, 0x7F, 0xFE, 0xFF>(), {}, 59}},
+    WidescreenByteContract{WidescreenContractSite::bar_stage_current_end, {FeatureId::windowed_widescreen, "bar_stage_current_end", VersionedOperationKind::mid_hook,
+             0x1E40D5, 6, PatternOf<0x83, 0xC4, 0x20, 0x51, 0xD9, 0xE8>(), {}, 60}},
+    WidescreenByteContract{WidescreenContractSite::bar_stage_total_begin, {FeatureId::windowed_widescreen, "bar_stage_total_begin", VersionedOperationKind::mid_hook,
+             0x1E412D, 5, PatternOf<0xE8, 0x2E, 0x7F, 0xFE, 0xFF>(), {}, 61}},
+    WidescreenByteContract{WidescreenContractSite::bar_stage_total_end, {FeatureId::windowed_widescreen, "bar_stage_total_end", VersionedOperationKind::mid_hook,
+             0x1E4135, 5, PatternOf<0xE8, 0x96, 0xD0, 0xE1, 0xFF>(), {}, 62}},
+    WidescreenByteContract{WidescreenContractSite::bar_gauge_begin, {FeatureId::windowed_widescreen, "bar_gauge_begin", VersionedOperationKind::mid_hook,
+             0x1E41AB, 5, PatternOf<0xE8, 0x90, 0x8C, 0xFE, 0xFF>(), {}, 63}},
+    WidescreenByteContract{WidescreenContractSite::bar_gauge_end, {FeatureId::windowed_widescreen, "bar_gauge_end", VersionedOperationKind::mid_hook,
+             0x1E41B3, 5, PatternOf<0xE8, 0x18, 0xD0, 0xE1, 0xFF>(), {}, 64}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_216_begin, {FeatureId::windowed_widescreen, "bar_panel_216_begin", VersionedOperationKind::mid_hook,
+             0x1E41E3, 5, PatternOf<0xE8, 0xC8, 0xD3, 0xFF, 0xFF>(), {}, 65}},
+    WidescreenByteContract{WidescreenContractSite::bar_panel_216_end, {FeatureId::windowed_widescreen, "bar_panel_216_end", VersionedOperationKind::mid_hook,
+             0x1E41E8, 5, PatternOf<0xE8, 0xE3, 0xCF, 0xE1, 0xFF>(), {}, 66}},
+    WidescreenByteContract{WidescreenContractSite::bar_score_panel_begin, {FeatureId::windowed_widescreen, "bar_score_panel_begin", VersionedOperationKind::mid_hook,
+             0x1E420A, 5, PatternOf<0xE8, 0xA1, 0xD3, 0xFF, 0xFF>(), {}, 67}},
+    WidescreenByteContract{WidescreenContractSite::bar_score_panel_end, {FeatureId::windowed_widescreen, "bar_score_panel_end", VersionedOperationKind::mid_hook,
+             0x1E420F, 6, PatternOf<0x51, 0xD9, 0xE8, 0xD9, 0x1C, 0x24>(), {}, 68}},
+    WidescreenByteContract{WidescreenContractSite::bar_score_digits_begin, {FeatureId::windowed_widescreen, "bar_score_digits_begin", VersionedOperationKind::mid_hook,
+             0x1E4261, 5, PatternOf<0xE8, 0xFA, 0x7D, 0xFE, 0xFF>(), {}, 69}},
+    WidescreenByteContract{WidescreenContractSite::bar_score_digits_end, {FeatureId::windowed_widescreen, "bar_score_digits_end", VersionedOperationKind::mid_hook,
+             0x1E4269, 5, PatternOf<0xE8, 0x62, 0xCF, 0xE1, 0xFF>(), {}, 70}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_panel_a_begin, {FeatureId::windowed_widescreen, "bar_extra_panel_a_begin", VersionedOperationKind::mid_hook,
+             0x1E4299, 5, PatternOf<0xE8, 0x12, 0xD3, 0xFF, 0xFF>(), {}, 71}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_panel_a_end, {FeatureId::windowed_widescreen, "bar_extra_panel_a_end", VersionedOperationKind::mid_hook,
+             0x1E429E, 6, PatternOf<0x51, 0xD9, 0xE8, 0xD9, 0x1C, 0x24>(), {}, 72}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_digits_a_begin, {FeatureId::windowed_widescreen, "bar_extra_digits_a_begin", VersionedOperationKind::mid_hook,
+             0x1E42EA, 5, PatternOf<0xE8, 0x71, 0x7D, 0xFE, 0xFF>(), {}, 73}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_digits_a_end, {FeatureId::windowed_widescreen, "bar_extra_digits_a_end", VersionedOperationKind::mid_hook,
+             0x1E42F2, 5, PatternOf<0xE8, 0xD9, 0xCE, 0xE1, 0xFF>(), {}, 74}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_panel_b_begin, {FeatureId::windowed_widescreen, "bar_extra_panel_b_begin", VersionedOperationKind::mid_hook,
+             0x1E4314, 5, PatternOf<0xE8, 0x97, 0xD2, 0xFF, 0xFF>(), {}, 75}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_panel_b_end, {FeatureId::windowed_widescreen, "bar_extra_panel_b_end", VersionedOperationKind::mid_hook,
+             0x1E4319, 6, PatternOf<0x51, 0xD9, 0xE8, 0xD9, 0x1C, 0x24>(), {}, 76}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_digits_b_begin, {FeatureId::windowed_widescreen, "bar_extra_digits_b_begin", VersionedOperationKind::mid_hook,
+             0x1E4365, 5, PatternOf<0xE8, 0xF6, 0x7C, 0xFE, 0xFF>(), {}, 77}},
+    WidescreenByteContract{WidescreenContractSite::bar_extra_digits_b_end, {FeatureId::windowed_widescreen, "bar_extra_digits_b_end", VersionedOperationKind::mid_hook,
+             0x1E436D, 5, PatternOf<0xE8, 0x5E, 0xCE, 0xE1, 0xFF>(), {}, 78}},
+    WidescreenByteContract{WidescreenContractSite::bar_mode_panel_begin, {FeatureId::windowed_widescreen, "bar_mode_panel_begin", VersionedOperationKind::mid_hook,
+             0x1E4B99, 5, PatternOf<0xE8, 0x12, 0xCA, 0xFF, 0xFF>(), {}, 79}},
+    WidescreenByteContract{WidescreenContractSite::bar_mode_panel_end, {FeatureId::windowed_widescreen, "bar_mode_panel_end", VersionedOperationKind::mid_hook,
+             0x1E4B9E, 5, PatternOf<0xE8, 0x2D, 0xC6, 0xE1, 0xFF>(), {}, 80}},
+    WidescreenByteContract{WidescreenContractSite::bar_player_panel_begin, {FeatureId::windowed_widescreen, "bar_player_panel_begin", VersionedOperationKind::mid_hook,
+             0x1E4BDF, 5, PatternOf<0xE8, 0xCC, 0xC9, 0xFF, 0xFF>(), {}, 81}},
+    WidescreenByteContract{WidescreenContractSite::bar_player_panel_end, {FeatureId::windowed_widescreen, "bar_player_panel_end", VersionedOperationKind::mid_hook,
+             0x1E4BE4, 5, PatternOf<0xE8, 0xE7, 0xC5, 0xE1, 0xFF>(), {}, 82}},
+    WidescreenByteContract{WidescreenContractSite::bar_status_panel_begin, {FeatureId::windowed_widescreen, "bar_status_panel_begin", VersionedOperationKind::mid_hook,
+             0x1E4C36, 5, PatternOf<0xE8, 0x75, 0xC9, 0xFF, 0xFF>(), {}, 83}},
+    WidescreenByteContract{WidescreenContractSite::bar_status_panel_end, {FeatureId::windowed_widescreen, "bar_status_panel_end", VersionedOperationKind::mid_hook,
+             0x1E4C3B, 5, PatternOf<0xE8, 0xE0, 0xE4, 0xE6, 0xFF>(), {}, 84}},
+    WidescreenByteContract{WidescreenContractSite::bar_names_end, {FeatureId::windowed_widescreen, "bar_names_end", VersionedOperationKind::mid_hook,
+             0x24A284, 6, PatternOf<0x8B, 0x85, 0x54, 0xFE, 0xFF, 0xFF>(), {}, 85}},
+    WidescreenByteContract{WidescreenContractSite::chain_label_end, {FeatureId::windowed_widescreen, "chain_label_end", VersionedOperationKind::mid_hook,
+             0x1E4508, 7, PatternOf<0x51, 0xD9, 0x45, 0xD8, 0xD9, 0x1C, 0x24>(), {}, 86}},
+    WidescreenByteContract{WidescreenContractSite::chain_digits_end, {FeatureId::windowed_widescreen, "chain_digits_end", VersionedOperationKind::mid_hook,
+             0x1E4555, 10, PatternOf<0x83, 0xC4, 0x20, 0xC7, 0x45, 0xCC, 0x0, 0x0, 0x0, 0x0>(), {}, 87}},
+    WidescreenByteContract{WidescreenContractSite::chain_glow_end, {FeatureId::windowed_widescreen, "chain_glow_end", VersionedOperationKind::mid_hook,
+             0x1E4611, 5, PatternOf<0xE9, 0x4B, 0xFF, 0xFF, 0xFF>(), {}, 88}},
+    WidescreenByteContract{WidescreenContractSite::hundred_digits_end, {FeatureId::windowed_widescreen, "hundred_digits_end", VersionedOperationKind::mid_hook,
+             0x1E4767, 8, PatternOf<0x83, 0xC4, 0x20, 0xE8, 0xB1, 0xE9, 0xE6, 0xFF>(), {}, 89}},
+    WidescreenByteContract{WidescreenContractSite::effect_packet_end, {FeatureId::windowed_widescreen, "effect_packet_end", VersionedOperationKind::mid_hook,
+             0x1F10C9, 10, PatternOf<0x8B, 0x4D, 0xAC, 0xC7, 0x41, 0x70, 0x0, 0x0, 0x0, 0x0>(), {}, 90}},
+    WidescreenByteContract{WidescreenContractSite::bar_names_begin, {FeatureId::windowed_widescreen, "bar_names_begin", VersionedOperationKind::mid_hook,
+             0x24A27F, 5, PatternOf<0xE8, 0x1C, 0x7D, 0xF9, 0xFF>(), {}, 38}},
+    WidescreenByteContract{WidescreenContractSite::chain_glow_begin, {FeatureId::windowed_widescreen, "chain_glow_begin", VersionedOperationKind::mid_hook,
+             0x1E4609, 5, PatternOf<0xE8, 0x52, 0x7A, 0xFE, 0xFF>(), {}, 41}},
+    WidescreenByteContract{WidescreenContractSite::hundred_digits_begin, {FeatureId::windowed_widescreen, "hundred_digits_begin", VersionedOperationKind::mid_hook,
+             0x1E4762, 5, PatternOf<0xE8, 0xF9, 0x78, 0xFE, 0xFF>(), {}, 42}},
+    WidescreenByteContract{WidescreenContractSite::effect_packet_allocated, {FeatureId::windowed_widescreen, "effect_packet_allocated", VersionedOperationKind::mid_hook,
+             0x1F0BB0, 7, PatternOf<0x89, 0x45, 0xF4, 0x83, 0x7D, 0xF4, 0x0>(), {}, 44}},
+    WidescreenByteContract{WidescreenContractSite::effect_packet_begin, {FeatureId::windowed_widescreen, "effect_packet_begin", VersionedOperationKind::mid_hook,
+             0x1F10C4, 5, PatternOf<0xE8, 0x37, 0xF5, 0xFF, 0xFF>(), {}, 45}},
     WidescreenByteContract{WidescreenContractSite::config_apply, {FeatureId::windowed_widescreen, "config_apply", VersionedOperationKind::inline_hook,
              0x23C360, 6, PatternOf<0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14, 0xE8, 0xE5, 0xF8, 0xFF, 0xFF>(), {}, 0}},
     WidescreenByteContract{WidescreenContractSite::window_device_create, {FeatureId::windowed_widescreen, "window_device_create", VersionedOperationKind::inline_hook,
@@ -59,20 +157,14 @@ constexpr std::array kBytes{
              0x263046, 5, PatternOf<0xE8, 0xD5, 0x0, 0xDF, 0xFF>(), {}, 25}},
     WidescreenByteContract{WidescreenContractSite::gameplay_hud_projection, {FeatureId::windowed_widescreen, "gameplay_hud_projection", VersionedOperationKind::mid_hook,
              0x23FDBA, 5, PatternOf<0xE8, 0xB1, 0xF3, 0xF9, 0xFF, 0x8B, 0xB5, 0x24, 0xFF, 0xFF, 0xFF, 0x81, 0xC6, 0xD0, 0x0, 0x0>(), {}, 26}},
-    WidescreenByteContract{WidescreenContractSite::combo_begin, {FeatureId::windowed_widescreen, "combo_begin", VersionedOperationKind::mid_hook,
+    WidescreenByteContract{WidescreenContractSite::chain_label_begin, {FeatureId::windowed_widescreen, "chain_label_begin", VersionedOperationKind::mid_hook,
              0x1E4503, 5, PatternOf<0xE8, 0xA8, 0xD0, 0xFF, 0xFF>(), {}, 27}},
-    WidescreenByteContract{WidescreenContractSite::combo_normal_digits, {FeatureId::windowed_widescreen, "combo_normal_digits", VersionedOperationKind::read_only_contract,
-             0x1E4550, 5, PatternOf<0xE8, 0xB, 0x7B, 0xFE, 0xFF>(), {}, 0, SiteDisposition::verify_only}},
-    WidescreenByteContract{WidescreenContractSite::combo_end, {FeatureId::windowed_widescreen, "combo_end", VersionedOperationKind::mid_hook,
-             0x1E4B58, 6, PatternOf<0x8B, 0x55, 0xE4, 0x8B, 0x45, 0xE0, 0x89, 0x2, 0xE9, 0xD9, 0xF8, 0xFF, 0xFF>(), {}, 28}},
+    WidescreenByteContract{WidescreenContractSite::chain_digits_begin, {FeatureId::windowed_widescreen, "chain_digits_begin", VersionedOperationKind::mid_hook,
+             0x1E4550, 5, PatternOf<0xE8, 0xB, 0x7B, 0xFE, 0xFF>(), {}, 36}},
     WidescreenByteContract{WidescreenContractSite::gameplay_feedback_draw_begin, {FeatureId::windowed_widescreen, "gameplay_feedback_draw_begin", VersionedOperationKind::mid_hook,
              0x1F11E8, 5, PatternOf<0xE8, 0x83, 0xD, 0x0, 0x0>(), {}, 29}},
     WidescreenByteContract{WidescreenContractSite::gameplay_feedback_draw_end, {FeatureId::windowed_widescreen, "gameplay_feedback_draw_end", VersionedOperationKind::mid_hook,
              0x1F11ED, 6, PatternOf<0x8B, 0x4D, 0xF8, 0x8B, 0x51, 0xC, 0x81, 0xE2, 0x0, 0x40>(), {}, 30}},
-    WidescreenByteContract{WidescreenContractSite::note_tutorial_group_begin, {FeatureId::windowed_widescreen, "note_tutorial_group_begin", VersionedOperationKind::mid_hook,
-             0x24A2D5, 5, PatternOf<0xE8, 0xA6, 0x6E, 0xFA, 0xFF>(), {}, 31}},
-    WidescreenByteContract{WidescreenContractSite::note_tutorial_group_end, {FeatureId::windowed_widescreen, "note_tutorial_group_end", VersionedOperationKind::mid_hook,
-             0x24A2DA, 6, PatternOf<0xF, 0xB6, 0x55, 0x8, 0x85, 0xD2, 0x74, 0x1B>(), {}, 32}},
     WidescreenByteContract{WidescreenContractSite::test_mode_native_begin, {FeatureId::windowed_widescreen, "test_mode_native_begin", VersionedOperationKind::mid_hook,
              0x23AA89, 5, PatternOf<0xE8, 0xD2, 0xBB, 0xF3, 0xFF, 0xE8, 0x8D, 0x86, 0xE1, 0xFF>(), {}, 10}},
     WidescreenByteContract{WidescreenContractSite::test_mode_native_end, {FeatureId::windowed_widescreen, "test_mode_native_end", VersionedOperationKind::mid_hook,
@@ -110,7 +202,57 @@ constexpr std::array<WidescreenPointerContract, 9> kPointers{{
     {WidescreenContractSite::common_3d_render, {FeatureId::windowed_widescreen, "common_3d_render", VersionedOperationKind::read_only_contract,
              0x2FB228, 4, PatternOf<0xB0, 0x84, 0x57, 0x0>(), {}, 0, SiteDisposition::verify_only}, 0x1784B0}
 }};
-constexpr std::array<WidescreenFunctionAbi, 36> kAbis{{
+constexpr std::array<WidescreenFunctionAbi, 83> kAbis{{
+    {WidescreenContractSite::bar_difficulty_a_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_difficulty_a_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_difficulty_b_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_difficulty_b_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_480_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_480_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_524_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_524_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_568_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_568_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_stage_panel_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_stage_panel_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_stage_current_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_stage_current_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_stage_total_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_stage_total_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_gauge_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_gauge_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_216_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_panel_216_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_score_panel_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_score_panel_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_score_digits_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_score_digits_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_panel_a_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_panel_a_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_digits_a_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_digits_a_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_panel_b_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_panel_b_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_digits_b_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_extra_digits_b_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_mode_panel_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_mode_panel_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_player_panel_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_player_panel_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_status_panel_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_status_panel_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_names_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::chain_label_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::chain_digits_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::chain_glow_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::hundred_digits_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::effect_packet_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::chain_digits_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::bar_names_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::chain_glow_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::hundred_digits_begin, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::effect_packet_allocated, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::effect_packet_begin, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::config_apply, WidescreenCallingConvention::cdecl_call, 1},
     {WidescreenContractSite::window_device_create, WidescreenCallingConvention::thiscall_call, 1},
     {WidescreenContractSite::frame_begin, WidescreenCallingConvention::thiscall_call, 1},
@@ -136,12 +278,9 @@ constexpr std::array<WidescreenFunctionAbi, 36> kAbis{{
     {WidescreenContractSite::gameplay_effects, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::gameplay_effects_end, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::gameplay_hud_projection, WidescreenCallingConvention::mid_context, 1},
-    {WidescreenContractSite::combo_begin, WidescreenCallingConvention::mid_context, 1},
-    {WidescreenContractSite::combo_end, WidescreenCallingConvention::mid_context, 1},
+    {WidescreenContractSite::chain_label_begin, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::gameplay_feedback_draw_begin, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::gameplay_feedback_draw_end, WidescreenCallingConvention::mid_context, 1},
-    {WidescreenContractSite::note_tutorial_group_begin, WidescreenCallingConvention::mid_context, 1},
-    {WidescreenContractSite::note_tutorial_group_end, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::test_mode_native_begin, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::test_mode_native_end, WidescreenCallingConvention::mid_context, 1},
     {WidescreenContractSite::clip_gate, WidescreenCallingConvention::mid_context, 1},
@@ -176,23 +315,70 @@ constexpr std::array kOrder{
     WidescreenContractSite::gameplay_effects,
     WidescreenContractSite::gameplay_effects_end,
     WidescreenContractSite::gameplay_hud_projection,
-    WidescreenContractSite::combo_begin,
-    WidescreenContractSite::combo_end,
+    WidescreenContractSite::chain_label_begin,
     WidescreenContractSite::gameplay_feedback_draw_begin,
     WidescreenContractSite::gameplay_feedback_draw_end,
-    WidescreenContractSite::note_tutorial_group_begin,
-    WidescreenContractSite::note_tutorial_group_end,
     WidescreenContractSite::clip_gate,
     WidescreenContractSite::reset_pre,
-    WidescreenContractSite::reset_post
+    WidescreenContractSite::reset_post,
+    WidescreenContractSite::chain_digits_begin,
+    WidescreenContractSite::bar_names_begin,
+    WidescreenContractSite::chain_glow_begin,
+    WidescreenContractSite::hundred_digits_begin,
+    WidescreenContractSite::effect_packet_allocated,
+    WidescreenContractSite::effect_packet_begin,
+    WidescreenContractSite::bar_difficulty_a_begin,
+    WidescreenContractSite::bar_difficulty_a_end,
+    WidescreenContractSite::bar_difficulty_b_begin,
+    WidescreenContractSite::bar_difficulty_b_end,
+    WidescreenContractSite::bar_panel_480_begin,
+    WidescreenContractSite::bar_panel_480_end,
+    WidescreenContractSite::bar_panel_524_begin,
+    WidescreenContractSite::bar_panel_524_end,
+    WidescreenContractSite::bar_panel_568_begin,
+    WidescreenContractSite::bar_panel_568_end,
+    WidescreenContractSite::bar_stage_panel_begin,
+    WidescreenContractSite::bar_stage_panel_end,
+    WidescreenContractSite::bar_stage_current_begin,
+    WidescreenContractSite::bar_stage_current_end,
+    WidescreenContractSite::bar_stage_total_begin,
+    WidescreenContractSite::bar_stage_total_end,
+    WidescreenContractSite::bar_gauge_begin,
+    WidescreenContractSite::bar_gauge_end,
+    WidescreenContractSite::bar_panel_216_begin,
+    WidescreenContractSite::bar_panel_216_end,
+    WidescreenContractSite::bar_score_panel_begin,
+    WidescreenContractSite::bar_score_panel_end,
+    WidescreenContractSite::bar_score_digits_begin,
+    WidescreenContractSite::bar_score_digits_end,
+    WidescreenContractSite::bar_extra_panel_a_begin,
+    WidescreenContractSite::bar_extra_panel_a_end,
+    WidescreenContractSite::bar_extra_digits_a_begin,
+    WidescreenContractSite::bar_extra_digits_a_end,
+    WidescreenContractSite::bar_extra_panel_b_begin,
+    WidescreenContractSite::bar_extra_panel_b_end,
+    WidescreenContractSite::bar_extra_digits_b_begin,
+    WidescreenContractSite::bar_extra_digits_b_end,
+    WidescreenContractSite::bar_mode_panel_begin,
+    WidescreenContractSite::bar_mode_panel_end,
+    WidescreenContractSite::bar_player_panel_begin,
+    WidescreenContractSite::bar_player_panel_end,
+    WidescreenContractSite::bar_status_panel_begin,
+    WidescreenContractSite::bar_status_panel_end,
+    WidescreenContractSite::bar_names_end,
+    WidescreenContractSite::chain_label_end,
+    WidescreenContractSite::chain_digits_end,
+    WidescreenContractSite::chain_glow_end,
+    WidescreenContractSite::hundred_digits_end,
+    WidescreenContractSite::effect_packet_end,
 };
 constexpr auto CountBytes(VersionedOperationKind kind) {
     return std::ranges::count_if(kBytes, [kind](const auto& row) { return row.contract.kind == kind; });
 }
-static_assert(kBytes.size() == 40 && kPointers.size() == 9 && kAbis.size() == 36 && kOrder.size() == 36);
+static_assert(kBytes.size() == 86 && kPointers.size() == 9 && kAbis.size() == 83 && kOrder.size() == 83);
 static_assert(CountBytes(VersionedOperationKind::inline_hook) == 18);
-static_assert(CountBytes(VersionedOperationKind::mid_hook) == 16);
-static_assert(CountBytes(VersionedOperationKind::read_only_contract) == 6);
+static_assert(CountBytes(VersionedOperationKind::mid_hook) == 63);
+static_assert(CountBytes(VersionedOperationKind::read_only_contract) == 5);
 static_assert(std::ranges::count_if(kPointers, [](const auto& row) {
     return row.contract.kind == VersionedOperationKind::global_vtable_slot;
 }) == 2);
@@ -220,9 +406,10 @@ constexpr WindowedWidescreenProfile Make(GameImageVariant variant) {
         .movie_clip_name_hash_multiplier = 0x21,
         .combo_entry_frame_offset = 0x14,
         .tune_effect_collection_offset = 0x1D6C,
+        .effect_root_manager_offset = 0x74,
         .pointer_collection_begin_offset = 0xC,
         .pointer_collection_end_offset = 0x10,
-        .network_status_visitor_matrix_stack_offset = 0x1A0
+        .network_status_visitor_matrix_stack_offset = 0x1A0,
     }};
 }
 }
@@ -283,6 +470,106 @@ namespace gc::windowed_widescreen {
         using namespace game_version;
         using namespace detail;
         switch (site) {
+        case WidescreenContractSite::bar_difficulty_a_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_difficulty_a_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_difficulty_b_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_difficulty_b_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_panel_480_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_panel_480_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_panel_524_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_panel_524_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_panel_568_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_panel_568_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_stage_panel_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_stage_panel_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_stage_current_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_stage_current_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_stage_total_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_stage_total_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_gauge_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_gauge_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_panel_216_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_panel_216_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_score_panel_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_score_panel_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_score_digits_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_score_digits_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_extra_panel_a_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_extra_panel_a_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_extra_digits_a_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_extra_digits_a_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_extra_panel_b_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_extra_panel_b_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_extra_digits_b_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_extra_digits_b_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_mode_panel_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_mode_panel_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_player_panel_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_player_panel_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_status_panel_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::bar_status_panel_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::bar_names_end:
+            return MidHookOperation{contract, &BarDrawEndMid};
+        case WidescreenContractSite::chain_label_end:
+            return MidHookOperation{contract, &CounterDrawEndMid};
+        case WidescreenContractSite::chain_digits_end:
+            return MidHookOperation{contract, &CounterDrawEndMid};
+        case WidescreenContractSite::chain_glow_end:
+            return MidHookOperation{contract, &CounterDrawEndMid};
+        case WidescreenContractSite::hundred_digits_end:
+            return MidHookOperation{contract, &CounterDrawEndMid};
+        case WidescreenContractSite::effect_packet_end:
+            return MidHookOperation{contract, &EffectPacketEndMid};
+        case WidescreenContractSite::chain_digits_begin:
+            return MidHookOperation{contract, &ChainDigitsBeginMid};
+        case WidescreenContractSite::bar_names_begin:
+            return MidHookOperation{contract, &BarDrawBeginMid};
+        case WidescreenContractSite::chain_glow_begin:
+            return MidHookOperation{contract, &ChainGlowBeginMid};
+        case WidescreenContractSite::hundred_digits_begin:
+            return MidHookOperation{contract, &HundredDigitsBeginMid};
+        case WidescreenContractSite::effect_packet_allocated:
+            return MidHookOperation{contract, &EffectPacketAllocatedMid};
+        case WidescreenContractSite::effect_packet_begin:
+            return MidHookOperation{contract, &EffectPacketSubmitMid};
         case WidescreenContractSite::config_apply:
             return InlineHookOperation{contract, reinterpret_cast<void*>(&ConfigApplyDetour),
                 hooking::OriginalPublisher::To(&g_window_originals.config_apply)};
@@ -371,18 +658,12 @@ namespace gc::windowed_widescreen {
             return MidHookOperation{contract, &GameplayEffectsEndMid};
         case WidescreenContractSite::gameplay_hud_projection:
             return MidHookOperation{contract, &GameplayHudProjectionMid};
-        case WidescreenContractSite::combo_begin:
-            return MidHookOperation{contract, &ComboBeginMid};
-        case WidescreenContractSite::combo_end:
-            return MidHookOperation{contract, &ComboEndMid};
+        case WidescreenContractSite::chain_label_begin:
+            return MidHookOperation{contract, &ChainLabelBeginMid};
         case WidescreenContractSite::gameplay_feedback_draw_begin:
             return MidHookOperation{contract, &GameplayFeedbackDrawBeginMid};
         case WidescreenContractSite::gameplay_feedback_draw_end:
             return MidHookOperation{contract, &GameplayFeedbackDrawEndMid};
-        case WidescreenContractSite::note_tutorial_group_begin:
-            return MidHookOperation{contract, &NoteTutorialGroupBeginMid};
-        case WidescreenContractSite::note_tutorial_group_end:
-            return MidHookOperation{contract, &NoteTutorialGroupEndMid};
         case WidescreenContractSite::clip_gate:
             return MidHookOperation{contract, &ClipGateMid};
         case WidescreenContractSite::reset_pre:

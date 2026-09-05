@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 #include "Patches/WindowedWidescreen/WindowedWidescreenFeature.h"
 #include "Patches/WindowedWidescreen/NativeCanvasCompositor.h"
 #include "Patches/WindowedWidescreen/GameplayFeedbackPlacement.h"
@@ -13,7 +14,16 @@ void ReportUnknownTaskCapacity(void*) noexcept;
 enum class GameplayFeedbackDrawScope : std::uint8_t
 {
     none,
-    physical_gameplay_hud_overlay,
+    bar, counter, direct_effect, effect_packet,
+};
+
+
+enum class GameplayEffectOwner : std::uint8_t { none, judgement_text, tutorial };
+
+struct OwnedGameplayPacket final
+{
+    std::uintptr_t address{};
+    GameplayEffectOwner owner{};
 };
 
 struct WindowedWidescreenRuntime
@@ -35,10 +45,10 @@ struct WindowedWidescreenRuntime
                   &ReportUnknownTaskCapacity,
               }
           },
-          device{resolution, settings.gameplay_hud_placement(), abi.layout},
+          device{resolution, GameplayHudPlacement::center, abi.layout},
           compositor{
               resolution.output_size(),
-              settings.gameplay_hud_placement(),
+              GameplayHudPlacement::center,
               RenderThreadIdProvider{
                   .current = +[](void*) noexcept
                   {
@@ -72,9 +82,10 @@ struct WindowedWidescreenRuntime
     GameplayFeedbackDrawScope gameplay_feedback_draw_scope{
         GameplayFeedbackDrawScope::none
     };
-    bool note_tutorial_group_active{};
-    bool judgement_scope_reported{};
-    bool note_tutorial_scope_reported{};
+    bool effect_root_active{};
+    GameplayEffectOwner effect_root_owner{};
+    std::vector<OwnedGameplayPacket> effect_packets;
+    std::uint32_t gameplay_render_thread{};
     bool test_mode_native_active{};
 };
 

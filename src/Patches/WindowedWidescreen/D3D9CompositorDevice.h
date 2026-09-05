@@ -128,6 +128,8 @@ namespace gc::windowed_widescreen
 
         [[nodiscard]] bool CaptureGameState() noexcept;
         [[nodiscard]] bool RestoreGameState() noexcept;
+        [[nodiscard]] bool CaptureHudDrawState() noexcept;
+        [[nodiscard]] bool RestoreHudDrawState() noexcept;
         [[nodiscard]] bool SetFullViewportAndScissor(
             RenderSpace space) noexcept;
         [[nodiscard]] bool SetGameplayHudViewport(
@@ -148,6 +150,9 @@ namespace gc::windowed_widescreen
         static bool BindRealBackbuffer(void* context) noexcept;
         static bool CaptureState(void* context) noexcept;
         static bool RestoreState(void* context) noexcept;
+        static bool CaptureHudDrawStateAction(void* context) noexcept;
+        static bool RestoreHudDrawStateAction(void* context) noexcept;
+        static bool FlushHudDrawBatches(void* context) noexcept;
         static bool DrawSceneCenterToNative(void* context) noexcept;
         static bool DrawNativeToSceneCenter(void* context) noexcept;
         static bool DrawSceneToBackbuffer(void* context) noexcept;
@@ -172,6 +177,10 @@ namespace gc::windowed_widescreen
         D3D9CompositorFailure last_failure_{};
         bool active_{};
         bool game_state_captured_{};
+        bool hud_draw_state_captured_{};
+        D3DVIEWPORT9 hud_draw_viewport_{};
+        RECT hud_draw_scissor_{};
+        DWORD hud_draw_depth_{}, hud_draw_depth_write_{}, hud_draw_stencil_{};
         BoundTarget bound_target_{BoundTarget::none};
 
         Microsoft::WRL::ComPtr<IDirect3DDevice9> device_;

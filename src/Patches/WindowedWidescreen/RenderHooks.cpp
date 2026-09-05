@@ -313,7 +313,8 @@ RenderOriginals g_render_originals;
         .width = dimensions->width_float,
         .height = dimensions->height_float,
     };
-    if (*current_space != RenderSpace::gameplay_hud)
+    if (*current_space != RenderSpace::gameplay_hud &&
+        !runtime->compositor.gameplay_hud_draw_active())
     {
         return true;
     }
@@ -325,6 +326,8 @@ RenderOriginals g_render_originals;
     {
         return false;
     }
+    viewport.width = static_cast<float>(gameplay_viewport->width);
+    viewport.height = static_cast<float>(gameplay_viewport->height);
     viewport.x = static_cast<float>(gameplay_viewport->x);
     viewport.y = static_cast<float>(gameplay_viewport->y);
     return true;

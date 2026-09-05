@@ -450,6 +450,14 @@ entry 1 selects the left viewport, and an unexpected entry selects center.
 
 ### Player 1 judgement effect ownership
 
+The slots in this section own track-position grade effects. They do not include
+the fixed-position text produced by 648D40 at slots 12,15,18,24,27,30 decimal.
+The [2026-09-06 follow-up](widescreen-judgment-text-followup-2026-09-06.md)
+records both families. The later
+[right-side flash correction](widescreen-right-flash-followup-2026-09-06.md)
+leaves track-position slots 93–97 unmodified and selects only the fixed HUD text
+and tutorials. These corrections supersede the older placement scope below.
+
 `sub_6463F0` accepts judgement owner `nn` only when `nn < 4`. For native
 grades 0 through 4, it resolves and registers:
 
