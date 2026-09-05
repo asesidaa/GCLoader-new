@@ -1365,17 +1365,23 @@ inventory and role gates are unchanged.
 
 ### Final build, artifact and packaging evidence
 
-Fresh verification used new empty directories
-`build-cleanup-final-msvc32-debug` and
-`build-cleanup-final-msvc32-release`. The existing presets were used with
-`-B` overrides and all seven FETCHCONTENT_SOURCE_DIR overrides copied from the
-existing cleanup Debug cache. Existing build and dependency caches were kept;
-no `--fresh`, shell file deletion, or filesystem move was used. Source
-removals used CLion patch operations.
+Verification was rerun in the standard preset directories
+`build-msvc32-debug` and `build-msvc32-release` after the user removed the
+previous build trees. These outputs supersede the earlier alternate-directory
+artifacts, which the user also removed. Use the checked-in presets without
+`-B` or dependency source-directory overrides; do not create alternate build
+directories. Dependencies were fetched into each preset's own `_deps` folder.
+
+Before the cache removal, reconfiguration exposed a source-package audit bug:
+an unused checkout from a retired dependency was treated as an active build
+input. The audit now checks FetchContent's current-run POPULATED property,
+preserving the check for active unregistered dependencies while allowing
+unused caches to remain. No shell file deletion or filesystem move was used.
+Source removals in the cleanup used CLion patch operations.
 
 | Configuration | Fresh configure/build | Final CTest | CRT / optimization |
 |---|---|---|---|
-| Debug | Exit 0; 571 full build steps; final registration-formatting change rebuilt successfully | 6/6, exit 0 | /MTd, /Od, /RTC1 |
+| Debug | Exit 0; 571 full build steps on final source | 6/6, exit 0 | /MTd, /Od, /RTC1 |
 | RelWithDebInfo | Exit 0; 571 full build steps on final source | 6/6, exit 0 | /MT, /O2, /DNDEBUG |
 
 Tests are Win32Primitives, ExactWasapiClockCompatibility, ExactHistoryIsolation,
@@ -1397,8 +1403,8 @@ MSVC CRT import appears.
 
 | Final DLL | SHA-256 |
 |---|---|
-| Debug | FB0648D8680B87AF72B639F9814F0D146C94218BDFA2FBEC80C324DCD5ECEAEF |
-| RelWithDebInfo | 9D173A60753107AA7A23976E9CA53E9BD1DAB8A5C1CD10DF377179704166E95C |
+| Debug | E1F2EC22A3698D96DD18CFF063B82CE9B66EB60CE2096CB4ED3246F2513E9F1C |
+| RelWithDebInfo | 13DC1B7156765ED429ADD707FDDF3F62838FD8D4C342E75508DC7AA623E008C3 |
 
 Both dist directories contain exactly iDmacDrv32.dll, ConfigGUI.exe,
 config.toml and card.txt. CardReaderTestClient.exe remains under its tool build
@@ -1409,9 +1415,8 @@ including revisions and tree hashes, with no MinHook input. This is packaging
 metadata/source review; a new corresponding-source ZIP was not generated.
 
 Build/CTest/ABI logs are under the session TEMP directory with
-`gcloader-cleanup-09-fresh-{debug,release}-{configure,build,tests}.log`,
-`gcloader-cleanup-09-final-debug-{build,tests}.log`, and
-`gcloader-cleanup-09-final-abi.txt`. Final diff whitespace checks passed.
+`gcloader-cleanup-presets-fresh-{debug,release}-{configure,build,tests}.log`
+and `gcloader-cleanup-presets-fresh-abi.txt`. Final diff whitespace checks passed.
 
 ### Runtime acceptance still pending
 

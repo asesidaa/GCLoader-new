@@ -119,7 +119,11 @@ if (DEFINED FETCHCONTENT_BASE_DIR)
     foreach (populated_source IN LISTS populated_fetchcontent_sources)
         get_filename_component(populated_name "${populated_source}" NAME)
         string(REGEX REPLACE "-src$" "" populated_name "${populated_name}")
-        if (NOT populated_name IN_LIST GC_CORRESPONDING_SOURCE_DEPENDENCIES)
+        # Reused preset trees can retain checkouts from retired dependencies.
+        # Audit only content populated by this configure run, not stale caches.
+        FetchContent_GetProperties(${populated_name} POPULATED dependency_is_active)
+        if (dependency_is_active AND
+                NOT populated_name IN_LIST GC_CORRESPONDING_SOURCE_DEPENDENCIES)
             message(FATAL_ERROR
                     "FetchContent source ${populated_name} is missing from "
                     "GC_CORRESPONDING_SOURCE_DEPENDENCIES")
