@@ -3,6 +3,7 @@
 #include "Audio/AudioSettings.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Patches/Framerate/FramerateSettings.h"
+#include "Patches/Framerate/FrameratePatchPlan.h"
 #include "Patches/Framerate/GameplaySongClock.h"
 
 #include <cstdint>
@@ -13,11 +14,13 @@ namespace gc::framerate
     enum class FramerateHookId;
     enum class GameplayAudioClockPlan : std::uint8_t;
 
-    [[nodiscard]] bool FramerateHookHasRuntimeBinding(
-        FramerateHookId id) noexcept;
-    [[nodiscard]] bool FrameratePatchInit(
-        FramerateSettings settings,
-        audio::AudioBackend audio_backend);
+    [[nodiscard]] std::expected<PreparedFrameratePlan, game_version::PlanError>
+    BuildFrameratePlan(game_version::GameBuild, game_version::GameImageVariant,
+        const FramerateSettings&, audio::AudioBackend) noexcept;
+    [[nodiscard]] std::expected<void, game_version::PlanError>
+    PrepareFramerateRuntimeBindings(const game_version::ApprovedVersionedPlan&,
+        const runtime_image::RuntimeImage&) noexcept;
+    void CompleteFramerateStartup(const game_version::ApprovedVersionedPlan&) noexcept;
 
     namespace detail
     {
@@ -75,18 +78,18 @@ namespace gc::framerate
             const std::optional<audio::GameplayAudioCursorObservation>&
             cursor_observation) noexcept;
 
-        [[nodiscard]] std::expected<bool, FramerateProfileError>
+        [[nodiscard]] std::expected<bool, FramerateTimingProfileError>
         ShouldRunGameplayCadence(
-            const FramerateProfile& profile,
+            const FramerateTimingProfile& profile,
             GameplayAudioClockPlan audio_clock_plan,
             std::uint32_t current_tick,
             std::uint32_t step,
             std::int32_t phase,
             std::uint32_t authored_period) noexcept;
 
-        [[nodiscard]] std::expected<std::uint32_t, FramerateProfileError>
+        [[nodiscard]] std::expected<std::uint32_t, FramerateTimingProfileError>
         CountGameplayEffectAdvances(
-            const FramerateProfile& profile,
+            const FramerateTimingProfile& profile,
             GameplayAudioClockPlan audio_clock_plan,
             std::uint32_t current_tick,
             std::uint32_t step) noexcept;

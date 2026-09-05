@@ -4,7 +4,6 @@
 #include "Audio/AudioContractFatal.h"
 #include "Audio/DirectSound/GameplayAudioCursorObservation.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementRuntime.h"
-#include "Patches/Countdown/CountdownTimerFreeze.h"
 #include "Patches/Framerate/FramerateAuthoredClock.h"
 #include "Patches/Framerate/FramerateDiagnostics.h"
 #include "Patches/Framerate/FramerateEffectTiming.h"
@@ -12,8 +11,7 @@
 #include "Patches/Framerate/FramerateMenuTiming.h"
 #include "Patches/Framerate/FramerateMonitor.h"
 #include "Patches/Framerate/FrameratePatchPlan.h"
-#include "Patches/Framerate/FrameratePatchTransaction.h"
-#include "Patches/Framerate/FramerateProfile.h"
+#include "Patches/Framerate/FramerateTimingProfile.h"
 
 #include <Windows.h>
 #include <plog/Log.h>
@@ -133,9 +131,9 @@ namespace gc::framerate
             return result;
         }
 
-        std::expected<bool, FramerateProfileError>
+        std::expected<bool, FramerateTimingProfileError>
         ShouldRunGameplayCadence(
-            const FramerateProfile& profile,
+            const FramerateTimingProfile& profile,
             GameplayAudioClockPlan audio_clock_plan,
             std::uint32_t current_tick,
             std::uint32_t step,
@@ -155,9 +153,9 @@ namespace gc::framerate
                 profile, current_tick, phase, authored_period);
         }
 
-        std::expected<std::uint32_t, FramerateProfileError>
+        std::expected<std::uint32_t, FramerateTimingProfileError>
         CountGameplayEffectAdvances(
-            const FramerateProfile& profile,
+            const FramerateTimingProfile& profile,
             GameplayAudioClockPlan audio_clock_plan,
             std::uint32_t current_tick,
             std::uint32_t step) noexcept
@@ -205,77 +203,18 @@ namespace gc::framerate
     namespace
     {
         constexpr std::int32_t kMinimumAudioSkipMarginMs = 48;
-        constexpr std::uintptr_t kAudioResyncEpilogueRva = 0x002401D4;
         constexpr std::size_t kMaximumMovieClipInstanceNameBytes = 32;
-        constexpr std::uintptr_t kGetSoundManagerRva = 0x00210400;
-        constexpr std::uintptr_t kGetGroupPlayCursorMsRva = 0x002122B0;
-        constexpr std::uintptr_t kGetConfigRva = 0x000011E0;
-        constexpr std::uintptr_t kAdvanceGameplayEffectRva = 0x001F08A0;
-        constexpr int kGameplaySoundGroup = 2;
-        constexpr std::uintptr_t kTuneCurrentTickOffset = 0x10;
-        constexpr std::uintptr_t kTuneStepOffset = 0x14;
-        constexpr std::uintptr_t kGameTimeOffsetOffset = 0x2C;
 
         using GetSoundManager = void* (__cdecl*)();
         using GetGroupPlayCursorMs = int (__thiscall*)(void*, int);
         using GetConfig = void* (__cdecl*)();
         using AdvanceGameplayEffect = void (__thiscall*)(void*);
 
-        struct FramerateHookStorage
-        {
-            safetyhook::InlineHook movieclip_goto{};
-            safetyhook::InlineHook movieclip_advance{};
-            safetyhook::InlineHook movieclip_preprocess_visit{};
-            safetyhook::InlineHook navigator_advance{};
-            safetyhook::MidHook palette_compare{};
-            safetyhook::MidHook stage_clip_frame{};
-            safetyhook::MidHook ifbl_wait{};
-            safetyhook::MidHook stage_bgm_preload{};
-            safetyhook::MidHook tune_countdown_compare{};
-            safetyhook::MidHook audio_skip_margin{};
-            safetyhook::MidHook audio_skip_interval{};
-            safetyhook::MidHook audio_resync_policy{};
-            safetyhook::MidHook gameplay_song_clock{};
-            safetyhook::MidHook gameplay_effect_advance{};
-            safetyhook::MidHook effect_cadence_6{};
-            safetyhook::MidHook effect_cadence_5{};
-            safetyhook::MidHook effect_cadence_4{};
-            safetyhook::MidHook effect_cadence_16_a{};
-            safetyhook::MidHook effect_cadence_16_b{};
-            safetyhook::MidHook effect_cadence_8{};
-            safetyhook::MidHook remote_cadence_a{};
-            safetyhook::MidHook remote_cadence_b{};
-            safetyhook::MidHook gameplay_blink{};
-            safetyhook::MidHook great_good_lifetime_operand{};
-            safetyhook::MidHook great_good_frame_operand{};
-            safetyhook::MidHook effect_lifetime_a_operand{};
-            safetyhook::MidHook effect_frame_a_operand{};
-            safetyhook::MidHook effect_lifetime_b_operand{};
-            safetyhook::MidHook effect_frame_b_operand{};
-            safetyhook::MidHook direct_effect_frame_operand{};
-            safetyhook::MidHook chart_effect_frame_a_operand{};
-            safetyhook::MidHook chart_effect_frame_b_operand{};
-            safetyhook::MidHook chart_effect_frame_c_operand{};
-            safetyhook::MidHook chart_effect_frame_d_operand{};
-            safetyhook::MidHook fixed_visual_frame_operand{};
-            safetyhook::MidHook gameplay_countdown_asset_frame{};
-            safetyhook::MidHook player_position_init_a{};
-            safetyhook::MidHook player_position_init_b{};
-            safetyhook::MidHook player_position_init_c{};
-            safetyhook::MidHook player_position_init_d{};
-            safetyhook::MidHook player_position_asset_frame{};
-            safetyhook::MidHook player_position_denominator_a{};
-            safetyhook::MidHook player_position_denominator_b{};
-            safetyhook::MidHook effect_flow_item_frame{};
-            safetyhook::MidHook effect_tutorial_elapsed{};
-            safetyhook::MidHook effect_chart_preroll_duration{};
-            safetyhook::MidHook effect_player_modulo_dividend{};
-            safetyhook::MidHook ranking_entry_counter_store{};
-            safetyhook::MidHook hitchart_entry_counter_store{};
-            safetyhook::MidHook unlock_reward_countdown_store{};
-            safetyhook::MidHook unlock_reward_primary_state_store{};
-            safetyhook::MidHook unlock_reward_secondary_state_store{};
-            safetyhook::MidHook outer_frame{};
+        struct FramerateOriginals final {
+            MovieClipGotoFn movieclip_goto{};
+            MovieClipAdvanceFn movieclip_advance{};
+            MovieClipPreprocessFn movieclip_preprocess_visit{};
+            NavigatorAdvanceFn navigator_advance{};
         };
 
         struct FramerateRuntimeCounters
@@ -338,7 +277,7 @@ namespace gc::framerate
         struct FramerateRuntimeState
         {
             FramerateRuntimeState(
-                FramerateProfile profile_value,
+                FramerateTimingProfile profile_value,
                 FramerateMonitor monitor_value,
                 std::int64_t frequency_value,
                 const FrameratePlatformActions& platform_value,
@@ -350,7 +289,6 @@ namespace gc::framerate
                   authored_clock{profile},
                   qpc_frequency{frequency_value},
                   platform{platform_value},
-                  transaction{ProductionFramerateMemoryApi()},
                   audio_clock_plan{audio_clock_plan_value},
                   gameplay_song_clock{
                       std::move(gameplay_song_clock_value)
@@ -358,17 +296,20 @@ namespace gc::framerate
             {
             }
 
-            FramerateProfile profile;
+            FramerateTimingProfile profile;
             FramerateMonitor monitor;
             Authored60PhaseClock authored_clock;
             std::int64_t qpc_frequency{};
             FrameratePlatformActions platform{};
-            FrameratePatchTransaction transaction;
             GameplayAudioClockPlan audio_clock_plan{
                 GameplayAudioClockPlan::OriginalWatchdog
             };
             std::optional<GameplaySongClock> gameplay_song_clock;
-            FramerateHookStorage hooks;
+            FramerateOriginals originals;
+            FramerateNativeLayout layout{};
+            std::array<std::uintptr_t, 10> native_targets{};
+            const FramerateGameProfile* game_profile{};
+            FramerateStartupPatchSummary startup_summary{};
             AuthoredFrameOperand authored_frame_operand{};
             PlayerPositionDurationOperand player_position_duration_operand{};
             FramerateRuntimeCounters counters;
@@ -378,16 +319,6 @@ namespace gc::framerate
             std::int64_t previous_stats_qpc{};
         };
 
-        struct FramerateHookOperationPlan
-        {
-            std::array<HookOperation, kMaximumFramerateHooks> operations{};
-            std::size_t count{};
-
-            [[nodiscard]] std::span<const HookOperation> view() const noexcept
-            {
-                return {operations.data(), count};
-            }
-        };
 
         std::optional<FramerateRuntimeState> g_runtime;
         thread_local int g_movieclip_goto_depth = 0;
@@ -435,11 +366,8 @@ namespace gc::framerate
         void HookOuterFrame(safetyhook::Context&);
         [[nodiscard]] bool IsAuthored60HzTick() noexcept;
 
-        [[nodiscard]] std::uintptr_t ExecutableBase() noexcept
-        {
-            static const auto base = reinterpret_cast<std::uintptr_t>(
-                GetModuleHandleW(nullptr));
-            return base;
+        [[nodiscard]] std::uintptr_t NativeTarget(FramerateNativeTarget id) noexcept {
+            return g_runtime->native_targets[static_cast<std::size_t>(id)];
         }
 
         [[nodiscard]] bool ReadU32Safe(
@@ -555,488 +483,123 @@ namespace gc::framerate
                 g_runtime->platform);
         }
 
-        template <
-            safetyhook::MidHook FramerateHookStorage::*Member,
-            safetyhook::MidHookFn Callback,
-            std::uintptr_t Rva>
-        bool InstallMidHook(void* opaque) noexcept
-        {
-            auto& state = *static_cast<FramerateRuntimeState*>(opaque);
-            auto& hook = state.hooks.*Member;
-            hook = safetyhook::create_mid(
-                reinterpret_cast<void*>(ExecutableBase() + Rva), Callback);
-            return static_cast<bool>(hook);
-        }
-
-        template <
-            safetyhook::InlineHook FramerateHookStorage::*Member,
-            auto Callback,
-            std::uintptr_t Rva>
-        bool InstallInlineHook(void* opaque) noexcept
-        {
-            auto& state = *static_cast<FramerateRuntimeState*>(opaque);
-            auto& hook = state.hooks.*Member;
-            hook = safetyhook::create_inline(
-                reinterpret_cast<void*>(ExecutableBase() + Rva),
-                reinterpret_cast<void*>(Callback));
-            return static_cast<bool>(hook);
-        }
-
-        template <auto Member>
-        void ResetOwnedHook(void* opaque) noexcept
-        {
-            auto& state = *static_cast<FramerateRuntimeState*>(opaque);
-            (state.hooks.*Member).reset();
-        }
-
-        void AssignHookCallbacks(
-            FramerateHookId id,
-            HookOperation& operation) noexcept
-        {
-            switch (id)
-            {
+        [[nodiscard]] std::expected<game_version::VersionedOperation, game_version::PlanError>
+        BindHook(const FramerateHookContract& contract) noexcept {
+            using namespace game_version;
+            switch (contract.id) {
             case FramerateHookId::MovieClipGoto:
-                operation.install = &InstallInlineHook<
-                    &FramerateHookStorage::movieclip_goto,
-                    HookMovieClipGoto,
-                    0x000DEA30>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::movieclip_goto>;
-                break;
+                return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookMovieClipGoto),
+                    hooking::OriginalPublisher::To(&g_runtime->originals.movieclip_goto)};
             case FramerateHookId::MovieClipAdvance:
-                operation.install = &InstallInlineHook<
-                    &FramerateHookStorage::movieclip_advance,
-                    HookMovieClipAdvance,
-                    0x000DF940>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::movieclip_advance>;
-                break;
+                return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookMovieClipAdvance),
+                    hooking::OriginalPublisher::To(&g_runtime->originals.movieclip_advance)};
             case FramerateHookId::PaletteCompare:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::palette_compare,
-                    HookPaletteCompare,
-                    0x0022BA60>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::palette_compare>;
-                break;
+                return MidHookOperation{contract.site, HookPaletteCompare};
             case FramerateHookId::StageClipFrame:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::stage_clip_frame,
-                    HookStageClipFrame,
-                    0x00244054>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::stage_clip_frame>;
-                break;
+                return MidHookOperation{contract.site, HookStageClipFrame};
             case FramerateHookId::IfblWait:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::ifbl_wait,
-                    HookIfblWait,
-                    0x002309D4>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::ifbl_wait>;
-                break;
+                return MidHookOperation{contract.site, HookIfblWait};
             case FramerateHookId::StageBgmPreload:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::stage_bgm_preload,
-                    HookStageBgmPreload,
-                    0x0021001A>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::stage_bgm_preload>;
-                break;
+                return MidHookOperation{contract.site, HookStageBgmPreload};
             case FramerateHookId::TuneCountdownCompare:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::tune_countdown_compare,
-                    HookTuneCountdownCompare,
-                    0x002648F7>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::tune_countdown_compare>;
-                break;
+                return MidHookOperation{contract.site, HookTuneCountdownCompare};
             case FramerateHookId::AudioSkipMargin:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::audio_skip_margin,
-                    HookAudioSkipMargin,
-                    0x0024018F>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::audio_skip_margin>;
-                break;
+                return MidHookOperation{contract.site, HookAudioSkipMargin};
             case FramerateHookId::AudioSkipInterval:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::audio_skip_interval,
-                    HookAudioSkipInterval,
-                    0x002401BD>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::audio_skip_interval>;
-                break;
+                return MidHookOperation{contract.site, HookAudioSkipInterval};
             case FramerateHookId::AudioResyncPolicy:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::audio_resync_policy,
-                    HookAudioResyncPolicy,
-                    0x002401C4>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::audio_resync_policy>;
-                break;
+                return MidHookOperation{contract.site, HookAudioResyncPolicy};
             case FramerateHookId::GameplaySongClock:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::gameplay_song_clock,
-                    HookGameplaySongClock,
-                    0x00264DB2>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::gameplay_song_clock>;
-                break;
+                return MidHookOperation{contract.site, HookGameplaySongClock};
             case FramerateHookId::GameplayEffectAdvance:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::gameplay_effect_advance,
-                    HookGameplayEffectAdvance,
-                    0x00264E2D>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::gameplay_effect_advance>;
-                break;
+                return MidHookOperation{contract.site, HookGameplayEffectAdvance};
             case FramerateHookId::EffectCadence6:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_cadence_6,
-                    HookEffectCadence6,
-                    0x0024063B>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_cadence_6>;
-                break;
+                return MidHookOperation{contract.site, HookEffectCadence6};
             case FramerateHookId::EffectCadence5:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_cadence_5,
-                    HookEffectCadence5,
-                    0x002408D7>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_cadence_5>;
-                break;
+                return MidHookOperation{contract.site, HookEffectCadence5};
             case FramerateHookId::EffectCadence4:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_cadence_4,
-                    HookEffectCadence4,
-                    0x00240C9C>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_cadence_4>;
-                break;
+                return MidHookOperation{contract.site, HookEffectCadence4};
             case FramerateHookId::EffectCadence16A:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_cadence_16_a,
-                    HookEffectCadence16A,
-                    0x00241213>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_cadence_16_a>;
-                break;
+                return MidHookOperation{contract.site, HookEffectCadence16A};
             case FramerateHookId::EffectCadence16B:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_cadence_16_b,
-                    HookEffectCadence16B,
-                    0x0024122F>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_cadence_16_b>;
-                break;
+                return MidHookOperation{contract.site, HookEffectCadence16B};
             case FramerateHookId::EffectCadence8:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_cadence_8,
-                    HookEffectCadence8,
-                    0x00241268>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_cadence_8>;
-                break;
+                return MidHookOperation{contract.site, HookEffectCadence8};
             case FramerateHookId::RemoteCadenceA:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::remote_cadence_a,
-                    HookRemoteCadenceA,
-                    0x002632DB>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::remote_cadence_a>;
-                break;
+                return MidHookOperation{contract.site, HookRemoteCadenceA};
             case FramerateHookId::RemoteCadenceB:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::remote_cadence_b,
-                    HookRemoteCadenceB,
-                    0x00263646>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::remote_cadence_b>;
-                break;
+                return MidHookOperation{contract.site, HookRemoteCadenceB};
             case FramerateHookId::GameplayBlink:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::gameplay_blink,
-                    HookGameplayBlink,
-                    0x0024A1B9>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::gameplay_blink>;
-                break;
+                return MidHookOperation{contract.site, HookGameplayBlink};
             case FramerateHookId::GreatGoodLifetimeOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::great_good_lifetime_operand,
-                    HookAuthoredOperandEax,
-                    0x002464A8>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::great_good_lifetime_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEax};
             case FramerateHookId::GreatGoodFrameOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::great_good_frame_operand,
-                    HookAuthoredOperandEcx,
-                    0x00246528>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::great_good_frame_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEcx};
             case FramerateHookId::EffectLifetimeAOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_lifetime_a_operand,
-                    HookAuthoredOperandEcx,
-                    0x00248F00>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_lifetime_a_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEcx};
             case FramerateHookId::EffectFrameAOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_frame_a_operand,
-                    HookAuthoredOperandEdx,
-                    0x00248F8C>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_frame_a_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEdx};
             case FramerateHookId::EffectLifetimeBOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_lifetime_b_operand,
-                    HookAuthoredOperandEcx,
-                    0x0024912B>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_lifetime_b_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEcx};
             case FramerateHookId::EffectFrameBOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_frame_b_operand,
-                    HookAuthoredOperandEdx,
-                    0x002491E0>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_frame_b_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEdx};
             case FramerateHookId::DirectEffectFrameOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::direct_effect_frame_operand,
-                    HookAuthoredOperandEdx,
-                    0x00249C14>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::direct_effect_frame_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEdx};
             case FramerateHookId::ChartEffectFrameAOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::chart_effect_frame_a_operand,
-                    HookAuthoredOperandEcx,
-                    0x0024BC8B>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::chart_effect_frame_a_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEcx};
             case FramerateHookId::ChartEffectFrameBOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::chart_effect_frame_b_operand,
-                    HookAuthoredOperandEcx,
-                    0x0024CC8A>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::chart_effect_frame_b_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEcx};
             case FramerateHookId::ChartEffectFrameCOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::chart_effect_frame_c_operand,
-                    HookAuthoredOperandEdx,
-                    0x0024CCBE>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::chart_effect_frame_c_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEdx};
             case FramerateHookId::ChartEffectFrameDOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::chart_effect_frame_d_operand,
-                    HookAuthoredOperandEax,
-                    0x0024D836>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::chart_effect_frame_d_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEax};
             case FramerateHookId::FixedVisualFrameOperand:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::fixed_visual_frame_operand,
-                    HookAuthoredOperandEcx,
-                    0x00250AD5>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::fixed_visual_frame_operand>;
-                break;
+                return MidHookOperation{contract.site, HookAuthoredOperandEcx};
             case FramerateHookId::GameplayCountdownAssetFrame:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::gameplay_countdown_asset_frame,
-                    HookGameplayCountdownAssetFrame,
-                    0x00249A9C>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::gameplay_countdown_asset_frame>;
-                break;
+                return MidHookOperation{contract.site, HookGameplayCountdownAssetFrame};
             case FramerateHookId::PlayerPositionInitA:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_init_a,
-                    HookPlayerPositionInitialization,
-                    0x00263240>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_init_a>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionInitialization};
             case FramerateHookId::PlayerPositionInitB:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_init_b,
-                    HookPlayerPositionInitialization,
-                    0x002632B2>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_init_b>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionInitialization};
             case FramerateHookId::PlayerPositionInitC:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_init_c,
-                    HookPlayerPositionInitialization,
-                    0x0026359B>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_init_c>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionInitialization};
             case FramerateHookId::PlayerPositionInitD:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_init_d,
-                    HookPlayerPositionInitialization,
-                    0x00263615>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_init_d>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionInitialization};
             case FramerateHookId::PlayerPositionAssetFrame:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_asset_frame,
-                    HookPlayerPositionAssetFrame,
-                    0x0024EF43>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_asset_frame>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionAssetFrame};
             case FramerateHookId::PlayerPositionDenominatorA:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_denominator_a,
-                    HookPlayerPositionDenominator,
-                    0x0024F76D>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_denominator_a>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionDenominator};
             case FramerateHookId::PlayerPositionDenominatorB:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::player_position_denominator_b,
-                    HookPlayerPositionDenominator,
-                    0x0024FD40>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::player_position_denominator_b>;
-                break;
+                return MidHookOperation{contract.site, HookPlayerPositionDenominator};
             case FramerateHookId::EffectFlowItemFrame:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_flow_item_frame,
-                    HookEffectFlowItemFrame,
-                    0x001F0310>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_flow_item_frame>;
-                break;
+                return MidHookOperation{contract.site, HookEffectFlowItemFrame};
             case FramerateHookId::EffectTutorialElapsed:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_tutorial_elapsed,
-                    HookEffectTutorialElapsed,
-                    0x00249593>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_tutorial_elapsed>;
-                break;
+                return MidHookOperation{contract.site, HookEffectTutorialElapsed};
             case FramerateHookId::EffectChartPreRollDuration:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_chart_preroll_duration,
-                    HookEffectChartPreRollDuration,
-                    0x0024A934>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_chart_preroll_duration>;
-                break;
+                return MidHookOperation{contract.site, HookEffectChartPreRollDuration};
             case FramerateHookId::EffectPlayerModuloDividend:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::effect_player_modulo_dividend,
-                    HookEffectPlayerModuloDividend,
-                    0x0025072E>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::effect_player_modulo_dividend>;
-                break;
+                return MidHookOperation{contract.site, HookEffectPlayerModuloDividend};
             case FramerateHookId::MovieClipPreprocessVisit:
-                operation.install = &InstallInlineHook<
-                    &FramerateHookStorage::movieclip_preprocess_visit,
-                    HookMovieClipPreprocessVisit,
-                    0x000EFB90>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::movieclip_preprocess_visit>;
-                break;
+                return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookMovieClipPreprocessVisit),
+                    hooking::OriginalPublisher::To(&g_runtime->originals.movieclip_preprocess_visit)};
             case FramerateHookId::RankingEntryCounterStore:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::ranking_entry_counter_store,
-                    HookRankingEntryCounterStore,
-                    kRankingEntryCounterHookGeometry.hook_rva>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::ranking_entry_counter_store>;
-                break;
+                return MidHookOperation{contract.site, HookRankingEntryCounterStore};
             case FramerateHookId::HitChartEntryCounterStore:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::hitchart_entry_counter_store,
-                    HookHitChartEntryCounterStore,
-                    kHitChartEntryCounterHookGeometry.hook_rva>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::hitchart_entry_counter_store>;
-                break;
+                return MidHookOperation{contract.site, HookHitChartEntryCounterStore};
             case FramerateHookId::UnlockRewardCountdownStore:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::unlock_reward_countdown_store,
-                    HookUnlockRewardCountdownStore,
-                    kUnlockRewardCountdownHookGeometry.hook_rva>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::unlock_reward_countdown_store>;
-                break;
+                return MidHookOperation{contract.site, HookUnlockRewardCountdownStore};
             case FramerateHookId::UnlockRewardPrimaryStateStore:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::unlock_reward_primary_state_store,
-                    HookUnlockRewardPrimaryStateStore,
-                    kUnlockRewardPrimaryHookGeometry.hook_rva>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::unlock_reward_primary_state_store>;
-                break;
+                return MidHookOperation{contract.site, HookUnlockRewardPrimaryStateStore};
             case FramerateHookId::UnlockRewardSecondaryStateStore:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::unlock_reward_secondary_state_store,
-                    HookUnlockRewardSecondaryStateStore,
-                    kUnlockRewardSecondaryHookGeometry.hook_rva>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::unlock_reward_secondary_state_store>;
-                break;
+                return MidHookOperation{contract.site, HookUnlockRewardSecondaryStateStore};
             case FramerateHookId::NavigatorAdvance:
-                operation.install = &InstallInlineHook<
-                    &FramerateHookStorage::navigator_advance,
-                    HookNavigatorAdvance,
-                    0x001B6310>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::navigator_advance>;
-                break;
+                return InlineHookOperation{contract.site, reinterpret_cast<void*>(HookNavigatorAdvance),
+                    hooking::OriginalPublisher::To(&g_runtime->originals.navigator_advance)};
             case FramerateHookId::OuterFrame:
-                operation.install = &InstallMidHook<
-                    &FramerateHookStorage::outer_frame,
-                    HookOuterFrame,
-                    0x00058B70>;
-                operation.reset = &ResetOwnedHook<
-                    &FramerateHookStorage::outer_frame>;
-                break;
+                return MidHookOperation{contract.site, HookOuterFrame};
             }
-        }
-
-        [[nodiscard]] FramerateHookOperationPlan BuildHookOperations(
-            std::span<const FramerateHookContract> contracts,
-            FramerateRuntimeState& state) noexcept
-        {
-            FramerateHookOperationPlan plan{};
-            for (const auto& contract : contracts)
-            {
-                auto& operation = plan.operations[plan.count++];
-                operation.address = ExecutableBase() + contract.rva;
-                operation.expected = contract.expected;
-                operation.name = contract.name;
-                operation.context = &state;
-                AssignHookCallbacks(contract.id, operation);
-            }
-            return plan;
+            return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+                .feature = FeatureId::framerate, .site = contract.site.site});
         }
 
         [[nodiscard]] bool IsAuthored60HzTick() noexcept
@@ -1063,7 +626,7 @@ namespace gc::framerate
             const auto movieclip = reinterpret_cast<std::uintptr_t>(self);
             std::uint32_t instance_name_hash{};
             if (!ReadU32Safe(
-                movieclip + kMovieClipInstanceNameHashOffset,
+                movieclip + g_runtime->layout.movieclip_instance_hash,
                 instance_name_hash))
             {
                 return std::nullopt;
@@ -1088,11 +651,11 @@ namespace gc::framerate
             std::uint32_t instance_name_address{};
             std::uint32_t owner{};
             if (!ReadU32Safe(
-                    movieclip + kMovieClipInstanceNameOffset,
+                    movieclip + g_runtime->layout.movieclip_instance_name,
                     instance_name_address) ||
                 instance_name_address == 0 ||
                 !ReadU32Safe(
-                    movieclip + kMovieClipOwnerOffset,
+                    movieclip + g_runtime->layout.movieclip_owner,
                     owner) ||
                 owner == 0)
             {
@@ -1116,10 +679,10 @@ namespace gc::framerate
             std::uint32_t owner_name_hash{};
             std::uint32_t owner_name_address{};
             if (!ReadU32Safe(
-                    owner_address + kMovieClipInstanceNameHashOffset,
+                    owner_address + g_runtime->layout.movieclip_instance_hash,
                     owner_name_hash) ||
                 !ReadU32Safe(
-                    owner_address + kMovieClipInstanceNameOffset,
+                    owner_address + g_runtime->layout.movieclip_instance_name,
                     owner_name_address) ||
                 owner_name_address == 0)
             {
@@ -1142,13 +705,13 @@ namespace gc::framerate
             std::uint32_t frame_high{};
             std::uint32_t stopped{};
             if (!ReadU32Safe(
-                    movieclip + kMovieClipCurrentFrameLowOffset,
+                    movieclip + g_runtime->layout.movieclip_frame_low,
                     frame_low) ||
                 !ReadU32Safe(
-                    movieclip + kMovieClipCurrentFrameHighOffset,
+                    movieclip + g_runtime->layout.movieclip_frame_high,
                     frame_high) ||
                 !ReadU32Safe(
-                    movieclip + kMovieClipStopFlagOffset,
+                    movieclip + g_runtime->layout.movieclip_stop_flag,
                     stopped))
             {
                 return std::nullopt;
@@ -1184,7 +747,7 @@ namespace gc::framerate
         {
             std::uint32_t tune{};
             return ReadU32Safe(context.ebp + tune_stack_offset, tune) &&
-                tune != 0 && ReadU32Safe(tune + 0x10, frame);
+                tune != 0 && ReadU32Safe(tune + g_runtime->layout.tune_current_tick, frame);
         }
 
         [[nodiscard]] bool ReadTuneFrameAndStep(
@@ -1196,8 +759,8 @@ namespace gc::framerate
             std::uint32_t tune{};
             return ReadU32Safe(context.ebp + tune_stack_offset, tune) &&
                 tune != 0 &&
-                ReadU32Safe(tune + kTuneCurrentTickOffset, frame) &&
-                ReadU32Safe(tune + kTuneStepOffset, step);
+                ReadU32Safe(tune + g_runtime->layout.tune_current_tick, frame) &&
+                ReadU32Safe(tune + g_runtime->layout.tune_step, step);
         }
 
         [[nodiscard]] bool ResolveCadenceTestValue(
@@ -1255,8 +818,8 @@ namespace gc::framerate
                 detail::UsesSharedGameplaySongClock(
                     g_runtime->audio_clock_plan)
                     ? ReadTuneFrameAndStep(
-                        context, -0x32C, frame, step)
-                    : ReadTuneFrame(context, -0x32C, frame);
+                        context, g_runtime->layout.judgement_tune_stack, frame, step)
+                    : ReadTuneFrame(context, g_runtime->layout.judgement_tune_stack, frame);
             if (!readable)
             {
                 FatalRuntimeConversion("effect cadence tune-frame read");
@@ -1265,7 +828,7 @@ namespace gc::framerate
 
             std::int32_t phase{};
             if (semantics->has_signed_phase &&
-                !ReadI32StackSafe(context, -0x1FC, phase))
+                !ReadI32StackSafe(context, g_runtime->layout.remote_phase_stack, phase))
             {
                 FatalRuntimeConversion("effect cadence phase read");
                 return;
@@ -1336,8 +899,7 @@ namespace gc::framerate
             };
 
             DepthGuard guard;
-            return g_runtime->hooks.movieclip_goto
-                            .unsafe_thiscall<char>(self, frame, subframe);
+            return g_runtime->originals.movieclip_goto(self, frame, subframe);
         }
 
         void __fastcall HookMovieClipPreprocessVisit(
@@ -1348,8 +910,7 @@ namespace gc::framerate
             MovieClipPreprocessScope scope{g_movieclip_preprocess_depth};
             g_runtime->menu_counters.preprocessing_visits.fetch_add(
                 1, std::memory_order_relaxed);
-            g_runtime->hooks.movieclip_preprocess_visit
-                     .unsafe_thiscall<void>(self, traversal_arg);
+            g_runtime->originals.movieclip_preprocess_visit(self, traversal_arg);
         }
 
         char __fastcall HookMovieClipAdvance(
@@ -1405,19 +966,18 @@ namespace gc::framerate
                 g_runtime->counters.movieclip_calls.fetch_add(
                     1, std::memory_order_relaxed);
             }
-            return g_runtime->hooks.movieclip_advance
-                            .unsafe_thiscall<char>(self, forward, loop);
+            return g_runtime->originals.movieclip_advance(self, forward, loop);
         }
 
         void ApplyPermanentMenuCounterStore(
             safetyhook::Context& context,
             MenuCounterRuntimeCounters& counters,
-            std::uintptr_t suppress_resume_rva) noexcept
+            std::uintptr_t suppress_resume_address) noexcept
         {
             const auto action = ApplyMenuCounterStoreGate(
                 context,
                 IsAuthored60HzTick(),
-                ExecutableBase() + suppress_resume_rva);
+                suppress_resume_address);
             auto& counter =
                 action == MenuCounterStoreAction::Commit
                     ? counters.commits
@@ -1430,7 +990,7 @@ namespace gc::framerate
             ApplyPermanentMenuCounterStore(
                 context,
                 g_runtime->menu_counters.ranking_entry,
-                kRankingEntryCounterHookGeometry.suppress_resume_rva);
+                NativeTarget(FramerateNativeTarget::ranking_resume));
         }
 
         void HookHitChartEntryCounterStore(safetyhook::Context& context)
@@ -1438,7 +998,7 @@ namespace gc::framerate
             ApplyPermanentMenuCounterStore(
                 context,
                 g_runtime->menu_counters.hitchart_entry,
-                kHitChartEntryCounterHookGeometry.suppress_resume_rva);
+                NativeTarget(FramerateNativeTarget::hitchart_resume));
         }
 
         void HookUnlockRewardCountdownStore(safetyhook::Context& context)
@@ -1446,7 +1006,7 @@ namespace gc::framerate
             ApplyPermanentMenuCounterStore(
                 context,
                 g_runtime->menu_counters.unlock_countdown,
-                kUnlockRewardCountdownHookGeometry.suppress_resume_rva);
+                NativeTarget(FramerateNativeTarget::unlock_countdown_resume));
         }
 
         void HookUnlockRewardPrimaryStateStore(
@@ -1455,7 +1015,7 @@ namespace gc::framerate
             ApplyPermanentMenuCounterStore(
                 context,
                 g_runtime->menu_counters.unlock_primary,
-                kUnlockRewardPrimaryHookGeometry.suppress_resume_rva);
+                NativeTarget(FramerateNativeTarget::unlock_primary_resume));
         }
 
         void HookUnlockRewardSecondaryStateStore(
@@ -1464,7 +1024,7 @@ namespace gc::framerate
             ApplyPermanentMenuCounterStore(
                 context,
                 g_runtime->menu_counters.unlock_secondary,
-                kUnlockRewardSecondaryHookGeometry.suppress_resume_rva);
+                NativeTarget(FramerateNativeTarget::unlock_secondary_resume));
         }
 
         void* __fastcall HookNavigatorAdvance(void* self, void*)
@@ -1477,13 +1037,13 @@ namespace gc::framerate
             }
             g_runtime->counters.navigator_advances.fetch_add(
                 1, std::memory_order_relaxed);
-            return g_runtime->hooks.navigator_advance.unsafe_thiscall<void*>(self);
+            return g_runtime->originals.navigator_advance(self);
         }
 
         void HookPaletteCompare(safetyhook::Context& context)
         {
             std::uint32_t counter{};
-            if (!ReadU32Safe(context.eax + 0x0C, counter))
+            if (!ReadU32Safe(context.eax + g_runtime->layout.palette_counter, counter))
             {
                 ReportFramerateRuntimeFailure(
                     "palette counter read failed",
@@ -1495,7 +1055,7 @@ namespace gc::framerate
                 context.eflags,
                 counter,
                 g_runtime->profile.palette_frame_cap());
-            context.eip += 4;
+            context.eip += g_runtime->layout.palette_skip;
         }
 
         void HookStageClipFrame(safetyhook::Context& context)
@@ -1522,11 +1082,11 @@ namespace gc::framerate
                 FatalRuntimeConversion("IFBL wait scaling");
                 return;
             }
-            if (WriteU32Safe(context.edx + 0x3C, scaled.value()))
+            if (WriteU32Safe(context.edx + g_runtime->layout.ifbl_wait, scaled.value()))
             {
                 g_runtime->counters.ifbl_wait_stores.fetch_add(
                     1, std::memory_order_relaxed);
-                context.eip += 3;
+                context.eip += g_runtime->layout.ifbl_skip;
             }
             else
             {
@@ -1542,14 +1102,14 @@ namespace gc::framerate
             {
                 g_runtime->counters.bgm_preload_skips.fetch_add(
                     1, std::memory_order_relaxed);
-                context.eip += 3;
+                context.eip += g_runtime->layout.bgm_preload_skip;
             }
         }
 
         void HookTuneCountdownCompare(safetyhook::Context& context)
         {
             std::uint32_t countdown{};
-            if (!ReadU32Safe(context.edx + 0x1D14, countdown))
+            if (!ReadU32Safe(context.edx + g_runtime->layout.tune_countdown, countdown))
             {
                 FatalRuntimeConversion("countdown compare read");
                 return;
@@ -1562,20 +1122,20 @@ namespace gc::framerate
                 g_runtime->counters.countdown_compare_hits.fetch_add(
                     1, std::memory_order_relaxed);
             }
-            context.eip += 7;
+            context.eip += g_runtime->layout.countdown_compare_skip;
         }
 
         // SafetyHook fixes the mid-hook callback signature to a mutable Context&.
         // ReSharper disable once CppParameterMayBeConstPtrOrRef
         void HookAudioSkipMargin(safetyhook::Context& context)
         {
-            const auto margin_ms = ReadI32Stack(context, -0x24);
+            const auto margin_ms = ReadI32Stack(context, g_runtime->layout.audio_margin_stack);
             if (margin_ms <= 0 || margin_ms >= kMinimumAudioSkipMarginMs)
             {
                 return;
             }
             if (WriteU32Safe(
-                context.ebp - 0x24,
+                context.ebp + g_runtime->layout.audio_margin_stack,
                 static_cast<std::uint32_t>(kMinimumAudioSkipMarginMs)))
             {
                 g_runtime->counters.audio_skip_margin_clamps.fetch_add(
@@ -1586,7 +1146,7 @@ namespace gc::framerate
         void HookAudioSkipInterval(safetyhook::Context& context)
         {
             std::uint32_t raw_interval{};
-            if (!ReadU32Safe(context.ecx + 0x3C, raw_interval))
+            if (!ReadU32Safe(context.ecx + g_runtime->layout.audio_interval, raw_interval))
             {
                 FatalRuntimeConversion("audio interval read");
                 return;
@@ -1623,15 +1183,15 @@ namespace gc::framerate
                 static_cast<std::int32_t>(remainder));
             g_runtime->counters.audio_skip_interval_conversions.fetch_add(
                 1, std::memory_order_relaxed);
-            context.eip += 3;
+            context.eip += g_runtime->layout.audio_interval_skip;
         }
 
         void HookAudioResyncPolicy(safetyhook::Context& context)
         {
             std::int32_t drift_ms{};
             std::int32_t margin_ms{};
-            if (!ReadI32StackSafe(context, -0x0C, drift_ms) ||
-                !ReadI32StackSafe(context, -0x24, margin_ms) ||
+            if (!ReadI32StackSafe(context, g_runtime->layout.audio_drift_stack, drift_ms) ||
+                !ReadI32StackSafe(context, g_runtime->layout.audio_margin_stack, margin_ms) ||
                 margin_ms < 0)
             {
                 return;
@@ -1645,13 +1205,13 @@ namespace gc::framerate
             if (suppressed)
             {
                 context.eip = static_cast<std::uint32_t>(
-                    ExecutableBase() + kAudioResyncEpilogueRva);
+                    NativeTarget(FramerateNativeTarget::audio_resync_epilogue));
             }
         }
 
         void HookGameplaySongClock(safetyhook::Context& context)
         {
-            context.eip += 5;
+            context.eip += g_runtime->layout.song_clock_skip;
 
             if (!detail::UsesSharedGameplaySongClock(
                     g_runtime->audio_clock_plan) ||
@@ -1665,7 +1225,7 @@ namespace gc::framerate
             std::uint32_t current_tick{};
             if (tune == 0 ||
                 !ReadU32Safe(
-                    tune + kTuneCurrentTickOffset, current_tick))
+                    tune + g_runtime->layout.tune_current_tick, current_tick))
             {
                 FatalRuntimeConversion("shared song-clock tune read");
                 return;
@@ -1678,15 +1238,15 @@ namespace gc::framerate
                 audio::ScopedGameplayAudioCursorQuery cursor_query;
                 const auto get_sound_manager =
                     reinterpret_cast<GetSoundManager>(
-                        ExecutableBase() + kGetSoundManagerRva);
+                        NativeTarget(FramerateNativeTarget::get_sound_manager));
                 const auto get_group_play_cursor_ms =
                     reinterpret_cast<GetGroupPlayCursorMs>(
-                        ExecutableBase() + kGetGroupPlayCursorMsRva);
+                        NativeTarget(FramerateNativeTarget::get_group_cursor));
                 if (void* const sound_manager = get_sound_manager();
                     sound_manager != nullptr)
                 {
                     group_cursor_ms = get_group_play_cursor_ms(
-                        sound_manager, kGameplaySoundGroup);
+                        sound_manager, g_runtime->layout.gameplay_sound_group);
                 }
                 cursor_observation = cursor_query.Consume();
             }
@@ -1739,7 +1299,7 @@ namespace gc::framerate
                         current_tick);
                 }
                 if (!WriteU32Safe(
-                    tune + kTuneStepOffset, decision->step))
+                    tune + g_runtime->layout.tune_step, decision->step))
                 {
                     FatalRuntimeConversion("ASIO QPC song-clock step write");
                 }
@@ -1747,13 +1307,13 @@ namespace gc::framerate
             }
 
             const auto get_config = reinterpret_cast<GetConfig>(
-                ExecutableBase() + kGetConfigRva);
+                NativeTarget(FramerateNativeTarget::get_config));
             void* const config = get_config();
             std::uint32_t game_time_offset_raw{};
             if (config == nullptr ||
                 !ReadU32Safe(
                     reinterpret_cast<std::uintptr_t>(config) +
-                    kGameTimeOffsetOffset,
+                    g_runtime->layout.game_time_offset,
                     game_time_offset_raw))
             {
                 FatalRuntimeConversion("shared song-clock config read");
@@ -1795,7 +1355,7 @@ namespace gc::framerate
                     selection.step);
             }
 
-            if (!WriteU32Safe(tune + kTuneStepOffset, selection.step))
+            if (!WriteU32Safe(tune + g_runtime->layout.tune_step, selection.step))
             {
                 FatalRuntimeConversion("shared song-clock step write");
             }
@@ -1809,8 +1369,8 @@ namespace gc::framerate
                 g_runtime->audio_clock_plan);
             const bool readable = shared_clock
                                       ? ReadTuneFrameAndStep(
-                                          context, -0x2B4, frame, step)
-                                      : ReadTuneFrame(context, -0x2B4, frame);
+                                          context, g_runtime->layout.semantic_tune_stack, frame, step)
+                                      : ReadTuneFrame(context, g_runtime->layout.semantic_tune_stack, frame);
             if (!readable)
             {
                 FatalRuntimeConversion("gameplay effect tune-frame read");
@@ -1839,7 +1399,7 @@ namespace gc::framerate
             {
                 g_runtime->counters.gameplay_effect_skips.fetch_add(
                     1, std::memory_order_relaxed);
-                context.eip += 5;
+                context.eip += g_runtime->layout.effect_advance_skip;
                 return;
             }
 
@@ -1849,8 +1409,7 @@ namespace gc::framerate
             {
                 const auto advance_gameplay_effect =
                     reinterpret_cast<AdvanceGameplayEffect>(
-                        ExecutableBase() +
-                        kAdvanceGameplayEffectRva);
+                        NativeTarget(FramerateNativeTarget::advance_gameplay_effect));
                 for (std::uint32_t index = 1;
                      index < advance_count.value();
                      ++index)
@@ -1967,7 +1526,7 @@ namespace gc::framerate
         void HookPlayerPositionAssetFrame(safetyhook::Context& context)
         {
             if (!MapPlayerPositionAssetFrame(
-                context, g_runtime->profile, &ReadU32Safe))
+                context, g_runtime->profile, g_runtime->layout, &ReadU32Safe))
             {
                 FatalRuntimeConversion(
                     "player-position asset-frame mapping");
@@ -1983,6 +1542,7 @@ namespace gc::framerate
                 context,
                 g_runtime->profile,
                 g_runtime->player_position_duration_operand,
+                g_runtime->layout,
                 &ReadU32Safe))
             {
                 FatalRuntimeConversion(
@@ -2270,245 +1830,155 @@ namespace gc::framerate
             MaybeLogRuntimeStats(now.QuadPart);
         }
 
-        [[nodiscard]] const char* PatchPlanErrorName(
-            FrameratePatchPlanError error) noexcept
-        {
-            switch (error)
-            {
-            case FrameratePatchPlanError::ProfileConversion:
-                return "profile_conversion";
-            case FrameratePatchPlanError::OperandAddressOutOfRange:
-                return "operand_address_out_of_range";
-            case FrameratePatchPlanError::UnexpectedImageBase:
-                return "unexpected_image_base";
-            case FrameratePatchPlanError::Capacity:
-                return "capacity";
-            }
-            return "unknown";
-        }
-
-        [[nodiscard]] const char* InstallStageName(
-            FramerateInstallStage stage) noexcept
-        {
-            switch (stage)
-            {
-            case FramerateInstallStage::None:
-                return "none";
-            case FramerateInstallStage::Capacity:
-                return "capacity";
-            case FramerateInstallStage::InvalidDescriptor:
-                return "invalid_descriptor";
-            case FramerateInstallStage::PreflightRead:
-                return "preflight_read";
-            case FramerateInstallStage::PreflightMismatch:
-                return "preflight_mismatch";
-            case FramerateInstallStage::DirectWrite:
-                return "direct_write";
-            case FramerateInstallStage::HookInstall:
-                return "hook_install";
-            }
-            return "unknown";
-        }
-
-        void FatalInstallPlanFailure(FrameratePatchPlanError error) noexcept
-        {
-            const auto detail = std::format(
-                "direct patch plan error={}; executable memory was not changed",
-                PatchPlanErrorName(error));
-            ReportFramerateInitializationFailure(
-                detail,
-                g_runtime->fatal_published,
-                g_runtime->platform);
-        }
-
-        void FatalTransactionFailure(
-            const FramerateInstallError& error) noexcept
-        {
-            const auto detail = std::format(
-                "transaction stage={} name={} index={} rollback_attempted={} "
-                "rollback_complete={}",
-                InstallStageName(error.stage),
-                error.operation_name != nullptr
-                    ? error.operation_name
-                    : "<unnamed>",
-                error.operation_index,
-                error.rollback_attempted,
-                error.rollback_complete);
-            PLOG_ERROR << "FrameratePatch: " << detail;
-            ReportFramerateInitializationFailure(
-                detail,
-                g_runtime->fatal_published,
-                g_runtime->platform);
-        }
     } // namespace
 
-    bool FramerateHookHasRuntimeBinding(FramerateHookId id) noexcept
-    {
-        HookOperation operation{};
-        AssignHookCallbacks(id, operation);
-        return operation.install != nullptr && operation.reset != nullptr;
+
+namespace {
+bool TargetRequired(FramerateNativeTarget target, const FramerateHookPlan& hooks) noexcept {
+    const auto has = [&](FramerateHookId id) {
+        return std::ranges::any_of(hooks.view(), [&](const auto& hook) { return hook.id == id; });
+    };
+    switch (target) {
+    case FramerateNativeTarget::audio_resync_epilogue: return has(FramerateHookId::AudioResyncPolicy);
+    case FramerateNativeTarget::get_sound_manager:
+    case FramerateNativeTarget::get_group_cursor:
+    case FramerateNativeTarget::get_config: return has(FramerateHookId::GameplaySongClock);
+    case FramerateNativeTarget::advance_gameplay_effect: return has(FramerateHookId::GameplayEffectAdvance);
+    case FramerateNativeTarget::ranking_resume: return has(FramerateHookId::RankingEntryCounterStore);
+    case FramerateNativeTarget::hitchart_resume: return has(FramerateHookId::HitChartEntryCounterStore);
+    case FramerateNativeTarget::unlock_countdown_resume: return has(FramerateHookId::UnlockRewardCountdownStore);
+    case FramerateNativeTarget::unlock_primary_resume: return has(FramerateHookId::UnlockRewardPrimaryStateStore);
+    case FramerateNativeTarget::unlock_secondary_resume: return has(FramerateHookId::UnlockRewardSecondaryStateStore);
+    case FramerateNativeTarget::count: return false;
     }
+    return false;
+}
+}
 
-    bool FrameratePatchInit(
-        FramerateSettings settings,
-        const audio::AudioBackend audio_backend)
-    {
-        static std::atomic_bool initialized{false};
-        bool expected = false;
-        if (!initialized.compare_exchange_strong(expected, true))
-        {
-            return g_runtime.has_value() &&
-                g_runtime->transaction.committed();
-        }
-
-        const auto actions = ProductionFrameratePlatformActions();
-        const auto target = settings.target_fps();
-        const bool timer_freeze_enabled = settings.timer_freeze_enabled();
-        auto profile_result = FramerateProfile::Create(target);
-
+std::expected<PreparedFrameratePlan, game_version::PlanError> BuildFrameratePlan(
+    game_version::GameBuild build, game_version::GameImageVariant variant,
+    const FramerateSettings& settings, audio::AudioBackend backend) noexcept {
+    using namespace game_version;
+    const auto invalid = [](std::string_view site) {
+        return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+            .feature = FeatureId::framerate, .site = site});
+    };
+    try {
+        if (g_runtime) return invalid("runtime_already_prepared");
+        const auto* game = ProfileFor(build, variant);
+        if (!game) return std::unexpected(PlanError{.stage = PlanStage::unsupported_feature,
+            .feature = FeatureId::framerate});
+        auto timing = FramerateTimingProfile::Create(settings.target_fps());
         LARGE_INTEGER frequency{};
-        if (!profile_result || !QueryPerformanceFrequency(&frequency) ||
-            frequency.QuadPart <= 0)
-        {
-            static std::atomic_bool startup_fatal{false};
-            ReportFramerateInitializationFailure(
-                "profile or QPC preflight failed; executable memory was not changed",
-                startup_fatal,
-                actions);
-            return false;
+        if (!timing || !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0)
+            return invalid("timing_profile_or_qpc");
+        auto monitor = FramerateMonitor::Create(settings.target_fps(), frequency.QuadPart);
+        if (!monitor) return invalid("cadence_monitor");
+        GameplayAudioClockPlan audio_plan{};
+        switch (backend) {
+        case audio::AudioBackend::asio: audio_plan = GameplayAudioClockPlan::AsioQpcSongClock; break;
+        case audio::AudioBackend::wasapi_exclusive:
+            audio_plan = timing->gameplay_validated() ? GameplayAudioClockPlan::WasapiSharedSongClock
+                                                    : GameplayAudioClockPlan::WasapiLegacyResync; break;
+        case audio::AudioBackend::directsound: audio_plan = GameplayAudioClockPlan::OriginalWatchdog; break;
+        default: return invalid("audio_backend");
         }
-
-        auto monitor_result = FramerateMonitor::Create(
-            target, frequency.QuadPart);
-        if (!monitor_result)
-        {
-            static std::atomic_bool startup_fatal{false};
-            ReportFramerateInitializationFailure(
-                "cadence monitor preflight failed; executable memory was not changed",
-                startup_fatal,
-                actions);
-            return false;
+        std::optional<GameplaySongClock> song_clock;
+        if (detail::UsesSharedGameplaySongClock(audio_plan)) {
+            auto clock = GameplaySongClock::Create(settings.target_fps(), 1);
+            if (!clock) return invalid("shared_song_clock");
+            song_clock.emplace(std::move(*clock));
         }
-
-        const auto audio_clock_plan =
-            audio_backend == audio::AudioBackend::asio
-                ? GameplayAudioClockPlan::AsioQpcSongClock
-                : audio_backend == audio::AudioBackend::wasapi_exclusive
-                ? profile_result->gameplay_validated()
-                      ? GameplayAudioClockPlan::WasapiSharedSongClock
-                      : GameplayAudioClockPlan::WasapiLegacyResync
-                : GameplayAudioClockPlan::OriginalWatchdog;
-        std::optional<GameplaySongClock> gameplay_song_clock;
-        if (detail::UsesSharedGameplaySongClock(audio_clock_plan))
-        {
-            auto clock_result = GameplaySongClock::Create(target, 1);
-            if (!clock_result)
-            {
-                static std::atomic_bool startup_fatal{false};
-                ReportFramerateInitializationFailure(
-                    "shared song-clock preflight failed; executable memory was not changed",
-                    startup_fatal,
-                    actions);
-                return false;
+        g_runtime.emplace(std::move(*timing), std::move(*monitor), frequency.QuadPart,
+            ProductionFrameratePlatformActions(), audio_plan, std::move(song_clock));
+        // Runtime addresses used by replacement operands now have process lifetime.
+        g_runtime->game_profile = game;
+        g_runtime->layout = game->layout;
+        const auto direct = BuildFramerateDirectPatchPlan(*game, g_runtime->profile,
+            reinterpret_cast<std::uintptr_t>(g_runtime->profile.target_fps_operand()));
+        if (!direct) {
+            switch (direct.error()) {
+            case FrameratePatchPlanError::ProfileConversion: return invalid("direct_patch_profile_conversion");
+            case FrameratePatchPlanError::OperandAddressOutOfRange: return invalid("direct_patch_operand_address_out_of_range");
+            case FrameratePatchPlanError::Capacity: return invalid("direct_patch_capacity");
             }
-            gameplay_song_clock.emplace(
-                std::move(clock_result.value()));
+            return invalid("direct_patch_values");
         }
-
-        g_runtime.emplace(
-            std::move(profile_result.value()),
-            std::move(monitor_result.value()),
-            frequency.QuadPart,
-            actions,
-            audio_clock_plan,
-            std::move(gameplay_song_clock));
-
-        const auto direct_plan = BuildFramerateDirectPatchPlan(
-            ExecutableBase(),
-            g_runtime->profile,
-            reinterpret_cast<std::uintptr_t>(
-                g_runtime->profile.target_fps_operand()));
-        if (!direct_plan)
-        {
-            FatalInstallPlanFailure(direct_plan.error());
-            return false;
+        const auto hooks = BuildFramerateHookPlan(*game, !g_runtime->profile.native_timing(), audio_plan);
+        PreparedFrameratePlan plan;
+        for (const auto& write : direct->view()) plan.operations[plan.count++] = write;
+        for (const auto& hook : hooks.view()) {
+            auto bound = BindHook(hook);
+            if (!bound) return std::unexpected(bound.error());
+            plan.operations[plan.count++] = std::move(*bound);
         }
-
-        const auto hook_plan = BuildFramerateHookPlan(
-            !g_runtime->profile.native_timing(),
-            g_runtime->audio_clock_plan);
-        const auto hook_operations = BuildHookOperations(
-            hook_plan.view(), *g_runtime);
-
-        ReportFramerateStartup(
-            g_runtime->profile,
-            FramerateStartupPatchSummary{
-                .direct_write_count = direct_plan->view().size(),
-                .hook_count = hook_operations.view().size(),
-                .menu_repeat_initial = direct_plan->menu_repeat_initial,
-                .menu_repeat_interval = direct_plan->menu_repeat_interval,
-                .authored_frame_milliseconds =
-                g_runtime->authored_frame_operand.frame_milliseconds,
-                .effect_timing = SummarizeEffectTimingManifest(),
-            },
-            actions);
-
-        PLOG_INFO
-            << "FrameratePatch: menu_timing startup"
-            << " policy=corrected"
-            << " contracts=6 temporary=0";
-
-        const auto installed = g_runtime->transaction.Install(
-            direct_plan->view(), hook_operations.view());
-        if (!installed)
-        {
-            FatalTransactionFailure(installed.error());
-            return false;
-        }
-
-        PLOG_INFO << "FrameratePatch: transaction committed"
-            << " direct_writes=" << direct_plan->view().size()
-            << " hooks=" << hook_operations.view().size();
-
-        if (timer_freeze_enabled)
-        {
-            const auto image = runtime_image::RuntimeImage::MainModule();
-            const auto frozen = image
-                ? gc::timer_freeze::InstallCountdownTimerFreeze(*image, true)
-                : std::expected<void, runtime_image::RuntimeImageError>(
-                    std::unexpected(image.error()));
-            if (!frozen)
-            {
-                // Framerate installation has already mutated this process.
-                try
-                {
-                    const auto& error = frozen.error();
-                    std::string expected;
-                    std::string observed;
-                    for (const auto value : error.expected.view())
-                        expected += std::format("{:02x}", std::to_integer<unsigned>(value));
-                    for (const auto value : error.observed.view())
-                        observed += std::format("{:02x}", std::to_integer<unsigned>(value));
-                    gc::diagnostics::AbortProcess({
-                        .log = std::format(
-                            "Countdown: startup failed stage={} site={} rva=0x{:08x} "
-                            "address=0x{:08x} expected={} observed={} win32_error={} "
-                            "memory_changed={} restore_attempted={} restore_succeeded={}",
-                            runtime_image::MemoryStageName(error.stage),
-                            error.identity.site, error.identity.rva, error.address,
-                            expected, observed, error.win32_error, error.memory_changed,
-                            error.restore_attempted, error.restore_succeeded),
-                        .modal = L"GCLoader could not install the countdown patches. "
-                            L"See loader-log.txt for the failing site.",
-                        .title = L"GCLoader countdown setup error",
-                    });
-                }
-                catch (...)
-                {
-                    gc::diagnostics::AbortProcess({});
-                }
-            }
-        }
-        return true;
+        for (const auto& target : game->targets)
+            if (TargetRequired(target.id, hooks))
+                plan.operations[plan.count++] = ReadOnlyContractOperation{target.site};
+        g_runtime->startup_summary = {
+            .direct_write_count = direct->count, .hook_count = hooks.count,
+            .menu_repeat_initial = direct->menu_repeat_initial,
+            .menu_repeat_interval = direct->menu_repeat_interval,
+            .authored_frame_milliseconds = g_runtime->authored_frame_operand.frame_milliseconds,
+            .effect_timing = game->effect_timing,
+        };
+        return plan;
+    } catch (...) {
+        return std::unexpected(PlanError{.stage = PlanStage::allocation,
+            .feature = FeatureId::framerate, .site = "runtime_preparation"});
     }
+}
+
+std::expected<void, game_version::PlanError> PrepareFramerateRuntimeBindings(
+    const game_version::ApprovedVersionedPlan& plan, const runtime_image::RuntimeImage& image) noexcept {
+    using namespace game_version;
+    bool included{};
+    for (const auto& site : plan.sites()) {
+        const auto& contract = site.contract();
+        if (contract.feature != FeatureId::framerate) continue;
+        included = true;
+        if (!g_runtime || !g_runtime->game_profile || plan.image_base() != image.base() ||
+            plan.image_size() != image.size() ||
+            plan.context().build != SelectedBuild{g_runtime->game_profile->build} ||
+            plan.context().variant != SelectedVariant{g_runtime->game_profile->variant})
+            return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+                .context = plan.context(), .feature = FeatureId::framerate, .site = "runtime_binding"});
+        if (contract.kind != VersionedOperationKind::read_only_contract) continue;
+        const auto& targets = g_runtime->game_profile->targets;
+        const auto found = std::ranges::find_if(targets,
+            [&](const auto& target) { return target.site.site == contract.site && target.site.rva == contract.rva; });
+        if (found == targets.end())
+            return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+                .context = plan.context(), .feature = FeatureId::framerate, .site = contract.site});
+        const auto address = image.Resolve({"framerate", contract.site, contract.rva}, contract.protected_span);
+        if (!address)
+            return std::unexpected(PlanError{.stage = PlanStage::address_range,
+                .context = plan.context(), .feature = FeatureId::framerate, .site = contract.site,
+                .rva = contract.rva, .memory = address.error()});
+        if (*address != site.address)
+            return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+                .context = plan.context(), .feature = FeatureId::framerate, .site = contract.site});
+        g_runtime->native_targets[static_cast<std::size_t>(found->id)] = *address;
+    }
+    if (included) {
+        const auto hooks = BuildFramerateHookPlan(*g_runtime->game_profile,
+            !g_runtime->profile.native_timing(), g_runtime->audio_clock_plan);
+        for (const auto& target : g_runtime->game_profile->targets)
+            if (TargetRequired(target.id, hooks) && NativeTarget(target.id) == 0)
+                return std::unexpected(PlanError{.stage = PlanStage::invalid_plan,
+                    .context = plan.context(), .feature = FeatureId::framerate, .site = target.site.site});
+    }
+    return {};
+}
+
+void CompleteFramerateStartup(const game_version::ApprovedVersionedPlan& plan) noexcept {
+    const bool included = std::ranges::any_of(plan.sites(), [](const auto& site) {
+        return site.contract().feature == game_version::FeatureId::framerate;
+    });
+    if (!included) return;
+    ReportFramerateStartup(g_runtime->profile, g_runtime->startup_summary, g_runtime->platform);
+    PLOG_INFO << "FrameratePatch: versioned startup committed direct_writes="
+        << g_runtime->startup_summary.direct_write_count << " hooks=" << g_runtime->startup_summary.hook_count;
+    PLOG_INFO << "FrameratePatch: menu_timing startup policy=corrected contracts=6 temporary=0";
+}
 } // namespace gc::framerate

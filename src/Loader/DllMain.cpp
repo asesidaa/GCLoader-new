@@ -18,7 +18,6 @@
 #include "plog/Init.h"
 #include "Rfid/Feature.h"
 #include "Loader/TransitionalVersionedStartup.h"
-#include "Patches/Framerate/FrameratePatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossPatch.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenPatch.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
@@ -522,14 +521,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             gc::loader::InstallTransitionalAbsoluteJudgement(
                 settings.judgement());
 
-            if (!gc::framerate::FrameratePatchInit(
-                settings.framerate(),
-                settings.audio().backend()))
-            {
-                PLOG_ERROR
-                    << "FrameratePatch: fail-closed DLL attach";
-                return FALSE;
-            }
+            gc::loader::InstallTransitionalFramerate(
+                settings.framerate(), settings.audio().backend());
             PLOG_DEBUG
                 << "Framerate runtime initialization complete!";
 

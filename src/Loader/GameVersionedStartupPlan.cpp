@@ -5,6 +5,8 @@
 #include "Patches/AutoPlay/AutoPlayProfile.h"
 #include "Patches/AbsoluteJudgement/AbsoluteJudgementProfile.h"
 #include "Patches/SongUnlock/SongUnlockProfile.h"
+#include "Patches/Framerate/FrameratePatch.h"
+#include "Patches/Countdown/CountdownProfile.h"
 #include <array>
 
 namespace gc::loader {
@@ -64,7 +66,21 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
     if (const auto result = append(absolute_judgement::BuildAbsoluteJudgementPlan(
             build, variant, settings.judgement().enabled()), after_compatibility); !result)
         return std::unexpected(result.error());
-    // Remaining families join in06d-06h. This entry point stays dormant until
+    if (const auto required = plans.Require({game_version::FeatureId::framerate, true, true}); !required)
+        return std::unexpected(StartupPlanError{.plan = required.error()});
+    auto frame = framerate::BuildFrameratePlan(build, variant, settings.framerate(), settings.audio().backend());
+    if (!frame) return std::unexpected(StartupPlanError{.plan = frame.error()});
+    constexpr std::array after_judgement{game_version::FeatureId::absolute_judgement};
+    if (const auto result = append(frame->feature_plan(), after_judgement); !result)
+        return std::unexpected(result.error());
+    if (settings.framerate().timer_freeze_enabled()) {
+        if (const auto required = plans.Require({game_version::FeatureId::countdown, false, true}); !required)
+            return std::unexpected(StartupPlanError{.plan = required.error()});
+        constexpr std::array after_framerate{game_version::FeatureId::framerate};
+        if (const auto result = append(timer_freeze::BuildCountdownPlan(build, variant, true), after_framerate); !result)
+            return std::unexpected(result.error());
+    }
+    // Remaining families join in06e-06h. This entry point stays dormant until
     // Plan09 switches all versioned startup through one complete barrier.
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});

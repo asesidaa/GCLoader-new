@@ -119,7 +119,7 @@ namespace gc::framerate
     }
 
     void ReportFramerateStartup(
-        const FramerateProfile& profile,
+        const FramerateTimingProfile& profile,
         const FramerateStartupPatchSummary& summary,
         const FrameratePlatformActions& actions) noexcept
     {

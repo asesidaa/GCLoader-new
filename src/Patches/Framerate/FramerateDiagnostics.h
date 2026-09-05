@@ -2,7 +2,7 @@
 
 #include "Patches/Framerate/FramerateEffectTiming.h"
 #include "Patches/Framerate/FramerateMonitor.h"
-#include "Patches/Framerate/FramerateProfile.h"
+#include "Patches/Framerate/FramerateTimingProfile.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -43,7 +43,7 @@ struct FramerateEffectRuntimeStats {
     noexcept;
 
 void ReportFramerateStartup(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     const FramerateStartupPatchSummary& summary,
     const FrameratePlatformActions& actions) noexcept;
 

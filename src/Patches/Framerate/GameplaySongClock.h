@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Patches/Framerate/FramerateProfile.h"
+#include "Patches/Framerate/FramerateTimingProfile.h"
 
 #include <cstdint>
 #include <expected>
@@ -71,15 +71,15 @@ private:
     std::uint64_t last_exact_source_frame_{};
 };
 
-[[nodiscard]] std::expected<std::uint32_t, FramerateProfileError>
+[[nodiscard]] std::expected<std::uint32_t, FramerateTimingProfileError>
 CountCrossedAuthored60Ticks(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t current_tick,
     std::uint32_t step) noexcept;
 
-[[nodiscard]] std::expected<bool, FramerateProfileError>
+[[nodiscard]] std::expected<bool, FramerateTimingProfileError>
 CrossesAuthored60Cadence(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t current_tick,
     std::uint32_t step,
     std::int32_t phase,

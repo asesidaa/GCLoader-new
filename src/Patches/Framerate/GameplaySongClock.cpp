@@ -298,15 +298,15 @@ GameplaySongClock::AdvanceToDesiredTick(
     };
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
+std::expected<std::uint32_t, FramerateTimingProfileError>
 CountCrossedAuthored60Ticks(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t current_tick,
     std::uint32_t step) noexcept {
     if (step >
         std::numeric_limits<std::uint32_t>::max() - current_tick) {
         return std::unexpected(
-            FramerateProfileError::DestinationOverflow);
+            FramerateTimingProfileError::DestinationOverflow);
     }
 
     const auto end_tick = current_tick + step;
@@ -320,25 +320,25 @@ CountCrossedAuthored60Ticks(
     }
     if (end_authored.value() < current_authored.value()) {
         return std::unexpected(
-            FramerateProfileError::ArithmeticOverflow);
+            FramerateTimingProfileError::ArithmeticOverflow);
     }
     return end_authored.value() - current_authored.value();
 }
 
-std::expected<bool, FramerateProfileError>
+std::expected<bool, FramerateTimingProfileError>
 CrossesAuthored60Cadence(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t current_tick,
     std::uint32_t step,
     std::int32_t phase,
     std::uint32_t authored_period) noexcept {
     if (authored_period == 0) {
-        return std::unexpected(FramerateProfileError::InvalidPeriod);
+        return std::unexpected(FramerateTimingProfileError::InvalidPeriod);
     }
     if (step >
         std::numeric_limits<std::uint32_t>::max() - current_tick) {
         return std::unexpected(
-            FramerateProfileError::DestinationOverflow);
+            FramerateTimingProfileError::DestinationOverflow);
     }
 
     const auto end_tick = current_tick + step;

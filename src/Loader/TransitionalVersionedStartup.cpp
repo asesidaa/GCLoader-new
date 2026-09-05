@@ -9,6 +9,8 @@
 #include "Patches/AutoPlay/AutoPlayProfile.h"
 #include "Patches/AutoPlay/AutoPlayPatch.h"
 #include "Patches/SongUnlock/SongUnlockProfile.h"
+#include "Patches/Framerate/FrameratePatch.h"
+#include "Patches/Countdown/CountdownProfile.h"
 #include "plog/Log.h"
 #include <format>
 
@@ -87,6 +89,44 @@ void InstallTransitionalAbsoluteJudgement(const absolute_judgement::JudgementSet
             return absolute_judgement::BuildAbsoluteJudgementPlan(
                 selection.build, selection.variant, settings.enabled());
         }, *g_detection), &settings);
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalFramerate(const framerate::FramerateSettings& settings, audio::AudioBackend backend) noexcept {
+    using namespace game_version;
+    try {
+        if (!g_detection) diagnostics::AbortProcess({});
+        auto frame = std::visit([&](const auto& selection) {
+            return framerate::BuildFrameratePlan(selection.build, selection.variant, settings, backend);
+        }, *g_detection);
+        if (!frame) diagnostics::AbortProcess(FormatPlanError(frame.error()));
+        const auto image = runtime_image::RuntimeImage::MainModule();
+        if (!image) diagnostics::AbortProcess(FormatStartupInstallError({
+            .stage = StartupInstallStage::image_binding, .memory = image.error()}));
+        VersionedPlanSet plans;
+        if (const auto required = plans.Require({FeatureId::framerate, true, true}); !required)
+            diagnostics::AbortProcess(FormatPlanError(required.error()));
+        if (const auto added = plans.Add(frame->feature_plan()); !added)
+            diagnostics::AbortProcess(FormatPlanError(added.error()));
+        if (settings.timer_freeze_enabled()) {
+            auto timer = std::visit([](const auto& selection) {
+                return timer_freeze::BuildCountdownPlan(selection.build, selection.variant, true);
+            }, *g_detection);
+            if (!timer) diagnostics::AbortProcess(FormatPlanError(timer.error()));
+            constexpr std::array after_framerate{FeatureId::framerate};
+            timer->install_after = after_framerate;
+            if (const auto required = plans.Require({FeatureId::countdown, false, true}); !required)
+                diagnostics::AbortProcess(FormatPlanError(required.error()));
+            if (const auto added = plans.Add(*timer); !added)
+                diagnostics::AbortProcess(FormatPlanError(added.error()));
+        }
+        const auto approved = plans.Validate(*image, *g_detection);
+        if (!approved) diagnostics::AbortProcess(FormatPlanError(approved.error()));
+        if (const auto prepared = framerate::PrepareFramerateRuntimeBindings(*approved, *image); !prepared)
+            diagnostics::AbortProcess(FormatPlanError(prepared.error()));
+        if (const auto installed = InstallApprovedVersionedPlan(
+                *approved, *image, hooking::HookRegistry::ProcessLifetime()); !installed)
+            diagnostics::AbortProcess(FormatStartupInstallError(installed.error()));
+        framerate::CompleteFramerateStartup(*approved);
     } catch (...) { diagnostics::AbortProcess({}); }
 }
 void InstallTransitionalOptionalPatches(const config::ValidatedConfig& settings) noexcept {

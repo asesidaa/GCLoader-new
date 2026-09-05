@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Patches/Framerate/FrameratePatchPlan.h"
+#include "Patches/Framerate/FramerateNativeAbi.h"
 
 #include <safetyhook.hpp>
 
@@ -10,50 +10,6 @@
 #include <string_view>
 
 namespace gc::framerate {
-
-enum class MenuTimingHookKind {
-    Inline,
-    Mid,
-};
-
-struct MenuCounterHookGeometry {
-    std::uintptr_t hook_rva{};
-    std::uintptr_t suppress_resume_rva{};
-};
-
-inline constexpr MenuCounterHookGeometry
-    kRankingEntryCounterHookGeometry{
-        .hook_rva = 0x00216EB4,
-        .suppress_resume_rva = 0x00216EB9,
-    };
-inline constexpr MenuCounterHookGeometry
-    kHitChartEntryCounterHookGeometry{
-        .hook_rva = 0x0026562F,
-        .suppress_resume_rva = 0x00265637,
-    };
-inline constexpr MenuCounterHookGeometry
-    kUnlockRewardCountdownHookGeometry{
-        .hook_rva = 0x00030DA3,
-        .suppress_resume_rva = 0x00030DA9,
-    };
-inline constexpr MenuCounterHookGeometry
-    kUnlockRewardPrimaryHookGeometry{
-        .hook_rva = 0x00030E54,
-        .suppress_resume_rva = 0x00030E5A,
-    };
-inline constexpr MenuCounterHookGeometry
-    kUnlockRewardSecondaryHookGeometry{
-        .hook_rva = 0x00030F23,
-        .suppress_resume_rva = 0x00030F29,
-    };
-
-struct MenuTimingHookSite {
-    FramerateHookContract contract{};
-    MenuTimingHookKind kind{};
-};
-
-[[nodiscard]] std::span<const MenuTimingHookSite>
-FramerateMenuTimingHookSites() noexcept;
 
 enum class MovieClipAdvanceContext {
     Ordinary,
@@ -73,14 +29,6 @@ inline constexpr std::uint32_t
 inline constexpr std::uint32_t
     kUnlockRewardNavigatorNameHash = 0x59FE24C8;
 
-// game471.exe MovieClipInstance layout, proved from the constructor,
-// placement core, Stop, and AdvanceOneTimelineFrame.
-inline constexpr std::uintptr_t kMovieClipStopFlagOffset = 0x11C;
-inline constexpr std::uintptr_t kMovieClipInstanceNameOffset = 0x120;
-inline constexpr std::uintptr_t kMovieClipInstanceNameHashOffset = 0x140;
-inline constexpr std::uintptr_t kMovieClipOwnerOffset = 0x150;
-inline constexpr std::uintptr_t kMovieClipCurrentFrameLowOffset = 0x178;
-inline constexpr std::uintptr_t kMovieClipCurrentFrameHighOffset = 0x17C;
 
 struct MovieClipAdvanceDecision {
     MovieClipAdvanceAction action{MovieClipAdvanceAction::ExecuteOriginal};

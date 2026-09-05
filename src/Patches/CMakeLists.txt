@@ -26,11 +26,11 @@ add_library(gc_runtime_patches STATIC
         Framerate/FrameratePatch.cpp
         Framerate/FrameratePatchPlan.cpp
         Framerate/FramerateMonitor.cpp
-        Framerate/FramerateProfile.cpp
-        Framerate/FrameratePatchTransaction.cpp
+        Framerate/FramerateTimingProfile.cpp
+        Framerate/FramerateGameProfile.cpp
         RendererDeviceLoss/RendererDeviceLossPatch.cpp
         RendererDeviceLoss/RendererResourceLifecycle.cpp
-        Countdown/CountdownTimerFreeze.cpp
+        Countdown/CountdownProfile.cpp
         WindowedWidescreen/D3D9CompositorDevice.cpp
         WindowedWidescreen/GameplayFeedbackPlacement.cpp
         WindowedWidescreen/NativeWindowPolicy.cpp

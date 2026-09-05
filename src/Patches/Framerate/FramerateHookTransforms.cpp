@@ -37,7 +37,7 @@ void RedirectEdxToAuthoredOperand(
 std::expected<void, FramerateHookTransformError>
 MapCountdownAssetFrame(
     safetyhook::Context& context,
-    const FramerateProfile& profile) noexcept {
+    const FramerateTimingProfile& profile) noexcept {
     const auto mapped = MapPositiveTargetFrameToAuthored60(
         profile, context.ecx);
     if (!mapped) {
@@ -51,7 +51,7 @@ MapCountdownAssetFrame(
 std::expected<void, FramerateHookTransformError>
 ScalePlayerPositionDurationEax(
     safetyhook::Context& context,
-    const FramerateProfile& profile) noexcept {
+    const FramerateTimingProfile& profile) noexcept {
     const auto scaled = ScalePositiveDuration(profile, context.eax);
     if (!scaled) {
         return std::unexpected(
@@ -64,11 +64,12 @@ ScalePlayerPositionDurationEax(
 std::expected<void, FramerateHookTransformError>
 MapPlayerPositionAssetFrame(
     safetyhook::Context& context,
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
+    const FramerateNativeLayout& layout,
     RuntimeReadU32 read_u32) noexcept {
     std::uint32_t remaining{};
     const std::uint32_t address =
-        context.edx + context.ecx * 4U + 0x1D54U;
+        context.edx + context.ecx * 4U + layout.player_position_remaining;
     if (read_u32 == nullptr || !read_u32(address, remaining)) {
         return std::unexpected(FramerateHookTransformError::MemoryRead);
     }
@@ -79,18 +80,19 @@ MapPlayerPositionAssetFrame(
             FramerateHookTransformError::ProfileConversion);
     }
     context.eax = mapped.value();
-    context.eip += 7U;
+    context.eip += layout.player_position_skip;
     return {};
 }
 
 std::expected<void, FramerateHookTransformError>
 PreparePlayerPositionDenominator(
     safetyhook::Context& context,
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     PlayerPositionDurationOperand& operand,
+    const FramerateNativeLayout& layout,
     RuntimeReadU32 read_u32) noexcept {
     std::uint32_t raw_duration{};
-    const std::uint32_t address = context.eax + 0xC4U;
+    const std::uint32_t address = context.eax + layout.player_position_duration;
     if (read_u32 == nullptr || !read_u32(address, raw_duration)) {
         return std::unexpected(FramerateHookTransformError::MemoryRead);
     }

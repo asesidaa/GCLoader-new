@@ -5,18 +5,18 @@
 
 namespace gc::framerate {
 
-enum class FramerateProfileError {
+enum class FramerateTimingProfileError {
     TargetOutOfRange,
     ArithmeticOverflow,
     DestinationOverflow,
     InvalidPeriod,
 };
 
-class FramerateProfile {
+class FramerateTimingProfile {
 public:
     [[nodiscard]] static std::expected<
-        FramerateProfile,
-        FramerateProfileError>
+        FramerateTimingProfile,
+        FramerateTimingProfileError>
     Create(std::uint32_t target_fps) noexcept;
 
     [[nodiscard]] std::uint32_t target_fps() const noexcept {
@@ -56,14 +56,14 @@ public:
         return value * 60.0F / target_fps_float_;
     }
 
-    [[nodiscard]] std::expected<std::int32_t, FramerateProfileError>
+    [[nodiscard]] std::expected<std::int32_t, FramerateTimingProfileError>
     ScaleDurationFrames(std::int32_t value) const noexcept;
 
-    [[nodiscard]] std::expected<std::uint32_t, FramerateProfileError>
+    [[nodiscard]] std::expected<std::uint32_t, FramerateTimingProfileError>
     MapToAuthored60(std::uint32_t value) const noexcept;
 
 private:
-    explicit FramerateProfile(std::uint32_t target_fps) noexcept;
+    explicit FramerateTimingProfile(std::uint32_t target_fps) noexcept;
 
     std::uint32_t target_fps_{};
     float target_fps_float_{};

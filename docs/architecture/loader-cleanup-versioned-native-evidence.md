@@ -201,3 +201,184 @@ are gone. Checked image resolution replaces runtime base-plus-RVA arithmetic.
 Full Debug and RelWithDebInfo builds and all five existing tests passed in
 each configuration. No new native test seams were added. Note timing,
 grades, audio alignment and gameplay acceptance remain unperformed.
+
+## 2026-09-05: Framerate and Countdown (Plan 06d)
+
+The saved IDA-CLI script `.codex-tmp/loader-cleanup-framerate-profile.py`
+and `loader-cleanup-framerate-native.json` verify **17 direct writes,
+53 available hooks, 32 countdown calls and ten callable/continuation targets**
+against both known game files and the existing IDB. All matched. Sorting the
+102 mutation spans produced zero overlaps. The script records whole decoded
+hook spans, surrounding instructions, native operand widths, parent functions,
+inline decompilation/epilogues and representative callers. It does not install
+hooks, mutate the IDB or launch the game.
+
+| Direct write | RVA | Original bytes | Kind / derived replacement |
+|---|---:|---|---|
+| gameplay frame milliseconds | 0x002FC0A0 | 55 55 85 41 | data; frame milliseconds |
+| visual frame milliseconds | 0x002F4604 | 55 55 85 41 | data; frame milliseconds |
+| gameplay frame seconds | 0x002FC280 | 89 88 88 3C | data; frame seconds |
+| render smoothing step | 0x002E8F00 | 00 00 80 40 | data; smoothing |
+| render offset-decay step | 0x002E8F04 | 00 00 A0 40 | data; decay |
+| XIO repeat initial duration | 0x00055CCC | C7 00 10 00 00 00 | code; scaled16 frames |
+| XIO repeat next duration | 0x00055CDD | C7 00 08 00 00 00 | code; scaled8 frames |
+| native keyboard repeat initial duration | 0x0005F843 | C7 86 D4 02 00 00 10 00 00 00 | code; scaled16 frames |
+| native keyboard repeat next duration | 0x0005F84D | C7 86 D8 02 00 00 08 00 00 00 | code; scaled8 frames |
+| gameplay countdown duration | 0x002645EE | C7 80 14 1D 00 00 78 00 00 00 | code; two-second frame count |
+| render EAX countdown duration | 0x00249A5E | B8 78 00 00 00 | code; two-second frame count |
+| render EDX countdown duration | 0x00249A73 | BA 78 00 00 00 | code; two-second frame count |
+| palette normalizer operand one | 0x0022BACF | D8 2D AC BB 6F 00 | code; stable target-FPS operand address |
+| palette normalizer operand two | 0x0022BAD5 | D8 35 AC BB 6F 00 | code; stable target-FPS operand address |
+| chart seconds-to-frames operand | 0x00262CB6 | D8 0D AC BB 6F 00 | code; stable target-FPS operand address |
+| non-song menu repeat initial duration | 0x00382CE8 | 10 00 00 00 | data; scaled16 frames |
+| non-song menu repeat interval | 0x00382CEC | 03 00 00 00 | data; scaled3 frames |
+
+The seven data writes are float timing operands and integer menu-repeat
+values. The ten code writes retain their opcode/addressing prefix and replace
+only the final four-byte immediate or address. The stable target-FPS float
+belongs to the process-lifetime runtime; it is published before plan approval.
+Checked timing arithmetic and the existing supported FPS range are unchanged.
+
+| Available hook in preserved manifest order | RVA | Replaced span | ABI kind |
+|---|---:|---:|---|
+| MovieClipGoto | 0x000DEA30 | 7 | inline |
+| MovieClipAdvance | 0x000DF940 | 5 | inline |
+| PaletteCompare | 0x0022BA60 | 6 | mid |
+| StageClipFrame | 0x00244054 | 9 | mid |
+| IfblWait | 0x002309D4 | 6 | mid |
+| StageBgmPreload | 0x0021001A | 6 | mid |
+| TuneCountdownCompare | 0x002648F7 | 7 | mid |
+| AudioSkipMargin | 0x0024018F | 6 | mid |
+| AudioSkipInterval | 0x002401BD | 5 | mid |
+| AudioResyncPolicy | 0x002401C4 | 9 | mid |
+| GameplaySongClock | 0x00264DB2 | 5 | mid |
+| GameplayEffectAdvance | 0x00264E2D | 5 | mid |
+| EffectCadence6 | 0x0024063B | 8 | mid |
+| EffectCadence5 | 0x002408D7 | 8 | mid |
+| EffectCadence4 | 0x00240C9C | 8 | mid |
+| EffectCadence16A | 0x00241213 | 11 | mid |
+| EffectCadence16B | 0x0024122F | 6 | mid |
+| EffectCadence8 | 0x00241268 | 8 | mid |
+| RemoteCadenceA | 0x002632DB | 8 | mid |
+| RemoteCadenceB | 0x00263646 | 8 | mid |
+| GameplayBlink | 0x0024A1B9 | 7 | mid |
+| GreatGoodLifetimeOperand | 0x002464A8 | 5 | mid |
+| GreatGoodFrameOperand | 0x00246528 | 8 | mid |
+| EffectLifetimeAOperand | 0x00248F00 | 5 | mid |
+| EffectFrameAOperand | 0x00248F8C | 8 | mid |
+| EffectLifetimeBOperand | 0x0024912B | 5 | mid |
+| EffectFrameBOperand | 0x002491E0 | 6 | mid |
+| DirectEffectFrameOperand | 0x00249C14 | 8 | mid |
+| ChartEffectFrameAOperand | 0x0024BC8B | 8 | mid |
+| ChartEffectFrameBOperand | 0x0024CC8A | 8 | mid |
+| ChartEffectFrameCOperand | 0x0024CCBE | 8 | mid |
+| ChartEffectFrameDOperand | 0x0024D836 | 8 | mid |
+| FixedVisualFrameOperand | 0x00250AD5 | 8 | mid |
+| GameplayCountdownAssetFrame | 0x00249A9C | 6 | mid |
+| PlayerPositionInitA | 0x00263240 | 7 | mid |
+| PlayerPositionInitB | 0x002632B2 | 7 | mid |
+| PlayerPositionInitC | 0x0026359B | 7 | mid |
+| PlayerPositionInitD | 0x00263615 | 7 | mid |
+| PlayerPositionAssetFrame | 0x0024EF43 | 7 | mid |
+| PlayerPositionDenominatorA | 0x0024F76D | 6 | mid |
+| PlayerPositionDenominatorB | 0x0024FD40 | 6 | mid |
+| EffectFlowItemFrame | 0x001F0310 | 6 | mid |
+| EffectTutorialElapsed | 0x00249593 | 6 | mid |
+| EffectChartPreRollDuration | 0x0024A934 | 6 | mid |
+| EffectPlayerModuloDividend | 0x0025072E | 8 | mid |
+| MovieClipPreprocessVisit | 0x000EFB90 | 7 | inline |
+| RankingEntryCounterStore | 0x00216EB4 | 5 | mid |
+| HitChartEntryCounterStore | 0x0026562F | 6 | mid |
+| UnlockRewardCountdownStore | 0x00030DA3 | 6 | mid |
+| UnlockRewardPrimaryStateStore | 0x00030E54 | 6 | mid |
+| UnlockRewardSecondaryStateStore | 0x00030F23 | 6 | mid |
+| NavigatorAdvance | 0x001B6310 | 6 | inline |
+| OuterFrame | 0x00058B70 | 5 | mid |
+
+This preserves the actual existing concatenation: 11 pre-effect, 34 effect,
+six menu, then two post-effect entries. The plan's grouped inventory listed
+the last two groups in a different order; the live source order is retained.
+Short legacy signatures now extend through the complete decoded replaced
+span. Longer signatures retain all their original bytes.
+
+Four inline hooks retain typed originals. MovieClip goto receives ECX and two
+integers, returns AL and uses RET8; advance receives ECX and two byte-valued
+stack arguments, returns AL and uses RET8. Preprocessing visit receives ECX
+and one integer, returns void and uses RET4. Navigator advance receives ECX,
+returns the receiver/pointer in EAX and uses RET. Native effect-manager advance
+takes ECX and no stack arguments; the existing caller ignores its EAX result.
+
+Mid callbacks preserve register/flag production and native timing boundaries:
+
+- Palette compares the four-byte [EAX+Ch] counter; IFBL stores ECX at [EDX+3Ch];
+  BGM preload gates ADD EAX,1; Tune countdown compares [EDX+1D14h].
+- Audio interval consumes EDX:EAX with divisor [ECX+3Ch]. Margin/drift are
+  signed four-byte locals at EBP-24h/-Ch; suppression resumes at the verified
+  original epilogue. Shared song-clock intercepts its original CALL with ECX
+  Tune, using Tune+10h/+14h and config+2Ch. Group cursor remains group2.
+- Effect cadence consumes the existing EDX/ECX/EAX test/modulo operands.
+  Tune receivers are four-byte locals at EBP-32Ch or EBP-2B4h; remote phase
+  is a signed four-byte local at EBP-1FCh. Clock-domain selection is unchanged.
+- Authored operand callbacks redirect the exact EAX/ECX/EDX base used by the
+  following x87 multiply/divide at +18h. The profile owns that operand carrier.
+  Player-position counters are [base+index*4+1D54h], and the x87 denominator
+  reads a four-byte integer at +C4h. The profile owns that carrier as well.
+- Countdown asset frame maps ECX before [EAX+8] store. Flow-item frame maps
+  EAX before [EDX+8], tutorial elapsed maps EDX before its stack store,
+  pre-roll scales EAX before its stack store, and player modulo maps EAX
+  before IDIV ECX. These preserve the original callback policies.
+- Menu gates preserve EAX/EDX values and either replay or skip the native
+  four-byte counter stores. Ranking and HitChart resumes follow their
+  indirect stores; UnlockReward resumes follow +376Ch/+37D4h stores.
+  MovieClip instance offsets and prompt-name policy are preserved.
+
+| Runtime target | RVA | Exact read-only signature |
+|---|---:|---|
+| audio_resync_epilogue | 0x002401D4 | 5E 8B E5 5D C3 |
+| get_sound_manager | 0x00210400 | 55 8B EC A1 9C 24 7F 00 |
+| get_group_cursor | 0x002122B0 | 55 8B EC 6A FF 68 9B 8D 67 00 |
+| get_config | 0x000011E0 | 55 8B EC E8 E8 FF FF FF |
+| advance_gameplay_effect | 0x001F08A0 | 55 8B EC 83 EC 10 89 4D F0 |
+| ranking_resume | 0x00216EB9 | E9 CA FD FF FF E8 ED FB F4 FF |
+| hitchart_resume | 0x00265637 | 8D 4D A4 E8 21 C0 DC FF |
+| unlock_countdown_resume | 0x00030DA9 | 8B 4D DC 83 B9 6C 37 00 00 00 |
+| unlock_primary_resume | 0x00030E5A | 8B 55 DC 83 BA D4 37 00 00 1F |
+| unlock_secondary_resume | 0x00030F29 | 8B 4D DC 81 C1 70 37 00 00 |
+
+Only targets needed by the selected hooks enter the manifest. Approved target
+addresses are resolved through the selected RuntimeImage and published before
+the first hook enables. No callback selects a build or adds a global RVA.
+
+All 32 countdown sites are in CountdownProfile in their original order. Each
+decodes as CALL rel32 to RVA2350C0, with return=call+5 and replacement
+D9 EE 90 90 90. This replaces the returned delta with x87 zero and preserves
+the timer's caller-side x87 contract. The setting is the existing immutable
+`timer_freeze_enabled` snapshot. Disabled mode contributes no countdown
+feature; enabled mode contributes all 32, after every framerate operation.
+
+A second important distinction from the illustrative plan counts is retained:
+**53 is the available hook manifest, not the installed count for every mode**.
+At native60 timing the direct-write plan is empty. Existing audio/FPS selection
+still chooses OuterFrame alone for the original watchdog, includes legacy
+resync for that route, or selects the shared song-clock consumers. Transformed
+timing includes the corresponding remaining hooks; mutually exclusive audio
+routes are never installed together. Every selected contract enters preflight.
+
+The renamed FramerateTimingProfile contains only existing timing math.
+FramerateGameProfile owns the static contracts, layout values, operand ABI
+carriers and native effect evidence. PreparedFrameratePlan owns dynamic
+operations until VersionedPlanSet copies them. Runtime state, typed originals,
+authored/gameplay clocks and the monitor have stable process lifetime.
+FrameratePatchTransaction and CountdownTimerFreeze's eager installer were
+deleted through the CLion source patch tool. No reverse writes/reset path or
+feature-owned SafetyHook object remains.
+
+The temporary Loader adapter validates Framerate plus enabled Countdown
+together before installing either. The dormant complete game plan orders
+Framerate after Absolute Judgement and Countdown after Framerate; Plan09
+will replace the temporary adapter with the complete startup barrier.
+Existing Framerate diagnostic action tables remain for their Plan08 migration.
+
+Debug and RelWithDebInfo builds and the five existing tests passed in both
+configurations. This is static/build proof; high-FPS pacing, countdown freeze,
+menu/effect motion and gameplay acceptance remain unperformed.

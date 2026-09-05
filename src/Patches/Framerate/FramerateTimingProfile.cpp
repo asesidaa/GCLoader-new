@@ -1,4 +1,4 @@
-#include "Patches/Framerate/FramerateProfile.h"
+#include "Patches/Framerate/FramerateTimingProfile.h"
 
 #include "Patches/Framerate/FrameratePolicy.h"
 
@@ -6,7 +6,7 @@
 
 namespace gc::framerate
 {
-    FramerateProfile::FramerateProfile(std::uint32_t target_fps) noexcept
+    FramerateTimingProfile::FramerateTimingProfile(std::uint32_t target_fps) noexcept
         : target_fps_{target_fps},
           target_fps_float_{static_cast<float>(target_fps)},
           gameplay_validated_{
@@ -21,18 +21,18 @@ namespace gc::framerate
     {
     }
 
-    std::expected<FramerateProfile, FramerateProfileError>
-    FramerateProfile::Create(std::uint32_t target_fps) noexcept
+    std::expected<FramerateTimingProfile, FramerateTimingProfileError>
+    FramerateTimingProfile::Create(std::uint32_t target_fps) noexcept
     {
         if (!IsTargetFpsInRange(target_fps))
         {
-            return std::unexpected(FramerateProfileError::TargetOutOfRange);
+            return std::unexpected(FramerateTimingProfileError::TargetOutOfRange);
         }
-        return FramerateProfile{target_fps};
+        return FramerateTimingProfile{target_fps};
     }
 
-    std::expected<std::int32_t, FramerateProfileError>
-    FramerateProfile::ScaleDurationFrames(std::int32_t value) const noexcept
+    std::expected<std::int32_t, FramerateTimingProfileError>
+    FramerateTimingProfile::ScaleDurationFrames(std::int32_t value) const noexcept
     {
         if (value <= 0)
         {
@@ -43,31 +43,31 @@ namespace gc::framerate
         if (static_cast<std::int64_t>(value) >
             maximum / static_cast<std::int64_t>(target_fps_))
         {
-            return std::unexpected(FramerateProfileError::ArithmeticOverflow);
+            return std::unexpected(FramerateTimingProfileError::ArithmeticOverflow);
         }
 
         const auto product = static_cast<std::int64_t>(value) * target_fps_;
         const auto rounded = (product + 30) / 60;
         if (rounded > std::numeric_limits<std::int32_t>::max())
         {
-            return std::unexpected(FramerateProfileError::DestinationOverflow);
+            return std::unexpected(FramerateTimingProfileError::DestinationOverflow);
         }
         return static_cast<std::int32_t>(rounded);
     }
 
-    std::expected<std::uint32_t, FramerateProfileError>
-    FramerateProfile::MapToAuthored60(std::uint32_t value) const noexcept
+    std::expected<std::uint32_t, FramerateTimingProfileError>
+    FramerateTimingProfile::MapToAuthored60(std::uint32_t value) const noexcept
     {
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
         if (static_cast<std::uint64_t>(value) > maximum / 60)
         {
-            return std::unexpected(FramerateProfileError::ArithmeticOverflow);
+            return std::unexpected(FramerateTimingProfileError::ArithmeticOverflow);
         }
         const auto mapped =
             static_cast<std::uint64_t>(value) * 60 / target_fps_;
         if (mapped > std::numeric_limits<std::uint32_t>::max())
         {
-            return std::unexpected(FramerateProfileError::DestinationOverflow);
+            return std::unexpected(FramerateTimingProfileError::DestinationOverflow);
         }
         return static_cast<std::uint32_t>(mapped);
     }

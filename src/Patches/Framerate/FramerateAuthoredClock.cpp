@@ -6,7 +6,7 @@
 namespace gc::framerate {
 
 Authored60PhaseClock::Authored60PhaseClock(
-    const FramerateProfile& profile) noexcept
+    const FramerateTimingProfile& profile) noexcept
     : target_fps_{profile.target_fps()},
       phase_{target_fps_ - 60U} {
 }
@@ -20,9 +20,9 @@ bool Authored60PhaseClock::Advance() noexcept {
     return true;
 }
 
-std::expected<bool, FramerateProfileError>
+std::expected<bool, FramerateTimingProfileError>
 IsAuthored60FrameBoundary(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t target_frame) noexcept {
     if (target_frame == 0) {
         return true;
@@ -39,14 +39,14 @@ IsAuthored60FrameBoundary(
     return current.value() != previous.value();
 }
 
-std::expected<bool, FramerateProfileError>
+std::expected<bool, FramerateTimingProfileError>
 ShouldRunAuthored60Cadence(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t target_frame,
     std::int32_t phase,
     std::uint32_t authored_period) noexcept {
     if (authored_period == 0) {
-        return std::unexpected(FramerateProfileError::InvalidPeriod);
+        return std::unexpected(FramerateTimingProfileError::InvalidPeriod);
     }
 
     const auto boundary =
@@ -72,26 +72,26 @@ ShouldRunAuthored60Cadence(
     return remainder == 0;
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
+std::expected<std::uint32_t, FramerateTimingProfileError>
 ReconstructUnsignedModuloDividend(
     std::uint32_t quotient,
     std::uint32_t remainder,
     std::uint32_t divisor) noexcept {
     if (divisor == 0 || remainder >= divisor) {
-        return std::unexpected(FramerateProfileError::InvalidPeriod);
+        return std::unexpected(FramerateTimingProfileError::InvalidPeriod);
     }
 
     const auto value = static_cast<std::uint64_t>(quotient) * divisor +
         remainder;
     if (value > std::numeric_limits<std::uint32_t>::max()) {
-        return std::unexpected(FramerateProfileError::ArithmeticOverflow);
+        return std::unexpected(FramerateTimingProfileError::ArithmeticOverflow);
     }
     return static_cast<std::uint32_t>(value);
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
+std::expected<std::uint32_t, FramerateTimingProfileError>
 MapPositiveTargetFrameToAuthored60(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t raw_value) noexcept {
     if (static_cast<std::int32_t>(raw_value) <= 0) {
         return raw_value;
@@ -99,9 +99,9 @@ MapPositiveTargetFrameToAuthored60(
     return profile.MapToAuthored60(raw_value);
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
+std::expected<std::uint32_t, FramerateTimingProfileError>
 ScalePositiveDuration(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t raw_value) noexcept {
     const auto signed_value = static_cast<std::int32_t>(raw_value);
     if (signed_value <= 0) {
@@ -114,9 +114,9 @@ ScalePositiveDuration(
     return static_cast<std::uint32_t>(scaled.value());
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
+std::expected<std::uint32_t, FramerateTimingProfileError>
 ScaleIfblIntegerWait(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t raw_value) noexcept {
     if (raw_value <= 1U) {
         return raw_value;
@@ -124,9 +124,9 @@ ScaleIfblIntegerWait(
     return ScalePositiveDuration(profile, raw_value);
 }
 
-std::expected<std::uint32_t, FramerateProfileError>
+std::expected<std::uint32_t, FramerateTimingProfileError>
 MapPlayerPositionElapsedToAuthored60(
-    const FramerateProfile& profile,
+    const FramerateTimingProfile& profile,
     std::uint32_t raw_total,
     std::uint32_t scaled_remaining) noexcept {
     const auto scaled_total = ScalePositiveDuration(profile, raw_total);

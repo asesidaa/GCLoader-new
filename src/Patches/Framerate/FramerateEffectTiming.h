@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Patches/Framerate/FramerateProfile.h"
-#include "Patches/Framerate/FrameratePatchPlan.h"
+#include "Patches/Framerate/FramerateTimingProfile.h"
+#include "Patches/Framerate/FramerateNativeAbi.h"
 
 #include <safetyhook.hpp>
 
@@ -71,34 +71,19 @@ enum class EffectTimingTransformError {
     ProfileConversion,
 };
 
-[[nodiscard]] std::span<const EffectRegistrationSite>
-EffectRegistrationSites() noexcept;
-
-[[nodiscard]] std::span<const EffectDurationQuerySite>
-EffectDurationQuerySites() noexcept;
-
-[[nodiscard]] std::span<const EffectTimingSite>
-EffectTimingSites() noexcept;
-
-[[nodiscard]] std::span<const FramerateHookContract>
-FramerateEffectHookContracts() noexcept;
-
-[[nodiscard]] EffectTimingManifestSummary
-SummarizeEffectTimingManifest() noexcept;
-
 [[nodiscard]] std::expected<void, EffectTimingTransformError>
 MapEffectFrameEaxToAuthored60(
     safetyhook::Context& context,
-    const FramerateProfile& profile) noexcept;
+    const FramerateTimingProfile& profile) noexcept;
 
 [[nodiscard]] std::expected<void, EffectTimingTransformError>
 MapEffectFrameEdxToAuthored60(
     safetyhook::Context& context,
-    const FramerateProfile& profile) noexcept;
+    const FramerateTimingProfile& profile) noexcept;
 
 [[nodiscard]] std::expected<void, EffectTimingTransformError>
 ScaleEffectDurationEaxToTarget(
     safetyhook::Context& context,
-    const FramerateProfile& profile) noexcept;
+    const FramerateTimingProfile& profile) noexcept;
 
 } // namespace gc::framerate
