@@ -1418,18 +1418,75 @@ Build/CTest/ABI logs are under the session TEMP directory with
 `gcloader-cleanup-presets-fresh-{debug,release}-{configure,build,tests}.log`
 and `gcloader-cleanup-presets-fresh-abi.txt`. Final diff whitespace checks passed.
 
-### Runtime acceptance still pending
+### Runtime acceptance follow-up: 2026-09-06
 
-| Runtime row | Status |
+After the source/build verification, the user performed two game runs and
+reported that runtime behavior seemed fine. The following is a read-only review
+of those logs; no additional game launch or runtime deployment was performed.
+At review time, `H:\gc\iDmacDrv32.dll` matched the standard RelWithDebInfo
+artifact above: SHA-256
+`13DC1B7156765ED429ADD707FDDF3F62838FD8D4C342E75508DC7AA623E008C3`.
+The logs do not embed the loader DLL hash separately for each run.
+
+| Retained game log | Local run time | Mode | Stage opens / ends | Errors / fatals | Validated external cap |
+|---|---|---|---|---|---|
+| `H:\gc\loader-log-auto.txt` | Sep 5, 22:10:01-22:18:37 | AutoPlay enabled; score saving disabled | 2 / 2 | 0 / 0 | 240.056 FPS |
+| `H:\gc\loader-log.txt` | Sep 6, 01:08:53-01:16:03 | AutoPlay disabled; keyboard input, Switch style | 2 / 2 | 0 / 0 | 239.981 FPS |
+
+Both runs selected `groove_coaster_471`, `variant=clean`,
+`proof=exact_known_hash`, completed preflight (230 / 225 versioned sites),
+and installed 49 non-versioned hook requests. Both started the XONAR ASIO
+driver at 48 kHz with 192-frame buffers, Absolute Judgement at 240 FPS,
+1 kHz keyboard polling, and widescreen output at 2276x1280 with the right HUD.
+The widescreen diagnostics confirm entry into the judgement/tutorial HUD
+paths and both network-status clip corrections. Both game logs confirm child
+DLL initialization and child readiness, and end with the input worker stopped.
+
+All four stage-end records have `activated=1`, zero pending work, zero late
+records, sequence errors, overload/cleanup drops, unavailable clock reads,
+rounded fallbacks, score-read failures, score regressions, diagnostic drops,
+and final accounting mismatches. The periodic summaries also contain no
+nonzero fault counters. Recognition and score call counts agree in each stage.
+The two manual stages drained 610 and 1,428 input transitions, with maximum
+transport depth 2 and no lost records. Autoplay recorded 1,089 and 974 GREAT
+score increments, with no MISS/GOOD/COOL increments.
+
+The manual second stage's maximum outer-loop gap was 35.2773 ms and maximum
+input delivery delay was 28.7235 ms; the other three stages' maximum outer
+gaps were 7.3785, 7.6611 and 9.3836 ms. These conversions use the host's
+10,000,000 Hz performance-counter frequency checked during review. The
+largest gap produced no recorded input loss or clock/accounting failure;
+these logs do not establish its cause or whether it differs from before the
+cleanup. ASIO's zero provider-publication/activation diagnostic counters are
+consistent with `JudgementScheduler::TryActivateOrWait` returning after
+`ActivateAsio`; the provider activation log belongs to the other clock path.
+
+Warnings are limited to the configured XInput slot being unavailable in both
+runs (keyboard input remains enabled), plus the intentional AutoPlay
+score-saving warning in the first run. No runtime failure was logged.
+
+`H:\gc\loader-service-log.txt` covers only the second run,
+01:08:55-01:16:03. NESYS 2.97 passed exact-known-hash selection, installed
+the ping patch and 40 export-hook requests, and skipped game-only startup.
+All 49 logged card HTTP transactions reported `result=success error=0`
+(maximum total time 141 ms); these are transport results, not assertions
+about application-level card responses. All 30 service pipe flushes
+succeeded. Eight writes initially reported `ERROR_IO_PENDING` (997) and
+then a successful flush; these are not failed writes. The game logs contain
+28 / 49 successful pipe writes and flushes. The NESYS process logged
+`ExitProcess exit_code=0x0`; it had no warnings or errors. The first run's
+service log was not retained separately; process logs use `CREATE_ALWAYS`.
+
+| Runtime row | Evidence and remaining scope |
 |---|---|
-| Known clean and legacy-patched game 4.71 startup; unknown-hash rejection/complete local verification | Untested in a target process |
-| NESYS 2.97 startup, enabled/disabled ping, request diagnostics and child launch | Untested in a target process |
-| Shared Win32 consumers, locale, crash handling, RFID and storage routing | Untested in a target process |
-| DirectSound, WASAPI and ASIO hardware/callback/ordinary-close lifetimes | Untested in a target process |
-| AutoPlay, unlocks, Switch input, Absolute Judgement, Framerate and Countdown | Untested in a target process |
-| Test Mode Timing persistence/carrier, renderer reset and widescreen window/HUD/network behavior | Untested in a target process |
-| ConfigGUI interaction and every future older-build profile | Untested; older profiles still require complete native evidence |
+| Game identity/preflight | Clean 4.71 startup exercised twice. Legacy-patched and unknown-hash paths remain untested. |
+| NESYS | Child initialization/readiness exercised twice; second-run 2.97 ping, request transport and normal exit verified in its retained log. Disabled ping remains untested. |
+| Shared Win32, locale, RFID/storage | Registry/network overrides and host-clock suppression observed. Dedicated card-reader, storage persistence, locale presentation and crash-path acceptance remain unverified. |
+| Audio | ASIO hardware startup and gameplay exercised with user-reported good behavior. The logs contain no explicit ordinary-close completion marker; callback teardown ordering is not independently proven. DirectSound and WASAPI remain untested. |
+| Gameplay patches | AutoPlay on/off, manual Switch edges/holds, Absolute Judgement and 240 FPS exercised. Dedicated unlock and Countdown acceptance remain unverified. |
+| Timing and renderer | Timing hooks installed and widescreen HUD/network paths exercised. Timing-menu interaction/persistence, forced renderer reset, and exhaustive visual checks remain unverified. |
+| ConfigGUI / older profiles | No dedicated acceptance evidence from these runs; older profiles still require complete native evidence. |
 
-The cleanup is complete at the source/build boundary. Nothing was deployed,
-and no game, NESYS or GUI acceptance run was performed. Those checks remain
-a separate explicitly authorized task.
+The cleanup has source/build verification and runtime smoke-test evidence for
+the exercised clean-4.71 ASIO/240-FPS/widescreen configuration, supported by
+the user's runtime observation. This does not close the remaining rows above.
