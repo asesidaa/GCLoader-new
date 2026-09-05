@@ -383,30 +383,22 @@ INT WSAAPI get_addr_info_ex_w_detour(
                    };
     }
 
-    void AppendServerAddressHookRequests(
+    std::expected<void, hooking::HookError> AddServerAddressHooks(
         ProcessRole role,
-        std::vector<ApiHookRequest>& requests)
+        hooking::HookPlan& hooks) noexcept
     {
-        requests.push_back({
-            L"ws2_32.dll",
-            "GetAddrInfoW",
-            reinterpret_cast<LPVOID>(&get_addr_info_w_detour),
-            reinterpret_cast<LPVOID*>(&g_original_get_addr_info_w),
-        });
-        requests.push_back({
-            L"ws2_32.dll",
-            "GetAddrInfoExW",
-            reinterpret_cast<LPVOID>(&get_addr_info_ex_w_detour),
-            reinterpret_cast<LPVOID*>(&g_original_get_addr_info_ex_w),
-        });
+        if (const auto added = hooks.AddInlineExport(
+            {"ServerAddress", "GetAddrInfoW"}, {L"ws2_32.dll", "GetAddrInfoW"},
+            &get_addr_info_w_detour, &g_original_get_addr_info_w); !added) return added;
+        if (const auto added = hooks.AddInlineExport(
+            {"ServerAddress", "GetAddrInfoExW"}, {L"ws2_32.dll", "GetAddrInfoExW"},
+            &get_addr_info_ex_w_detour, &g_original_get_addr_info_ex_w); !added) return added;
         if (role == ProcessRole::Service)
         {
-            requests.push_back({
-                L"ws2_32.dll",
-                "gethostbyname",
-                reinterpret_cast<LPVOID>(&get_host_by_name_detour),
-                reinterpret_cast<LPVOID*>(&g_original_get_host_by_name),
-            });
+            if (const auto added = hooks.AddInlineExport(
+            {"ServerAddress", "gethostbyname"}, {L"ws2_32.dll", "gethostbyname"},
+            &get_host_by_name_detour, &g_original_get_host_by_name); !added) return added;
         }
-    }
+        return {};
+}
 } // namespace gc::nesys_service

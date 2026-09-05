@@ -1,12 +1,5 @@
 include(FetchContent)
 
-FetchContent_Declare(
-        minhook
-        GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-        GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537
-)
-FetchContent_MakeAvailable(minhook)
-
 set(MINIAUDIO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "" FORCE)

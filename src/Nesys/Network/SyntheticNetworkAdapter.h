@@ -4,7 +4,7 @@
 #include <RTInfo.h>
 #include <Iphlpapi.h>
 
-#include "Nesys/NesysHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 #include "Nesys/NesysServiceProcess.h"
 
 #include <array>
@@ -74,8 +74,8 @@ DWORD WINAPI SuppressFlushIpNetTable(DWORD index) noexcept;
 
 std::span<const char* const> SyntheticAdapterHookExports(
     ProcessRole role) noexcept;
-void AppendSyntheticAdapterHookRequests(
+[[nodiscard]] std::expected<void, hooking::HookError> AddSyntheticAdapterHooks(
     ProcessRole role,
-    std::vector<ApiHookRequest>& requests);
+    hooking::HookPlan& hooks) noexcept;
 
 } // namespace gc::nesys_service

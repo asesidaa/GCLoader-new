@@ -3,7 +3,7 @@
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 
-#include "Nesys/NesysHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 #include "Nesys/NesysSettings.h"
 #include "Nesys/NesysServiceProcess.h"
 
@@ -96,7 +96,7 @@ namespace gc::nesys_service
     bool InitializeServerAddressOverride(ServerAddressState state) noexcept;
     std::span<const char* const> ServerAddressHookExports(
         ProcessRole role) noexcept;
-    void AppendServerAddressHookRequests(
+    [[nodiscard]] std::expected<void, hooking::HookError> AddServerAddressHooks(
         ProcessRole role,
-        std::vector<ApiHookRequest>& requests);
+        hooking::HookPlan& hooks) noexcept;
 } // namespace gc::nesys_service

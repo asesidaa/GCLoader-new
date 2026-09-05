@@ -6,6 +6,7 @@ add_library(gc_audio STATIC
         ExactJudgementTimeline.cpp
         Asio/AsioOutputBackend.cpp
         DirectSound/DirectSoundFacade.cpp
+        DirectSound/DirectSoundHook.cpp
         DirectSound/GameplayAudioCursorObservation.cpp
         Mixer/AudioCursorTimeline.cpp
         Mixer/AudioRenderCore.cpp
@@ -21,13 +22,12 @@ add_library(gc_audio STATIC
 )
 target_include_directories(gc_audio PUBLIC
         ${PROJECT_SOURCE_DIR}/src
-        ${minhook_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_audio PUBLIC
+        gc_hooking
         gc_asio
         gc_timing
-        minhook
         safetyhook::safetyhook
         miniaudio
         dsound

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Nesys/NesysServiceProcess.h"
-#include "Platform/Win32/Hooking/MinHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 
 #include <Windows.h>
 
@@ -34,15 +34,6 @@ struct OriginalJapaneseLocaleApi {
     GetLocalTimeApi get_local_time{};
     decltype(&::SetLocalTime) set_local_time{};
 };
-
-inline constexpr std::size_t kJapaneseLocaleHookCount = 10;
-using JapaneseLocaleHookRequests = std::array<
-    gc::win32_hooks::HookRequest,
-    kJapaneseLocaleHookCount>;
-
-[[nodiscard]] JapaneseLocaleHookRequests
-BuildJapaneseLocaleHookRequests(
-    OriginalJapaneseLocaleApi* originals) noexcept;
 
 namespace detail {
 
@@ -80,10 +71,7 @@ void InvokeGetLocalTime(
 
 } // namespace detail
 
-[[nodiscard]] std::expected<
-    void,
-    gc::win32_hooks::HookInstallError>
-InstallJapaneseLocaleCompatibility(
-    gc::nesys_service::ProcessRole role) noexcept;
+[[nodiscard]] std::expected<void, hooking::HookError>
+AddJapaneseLocaleHooks(hooking::HookPlan& plan, gc::nesys_service::ProcessRole role) noexcept;
 
 } // namespace gc::locale_compatibility

@@ -294,12 +294,6 @@ namespace gc::input
                     << " identity=" << controller_identity_.device_id
                     << " binding_count=" << controller_bindings_.size();
 
-                const auto guard_result = InstallRawInputRegistrationGuard();
-                if (!guard_result)
-                {
-                    return std::unexpected(guard_result.error());
-                }
-
                 window_ = std::make_unique<Win32InputWindow>(
                     *this, RegisterOwnedRawInputDevices);
                 const auto window_result = window_->Create(GetModuleHandleW(nullptr));

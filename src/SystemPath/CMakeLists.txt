@@ -8,4 +8,4 @@ target_include_directories(gc_system_path PUBLIC
         ${PROJECT_SOURCE_DIR}/src
         ${plog_SOURCE_DIR}/include
 )
-target_link_libraries(gc_system_path PUBLIC safetyhook::safetyhook)
+target_link_libraries(gc_system_path PUBLIC gc_hooking)

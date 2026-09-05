@@ -23,18 +23,6 @@ namespace {
     return FALSE;
 }
 
-template <typename Function>
-[[nodiscard]] LPVOID* OriginalSlot(Function* function) noexcept
-{
-    return reinterpret_cast<LPVOID*>(function);
-}
-
-template <typename Function>
-[[nodiscard]] LPVOID DetourAddress(Function function) noexcept
-{
-    return reinterpret_cast<LPVOID>(function);
-}
-
 template <typename Result, typename Callback>
 [[nodiscard]] Result GuardDetour(
     Result failure,
@@ -79,34 +67,17 @@ void Kernel32Hooks::Deactivate() noexcept
     }
 }
 
-HookRequestSet Kernel32Hooks::BuildRequests() noexcept
+std::expected<void, hooking::HookError> Kernel32Hooks::AddHooks(hooking::HookPlan& plan) noexcept
 {
-    HookRequestSet result;
-    bool valid = true;
+    std::expected<void, hooking::HookError> result;
     const auto append = [&]<typename Function>(
-                            LPCSTR export_name,
-                            Function detour,
-                            Function* original) {
-        if (!valid || result.size >= result.storage.size()) {
-            valid = false;
-            result.size = 0;
-            return;
-        }
-        result.storage[result.size++] = {
-            .module_name = L"kernel32.dll",
-            .export_name = export_name,
-            .detour = DetourAddress(detour),
-            .original = OriginalSlot(original),
-        };
+        LPCSTR export_name, Function detour, Function* original) {
+        if (result) result = plan.AddInlineExport(
+            {"Kernel32", export_name}, {L"kernel32.dll", export_name}, detour, original);
     };
     const auto append_if = [&]<typename Function>(
-                               bool condition,
-                               LPCSTR export_name,
-                               Function detour,
-                               Function* original) {
-        if (condition) {
-            append(export_name, detour, original);
-        }
+        bool condition, LPCSTR export_name, Function detour, Function* original) {
+        if (condition) append(export_name, detour, original);
     };
 
     append("CreateFileA", CreateFileADetour, &originals_.create_file_a);

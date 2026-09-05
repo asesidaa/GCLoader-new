@@ -2,7 +2,7 @@
 
 #include <Windows.h>
 
-#include "Nesys/NesysHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 #include "Nesys/NesysSettings.h"
 #include "Nesys/NesysServiceProcess.h"
 
@@ -84,6 +84,6 @@ namespace gc::nesys_service
         ProcessRole role,
         RegistryOverrideValues values) noexcept;
     std::span<const char* const> RegistryOverrideHookExports() noexcept;
-    void AppendRegistryOverrideHookRequests(
-        std::vector<ApiHookRequest> & requests);
+    [[nodiscard]] std::expected<void, hooking::HookError> AddRegistryOverrideHooks(
+        hooking::HookPlan& hooks) noexcept;
 } // namespace gc::nesys_service

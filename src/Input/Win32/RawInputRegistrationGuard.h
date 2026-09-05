@@ -1,18 +1,8 @@
 #pragma once
-
-#include <Windows.h>
-
-#include <expected>
-#include <string>
-
+#include "Platform/Win32/Hooking/HookPlan.h"
 namespace gc::input {
-
-[[nodiscard]] std::expected<void, std::string>
-InstallRawInputRegistrationGuard();
-
+[[nodiscard]] std::expected<void, hooking::HookError>
+AddRawInputRegistrationHook(hooking::HookPlan&) noexcept;
 BOOL WINAPI RegisterOwnedRawInputDevices(
-    PCRAWINPUTDEVICE devices,
-    UINT device_count,
-    UINT device_size) noexcept;
-
-} // namespace gc::input
+    PCRAWINPUTDEVICE devices, UINT device_count, UINT device_size) noexcept;
+}

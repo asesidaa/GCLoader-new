@@ -1,6 +1,7 @@
 #include "Rfid/Feature.h"
 
 #include "Rfid/Runtime.h"
+#include "SystemPath/TtxInitGuard.h"
 #include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
 #include "Win32Hooks/Kernel32Hooks.h"
@@ -38,14 +39,7 @@ namespace gc::rfid
             gc::testmode_storage::Hooks storage;
             gc::system_path::SystemPathRouter system;
             gc::win32_hooks::Kernel32Hooks kernel32;
-            gc::win32_hooks::MinHookTransaction transaction;
             gc::system_path::TtxInitGuard ttx;
-        };
-
-        struct ProductionHookLayerContext
-        {
-            FeatureState* state{};
-            std::span<const gc::win32_hooks::HookRequest> requests;
         };
 
         FeatureState* g_feature_state{};
@@ -86,58 +80,15 @@ namespace gc::rfid
         }
     } // namespace
 
-    std::expected<void, FeatureError> InstallFeatureHookLayers(
-        const FeatureHookLayerActions& actions) noexcept
-    {
-        if (actions.install_kernel32 == nullptr ||
-            actions.install_ttx == nullptr ||
-            actions.rollback_kernel32 == nullptr ||
-            actions.deactivate_kernel32 == nullptr)
-        {
-            if (actions.deactivate_kernel32 != nullptr)
-            {
-                actions.deactivate_kernel32(actions.context);
-            }
-            return std::unexpected(FeatureError{
-                .stage = FeatureFailureStage::hook_installation,
-                .win32_error = ERROR_INVALID_PARAMETER,
-                .hook = gc::win32_hooks::HookInstallError{
-                    .stage = gc::win32_hooks::HookInstallStage::none,
-                    .win32_error = ERROR_INVALID_PARAMETER,
-                },
-            });
-        }
-
-        const auto kernel32 = actions.install_kernel32(actions.context);
-        if (!kernel32)
-        {
-            actions.deactivate_kernel32(actions.context);
-            return std::unexpected(FeatureError{
-                .stage = FeatureFailureStage::hook_installation,
-                .hook = kernel32.error(),
-            });
-        }
-
-        const auto ttx = actions.install_ttx(actions.context);
-        if (!ttx)
-        {
-            actions.rollback_kernel32(actions.context);
-            actions.deactivate_kernel32(actions.context);
-            return std::unexpected(FeatureError{
-                .stage = FeatureFailureStage::ttx_guard_installation,
-                .ttx = ttx.error(),
-            });
-        }
-        return {};
-    }
-
-    std::expected<void, FeatureError> InitializeFeature(
+    std::expected<void, FeatureError> AddRfidHooks(
+        hooking::HookPlan& plan,
         const gc::system_path::RuntimeRoot& system_root,
         FeatureSettings settings) noexcept
     {
         if (g_feature_state != nullptr)
         {
-            return {};
+            return std::unexpected(FeatureError{.stage = FeatureFailureStage::hook_plan,
+                .win32_error = ERROR_ALREADY_INITIALIZED});
         }
 
         int card_virtual_key{};
@@ -200,76 +151,17 @@ namespace gc::rfid
             });
         }
 
-        state->kernel32.Activate();
-        const auto requests = state->kernel32.BuildRequests();
-        ProductionHookLayerContext hook_context{
-            .state = state.get(),
-            .requests = requests.requests(),
-        };
-        const auto installed = InstallFeatureHookLayers(
-            FeatureHookLayerActions{
-                .context = &hook_context,
-                .install_kernel32 = +[](void* context) noexcept
-                {
-                    auto& owner =
-                        *static_cast<ProductionHookLayerContext*>(context);
-                    return owner.state->transaction.Install(owner.requests);
-                },
-                .install_ttx = +[](void* context) noexcept
-                {
-                    auto& owner =
-                        *static_cast<ProductionHookLayerContext*>(context);
-                    return owner.state->ttx.Install();
-                },
-                .rollback_kernel32 = +[](void* context) noexcept
-                {
-                    auto& owner =
-                        *static_cast<ProductionHookLayerContext*>(context);
-                    owner.state->transaction.Rollback();
-                },
-                .deactivate_kernel32 = +[](void* context) noexcept
-                {
-                    auto& owner =
-                        *static_cast<ProductionHookLayerContext*>(context);
-                    owner.state->kernel32.Deactivate();
-                },
-            });
-        if (!installed)
-        {
-            const auto& error = installed.error();
-            if (error.stage == FeatureFailureStage::hook_installation)
-            {
-                PLOG_ERROR
-                    << "Game Kernel32 hooks: installation failed rfid=true "
-                    "storage="
-                    << storage_enabled
-                    << " system=" << state->system.enabled()
-                    << " stage="
-                    << gc::win32_hooks::HookInstallStageName(error.hook.stage)
-                    << " export="
-                    << (error.hook.export_name == nullptr
-                            ? "<none>"
-                            : error.hook.export_name)
-                    << " target=" << error.hook.target
-                    << " win32_error=" << error.hook.win32_error
-                    << " minhook_status="
-                    << static_cast<int>(error.hook.minhook_status);
-            }
-            else
-            {
-                PLOG_ERROR
-                    << "Ttx init guard: installation failed stage="
-                    << gc::system_path::TtxGuardInstallStageName(
-                        error.ttx.stage)
-                    << " win32_error=" << error.ttx.win32_error
-                    << " safetyhook_error=" << error.ttx.safetyhook_error;
-            }
-            return std::unexpected(error);
-        }
-
+        // Runtime and routing state outlive every registered original slot.
         g_feature_state = state.release();
-        PLOG_INFO
-            << "RFID/JVS feature active hooks=" << requests.requests().size();
+        g_feature_state->kernel32.Activate();
+        const auto kernel32 = g_feature_state->kernel32.AddHooks(plan);
+        if (!kernel32)
+            return std::unexpected(FeatureError{.stage = FeatureFailureStage::hook_plan,
+                .hook = kernel32.error()});
+        const auto ttx = g_feature_state->ttx.AddHook(plan);
+        if (!ttx)
+            return std::unexpected(FeatureError{.stage = FeatureFailureStage::hook_plan,
+                .hook = ttx.error()});
         return {};
     }
 } // namespace gc::rfid

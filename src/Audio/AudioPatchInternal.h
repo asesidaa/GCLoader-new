@@ -1,18 +1,13 @@
 #pragma once
 
 #include "Audio/AudioPatch.h"
+#include "Audio/AudioBackendController.h"
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
 
 #include <cstdint>
 
 namespace gc::audio::detail
 {
-    struct AudioResolverApi
-    {
-        decltype(&GetModuleHandleW) get_module_handle{};
-        decltype(&GetProcAddress) get_proc_address{};
-    };
-
     // Long-lived observers, factories, and reporters must own a copy of this
     // callback table; their constructor arguments are often temporaries.
     struct AudioPatchPlatformActions
@@ -24,27 +19,9 @@ namespace gc::audio::detail
         void (*fail_fast)(){};
     };
 
-    struct AudioPatchInitDependencies
-    {
-        AudioMinHookApi minhook{};
-        AudioResolverApi resolver{};
-        AudioPatchPlatformActions platform{};
-    };
-
     using CreateWasapiApiFn = std::unique_ptr<IWasapiApi> (*)() noexcept;
     using StartExclusiveAudioEngineFn =
     decltype(&ExclusiveAudioEngine::StartAndWait);
-
-    bool InstallAudioHookWithResolver(
-        bool enabled,
-        const AudioMinHookApi& minhook,
-        AudioResolverApi resolver,
-        AudioHookFailure* failure) noexcept;
-
-    bool AudioPatchInitWithDependencies(
-        AudioBackend requested_backend,
-        std::uint32_t configured_buffer_ms,
-        const AudioPatchInitDependencies& dependencies);
 
     void ReportAudioStartupSucceeded(
         const EndpointInitialization&,
@@ -69,11 +46,4 @@ namespace gc::audio::detail
         std::shared_ptr<IAudioEngineObserver>,
         AudioStartupFailure*) noexcept;
 
-    HRESULT InvokeDirectSoundCreate8Detour(
-        LPCGUID device_guid,
-        LPDIRECTSOUND8* output,
-        LPUNKNOWN outer,
-        IAudioBackendControllerFactory& factory,
-        IAudioBackendControllerReporter& reporter,
-        DirectSoundCreate8Fn saved_original) noexcept;
 } // namespace gc::audio::detail

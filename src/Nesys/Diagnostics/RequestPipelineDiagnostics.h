@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Nesys/NesysHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 
 #include <Windows.h>
 
@@ -43,7 +43,7 @@ void ObserveGamePipeFlush(
     std::uint64_t finished_ms) noexcept;
 void ObserveGameHandleClose(HANDLE handle) noexcept;
 
-void AppendServiceRequestPipelineHookRequests(
-    std::vector<ApiHookRequest>& requests);
+[[nodiscard]] std::expected<void, hooking::HookError> AddServiceRequestPipelineHooks(
+    hooking::HookPlan& hooks) noexcept;
 
 } // namespace gc::nesys_service::diagnostics

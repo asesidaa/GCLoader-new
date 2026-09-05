@@ -5,7 +5,7 @@
 #include "Audio/Asio/AsioDriver.h"
 #include "Audio/Asio/AsioDriverCatalog.h"
 #include "Audio/Asio/AsioOutputBackend.h"
-#include "Audio/DirectSound/DirectSoundFacade.h"
+#include "Audio/DirectSound/DirectSoundHook.h"
 #include "Audio/Wasapi/ExclusiveAudioEngine.h"
 #include "Audio/AudioPatchInternal.h"
 
@@ -39,8 +39,6 @@ namespace gc::audio
 {
     namespace
     {
-        LPVOID g_original_direct_sound_create8{};
-        LPVOID g_committed_target{};
         safetyhook::MidHook g_asio_close_hook{};
 
         constexpr std::uintptr_t kSupportedImageBase = 0x00400000U;
@@ -271,22 +269,6 @@ namespace gc::audio
                 << " first_exact_source_rate=" << mixer.first_exact_source_rate;
         }
 
-        const char* audio_hook_stage_name(AudioHookStage stage) noexcept
-        {
-            switch (stage)
-            {
-            case AudioHookStage::None: return "None";
-            case AudioHookStage::ValidateApi: return "ValidateApi";
-            case AudioHookStage::ResolveModule: return "ResolveModule";
-            case AudioHookStage::ResolveExport: return "ResolveExport";
-            case AudioHookStage::InitializeMinHook: return "InitializeMinHook";
-            case AudioHookStage::CreateHook: return "CreateHook";
-            case AudioHookStage::QueueEnable: return "QueueEnable";
-            case AudioHookStage::ApplyQueued: return "ApplyQueued";
-            }
-            return "Unknown";
-        }
-
         std::string utf8(std::wstring_view value)
         {
             if (value.empty())
@@ -480,24 +462,6 @@ namespace gc::audio
                 initialization.actual_buffer_frames);
         }
 
-        std::string hook_failure_text(const AudioHookFailure& failure)
-        {
-            return std::format(
-                "AudioPatch: hook install failed stage={} status={} "
-                "win32_error={} target=0x{:0{}X} rollback_attempted={} "
-                "rollback_disable_status={} rollback_remove_status={} "
-                "rollback_complete={}",
-                audio_hook_stage_name(failure.stage),
-                static_cast<int>(failure.status),
-                failure.win32_error,
-                reinterpret_cast<std::uintptr_t>(failure.target),
-                sizeof(std::uintptr_t) * 2,
-                failure.rollback_attempted,
-                static_cast<int>(failure.rollback_disable_status),
-                static_cast<int>(failure.rollback_remove_status),
-                failure.rollback_complete);
-        }
-
         std::string audio_config_text(
             AudioBackend requested_backend,
             std::uint32_t configured_buffer_ms)
@@ -506,7 +470,7 @@ namespace gc::audio
                 requested_backend != AudioBackend::directsound;
             return std::format(
                 "Audio config requested_backend={} active_backend={} "
-                "hook_installed={} enabled={} configured_buffer_ms={} "
+                "hook_requested={} enabled={} configured_buffer_ms={} "
                 "configured_duration_100ns={}",
                 AudioBackendName(requested_backend),
                 enabled ? "pending" : "directsound",
@@ -1041,105 +1005,6 @@ namespace gc::audio
             }
         }
 
-        ProductionAudioBackendControllerReporter g_startup_failure_reporter{
-            production_platform_actions()
-        };
-
-        ProductionDetourState* production_detour_state() noexcept
-        {
-            return g_production_detour_state.load(std::memory_order_acquire);
-        }
-
-        struct RollbackResult
-        {
-            MH_STATUS disable_status{MH_OK};
-            MH_STATUS remove_status{MH_OK};
-            bool complete{true};
-        };
-
-        HRESULT WINAPI DirectSoundCreate8Detour(
-            LPCGUID device_guid,
-            LPDIRECTSOUND8* output,
-            LPUNKNOWN outer)
-        {
-            if (output == nullptr)
-            {
-                return DSERR_INVALIDPARAM;
-            }
-            *output = nullptr;
-            if (device_guid != nullptr)
-            {
-                return DSERR_NODRIVER;
-            }
-            if (outer != nullptr)
-            {
-                return DSERR_NOAGGREGATION;
-            }
-
-            auto* state = production_detour_state();
-            if (state == nullptr)
-            {
-                g_startup_failure_reporter.FatalControllerAllocationFailure();
-                return DSERR_OUTOFMEMORY;
-            }
-            return detail::InvokeDirectSoundCreate8Detour(
-                device_guid,
-                output,
-                outer,
-                state->factory,
-                state->reporter,
-                reinterpret_cast<DirectSoundCreate8Fn>(
-                    g_original_direct_sound_create8));
-        }
-
-        void set_failure(
-            AudioHookFailure* failure,
-            AudioHookStage stage,
-            MH_STATUS status,
-            DWORD win32_error,
-            LPVOID target) noexcept
-        {
-            if (failure != nullptr)
-            {
-                *failure = {stage, status, win32_error, target};
-            }
-        }
-
-        RollbackResult rollback(const AudioMinHookApi& api, LPVOID target) noexcept
-        {
-            RollbackResult result{};
-            result.disable_status = api.disable(target);
-            result.remove_status = api.remove(target);
-            result.complete = result.remove_status == MH_OK ||
-                result.remove_status == MH_ERROR_NOT_CREATED;
-            return result;
-        }
-
-        void record_rollback(
-            AudioHookFailure* failure,
-            // This small status aggregate is intentionally passed by value.
-            // ReSharper disable once CppPassValueParameterByConstReference
-            RollbackResult rollback_result) noexcept
-        {
-            if (failure != nullptr)
-            {
-                failure->rollback_attempted = true;
-                failure->rollback_disable_status = rollback_result.disable_status;
-                failure->rollback_remove_status = rollback_result.remove_status;
-                failure->rollback_complete = rollback_result.complete;
-            }
-        }
-
-        bool complete_api_tables(
-            const AudioMinHookApi& minhook,
-            detail::AudioResolverApi resolver) noexcept
-        {
-            return resolver.get_module_handle != nullptr &&
-                resolver.get_proc_address != nullptr &&
-                minhook.initialize != nullptr && minhook.create != nullptr &&
-                minhook.queue_enable != nullptr && minhook.apply != nullptr &&
-                minhook.disable != nullptr && minhook.remove != nullptr;
-        }
     } // namespace
 
     namespace detail
@@ -1305,298 +1170,38 @@ namespace gc::audio
                 startup_failure);
         }
 
-        bool AudioPatchInitWithDependencies(
-            AudioBackend requested_backend,
-            std::uint32_t configured_buffer_ms,
-            const AudioPatchInitDependencies& dependencies)
-        {
-            const bool enabled =
-                requested_backend != AudioBackend::directsound;
-            AudioHookFailure failure{};
-            if (!InstallAudioHookWithResolver(
-                enabled,
-                dependencies.minhook,
-                dependencies.resolver,
-                enabled ? &failure : nullptr))
-            {
-                try
-                {
-                    const auto text = hook_failure_text(failure);
-                    emit_error(dependencies.platform, text.c_str());
-                }
-                catch (...)
-                {
-                    emit_error(
-                        dependencies.platform,
-                        "AudioPatch: hook failure formatting failed");
-                }
-                show_error(dependencies.platform);
-                if (failure.rollback_complete)
-                {
-                    return false;
-                }
-
-                if (dependencies.platform.terminate_process != nullptr)
-                {
-                    dependencies.platform.terminate_process(ERROR_DLL_INIT_FAILED);
-                }
-                if (dependencies.platform.fail_fast != nullptr)
-                {
-                    dependencies.platform.fail_fast();
-                }
-                std::abort();
-            }
-
-            try
-            {
-                const auto text = audio_config_text(
-                    requested_backend,
-                    configured_buffer_ms);
-                emit_info(dependencies.platform, text.c_str());
-            }
-            catch (...)
-            {
-                emit_error(
-                    dependencies.platform,
-                    "WASAPI audio config diagnostics formatting failed");
-            }
-            return true;
-        }
-
-        HRESULT InvokeDirectSoundCreate8Detour(
-            LPCGUID device_guid,
-            LPDIRECTSOUND8* output,
-            LPUNKNOWN outer,
-            IAudioBackendControllerFactory& factory,
-            IAudioBackendControllerReporter& reporter,
-            DirectSoundCreate8Fn saved_original) noexcept
-        {
-            static_cast<void>(saved_original);
-            if (output == nullptr)
-            {
-                return DSERR_INVALIDPARAM;
-            }
-            *output = nullptr;
-            if (device_guid != nullptr)
-            {
-                return DSERR_NODRIVER;
-            }
-            if (outer != nullptr)
-            {
-                return DSERR_NOAGGREGATION;
-            }
-
-            auto* controller = factory.GetOrCreate();
-            if (controller == nullptr)
-            {
-                reporter.FatalControllerAllocationFailure();
-                return DSERR_OUTOFMEMORY;
-            }
-            return CreateDirectSoundDevice(*controller, output);
-        }
-
-        bool InstallAudioHookWithResolver(
-            bool enabled,
-            const AudioMinHookApi& minhook,
-            AudioResolverApi resolver,
-            AudioHookFailure* failure) noexcept
-        {
-            if (!enabled)
-            {
-                if (failure != nullptr)
-                {
-                    *failure = {};
-                }
-                return true;
-            }
-            if (failure == nullptr)
-            {
-                return false;
-            }
-            *failure = {};
-            if (!complete_api_tables(minhook, resolver))
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::ValidateApi,
-                    MH_UNKNOWN,
-                    ERROR_INVALID_PARAMETER,
-                    nullptr);
-                return false;
-            }
-
-            const auto module = resolver.get_module_handle(L"dsound.dll");
-            if (module == nullptr)
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::ResolveModule,
-                    MH_OK,
-                    ERROR_MOD_NOT_FOUND,
-                    nullptr);
-                return false;
-            }
-
-            const auto target = reinterpret_cast<LPVOID>(
-                resolver.get_proc_address(module, "DirectSoundCreate8"));
-            if (target == nullptr)
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::ResolveExport,
-                    MH_OK,
-                    ERROR_PROC_NOT_FOUND,
-                    nullptr);
-                return false;
-            }
-
-            auto status = minhook.initialize();
-            if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED)
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::InitializeMinHook,
-                    status,
-                    ERROR_SUCCESS,
-                    target);
-                return false;
-            }
-
-            status = minhook.create(
-                target,
-                reinterpret_cast<LPVOID>(&DirectSoundCreate8Detour),
-                &g_original_direct_sound_create8);
-            if (status != MH_OK)
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::CreateHook,
-                    status,
-                    ERROR_SUCCESS,
-                    target);
-                return false;
-            }
-
-            status = minhook.queue_enable(target);
-            if (status != MH_OK)
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::QueueEnable,
-                    status,
-                    ERROR_SUCCESS,
-                    target);
-                record_rollback(failure, rollback(minhook, target));
-                return false;
-            }
-
-            status = minhook.apply();
-            if (status != MH_OK)
-            {
-                set_failure(
-                    failure,
-                    AudioHookStage::ApplyQueued,
-                    status,
-                    ERROR_SUCCESS,
-                    target);
-                record_rollback(failure, rollback(minhook, target));
-                return false;
-            }
-
-            g_committed_target = target;
-            return true;
-        }
     } // namespace detail
 
-    bool InstallAudioHook(
-        bool enabled,
-        const AudioMinHookApi& api,
-        AudioHookFailure* failure) noexcept
+    std::expected<void, hooking::HookError> AddAudioHooks(
+        hooking::HookPlan& hooks, AudioSettings settings) noexcept
     {
-        return detail::InstallAudioHookWithResolver(
-            enabled,
-            api,
-            {GetModuleHandleW, GetProcAddress},
-            failure);
-    }
-
-    bool AudioPatchInit(AudioSettings settings) noexcept
-    {
-        const auto actions = production_platform_actions();
         try
         {
-            const auto requested_backend = settings.backend();
-            const auto configured_buffer_ms =
-                configured_wasapi_buffer_ms(settings);
-            safetyhook::MidHook pending_asio_close_hook{};
-            if (requested_backend == AudioBackend::asio &&
-                !CreateAsioOrdinaryCloseHook(pending_asio_close_hook))
-            {
-                emit_error(
-                    actions,
-                    "AudioPatch: ASIO ordinary-close seam preflight failed");
-                return false;
-            }
-            std::unique_ptr<ProductionDetourState> pending_state;
-            if (requested_backend != AudioBackend::directsound)
-            {
-                pending_state = std::make_unique<ProductionDetourState>(
-                    std::move(settings));
-                g_production_detour_state.store(
-                    pending_state.get(), std::memory_order_release);
-            }
+            const auto backend = settings.backend();
+            const auto buffer_ms = configured_wasapi_buffer_ms(settings);
+            const auto config_text = audio_config_text(backend, buffer_ms);
+            emit_info(production_platform_actions(), config_text.c_str());
+            if (backend == AudioBackend::directsound) return {};
 
-            const auto initialized = detail::AudioPatchInitWithDependencies(
-                requested_backend,
-                configured_buffer_ms,
-                {
-                    {
-                        MH_Initialize,
-                        MH_CreateHook,
-                        MH_QueueEnableHook,
-                        MH_ApplyQueued,
-                        MH_DisableHook,
-                        MH_RemoveHook,
-                    },
-                    {GetModuleHandleW, GetProcAddress},
-                    actions,
+            // Factory/reporter and the ASIO callback's state are process-lived.
+            auto* state = new ProductionDetourState(std::move(settings));
+            g_production_detour_state.store(state, std::memory_order_release);
+            if (backend == AudioBackend::asio &&
+                !CreateAsioOrdinaryCloseHook(g_asio_close_hook))
+                return std::unexpected(hooking::HookError{
+                    .stage = hooking::HookStage::create,
+                    .identity = {"AsioClose", "ordinary_close"},
+                    .win32_error = ERROR_INVALID_DATA,
                 });
-            if (!initialized)
-            {
-                if (pending_state)
-                {
-                    g_production_detour_state.store(
-                        nullptr, std::memory_order_release);
-                }
-                return false;
-            }
-            if (pending_state)
-            {
-                if (requested_backend == AudioBackend::asio)
-                {
-                    g_asio_close_hook = std::move(pending_asio_close_hook);
-                }
-                auto* const committed_state = pending_state.release();
-                g_production_detour_state.store(
-                    committed_state, std::memory_order_release);
-            }
-            return true;
+            return AddDirectSoundHook(hooks, state->factory, state->reporter);
         }
         catch (...)
         {
-            g_production_detour_state.store(nullptr, std::memory_order_release);
-            emit_error(
-                actions,
-                "AudioPatch: unexpected attach initialization failure");
-            show_error(actions);
-            actions.terminate_process(ERROR_DLL_INIT_FAILED);
-            actions.fail_fast();
-            std::abort();
+            return std::unexpected(hooking::HookError{
+                .stage = hooking::HookStage::invalid_plan,
+                .identity = {"Audio", "prepare"},
+                .win32_error = ERROR_NOT_ENOUGH_MEMORY,
+            });
         }
-    }
-
-    bool IsAudioHookCommitted() noexcept
-    {
-        return g_committed_target != nullptr;
     }
 } // namespace gc::audio

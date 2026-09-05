@@ -13,19 +13,7 @@ namespace gc::locale_compatibility {
 namespace {
 
 OriginalJapaneseLocaleApi g_originals{};
-std::unique_ptr<gc::win32_hooks::MinHookTransaction>
-    g_transaction;
 std::atomic_bool g_set_local_time_notification{};
-
-template <typename Function>
-LPVOID DetourAddress(Function function) noexcept {
-    return reinterpret_cast<LPVOID>(function);
-}
-
-template <typename Function>
-LPVOID* OriginalSlot(Function* function) noexcept {
-    return reinterpret_cast<LPVOID*>(function);
-}
 
 UINT WINAPI GetACPDetour() noexcept {
     return kJapaneseCodePage;
@@ -119,111 +107,7 @@ BOOL WINAPI SetLocalTimeDetour(
         &LogSetLocalTimeSuppression);
 }
 
-void LogInstallSuccess(
-    gc::nesys_service::ProcessRole role) noexcept {
-    try {
-        PLOG_INFO
-            << "JapaneseLocaleCompatibility: hooks active"
-            << " role="
-            << gc::nesys_service::ProcessRoleName(role)
-            << " acp=" << kJapaneseCodePage
-            << " lcid=0x411"
-            << " utc_offset_minutes=540";
-    } catch (...) {
-    }
-}
-
-gc::win32_hooks::HookInstallError AllocationError() noexcept {
-    return {
-        .stage = gc::win32_hooks::HookInstallStage::initialize,
-        .win32_error = ERROR_NOT_ENOUGH_MEMORY,
-        .minhook_status = MH_ERROR_MEMORY_ALLOC,
-    };
-}
-
-gc::win32_hooks::HookInstallError UnexpectedError() noexcept {
-    return {
-        .stage = gc::win32_hooks::HookInstallStage::initialize,
-        .win32_error = ERROR_UNHANDLED_EXCEPTION,
-        .minhook_status = MH_UNKNOWN,
-    };
-}
-
 } // namespace
-
-JapaneseLocaleHookRequests BuildJapaneseLocaleHookRequests(
-    OriginalJapaneseLocaleApi* originals) noexcept {
-    auto slot = [originals]<typename Function>(
-                    Function OriginalJapaneseLocaleApi::* member) noexcept
-        -> LPVOID* {
-        return originals != nullptr
-            ? OriginalSlot(&(originals->*member))
-            : nullptr;
-    };
-
-    return {{
-        {
-            L"kernel32.dll",
-            "GetACP",
-            DetourAddress(&GetACPDetour),
-            slot(&OriginalJapaneseLocaleApi::get_acp),
-        },
-        {
-            L"kernel32.dll",
-            "GetOEMCP",
-            DetourAddress(&GetOEMCPDetour),
-            slot(&OriginalJapaneseLocaleApi::get_oem_cp),
-        },
-        {
-            L"kernel32.dll",
-            "GetThreadLocale",
-            DetourAddress(&GetThreadLocaleDetour),
-            slot(&OriginalJapaneseLocaleApi::get_thread_locale),
-        },
-        {
-            L"kernel32.dll",
-            "GetUserDefaultLCID",
-            DetourAddress(&GetUserDefaultLCIDDetour),
-            slot(&OriginalJapaneseLocaleApi::get_user_default_lcid),
-        },
-        {
-            L"kernel32.dll",
-            "GetCPInfo",
-            DetourAddress(&GetCPInfoDetour),
-            slot(&OriginalJapaneseLocaleApi::get_cp_info),
-        },
-        {
-            L"kernel32.dll",
-            "MultiByteToWideChar",
-            DetourAddress(&MultiByteToWideCharDetour),
-            slot(&OriginalJapaneseLocaleApi::multi_byte_to_wide_char),
-        },
-        {
-            L"kernel32.dll",
-            "WideCharToMultiByte",
-            DetourAddress(&WideCharToMultiByteDetour),
-            slot(&OriginalJapaneseLocaleApi::wide_char_to_multi_byte),
-        },
-        {
-            L"kernel32.dll",
-            "GetTimeZoneInformation",
-            DetourAddress(&GetTimeZoneInformationDetour),
-            slot(&OriginalJapaneseLocaleApi::get_time_zone_information),
-        },
-        {
-            L"kernel32.dll",
-            "GetLocalTime",
-            DetourAddress(&GetLocalTimeDetour),
-            slot(&OriginalJapaneseLocaleApi::get_local_time),
-        },
-        {
-            L"kernel32.dll",
-            "SetLocalTime",
-            DetourAddress(&SetLocalTimeDetour),
-            slot(&OriginalJapaneseLocaleApi::set_local_time),
-        },
-    }};
-}
 
 BOOL detail::InvokeGetCPInfo(
     UINT code_page,
@@ -323,35 +207,39 @@ BOOL detail::SuppressSetLocalTime(
     return TRUE;
 }
 
-std::expected<void, gc::win32_hooks::HookInstallError>
-InstallJapaneseLocaleCompatibility(
-    gc::nesys_service::ProcessRole role) noexcept {
-    if (g_transaction != nullptr) {
-        return {};
-    }
-
-    try {
-        auto candidate =
-            std::make_unique<gc::win32_hooks::MinHookTransaction>();
-        const auto requests =
-            BuildJapaneseLocaleHookRequests(&g_originals);
-        const auto installed = candidate->Install(
-            std::span<const gc::win32_hooks::HookRequest>{requests});
-        if (!installed) {
-            g_originals = {};
-            return std::unexpected(installed.error());
-        }
-
-        g_transaction = std::move(candidate);
-        LogInstallSuccess(role);
-        return {};
-    } catch (const std::bad_alloc&) {
-        g_originals = {};
-        return std::unexpected(AllocationError());
-    } catch (...) {
-        g_originals = {};
-        return std::unexpected(UnexpectedError());
-    }
+std::expected<void, hooking::HookError> AddJapaneseLocaleHooks(
+    hooking::HookPlan& plan, gc::nesys_service::ProcessRole) noexcept {
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetACP"}, {L"kernel32.dll", "GetACP"},
+            &GetACPDetour, &g_originals.get_acp); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetOEMCP"}, {L"kernel32.dll", "GetOEMCP"},
+            &GetOEMCPDetour, &g_originals.get_oem_cp); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetThreadLocale"}, {L"kernel32.dll", "GetThreadLocale"},
+            &GetThreadLocaleDetour, &g_originals.get_thread_locale); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetUserDefaultLCID"}, {L"kernel32.dll", "GetUserDefaultLCID"},
+            &GetUserDefaultLCIDDetour, &g_originals.get_user_default_lcid); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetCPInfo"}, {L"kernel32.dll", "GetCPInfo"},
+            &GetCPInfoDetour, &g_originals.get_cp_info); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "MultiByteToWideChar"}, {L"kernel32.dll", "MultiByteToWideChar"},
+            &MultiByteToWideCharDetour, &g_originals.multi_byte_to_wide_char); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "WideCharToMultiByte"}, {L"kernel32.dll", "WideCharToMultiByte"},
+            &WideCharToMultiByteDetour, &g_originals.wide_char_to_multi_byte); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetTimeZoneInformation"}, {L"kernel32.dll", "GetTimeZoneInformation"},
+            &GetTimeZoneInformationDetour, &g_originals.get_time_zone_information); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "GetLocalTime"}, {L"kernel32.dll", "GetLocalTime"},
+            &GetLocalTimeDetour, &g_originals.get_local_time); !added) return added;
+    if (const auto added = plan.AddInlineExport(
+            {"JapaneseLocale", "SetLocalTime"}, {L"kernel32.dll", "SetLocalTime"},
+            &SetLocalTimeDetour, &g_originals.set_local_time); !added) return added;
+    return {};
 }
 
 } // namespace gc::locale_compatibility

@@ -1,12 +1,10 @@
 #include "Input/Win32/RawInputRegistrationGuard.h"
 
-#include <safetyhook.hpp>
 
 #include <array>
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <format>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -18,17 +16,7 @@ namespace gc::input
     {
         constexpr std::array<USHORT, 4> kProtectedUsages{0x06, 0x05, 0x04, 0x08};
 
-        struct GuardState
-        {
-            std::mutex install_mutex;
-            safetyhook::InlineHook hook;
-        };
-
-        GuardState& State()
-        {
-            static GuardState* state = new GuardState();
-            return *state;
-        }
+        decltype(&::RegisterRawInputDevices) g_original_register{};
 
         bool IsProtected(const RAWINPUTDEVICE& device) noexcept
         {
@@ -53,14 +41,9 @@ namespace gc::input
             UINT device_count,
             UINT device_size) noexcept
         {
-            auto& hook = State().hook;
-            if (!hook)
-            {
-                return ::RegisterRawInputDevices(
-                    devices, device_count, device_size);
-            }
-            return hook.unsafe_stdcall<BOOL>(
-                devices, device_count, device_size);
+            const auto original = g_original_register != nullptr
+                ? g_original_register : &::RegisterRawInputDevices;
+            return original(devices, device_count, device_size);
         }
 
 BOOL WINAPI RegisterRawInputDevicesDetour(
@@ -114,62 +97,13 @@ BOOL WINAPI RegisterRawInputDevicesDetour(
             }
         }
 
-        std::string SafetyHookFailure(
-            const char* operation,
-            const safetyhook::InlineHook::Error& error)
-        {
-            return std::format(
-                "{} failed with SafetyHook error {}",
-                operation,
-                static_cast<unsigned int>(error.type));
-        }
     } // namespace
 
-    std::expected<void, std::string> InstallRawInputRegistrationGuard()
+    std::expected<void, hooking::HookError> AddRawInputRegistrationHook(hooking::HookPlan& plan) noexcept
     {
-        auto& state = State();
-        std::lock_guard lock(state.install_mutex);
-        if (state.hook)
-        {
-            return {};
-        }
-
-        const HMODULE user32 = GetModuleHandleW(L"user32.dll");
-        if (user32 == nullptr)
-        {
-            return std::unexpected(std::format(
-                "GetModuleHandleW(user32.dll) failed with Win32 error {}",
-                GetLastError()));
-        }
-        const FARPROC target = GetProcAddress(user32, "RegisterRawInputDevices");
-        if (target == nullptr)
-        {
-            return std::unexpected(std::format(
-                "GetProcAddress(RegisterRawInputDevices) failed with Win32 error {}",
-                GetLastError()));
-        }
-
-        auto created = safetyhook::InlineHook::create(
-            reinterpret_cast<void*>(target),
-            reinterpret_cast<void*>(RegisterRawInputDevicesDetour),
-            safetyhook::InlineHook::StartDisabled);
-        if (!created)
-        {
-            return std::unexpected(
-                SafetyHookFailure("Raw Input guard hook creation", created.error()));
-        }
-        state.hook = std::move(*created);
-        const auto enabled = state.hook.enable();
-        if (!enabled)
-        {
-            const auto error = SafetyHookFailure(
-                "Raw Input guard hook enable", enabled.error());
-            state.hook.reset();
-            return std::unexpected(error);
-        }
-
-        PLOG_INFO << "Input registration guard active usages=06,05,04,08";
-        return {};
+        return plan.AddInlineExport({"RawInput", "RegisterRawInputDevices"},
+            {L"user32.dll", "RegisterRawInputDevices"},
+            &RegisterRawInputDevicesDetour, &g_original_register);
     }
 
 BOOL WINAPI RegisterOwnedRawInputDevices(

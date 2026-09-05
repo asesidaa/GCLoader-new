@@ -23,12 +23,6 @@ namespace gc::system_path
         constexpr wchar_t kTtxFatalTitle[] =
             L"TtxUpdateDownloader initialization error";
 
-        std::uint32_t SafetyHookErrorCode(
-            const safetyhook::InlineHook::Error& error) noexcept
-        {
-            return static_cast<std::uint32_t>(error.type);
-        }
-
         std::wstring Utf8ToWide(std::string_view value)
         {
             if (value.empty())
@@ -138,169 +132,16 @@ namespace gc::system_path
         return result;
     }
 
-    std::expected<void, TtxGuardInstallError> InstallTtxInitGuard(
-        const TtxGuardInstallActions& actions) noexcept
-    {
-        if (actions.detour == nullptr || actions.get_module == nullptr ||
-            actions.get_export == nullptr || actions.get_last_error == nullptr ||
-            actions.create_disabled == nullptr || actions.enable == nullptr ||
-            actions.reset == nullptr)
-        {
-            return std::unexpected(TtxGuardInstallError{
-                .stage = TtxGuardInstallStage::invalid_actions,
-                .win32_error = ERROR_INVALID_PARAMETER,
-            });
-        }
-
-        const HMODULE module =
-            actions.get_module(actions.context, kTtxModuleName);
-        if (module == nullptr)
-        {
-            const DWORD error = actions.get_last_error(actions.context);
-            return std::unexpected(TtxGuardInstallError{
-                .stage = TtxGuardInstallStage::resolve_module,
-                .win32_error = error,
-            });
-        }
-
-        const FARPROC target =
-            actions.get_export(actions.context, module, kTtxUdlInitExport);
-        if (target == nullptr)
-        {
-            const DWORD error = actions.get_last_error(actions.context);
-            return std::unexpected(TtxGuardInstallError{
-                .stage = TtxGuardInstallStage::resolve_export,
-                .win32_error = error,
-            });
-        }
-
-        const auto created = actions.create_disabled(
-            actions.context,
-            reinterpret_cast<void*>(target),
-            actions.detour);
-        if (!created)
-        {
-            const auto error = created.error();
-            actions.reset(actions.context);
-            return std::unexpected(TtxGuardInstallError{
-                .stage = TtxGuardInstallStage::create_hook,
-                .safetyhook_error = error,
-            });
-        }
-
-        const auto enabled = actions.enable(actions.context);
-        if (!enabled)
-        {
-            const auto error = enabled.error();
-            actions.reset(actions.context);
-            return std::unexpected(TtxGuardInstallError{
-                .stage = TtxGuardInstallStage::enable_hook,
-                .safetyhook_error = error,
-            });
-        }
-        return {};
-    }
-
     TtxInitGuard::TtxInitGuard(RuntimeRoot root)
         : root_{std::move(root)}
     {
     }
 
-    TtxInitGuard::~TtxInitGuard() noexcept
+    std::expected<void, hooking::HookError> TtxInitGuard::AddHook(hooking::HookPlan& plan) noexcept
     {
-        Reset();
-    }
-
-    std::expected<void, TtxGuardInstallError> TtxInitGuard::Install() noexcept
-    {
-        Reset();
-        return InstallTtxInitGuard(TtxGuardInstallActions{
-            .context = this,
-            .detour = reinterpret_cast<void*>(&TtxInitGuard::Detour),
-            .get_module = +[](void*, LPCWSTR name) noexcept
-            {
-                return GetModuleHandleW(name);
-            },
-            .get_export = +[](void*, HMODULE module, LPCSTR name) noexcept
-            {
-                return GetProcAddress(module, name);
-            },
-            .get_last_error = +[](void*) noexcept
-            {
-                return GetLastError();
-            },
-            .create_disabled = +[](
-            void* context,
-            void* target,
-            void* detour) noexcept
-            -> std::expected<void, std::uint32_t>
-            {
-                auto& self = *static_cast<TtxInitGuard*>(context);
-                try
-                {
-                    auto created = safetyhook::InlineHook::create(
-                        target,
-                        detour,
-                        safetyhook::InlineHook::StartDisabled);
-                    if (!created)
-                    {
-                        return std::unexpected(
-                            SafetyHookErrorCode(created.error()));
-                    }
-                    self.hook_ = std::move(*created);
-                    active_.store(&self, std::memory_order_release);
-                    return {};
-                }
-                catch (...)
-                {
-                    return std::unexpected(
-                        static_cast<std::uint32_t>(
-                            safetyhook::InlineHook::Error::BAD_ALLOCATION));
-                }
-            },
-            .enable = +[](void* context) noexcept
-            -> std::expected<void, std::uint32_t>
-            {
-                auto& self = *static_cast<TtxInitGuard*>(context);
-                try
-                {
-                    auto enabled = self.hook_.enable();
-                    if (!enabled)
-                    {
-                        return std::unexpected(
-                            SafetyHookErrorCode(enabled.error()));
-                    }
-                    return {};
-                }
-                catch (...)
-                {
-                    return std::unexpected(
-                        static_cast<std::uint32_t>(
-                            safetyhook::InlineHook::Error::BAD_ALLOCATION));
-                }
-            },
-            .reset = +[](void* context) noexcept
-            {
-                static_cast<TtxInitGuard*>(context)->Reset();
-            },
-        });
-    }
-
-    void TtxInitGuard::Reset() noexcept
-    {
-        try
-        {
-            hook_.reset();
-        }
-        catch (...)
-        {
-        }
-        auto* expected = this;
-        static_cast<void>(active_.compare_exchange_strong(
-            expected,
-            nullptr,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire));
+        active_.store(this, std::memory_order_release);
+        return plan.AddInlineExport({"TtxInitGuard", "TtxUDLInit"},
+            {kTtxModuleName, kTtxUdlInitExport}, &TtxInitGuard::Detour, &original_);
     }
 
     int __cdecl TtxInitGuard::Detour(
@@ -344,7 +185,7 @@ namespace gc::system_path
                 unsigned int original_update_options) noexcept
                 {
                     auto& self = *static_cast<TtxInitGuard*>(context);
-                    return self.hook_.unsafe_ccall<int>(
+                    return self.original_(
                         original_priority,
                         original_game_version,
                         original_update_step,

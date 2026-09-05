@@ -2,7 +2,7 @@
 
 #include <Windows.h>
 
-#include "Nesys/NesysHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 
 #include <vector>
 
@@ -30,7 +30,7 @@ ServiceChildResult FinalizeInjectedServiceChild(
     const ServiceChildApi& api) noexcept;
 
 bool InitializeNesysServiceLauncher(HMODULE loader_module) noexcept;
-void AppendNesysServiceLauncherHookRequest(
-    std::vector<ApiHookRequest>& requests);
+[[nodiscard]] std::expected<void, hooking::HookError> AddNesysServiceLauncherHook(
+    hooking::HookPlan& hooks) noexcept;
 
 } // namespace gc::nesys_service

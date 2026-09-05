@@ -157,14 +157,12 @@ bool InitializeThreadPriorityOverride(ProcessRole role) noexcept {
     return true;
 }
 
-void AppendThreadPriorityOverrideHookRequest(
-    std::vector<ApiHookRequest>& requests) {
-    requests.push_back({
-        L"kernel32.dll",
-        "SetThreadPriority",
-        reinterpret_cast<LPVOID>(&set_thread_priority_detour),
-        reinterpret_cast<LPVOID*>(&g_original_set_thread_priority),
-    });
+std::expected<void, hooking::HookError> AddThreadPriorityHook(
+    hooking::HookPlan& hooks) noexcept {
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPriority", "SetThreadPriority"}, {L"kernel32.dll", "SetThreadPriority"},
+            &set_thread_priority_detour, &g_original_set_thread_priority); !added) return added;
+    return {};
 }
 
 } // namespace gc::nesys_service

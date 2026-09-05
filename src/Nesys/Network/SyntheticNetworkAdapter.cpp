@@ -401,44 +401,42 @@ std::span<const char* const> SyntheticAdapterHookExports(
               kServiceExports.size()};
 }
 
-void AppendSyntheticAdapterHookRequests(
+std::expected<void, hooking::HookError> AddSyntheticAdapterHooks(
     ProcessRole role,
-    std::vector<ApiHookRequest>& requests) {
-    requests.push_back({
-        L"iphlpapi.dll",
-        "GetAdaptersInfo",
-        reinterpret_cast<LPVOID>(&SyntheticGetAdaptersInfo),
-        nullptr,
-    });
+    hooking::HookPlan& hooks) noexcept {
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "GetAdaptersInfo"}, {L"iphlpapi.dll", "GetAdaptersInfo"},
+            &SyntheticGetAdaptersInfo); !added) return added;
 
     if (role == ProcessRole::Game) {
-        requests.push_back({
-            L"iphlpapi.dll",
-            "NotifyAddrChange",
-            reinterpret_cast<LPVOID>(&SyntheticNotifyAddrChange),
-            nullptr,
-        });
-        requests.push_back({
-            L"iphlpapi.dll",
-            "CancelIPChangeNotify",
-            reinterpret_cast<LPVOID>(&SyntheticCancelIPChangeNotify),
-            nullptr,
-        });
-        return;
+        if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "NotifyAddrChange"}, {L"iphlpapi.dll", "NotifyAddrChange"},
+            &SyntheticNotifyAddrChange); !added) return added;
+        if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "CancelIPChangeNotify"}, {L"iphlpapi.dll", "CancelIPChangeNotify"},
+            &SyntheticCancelIPChangeNotify); !added) return added;
+        return {};
     }
 
-    requests.push_back({L"iphlpapi.dll", "GetIfTable",
-        reinterpret_cast<LPVOID>(&SyntheticGetIfTable), nullptr});
-    requests.push_back({L"iphlpapi.dll", "GetInterfaceInfo",
-        reinterpret_cast<LPVOID>(&SyntheticGetInterfaceInfo), nullptr});
-    requests.push_back({L"iphlpapi.dll", "GetNetworkParams",
-        reinterpret_cast<LPVOID>(&SyntheticGetNetworkParams), nullptr});
-    requests.push_back({L"iphlpapi.dll", "IpReleaseAddress",
-        reinterpret_cast<LPVOID>(&SuppressIpReleaseAddress), nullptr});
-    requests.push_back({L"iphlpapi.dll", "IpRenewAddress",
-        reinterpret_cast<LPVOID>(&SuppressIpRenewAddress), nullptr});
-    requests.push_back({L"iphlpapi.dll", "FlushIpNetTable",
-        reinterpret_cast<LPVOID>(&SuppressFlushIpNetTable), nullptr});
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "GetIfTable"}, {L"iphlpapi.dll", "GetIfTable"},
+            &SyntheticGetIfTable); !added) return added;
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "GetInterfaceInfo"}, {L"iphlpapi.dll", "GetInterfaceInfo"},
+            &SyntheticGetInterfaceInfo); !added) return added;
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "GetNetworkParams"}, {L"iphlpapi.dll", "GetNetworkParams"},
+            &SyntheticGetNetworkParams); !added) return added;
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "IpReleaseAddress"}, {L"iphlpapi.dll", "IpReleaseAddress"},
+            &SuppressIpReleaseAddress); !added) return added;
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "IpRenewAddress"}, {L"iphlpapi.dll", "IpRenewAddress"},
+            &SuppressIpRenewAddress); !added) return added;
+    if (const auto added = hooks.AddInlineReplacementExport(
+            {"SyntheticAdapter", "FlushIpNetTable"}, {L"iphlpapi.dll", "FlushIpNetTable"},
+            &SuppressFlushIpNetTable); !added) return added;
+    return {};
 }
 
 } // namespace gc::nesys_service

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Nesys/NesysHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 #include "Nesys/NesysServiceProcess.h"
 
 #include <Windows.h>
@@ -40,7 +40,7 @@ BOOL ForwardExecutableThreadPriority(
     ThreadPriorityClampDiagnosticFn diagnostic) noexcept;
 
 bool InitializeThreadPriorityOverride(ProcessRole role) noexcept;
-void AppendThreadPriorityOverrideHookRequest(
-    std::vector<ApiHookRequest>& requests);
+[[nodiscard]] std::expected<void, hooking::HookError> AddThreadPriorityHook(
+    hooking::HookPlan& hooks) noexcept;
 
 } // namespace gc::nesys_service

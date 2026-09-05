@@ -1802,98 +1802,54 @@ void ObserveGameHandleClose(HANDLE handle) noexcept {
     forget_pipe(handle);
 }
 
-void AppendServiceRequestPipelineHookRequests(
-    std::vector<ApiHookRequest>& requests) {
-    requests.push_back({
-        L"kernel32.dll",
-        "CreateFileA",
-        reinterpret_cast<LPVOID>(&create_file_a_detour),
-        reinterpret_cast<LPVOID*>(&g_original_create_file_a),
-    });
-    requests.push_back({
-        L"kernel32.dll",
-        "CreateNamedPipeA",
-        reinterpret_cast<LPVOID>(&create_named_pipe_a_detour),
-        reinterpret_cast<LPVOID*>(&g_original_create_named_pipe_a),
-    });
-    requests.push_back({
-        L"kernel32.dll",
-        "SetFilePointer",
-        reinterpret_cast<LPVOID>(&set_file_pointer_detour),
-        reinterpret_cast<LPVOID*>(&g_original_set_file_pointer),
-    });
-    requests.push_back({
-        L"kernel32.dll",
-        "WriteFile",
-        reinterpret_cast<LPVOID>(&write_file_detour),
-        reinterpret_cast<LPVOID*>(&g_original_write_file),
-    });
-    requests.push_back({
-        L"kernel32.dll",
-        "FlushFileBuffers",
-        reinterpret_cast<LPVOID>(&flush_file_buffers_detour),
-        reinterpret_cast<LPVOID*>(&g_original_flush_file_buffers),
-    });
-    requests.push_back({
-        L"kernel32.dll",
-        "CloseHandle",
-        reinterpret_cast<LPVOID>(&close_handle_detour),
-        reinterpret_cast<LPVOID*>(&g_original_close_handle),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpOpen",
-        reinterpret_cast<LPVOID>(&win_http_open_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_open),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpSetTimeouts",
-        reinterpret_cast<LPVOID>(&win_http_set_timeouts_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_set_timeouts),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpConnect",
-        reinterpret_cast<LPVOID>(&win_http_connect_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_connect),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpOpenRequest",
-        reinterpret_cast<LPVOID>(&win_http_open_request_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_open_request),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpSendRequest",
-        reinterpret_cast<LPVOID>(&win_http_send_request_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_send_request),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpReceiveResponse",
-        reinterpret_cast<LPVOID>(&win_http_receive_response_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_receive_response),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpQueryDataAvailable",
-        reinterpret_cast<LPVOID>(&win_http_query_data_available_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_query_data_available),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpReadData",
-        reinterpret_cast<LPVOID>(&win_http_read_data_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_read_data),
-    });
-    requests.push_back({
-        L"winhttp.dll",
-        "WinHttpCloseHandle",
-        reinterpret_cast<LPVOID>(&win_http_close_handle_detour),
-        reinterpret_cast<LPVOID*>(&g_original_win_http_close_handle),
-    });
+std::expected<void, hooking::HookError> AddServiceRequestPipelineHooks(
+    hooking::HookPlan& hooks) noexcept {
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "CreateFileA"}, {L"kernel32.dll", "CreateFileA"},
+            &create_file_a_detour, &g_original_create_file_a); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "CreateNamedPipeA"}, {L"kernel32.dll", "CreateNamedPipeA"},
+            &create_named_pipe_a_detour, &g_original_create_named_pipe_a); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "SetFilePointer"}, {L"kernel32.dll", "SetFilePointer"},
+            &set_file_pointer_detour, &g_original_set_file_pointer); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WriteFile"}, {L"kernel32.dll", "WriteFile"},
+            &write_file_detour, &g_original_write_file); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "FlushFileBuffers"}, {L"kernel32.dll", "FlushFileBuffers"},
+            &flush_file_buffers_detour, &g_original_flush_file_buffers); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "CloseHandle"}, {L"kernel32.dll", "CloseHandle"},
+            &close_handle_detour, &g_original_close_handle); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpOpen"}, {L"winhttp.dll", "WinHttpOpen"},
+            &win_http_open_detour, &g_original_win_http_open); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpSetTimeouts"}, {L"winhttp.dll", "WinHttpSetTimeouts"},
+            &win_http_set_timeouts_detour, &g_original_win_http_set_timeouts); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpConnect"}, {L"winhttp.dll", "WinHttpConnect"},
+            &win_http_connect_detour, &g_original_win_http_connect); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpOpenRequest"}, {L"winhttp.dll", "WinHttpOpenRequest"},
+            &win_http_open_request_detour, &g_original_win_http_open_request); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpSendRequest"}, {L"winhttp.dll", "WinHttpSendRequest"},
+            &win_http_send_request_detour, &g_original_win_http_send_request); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpReceiveResponse"}, {L"winhttp.dll", "WinHttpReceiveResponse"},
+            &win_http_receive_response_detour, &g_original_win_http_receive_response); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpQueryDataAvailable"}, {L"winhttp.dll", "WinHttpQueryDataAvailable"},
+            &win_http_query_data_available_detour, &g_original_win_http_query_data_available); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpReadData"}, {L"winhttp.dll", "WinHttpReadData"},
+            &win_http_read_data_detour, &g_original_win_http_read_data); !added) return added;
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysPipeline", "WinHttpCloseHandle"}, {L"winhttp.dll", "WinHttpCloseHandle"},
+            &win_http_close_handle_detour, &g_original_win_http_close_handle); !added) return added;
+    return {};
 }
 
 } // namespace gc::nesys_service::diagnostics

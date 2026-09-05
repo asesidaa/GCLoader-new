@@ -35,6 +35,7 @@
 #include "Audio/AudioPatch.h"
 #include "Diagnostics/CrashDumpHandler.h"
 #include "Diagnostics/FatalProcess.h"
+#include "Loader/NonVersionedHookPlan.h"
 #include "SystemPath/StartupFatal.h"
 #include "SystemPath/TtxInitGuard.h"
 
@@ -233,95 +234,6 @@ namespace
             exit_code);
     }
 
-    void PublishFeatureInitializationFatal(
-        const gc::rfid::FeatureError& error) noexcept
-    {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 23;
-        constexpr std::wstring_view title = L"GCLoader hook setup error";
-
-        try
-        {
-            std::ostringstream log;
-            std::wostringstream modal;
-            if (error.stage ==
-                gc::rfid::FeatureFailureStage::ttx_guard_installation)
-            {
-                const auto stage =
-                    gc::system_path::TtxGuardInstallStageName(error.ttx.stage);
-                log << "Ttx guard setup failed module=TtxUpdateDownloader.dll "
-                    << "export=?TtxUDLInit@@YAHKKKK@Z"
-                    << " stage=" << stage
-                    << " win32_error=" << error.ttx.win32_error
-                    << " safetyhook_error=" << error.ttx.safetyhook_error;
-                modal
-                    << L"The supported TtxUpdateDownloader initialization guard "
-                    L"could not be installed.\n\n"
-                    << L"Module: TtxUpdateDownloader.dll\n"
-                    << L"Export: ?TtxUDLInit@@YAHKKKK@Z\n"
-                    << L"Stage: " << Utf8ToWideOrFallback(stage) << L"\n"
-                    << L"Windows error: " << error.ttx.win32_error << L"\n"
-                    << L"SafetyHook error: " << error.ttx.safetyhook_error
-                    << L"\n\nVerify that the game uses the supported downloader "
-                    L"binary and that security software is not blocking hooks.";
-            }
-            else if (error.stage ==
-                gc::rfid::FeatureFailureStage::hook_installation)
-            {
-                const auto stage = gc::win32_hooks::HookInstallStageName(
-                    error.hook.stage);
-                const std::string_view export_name =
-                    error.hook.export_name == nullptr
-                        ? std::string_view{"<none>"}
-                        : std::string_view{error.hook.export_name};
-                log << "Game Kernel32 hook setup failed stage=" << stage
-                    << " export=" << export_name
-                    << " win32_error=" << error.hook.win32_error
-                    << " minhook_status="
-                    << static_cast<int>(error.hook.minhook_status);
-                modal
-                    << L"The game Kernel32 hook layer could not be installed.\n\n"
-                    << L"Stage: " << Utf8ToWideOrFallback(stage) << L"\n"
-                    << L"Export: " << Utf8ToWideOrFallback(export_name) << L"\n"
-                    << L"Windows error: " << error.hook.win32_error << L"\n"
-                    << L"MinHook status: "
-                    << static_cast<int>(error.hook.minhook_status)
-                    << L"\n\nCheck the loader log and verify that security software "
-                    L"is not blocking hooks.";
-            }
-            else
-            {
-                log << "Game feature initialization failed stage="
-                    << static_cast<int>(error.stage)
-                    << " win32_error=" << error.win32_error;
-                modal
-                    << L"GCLoader could not initialize the game feature layer.\n\n"
-                    << L"Stage: " << static_cast<int>(error.stage) << L"\n"
-                    << L"Windows error: " << error.win32_error
-                    << L"\n\nCheck the loader log for details.";
-            }
-
-            gc::system_path::PublishStartupFatal(
-                published,
-                log.str(),
-                modal.str(),
-                title,
-                exit_code);
-            return;
-        }
-        catch (...)
-        {
-        }
-
-        gc::system_path::PublishStartupFatal(
-            published,
-            "GCLoader game hook setup failed",
-            L"GCLoader could not install the required game hooks. Check the "
-            L"loader log for details.",
-            title,
-            exit_code);
-    }
-
     void PublishWindowedWidescreenInitializationFatal(
         const gc::windowed_widescreen::WindowedWidescreenError& error) noexcept
     {
@@ -399,59 +311,7 @@ namespace
             exit_code);
     }
 
-    void PublishJapaneseLocaleCompatibilityFatal(
-        const gc::win32_hooks::HookInstallError& error) noexcept
-    {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 25;
-        constexpr std::wstring_view title =
-            L"GCLoader Japanese locale setup error";
 
-        try
-        {
-            const auto stage =
-                gc::win32_hooks::HookInstallStageName(error.stage);
-            const std::string_view export_name =
-                error.export_name == nullptr
-                    ? std::string_view{"<none>"}
-                    : std::string_view{error.export_name};
-            std::ostringstream log;
-            std::wostringstream modal;
-            log << "Japanese locale hook setup failed"
-                << " stage=" << stage
-                << " export=" << export_name
-                << " win32_error=" << error.win32_error
-                << " minhook_status="
-                << static_cast<int>(error.minhook_status);
-            modal
-                << L"The required Japanese locale compatibility hooks could not "
-                L"be installed.\n\n"
-                << L"Stage: " << Utf8ToWideOrFallback(stage) << L"\n"
-                << L"Export: " << Utf8ToWideOrFallback(export_name) << L"\n"
-                << L"Windows error: " << error.win32_error << L"\n"
-                << L"MinHook status: "
-                << static_cast<int>(error.minhook_status)
-                << L"\n\nThe game cannot safely start under the host locale.";
-            gc::system_path::PublishStartupFatal(
-                published,
-                log.str(),
-                modal.str(),
-                title,
-                exit_code);
-            return;
-        }
-        catch (...)
-        {
-        }
-
-        gc::system_path::PublishStartupFatal(
-            published,
-            "Japanese locale hook setup failed",
-            L"The required Japanese locale compatibility hooks could not be "
-            L"installed. Check the loader log for details.",
-            title,
-            exit_code);
-    }
 
     void PublishImeSuppressionFatal(
         const gc::input::ImeSuppressionError& error) noexcept
@@ -537,26 +397,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     << " sites=" << game_binary_patch->site_count;
             }
 
-            const auto locale =
-                gc::locale_compatibility::
-                InstallJapaneseLocaleCompatibility(role);
-            if (!locale)
-            {
-                PublishJapaneseLocaleCompatibilityFatal(
-                    locale.error());
-                return FALSE;
-            }
-
-            if (gc::nesys_service::ShouldRunGameOnlyInitialization(role))
-            {
-                const auto crash_dump_status =
-                    gc::crash_dump::InstallGameCrashDumpHandler();
-                PLOG_INFO
-                    << "Game crash dump handler="
-                    << gc::crash_dump::InstallStatusName(
-                        crash_dump_status);
-            }
-
             std::error_code current_path_error;
             const auto config_directory =
                 std::filesystem::current_path(current_path_error);
@@ -598,15 +438,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 PLOG_INFO
                     << "NesysServicePatch: process role="
                     << gc::nesys_service::ProcessRoleName(role);
-                if (!gc::nesys_service::NesysServicePatchInit(
-                    hModule,
-                    role,
-                    std::move(service->nesys)))
-                {
-                    PLOG_ERROR
-                        << "NesysServicePatch: fail-closed DLL attach";
-                    return FALSE;
-                }
+                gc::loader::InstallNesysNonVersionedHooks(
+                    hModule, std::move(service->nesys));
 
                 PLOG_INFO
                     << "NesysServicePatch: service role skipping"
@@ -682,32 +515,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 return FALSE;
             }
 
-            try
-            {
-                auto nesys_settings = settings.nesys();
-                if (!gc::nesys_service::NesysServicePatchInit(
-                    hModule,
-                    role,
-                    std::move(nesys_settings)))
-                {
-                    PLOG_ERROR
-                        << "NesysServicePatch: fail-closed DLL attach";
-                    return FALSE;
-                }
-            }
-            catch (const std::exception& error)
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch configuration copy failed: "
-                    << error.what();
-                return FALSE;
-            }
-            catch (...)
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch configuration copy failed";
-                return FALSE;
-            }
+            gc::loader::InstallGameNonVersionedHooks(hModule, settings, game.system_root);
 
             if (!gc::test_mode_timing::TimingSettingsPatchInit())
             {
@@ -756,56 +564,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             PLOG_DEBUG
                 << "Windowed widescreen initialization complete!";
 
-            try
-            {
-                auto audio_settings = settings.audio();
-                if (!gc::audio::AudioPatchInit(std::move(audio_settings)))
-                {
-                    PLOG_ERROR
-                        << "AudioPatch: fail-closed DLL attach";
-                    return FALSE;
-                }
-            }
-            catch (const std::exception& error)
-            {
-                PLOG_ERROR
-                    << "AudioPatch configuration copy failed: "
-                    << error.what();
-                return FALSE;
-            }
-            catch (...)
-            {
-                PLOG_ERROR << "AudioPatch configuration copy failed";
-                return FALSE;
-            }
-
             gc::absolute_judgement::InitializeAbsoluteJudgementOrFatal(
                 settings.judgement());
-
-            try
-            {
-                auto rfid_settings = settings.rfid();
-                const auto rfid_result = gc::rfid::InitializeFeature(
-                    game.system_root,
-                    std::move(rfid_settings));
-                if (!rfid_result)
-                {
-                    PublishFeatureInitializationFatal(rfid_result.error());
-                    return FALSE;
-                }
-            }
-            catch (const std::exception& error)
-            {
-                PLOG_ERROR
-                    << "RFID configuration copy failed: " << error.what();
-                return FALSE;
-            }
-            catch (...)
-            {
-                PLOG_ERROR << "RFID configuration copy failed";
-                return FALSE;
-            }
-            PLOG_DEBUG << "RFID/JVS feature init complete!";
 
             if (!gc::framerate::FrameratePatchInit(
                 settings.framerate(),

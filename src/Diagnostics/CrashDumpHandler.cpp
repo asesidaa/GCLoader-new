@@ -1,6 +1,5 @@
 #include "Diagnostics/CrashDumpHandler.h"
 
-#include "Platform/Win32/Hooking/MinHookTransaction.h"
 
 #include <Windows.h>
 #include <DbgHelp.h>
@@ -17,12 +16,6 @@ namespace {
 
 constexpr std::size_t kMaxDumpPathChars = 32768;
 constexpr std::size_t kReservedDumpSuffixChars = 96;
-
-constexpr LONG kInstallUnattempted = 0;
-constexpr LONG kInstallInProgress = 1;
-constexpr LONG kInstallComplete = 2;
-constexpr LONG kInstallFilterOnly = 3;
-constexpr LONG kInstallUnavailable = 4;
 
 constexpr MINIDUMP_TYPE kComprehensiveDumpType =
     static_cast<MINIDUMP_TYPE>(
@@ -53,23 +46,9 @@ std::array<wchar_t, kMaxDumpPathChars> g_dump_path{};
 std::size_t g_dump_prefix_length{};
 std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> g_downstream_filter{};
 std::atomic_flag g_dump_in_progress = ATOMIC_FLAG_INIT;
-std::atomic<LONG> g_install_state{kInstallUnattempted};
 decltype(&SetUnhandledExceptionFilter) g_original_set_filter{};
-win32_hooks::MinHookTransaction g_set_filter_hook{};
 
 LONG WINAPI CrashDumpFilter(EXCEPTION_POINTERS* exception) noexcept;
-
-InstallStatus PublicInstallStatus(LONG state) noexcept
-{
-    switch (state) {
-    case kInstallComplete:
-        return InstallStatus::installed;
-    case kInstallFilterOnly:
-        return InstallStatus::filter_only;
-    default:
-        return InstallStatus::unavailable;
-    }
-}
 
 bool PrepareDumpPathPrefix() noexcept
 {
@@ -307,59 +286,19 @@ LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilterDetour(
 
 } // namespace
 
-InstallStatus InstallGameCrashDumpHandler() noexcept
-{
-    LONG state = g_install_state.load(std::memory_order_acquire);
-    if (state != kInstallUnattempted) {
-        return PublicInstallStatus(state);
-    }
-
-    LONG expected = kInstallUnattempted;
-    if (!g_install_state.compare_exchange_strong(
-            expected,
-            kInstallInProgress,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
-        return PublicInstallStatus(expected);
-    }
-
-    InstallStatus status = InstallStatus::unavailable;
-    bool filter_registered = false;
-    try {
-        if (PrepareDumpPathPrefix()) {
-            const auto previous =
-                SetUnhandledExceptionFilter(CrashDumpFilter);
-            g_downstream_filter.store(previous, std::memory_order_release);
-            filter_registered = true;
-
-            const std::array requests{
-                win32_hooks::HookRequest{
-                    .module_name = L"kernel32.dll",
-                    .export_name = "SetUnhandledExceptionFilter",
-                    .detour = reinterpret_cast<LPVOID>(
-                        SetUnhandledExceptionFilterDetour),
-                    .original = reinterpret_cast<LPVOID*>(
-                        &g_original_set_filter),
-                },
-            };
-            status = g_set_filter_hook.Install(requests)
-                ? InstallStatus::installed
-                : InstallStatus::filter_only;
-        }
-    } catch (...) {
-        status = filter_registered
-            ? InstallStatus::filter_only
-            : InstallStatus::unavailable;
-    }
-
-    LONG completed_state = kInstallUnavailable;
-    if (status == InstallStatus::installed) {
-        completed_state = kInstallComplete;
-    } else if (status == InstallStatus::filter_only) {
-        completed_state = kInstallFilterOnly;
-    }
-    g_install_state.store(completed_state, std::memory_order_release);
-    return status;
+std::expected<void, hooking::HookError> AddCrashDumpHook(hooking::HookPlan& plan) noexcept {
+    if (!PrepareDumpPathPrefix())
+        return std::unexpected(hooking::HookError{
+            .stage = hooking::HookStage::invalid_plan,
+            .identity = {"CrashDump", "SetUnhandledExceptionFilter"},
+            .win32_error = ERROR_BAD_PATHNAME,
+        });
+    const auto previous = SetUnhandledExceptionFilter(CrashDumpFilter);
+    g_downstream_filter.store(previous, std::memory_order_release);
+    return plan.AddInlineExport(
+        {"CrashDump", "SetUnhandledExceptionFilter"},
+        {L"kernel32.dll", "SetUnhandledExceptionFilter"},
+        &SetUnhandledExceptionFilterDetour, &g_original_set_filter);
 }
 
 } // namespace gc::crash_dump

@@ -3,7 +3,7 @@
 #include "SystemPath/SystemRoot.h"
 
 #include <Windows.h>
-#include <safetyhook.hpp>
+#include "Platform/Win32/Hooking/HookPlan.h"
 
 #include <atomic>
 #include <cstdint>
@@ -18,38 +18,6 @@ using TtxUdlInitFn = int(__cdecl*)(
     unsigned int,
     unsigned int,
     unsigned int);
-
-enum class TtxGuardInstallStage {
-    invalid_actions,
-    resolve_module,
-    resolve_export,
-    create_hook,
-    enable_hook,
-};
-
-[[nodiscard]] constexpr const char* TtxGuardInstallStageName(
-    TtxGuardInstallStage stage) noexcept
-{
-    switch (stage) {
-    case TtxGuardInstallStage::invalid_actions:
-        return "invalid_actions";
-    case TtxGuardInstallStage::resolve_module:
-        return "resolve_module";
-    case TtxGuardInstallStage::resolve_export:
-        return "resolve_export";
-    case TtxGuardInstallStage::create_hook:
-        return "create_hook";
-    case TtxGuardInstallStage::enable_hook:
-        return "enable_hook";
-    }
-    return "unknown";
-}
-
-struct TtxGuardInstallError {
-    TtxGuardInstallStage stage{};
-    DWORD win32_error{ERROR_SUCCESS};
-    std::uint32_t safetyhook_error{};
-};
 
 struct TtxGuardRuntimeActions {
     void* context{};
@@ -74,31 +42,14 @@ struct TtxGuardRuntimeActions {
     const RuntimeRoot& root,
     const TtxGuardRuntimeActions& actions) noexcept;
 
-struct TtxGuardInstallActions {
-    void* context{};
-    void* detour{};
-    HMODULE (*get_module)(void*, LPCWSTR) noexcept{};
-    FARPROC (*get_export)(void*, HMODULE, LPCSTR) noexcept{};
-    DWORD (*get_last_error)(void*) noexcept{};
-    std::expected<void, std::uint32_t> (*create_disabled)(
-        void*, void* target, void* detour) noexcept{};
-    std::expected<void, std::uint32_t> (*enable)(void*) noexcept{};
-    void (*reset)(void*) noexcept{};
-};
-
-[[nodiscard]] std::expected<void, TtxGuardInstallError>
-InstallTtxInitGuard(const TtxGuardInstallActions& actions) noexcept;
-
 class TtxInitGuard {
 public:
     explicit TtxInitGuard(RuntimeRoot root);
-    ~TtxInitGuard() noexcept;
     TtxInitGuard(const TtxInitGuard&) = delete;
     TtxInitGuard& operator=(const TtxInitGuard&) = delete;
 
-    [[nodiscard]] std::expected<void, TtxGuardInstallError>
-    Install() noexcept;
-    void Reset() noexcept;
+    [[nodiscard]] std::expected<void, hooking::HookError>
+    AddHook(hooking::HookPlan&) noexcept;
 
 private:
     static int __cdecl Detour(
@@ -115,7 +66,7 @@ private:
 
     static std::atomic<TtxInitGuard*> active_;
     RuntimeRoot root_;
-    safetyhook::InlineHook hook_;
+    TtxUdlInitFn original_{};
     std::atomic_bool failure_published_{};
 };
 

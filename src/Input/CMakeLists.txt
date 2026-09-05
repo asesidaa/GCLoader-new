@@ -37,6 +37,7 @@ target_include_directories(gc_input PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_input PUBLIC
+        gc_hooking
         gc_input_win32
         ntdll
         safetyhook::safetyhook

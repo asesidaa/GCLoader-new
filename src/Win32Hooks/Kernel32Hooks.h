@@ -3,7 +3,7 @@
 #include "Rfid/Runtime.h"
 #include "SystemPath/SystemPathRouter.h"
 #include "TestModeStorage/Hooks.h"
-#include "Platform/Win32/Hooking/MinHookTransaction.h"
+#include "Platform/Win32/Hooking/HookPlan.h"
 
 #include <Windows.h>
 
@@ -44,16 +44,6 @@ struct OriginalKernel32Api {
     decltype(&::MoveFileW) move_file_w{};
 };
 
-struct HookRequestSet {
-    std::array<HookRequest, kMaxOwnedKernel32Hooks> storage{};
-    std::size_t size{};
-
-    [[nodiscard]] std::span<const HookRequest> requests() const noexcept
-    {
-        return {storage.data(), size};
-    }
-};
-
 class Kernel32Hooks {
 public:
     Kernel32Hooks(
@@ -64,7 +54,7 @@ public:
 
     void Activate() noexcept;
     void Deactivate() noexcept;
-    [[nodiscard]] HookRequestSet BuildRequests() noexcept;
+    [[nodiscard]] std::expected<void, hooking::HookError> AddHooks(hooking::HookPlan&) noexcept;
 
     HANDLE CreateFileA(
         LPCSTR file_name, DWORD desired_access, DWORD share_mode,

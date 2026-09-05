@@ -1,24 +1,5 @@
 #pragma once
-
+#include "Platform/Win32/Hooking/HookPlan.h"
 namespace gc::crash_dump {
-
-enum class InstallStatus {
-    installed,
-    filter_only,
-    unavailable,
-};
-
-[[nodiscard]] constexpr const char* InstallStatusName(
-    InstallStatus status) noexcept
-{
-    switch (status) {
-    case InstallStatus::installed: return "installed";
-    case InstallStatus::filter_only: return "filter_only";
-    case InstallStatus::unavailable: return "unavailable";
-    }
-    return "unavailable";
+[[nodiscard]] std::expected<void, hooking::HookError> AddCrashDumpHook(hooking::HookPlan&) noexcept;
 }
-
-[[nodiscard]] InstallStatus InstallGameCrashDumpHandler() noexcept;
-
-} // namespace gc::crash_dump

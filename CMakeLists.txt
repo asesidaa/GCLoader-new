@@ -16,7 +16,6 @@ include(Dependencies)
 # including transitive sources such as SafetyHook's Zydis checkout. The
 # configure-time directory audit below catches an unregistered default checkout.
 set(GC_CORRESPONDING_SOURCE_DEPENDENCIES
-        minhook
         miniaudio
         tomlplusplus
         safetyhook
@@ -24,10 +23,6 @@ set(GC_CORRESPONDING_SOURCE_DEPENDENCIES
         plog
         imgui_external
         zydis)
-set(GC_PACKAGE_ORIGIN_minhook
-        "https://github.com/TsudaKageyu/minhook.git")
-set(GC_PACKAGE_REVISION_minhook
-        "c3fcafdc10146beb5919319d0683e44e3c30d537")
 set(GC_PACKAGE_ORIGIN_miniaudio
         "https://github.com/mackron/miniaudio.git")
 set(GC_PACKAGE_REVISION_miniaudio

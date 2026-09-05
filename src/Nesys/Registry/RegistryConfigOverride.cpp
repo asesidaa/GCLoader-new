@@ -494,26 +494,18 @@ LSTATUS WINAPI reg_close_key_detour(HKEY key)
         return kRegistryExports;
     }
 
-    void AppendRegistryOverrideHookRequests(
-        std::vector<ApiHookRequest>& requests)
+    std::expected<void, hooking::HookError> AddRegistryOverrideHooks(
+        hooking::HookPlan& hooks) noexcept
     {
-        requests.push_back({
-            L"Advapi32.dll",
-            "RegOpenKeyExA",
-            reinterpret_cast<LPVOID>(&reg_open_key_ex_a_detour),
-            reinterpret_cast<LPVOID*>(&g_original_reg_open_key_ex_a),
-        });
-        requests.push_back({
-            L"Advapi32.dll",
-            "RegQueryValueExA",
-            reinterpret_cast<LPVOID>(&reg_query_value_ex_a_detour),
-            reinterpret_cast<LPVOID*>(&g_original_reg_query_value_ex_a),
-        });
-        requests.push_back({
-            L"Advapi32.dll",
-            "RegCloseKey",
-            reinterpret_cast<LPVOID>(&reg_close_key_detour),
-            reinterpret_cast<LPVOID*>(&g_original_reg_close_key),
-        });
-    }
+        if (const auto added = hooks.AddInlineExport(
+            {"NesysRegistry", "RegOpenKeyExA"}, {L"Advapi32.dll", "RegOpenKeyExA"},
+            &reg_open_key_ex_a_detour, &g_original_reg_open_key_ex_a); !added) return added;
+        if (const auto added = hooks.AddInlineExport(
+            {"NesysRegistry", "RegQueryValueExA"}, {L"Advapi32.dll", "RegQueryValueExA"},
+            &reg_query_value_ex_a_detour, &g_original_reg_query_value_ex_a); !added) return added;
+        if (const auto added = hooks.AddInlineExport(
+            {"NesysRegistry", "RegCloseKey"}, {L"Advapi32.dll", "RegCloseKey"},
+            &reg_close_key_detour, &g_original_reg_close_key); !added) return added;
+        return {};
+}
 } // namespace gc::nesys_service

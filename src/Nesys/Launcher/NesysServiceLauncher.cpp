@@ -265,14 +265,12 @@ bool InitializeNesysServiceLauncher(
     return true;
 }
 
-void AppendNesysServiceLauncherHookRequest(
-    std::vector<ApiHookRequest>& requests) {
-    requests.push_back({
-        L"kernel32.dll",
-        "CreateProcessA",
-        reinterpret_cast<LPVOID>(&create_process_a_detour),
-        reinterpret_cast<LPVOID*>(&g_original_create_process_a),
-    });
+std::expected<void, hooking::HookError> AddNesysServiceLauncherHook(
+    hooking::HookPlan& hooks) noexcept {
+    if (const auto added = hooks.AddInlineExport(
+            {"NesysLauncher", "CreateProcessA"}, {L"kernel32.dll", "CreateProcessA"},
+            &create_process_a_detour, &g_original_create_process_a); !added) return added;
+    return {};
 }
 
 } // namespace gc::nesys_service

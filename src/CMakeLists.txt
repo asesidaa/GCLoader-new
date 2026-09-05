@@ -17,7 +17,6 @@ add_subdirectory(Win32Hooks)
 add_library(gc_rfid_feature STATIC Rfid/Feature.cpp)
 target_include_directories(gc_rfid_feature PUBLIC
         ${PROJECT_SOURCE_DIR}/src
-        ${minhook_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_rfid_feature PUBLIC
@@ -48,6 +47,7 @@ target_link_libraries(gc_loader_startup PUBLIC
 
 add_library(iDmacDrv32 SHARED
         Loader/DllMain.cpp
+        Loader/NonVersionedHookPlan.cpp
         Driver/iDmac/iDmacDrv32.cpp
 )
 set_target_properties(iDmacDrv32 PROPERTIES
@@ -56,7 +56,6 @@ set_target_properties(iDmacDrv32 PROPERTIES
 )
 target_include_directories(iDmacDrv32 PRIVATE
         ${PROJECT_SOURCE_DIR}/src
-        ${minhook_SOURCE_DIR}/include
         ${reflectcpp_SOURCE_DIR}/include
         ${plog_SOURCE_DIR}/include
 )
@@ -80,7 +79,6 @@ target_link_libraries(iDmacDrv32 PRIVATE
         uuid
         avrt
         propsys
-        minhook
         miniaudio
         safetyhook::safetyhook
         tomlplusplus::tomlplusplus

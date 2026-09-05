@@ -1,45 +1,21 @@
 #include "Nesys/NesysServicePatch.h"
-
-#include "Nesys/NesysHookTransaction.h"
 #include "Nesys/ThreadPriorityOverride.h"
 #include "Nesys/Diagnostics/RequestPipelineDiagnostics.h"
 #include "Nesys/Launcher/NesysServiceLauncher.h"
 #include "Nesys/Registry/RegistryConfigOverride.h"
 #include "Nesys/Network/ServerAddressOverride.h"
 #include "Nesys/Network/SyntheticNetworkAdapter.h"
-
-#include <Windows.h>
-
+#include "Platform/Win32/Hooking/HookDiagnostics.h"
 #include <atomic>
-// ReSharper disable once CppUnusedIncludeDirective
-#include <cstdint>
-// ReSharper disable once CppUnusedIncludeDirective
-#include <iomanip>
 #include <intrin.h>
-#include <memory>
 #include <utility>
-#include <vector>
-
 #include "plog/Log.h"
 
-namespace gc::nesys_service
-{
-    namespace
-    {
-        enum class InitializationState
-        {
-            Uninitialized,
-            Initializing,
-            Succeeded,
-            Failed,
-        };
-
-        std::atomic<InitializationState> g_initialization{
-            InitializationState::Uninitialized
-        };
-        std::unique_ptr<OwnedMinHookTransaction> g_owned_hooks;
-        decltype(&ExitProcess) g_original_exit_process = nullptr;
-
+namespace gc::nesys_service {
+namespace {
+std::atomic_bool g_prepared{};
+bool g_pending_ping{};
+decltype(&ExitProcess) g_original_exit_process{};
         __declspec(noreturn) void WINAPI service_exit_process_detour(
             UINT exit_code)
         {
@@ -67,347 +43,76 @@ namespace gc::nesys_service
             __assume(0);
         }
 
-        void append_service_exit_diagnostic_hook_request(
-            std::vector<ApiHookRequest>& requests)
-        {
-            requests.push_back({
-                L"kernel32.dll",
-                "ExitProcess",
-                reinterpret_cast<LPVOID>(&service_exit_process_detour),
-                reinterpret_cast<LPVOID*>(&g_original_exit_process),
-            });
+
+hooking::HookError StateError(std::string_view site, DWORD code = ERROR_INVALID_DATA) noexcept {
+    return {.stage = hooking::HookStage::invalid_plan,
+        .identity = {"Nesys", site}, .win32_error = code};
+}
+}
+std::expected<void, hooking::HookError> AddNesysHooks(
+    hooking::HookPlan& hooks, HMODULE loader_module, ProcessRole role, NesysSettings settings) noexcept {
+    if (g_prepared.exchange(true))
+        return std::unexpected(StateError("prepare", ERROR_ALREADY_INITIALIZED));
+    try {
+        const auto plan = ResolveNesysFeaturePlan(
+            role, settings.adapter_patch_enabled(), settings.registry_override().has_value());
+        if (!plan.enabled) return {};
+        if (plan.server_address_override &&
+            !InitializeServerAddressOverride(std::move(settings).server_address()))
+            return std::unexpected(StateError("server_address"));
+        if (plan.registry_config_override) {
+            auto values = std::move(settings).registry_override();
+            if (!values || !InitializeRegistryConfigOverride(role, std::move(*values)))
+                return std::unexpected(StateError("registry_values"));
         }
-
-        const char* stage_name(HookInstallStage stage) noexcept
-        {
-            switch (stage)
-            {
-            case HookInstallStage::None:
-                return "none";
-            case HookInstallStage::ResolveModule:
-                return "resolve_module";
-            case HookInstallStage::ResolveExport:
-                return "resolve_export";
-            case HookInstallStage::Initialize:
-                return "initialize_minhook";
-            case HookInstallStage::Create:
-                return "create_hook";
-            case HookInstallStage::QueueEnable:
-                return "queue_enable";
-            case HookInstallStage::ApplyQueued:
-                return "apply_queued";
-            }
-            return "unknown";
+        if (plan.thread_priority_override && !InitializeThreadPriorityOverride(role))
+            return std::unexpected(StateError("thread_priority"));
+        if (plan.service_launcher && !InitializeNesysServiceLauncher(loader_module))
+            return std::unexpected(StateError("launcher"));
+        const auto before = hooks.size();
+        if (plan.synthetic_adapter) {
+            if (const auto added = AddSyntheticAdapterHooks(role, hooks); !added) return added;
         }
-
-        void log_hook_error(const HookInstallError& error) noexcept
-        {
-            try
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch: hook install failed"
-                    << " stage=" << stage_name(error.stage)
-                    << " export="
-                    << (error.export_name != nullptr
-                            ? error.export_name
-                            : "<none>")
-                    << " target=" << error.target
-                    << " minhook_status="
-                    << static_cast<int>(error.minhook_status)
-                    << " win32_error=" << error.win32_error;
-            }
-            catch (...)
-            {
-            }
+        if (plan.server_address_override) {
+            if (const auto added = AddServerAddressHooks(role, hooks); !added) return added;
         }
-
-        bool initialize_feature_plan(
-            HMODULE loader_module,
-            ProcessRole role,
-            const NesysFeaturePlan& plan,
-            NesysSettings settings)
-        {
-            if (plan.server_address_override &&
-                !InitializeServerAddressOverride(
-                    std::move(settings).server_address()))
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch: invalid NESYS server IPv4";
-                return false;
-            }
-
-            if (plan.registry_config_override)
-            {
-                auto values = std::move(settings).registry_override();
-                if (!values ||
-                    !InitializeRegistryConfigOverride(role, std::move(*values)))
-                {
-                    PLOG_ERROR
-                        << "NesysServicePatch: registry override state initialization failed";
-                    return false;
-                }
-            }
-
-            if (plan.thread_priority_override &&
-                !InitializeThreadPriorityOverride(role))
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch: thread priority override state initialization failed";
-                return false;
-            }
-
-            std::uintptr_t executable_base = 0;
-            if (plan.service_ping_redirect)
-            {
-                executable_base = reinterpret_cast<std::uintptr_t>(
-                    GetModuleHandleW(nullptr));
-                if (executable_base == 0)
-                {
-                    PLOG_ERROR
-                        << "NesysServicePatch: main executable module unavailable";
-                    return false;
-                }
-            }
-
-            std::vector<ApiHookRequest> requests;
-            requests.reserve(plan.api_hook_count);
-            if (plan.synthetic_adapter)
-            {
-                AppendSyntheticAdapterHookRequests(role, requests);
-            }
-            if (plan.server_address_override)
-            {
-                AppendServerAddressHookRequests(role, requests);
-            }
-            if (plan.registry_config_override)
-            {
-                AppendRegistryOverrideHookRequests(requests);
-            }
-            if (plan.thread_priority_override)
-            {
-                AppendThreadPriorityOverrideHookRequest(requests);
-            }
-            if (plan.request_pipeline_diagnostics)
-            {
-                diagnostics::AppendServiceRequestPipelineHookRequests(requests);
-            }
-            if (role == ProcessRole::Service)
-            {
-                append_service_exit_diagnostic_hook_request(requests);
-            }
-            if (plan.service_launcher)
-            {
-                AppendNesysServiceLauncherHookRequest(requests);
-            }
-            if (requests.size() != plan.api_hook_count)
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch: role hook count mismatch"
-                    << " expected=" << plan.api_hook_count
-                    << " actual=" << requests.size();
-                return false;
-            }
-
-            std::vector<ResolvedApiHook> resolved;
-            HookInstallError resolve_error{};
-            if (!ResolveApiHooks(requests, &resolved, &resolve_error))
-            {
-                log_hook_error(resolve_error);
-                return false;
-            }
-            if (plan.service_ping_redirect &&
-                !PreflightServicePingRedirect(executable_base))
-            {
-                return false;
-            }
-            if (plan.service_launcher &&
-                !InitializeNesysServiceLauncher(loader_module))
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch: launcher state initialization failed";
-                return false;
-            }
-
-            auto transaction = std::make_unique<OwnedMinHookTransaction>(
-                ProductionMinHookApi());
-            if (!transaction->Initialize())
-            {
-                log_hook_error(transaction->error());
-                return false;
-            }
-            if (!transaction->CreateAll(resolved))
-            {
-                log_hook_error(transaction->error());
-                return false;
-            }
-            if (plan.service_ping_redirect &&
-                !PrepareServicePingRedirect(executable_base))
-            {
-                transaction->Rollback();
-                RollbackServicePingRedirect();
-                return false;
-            }
-            if (!transaction->Commit())
-            {
-                log_hook_error(transaction->error());
-                RollbackServicePingRedirect();
-                return false;
-            }
-
-            if (plan.service_ping_redirect &&
-                !ActivateServicePingRedirect())
-            {
-                transaction->Rollback();
-                RollbackServicePingRedirect();
-                return false;
-            }
-
-            g_owned_hooks = std::move(transaction);
-            try
-            {
-                if (plan.synthetic_adapter)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=synthetic_network_adapter";
-                }
-                if (plan.server_address_override)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=server_address_override";
-                }
-                if (plan.registry_config_override)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=registry_config_override"
-                        << " owned_api_hooks=3";
-                }
-                if (plan.thread_priority_override)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=thread_priority_override";
-                }
-                if (plan.request_pipeline_diagnostics)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=request_pipeline_diagnostics"
-                        << " owned_api_hooks="
-                        << kServiceRequestPipelineHookCount;
-                }
-                if (plan.service_launcher)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=nesys_service_launcher";
-                }
-                if (plan.service_ping_redirect)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=service_ping_redirect";
-                }
-                if (role == ProcessRole::Service)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: component active"
-                        << " name=service_exit_diagnostics";
-                }
-                PLOG_INFO
-                    << "NesysServicePatch: all role hooks active"
-                    << " role=" << ProcessRoleName(role)
-                    << " network=" << plan.network_virtualization
-                    << " registry=" << plan.registry_virtualization
-                    << " api_hooks=" << plan.api_hook_count;
-                if (plan.synthetic_adapter)
-                {
-                    PLOG_INFO
-                        << "NesysServicePatch: synthetic adapter"
-                        << " name=" << kSyntheticAdapterName
-                        << " mac=DE-AD-BE-EF-00-01"
-                        << " index=0x" << std::hex
-                        << kSyntheticInterfaceIndex
-                        << " ipv4=" << kSyntheticIpv4
-                        << " link_state=up"
-                        << std::dec;
-                }
-            }
-            catch (...)
-            {
-            }
-            return true;
+        if (plan.registry_config_override) {
+            if (const auto added = AddRegistryOverrideHooks(hooks); !added) return added;
         }
-    } // namespace
-
-    bool NesysServicePatchInit(
-        HMODULE loader_module,
-        ProcessRole role,
-        NesysSettings settings) noexcept
-    {
-        InitializationState expected =
-            InitializationState::Uninitialized;
-        if (!g_initialization.compare_exchange_strong(
-            expected,
-            InitializationState::Initializing))
-        {
-            return g_initialization.load() ==
-                InitializationState::Succeeded;
+        if (plan.thread_priority_override) {
+            if (const auto added = AddThreadPriorityHook(hooks); !added) return added;
         }
-
-        bool success = false;
-        try
-        {
-            const bool network_enabled =
-                settings.adapter_patch_enabled();
-            const bool registry_enabled =
-                settings.registry_override().has_value();
-            const auto plan = ResolveNesysFeaturePlan(
-                role,
-                network_enabled,
-                registry_enabled);
-            PLOG_INFO
-                << "NesysServicePatch: init"
-                << " role=" << ProcessRoleName(role)
-                << " network=" << network_enabled
-                << " registry=" << registry_enabled;
-
-            success = !plan.enabled ||
-                initialize_feature_plan(
-                    loader_module,
-                    role,
-                    plan,
-                    std::move(settings));
-            if (!plan.enabled)
-            {
-                PLOG_INFO
-                    << "NesysServicePatch: all policies disabled; installed no hooks";
-            }
+        if (plan.request_pipeline_diagnostics) {
+            if (const auto added = diagnostics::AddServiceRequestPipelineHooks(hooks); !added) return added;
         }
-        catch (const std::exception& error)
-        {
-            try
-            {
-                PLOG_ERROR
-                    << "NesysServicePatch: initialization exception="
-                    << error.what();
-            }
-            catch (...)
-            {
-            }
-            success = false;
+        if (role == ProcessRole::Service) {
+            if (const auto added = hooks.AddInlineExport(
+                    {"NesysExit", "ExitProcess"}, {L"kernel32.dll", "ExitProcess"},
+                    &service_exit_process_detour, &g_original_exit_process); !added) return added;
         }
-        catch (...)
-        {
-            success = false;
+        if (plan.service_launcher) {
+            if (const auto added = AddNesysServiceLauncherHook(hooks); !added) return added;
         }
-
-        g_initialization.store(
-            success
-                ? InitializationState::Succeeded
-                : InitializationState::Failed);
-        return success;
+        if (hooks.size() - before != plan.api_hook_count)
+            return std::unexpected(StateError("hook_count"));
+        g_pending_ping = plan.service_ping_redirect;
+        PLOG_INFO << "NesysServicePatch: role hooks prepared"
+            << " role=" << ProcessRoleName(role)
+            << " network=" << plan.network_virtualization
+            << " registry=" << plan.registry_virtualization
+            << " api_hooks=" << plan.api_hook_count;
+        return {};
+    } catch (...) {
+        return std::unexpected(StateError("prepare", ERROR_NOT_ENOUGH_MEMORY));
     }
+}
+void InstallPendingNesysPing() noexcept {
+    if (!g_pending_ping) return;
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    if (!base || !PreflightServicePingRedirect(base) ||
+        !PrepareServicePingRedirect(base) || !ActivateServicePingRedirect())
+        hooking::AbortHookError({.stage = hooking::HookStage::create,
+            .identity = {"NesysPing", "service_ping"}, .win32_error = ERROR_INVALID_DATA});
+    g_pending_ping = false;
+}
 } // namespace gc::nesys_service
