@@ -14,6 +14,18 @@ std::expected<void, StartupInstallError> InstallApprovedVersionedPlan(
     if (plan.image_base() != image.base() || plan.image_size() != image.size())
         return std::unexpected(current);
     try {
+        // Publish all logical consumers before any shared physical slot can enable.
+        for (const auto& site : plan.sites()) {
+            if (const auto* slot = std::get_if<GlobalVtableSlotOperation>(&site.operation)) {
+                current = {.stage = StartupInstallStage::operation, .context = plan.context(),
+                    .operation = site.operation, .address = site.address};
+                const auto& contract = slot->contract;
+                const auto published = runtime_image::PublishVtableSlotOriginal(image, {
+                    {FeatureName(contract.feature), contract.site, contract.rva},
+                    slot->expected, slot->replacement, slot->original});
+                if (!published) { current.memory = published.error(); return std::unexpected(current); }
+            }
+        }
         // Validate already resolved every operation and ordered dependencies,
         // install_order, then source ordinal. Never reselect profiles here.
         for (const auto& site : plan.sites()) {
@@ -34,7 +46,8 @@ std::expected<void, StartupInstallError> InstallApprovedVersionedPlan(
                     const auto result = [&] {
                         if constexpr (std::is_same_v<T, BytePatchOperation>)
                             return image.Write(identity, operation.replacement, operation.memory_kind);
-                        else return image.ExchangePointer(identity, operation.expected, operation.replacement);
+                        else return runtime_image::InstallVtableSlotHook(image, {
+                            identity, operation.expected, operation.replacement, operation.original});
                     }();
                     if (!result) { current.memory = result.error(); return std::unexpected(current); }
                 } else if constexpr (std::is_same_v<T, InlineHookOperation> ||

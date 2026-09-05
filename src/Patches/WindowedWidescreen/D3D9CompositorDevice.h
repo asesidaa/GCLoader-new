@@ -4,6 +4,7 @@
 #include "Patches/WindowedWidescreen/NativeCanvasCompositor.h"
 #include "Patches/WindowedWidescreen/ResolutionModel.h"
 
+#include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
 #include <d3d9.h>
 #include <wrl/client.h>
 
@@ -11,8 +12,6 @@
 
 namespace gc::windowed_widescreen
 {
-    inline constexpr std::size_t kRendererDeviceOffset = 0x08;
-    inline constexpr std::size_t kRendererWindowOffset = 0x8C;
 
     enum class D3D9CompositorStage : std::uint8_t
     {
@@ -59,7 +58,8 @@ namespace gc::windowed_widescreen
     public:
         D3D9CompositorDevice(
             ResolutionModel resolution,
-            GameplayHudPlacement base_gameplay_hud_placement) noexcept;
+            GameplayHudPlacement base_gameplay_hud_placement,
+            WidescreenNativeLayout layout) noexcept;
 
         D3D9CompositorDevice(const D3D9CompositorDevice&) = delete;
         D3D9CompositorDevice& operator=(const D3D9CompositorDevice&) = delete;
@@ -164,6 +164,7 @@ namespace gc::windowed_widescreen
             void* context,
             RenderSpace stable_space) noexcept;
 
+        const WidescreenNativeLayout layout_;
         ResolutionModel resolution_;
         GameplayHudPlacement base_gameplay_hud_placement_{
             GameplayHudPlacement::center};

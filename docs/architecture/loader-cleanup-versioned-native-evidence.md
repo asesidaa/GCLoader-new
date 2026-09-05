@@ -550,3 +550,179 @@ Compatibility. The temporary Loader adapter publishes runtime state before
 installing the same six sites in manifest order. Debug and RelWithDebInfo
 builds and all five existing tests passed in both configurations. No D3D
 device-loss/reset/retry/resource-recovery runtime acceptance was performed.
+
+## Plan06g - Widescreen profile and global vtable slots
+
+The saved IDA-CLI batches `.codex-tmp/loader-cleanup-widescreen-profile.py`,
+`loader-cleanup-widescreen-layout.py`, and `loader-cleanup-widescreen-collection.py`
+used the existing `game471.exe.i64` database without mutation. The byte/pointer
+batch compares IDB bytes and both executable files using IDA's file-region
+mapping. All 42 former byte rows and nine pointer rows match. The two former
+byte rows encoding global vtable pointers are now represented once in the nine
+pointer contracts: 40 byte contracts plus nine pointer contracts, 49 operations.
+
+### Byte manifest
+
+The protected span for a detour ends on the decoded instruction boundary at or
+beyond five bytes; its verified prefix may be longer. Read-only rows protect no
+mutation range and retain their entire prefix as their contract size.
+
+| Site | RVA | Kind | Span | Original prefix | Native owner VA |
+| --- | --- | --- | ---: | --- | --- |
+| config_apply | 0x0023C360 | inline_hook | 6 | 55 8B EC 83 EC 14 E8 E5 F8 FF FF | 0x63c360 |
+| window_device_create | 0x0005B8A0 | inline_hook | 5 | 83 EC 64 53 55 56 57 6A 30 33 ED 8D | 0x45b8a0 |
+| frame_begin | 0x0005AC70 | inline_hook | 7 | 51 53 56 8D 44 24 08 57 50 8B F1 E8 | 0x45ac70 |
+| frame_end | 0x0005ACE0 | inline_hook | 5 | 8B 41 08 8B 08 8B 91 A8 00 00 00 50 | 0x45ace0 |
+| task_dispatch | 0x0005C1B0 | inline_hook | 7 | 8B 09 8B 01 8B 50 10 FF E2 CC CC CC | 0x45c1b0 |
+| screen_width_int | 0x00052F20 | inline_hook | 5 | A1 E8 6F 78 00 C3 | 0x452f20 |
+| screen_height_int | 0x00052F30 | inline_hook | 5 | A1 EC 6F 78 00 C3 | 0x452f30 |
+| screen_width_float | 0x00052F40 | inline_hook | 6 | D9 05 F0 6F 78 00 C3 | 0x452f40 |
+| screen_height_float | 0x00052F50 | inline_hook | 6 | D9 05 F4 6F 78 00 C3 | 0x452f50 |
+| target_width_int | 0x00052FA0 | inline_hook | 5 | A1 F8 6F 78 00 C3 | 0x452fa0 |
+| target_height_int | 0x00052FB0 | inline_hook | 5 | A1 FC 6F 78 00 C3 | 0x452fb0 |
+| target_width_float | 0x00052FC0 | inline_hook | 6 | D9 05 00 70 78 00 C3 | 0x452fc0 |
+| target_height_float | 0x00052FD0 | inline_hook | 6 | D9 05 04 70 78 00 C3 | 0x452fd0 |
+| logical_resolution_set | 0x00053660 | inline_hook | 7 | 6A FF 68 EB DA 66 00 64 A1 00 00 00 00 50 | 0x453660 |
+| logical_target_width_set | 0x00052F60 | inline_hook | 8 | DB 44 24 04 8B 44 24 04 A3 F8 6F 78 00 | 0x452f60 |
+| logical_target_height_set | 0x00052F80 | inline_hook | 8 | DB 44 24 04 8B 44 24 04 A3 FC 6F 78 00 | 0x452f80 |
+| viewport_reset | 0x00053140 | inline_hook | 6 | 8B 4C 24 04 33 C0 83 EC 20 3B C8 0F | 0x453140 |
+| mouse_debug_poll | 0x000B06B0 | inline_hook | 6 | 55 8B EC 83 EC 08 89 4D F8 8B 45 F8 | 0x4b06b0 |
+| reset_pre | 0x0005B28B | mid_hook | 7 | 83 BE 94 00 00 00 00 | 0x45b270 |
+| reset_post | 0x0005B474 | mid_hook | 8 | 83 C4 04 B8 01 00 00 00 | 0x45b270 |
+| gameplay_stage_background | 0x00262FA0 | mid_hook | 5 | E8 4B 1A FE FF 8B 4D C4 | 0x662f10 |
+| gameplay_track | 0x00262FA8 | mid_hook | 5 | E8 D3 56 FE FF 8B 4D C4 | 0x662f10 |
+| gameplay_effects | 0x00263041 | mid_hook | 5 | E8 FA 5C FE FF E8 D5 00 DF FF | 0x662f10 |
+| gameplay_effects_end | 0x00263046 | mid_hook | 5 | E8 D5 00 DF FF | 0x662f10 |
+| gameplay_hud_projection | 0x0023FDBA | mid_hook | 5 | E8 B1 F3 F9 FF 8B B5 24 FF FF FF 81 C6 D0 00 00 | 0x63f9e0 |
+| combo_begin | 0x001E4503 | mid_hook | 5 | E8 A8 D0 FF FF | 0x5e3ec0 |
+| combo_normal_digits | 0x001E4550 | read_only | 5 | E8 0B 7B FE FF | 0x5e3ec0 |
+| combo_end | 0x001E4B58 | mid_hook | 6 | 8B 55 E4 8B 45 E0 89 02 E9 D9 F8 FF FF | 0x5e3ec0 |
+| gameplay_feedback_draw_begin | 0x001F11E8 | mid_hook | 5 | E8 83 0D 00 00 | 0x5f1180 |
+| gameplay_feedback_draw_end | 0x001F11ED | mid_hook | 6 | 8B 4D F8 8B 51 0C 81 E2 00 40 | 0x5f1180 |
+| note_tutorial_group_begin | 0x0024A2D5 | mid_hook | 5 | E8 A6 6E FA FF | 0x648d40 |
+| note_tutorial_group_end | 0x0024A2DA | mid_hook | 6 | 0F B6 55 08 85 D2 74 1B | 0x648d40 |
+| test_mode_native_begin | 0x0023AA89 | mid_hook | 5 | E8 D2 BB F3 FF E8 8D 86 E1 FF | 0x638ec0 |
+| test_mode_native_end | 0x0023AA8E | mid_hook | 5 | E8 8D 86 E1 FF 89 85 80 FE FF FF 8B 8D | 0x638ec0 |
+| clip_default | 0x002441C6 | read_only | 4 | C6 45 DF 00 | 0x644000 |
+| clip_gate | 0x002441CA | mid_hook | 6 | 8B 95 80 FE FF FF 8B 82 4C 02 00 00 0F B6 88 5C 01 00 00 | 0x644000 |
+| clip_continuation | 0x0024422F | read_only | 10 | 8B 4D D8 E8 C9 18 DC FF 0F B6 | 0x644000 |
+| batch_flush | 0x001C9B10 | read_only | 12 | 55 8B EC 83 EC 08 C7 45 FC 00 00 00 | 0x5c9b10 |
+| clip_owner | 0x00244000 | read_only | 12 | 55 8B EC 81 EC A0 01 00 00 56 57 89 | 0x644000 |
+| live_frustum_helper | 0x00243BE0 | read_only | 12 | 55 8B EC 81 EC C0 00 00 00 89 8D 58 | 0x643be0 |
+
+### Pointer manifest
+
+| Site | Slot RVA | Expected target RVA | Ownership |
+| --- | --- | --- | --- |
+| config_width_setter | 0x002AE644 | 0x00059CC0 | Read-only native vtable target |
+| config_height_setter | 0x002AE648 | 0x00059CE0 | Read-only native vtable target |
+| config_resize_setter | 0x002AE654 | 0x00059D20 | Read-only native vtable target |
+| config_minmax_setter | 0x002AE658 | 0x00059D40 | Read-only native vtable target |
+| config_mode_setter | 0x002AE65C | 0x00059D70 | Read-only native vtable target |
+| common_2d_render | 0x002F9B0C | 0x001F5670 | Read-only native vtable target |
+| network_status_movie_clip_accept | 0x002BE0E0 | 0x000E0CD0 | Global class vtable slot, checked CAS |
+| network_status_shape_draw_visit | 0x002BB798 | 0x000CC880 | Global class vtable slot, checked CAS |
+| common_3d_render | 0x002FB228 | 0x001784B0 | Read-only native vtable target |
+
+MovieClip's class table is RVA 0x002BE0CC and its accept slot is +0x14;
+DrawTraverse's class table is RVA 0x002BB74C and its shape visitor slot is
++0x4C. Constructors/destructors reference these global class tables. Accept
+at VA 0x004E0CD0 dispatches through the visitor; the draw implementation at
+VA 0x004CC880 reads the visitor's current matrix. Neither replacement clones
+an object's table. Main config's five targets retain their verified receiver
+and stack arguments; the object must first match the selected main config table.
+
+### Complete callback ABI and order
+
+The order below is the former 36-request order, independent of RVA/byte-table
+order. ABI argument counts include the receiver for thiscall and the Context
+for a mid callback. The compiler types the 18 original inline functions and
+two original virtual functions; HookRegistry owns all 34 SafetyHook objects.
+
+| Order | Site | Convention | Argument count | Native behavior |
+| ---: | --- | --- | ---: | --- |
+| 0 | config_apply | cdecl_call | 1 | cdecl(config) -> int in EAX; plain RET |
+| 1 | window_device_create | thiscall_call | 1 | thiscall(renderer) -> int in EAX; plain RET |
+| 2 | logical_resolution_set | cdecl_call | 2 | cdecl(width, height) -> int; update logical globals and notify |
+| 3 | logical_target_width_set | cdecl_call | 1 | cdecl(width) -> int; write integer and x87 float target width |
+| 4 | logical_target_height_set | cdecl_call | 1 | cdecl(height) -> int; write integer and x87 float target height |
+| 5 | frame_begin | thiscall_call | 1 | thiscall(renderer) -> int in EAX; plain RET |
+| 6 | frame_end | thiscall_call | 1 | thiscall(renderer) -> int in EAX; plain RET |
+| 7 | task_dispatch | thiscall_call | 1 | thiscall(task node); dereference ECX, tail-jump virtual render |
+| 8 | network_status_movie_clip_accept | thiscall_call | 2 | thiscall(MovieClip, visitor) -> int; RET 4; fastcall detour adapts ECX/EDX |
+| 9 | network_status_shape_draw_visit | thiscall_call | 2 | thiscall(draw visitor, definition) -> void; RET 4; fastcall detour adapts ECX/EDX |
+| 10 | test_mode_native_begin | mid_context | 1 | mid Context; standalone native 2D traversal begins |
+| 11 | test_mode_native_end | mid_context | 1 | mid Context; native 2D traversal ends before direct EndScene |
+| 12 | screen_width_int | cdecl_call | 0 | cdecl() -> int in EAX; load logical dimension global |
+| 13 | screen_height_int | cdecl_call | 0 | cdecl() -> int in EAX; load logical dimension global |
+| 14 | screen_width_float | cdecl_call | 0 | cdecl() -> float in ST0; fld from logical dimension global |
+| 15 | screen_height_float | cdecl_call | 0 | cdecl() -> float in ST0; fld from logical dimension global |
+| 16 | target_width_int | cdecl_call | 0 | cdecl() -> int in EAX; load logical dimension global |
+| 17 | target_height_int | cdecl_call | 0 | cdecl() -> int in EAX; load logical dimension global |
+| 18 | target_width_float | cdecl_call | 0 | cdecl() -> float in ST0; fld from logical dimension global |
+| 19 | target_height_float | cdecl_call | 0 | cdecl() -> float in ST0; fld from logical dimension global |
+| 20 | viewport_reset | cdecl_call | 1 | cdecl(four-float viewport pointer) -> HRESULT; D3D SetViewport |
+| 21 | mouse_debug_poll | thiscall_call | 2 | thiscall(owner, output words) -> POINT* in EAX; RET 4 |
+| 22 | gameplay_stage_background | mid_context | 1 | mid Context; native stage background call |
+| 23 | gameplay_track | mid_context | 1 | mid Context; ECX active Tune before track call |
+| 24 | gameplay_effects | mid_context | 1 | mid Context; ECX active Tune before effects call |
+| 25 | gameplay_effects_end | mid_context | 1 | mid Context; native effects end / following call |
+| 26 | gameplay_hud_projection | mid_context | 1 | mid Context; ECX matrix destination, six orthographic floats at ESP |
+| 27 | combo_begin | mid_context | 1 | mid Context; combo entry index at EBP - 0x14 |
+| 28 | combo_end | mid_context | 1 | mid Context; matching native combo boundary |
+| 29 | gameplay_feedback_draw_begin | mid_context | 1 | mid Context; ECX effect before native draw |
+| 30 | gameplay_feedback_draw_end | mid_context | 1 | mid Context; post-draw, native branch/register state retained |
+| 31 | note_tutorial_group_begin | mid_context | 1 | mid Context; native group 6 draw |
+| 32 | note_tutorial_group_end | mid_context | 1 | mid Context; native post-draw boundary; existing conditional scope retained |
+| 33 | clip_gate | mid_context | 1 | mid Context; preserve preceding default flag, redirect to checked continuation |
+| 34 | reset_pre | mid_context | 1 | mid Context; ESI renderer; before Reset |
+| 35 | reset_post | mid_context | 1 | mid Context; ESI renderer; successful Reset path, before ESI pop |
+
+### Layout ownership and preparation
+
+- The window/device creator at VA 0x0045B8A0 writes renderer window +0x8C
+  and stored style +0x98; frame wrappers and reset logic use device +0x08.
+  The profile's 0x00CA0000 style is the existing fixed decorated V1 policy.
+- The flush owner at VA 0x005C9B10 visits four queues through global pointer
+  RVA 0x003F24FC, with stride 24 and pending-count offset 24. The readonly
+  batch-flush target and global address are resolved before hook enable.
+- Mouse output words 0/1 are X/Y and word 6 is validity. Other output words
+  retain their native behavior.
+- MovieClip name getters/setter at VAs 0x004D1660/0x004D1670/0x004D1680
+  establish name pointer +0x120, hash +0x140, and multiplier 33. The two
+  existing asset names are ASCII, so signed-char hashing has the same values.
+- DrawTraverse construction/reset at VAs 0x004D0450/0x004D0240 owns the
+  matrix allocation and current stack pointer +0x1A0. Four SIMD stores prove
+  the 16-float matrix carrier; the horizontal components are 0/4/8 and
+  translation is 12. Existing temporary matrix restoration remains rendering
+  policy; it is unrelated to installation rollback.
+- Tune construction/population at VAs 0x006602E0/0x00660D20 owns the
+  collection at +0x1D6C and assigns five judgement effects per player from
+  index 93. The collection accessor at VA 0x0043D0C0 returns begin + 4*index;
+  size helper 0x004128A0 computes (end - begin)/4 from fields +0x10/+0x0C.
+  Player one's unchanged slots are 93 through 97.
+- Combo's live local index is EBP-0x14. The HUD call has a six-float
+  orthographic argument carrier. Clip's preceding default write and checked
+  continuation remain separate read-only contracts.
+
+The selected profile owns every migrated RVA, byte/pointer encoding, ABI row,
+native layout value and carrier shape. Runtime state keeps resolved addresses,
+typed helpers and a copied immutable layout. Config/window/compositor/resource
+preparation occurs after approval and before any Widescreen hook enable. The
+activation gate preserves native passthrough until the complete 36-hook install
+finishes. Widescreen declares Renderer Device Loss and Test Mode Timing as
+predecessors in the complete plan. Disabled Widescreen contributes no sites.
+
+Global-slot installation prepublishes every logical original before a physical
+slot can be changed, then uses RuntimeImage's exact-span protection, expected
+pointer CAS, protection restoration and read-back. A process-lifetime registry
+retains slot identity and outcome; failure aborts without reversing hooks,
+unpublishing state or detaching resources. The two former transaction files
+and all feature-owned hook objects/install adapters have been removed.
+
+Debug and RelWithDebInfo full builds and all five existing CTest cases passed
+in both configurations. The source ownership audit finds no Widescreen
+transaction, local SafetyHook object, CAS/unprotect implementation, or
+production VmtHook/VmHook. No native fake tests were added. No visual placement,
+window, device-reset, tutorial/test-mode, network-status or gameplay HUD
+runtime acceptance was performed.

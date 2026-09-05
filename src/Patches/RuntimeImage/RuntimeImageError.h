@@ -20,6 +20,8 @@ enum class MemoryStage : std::uint8_t {
     restore_protection,
     read_back,
     compare_exchange,
+    publish_original,
+    register_vtable_slot,
 };
 
 struct SiteIdentity final {

@@ -4,7 +4,7 @@
 #include "Patches/WindowedWidescreen/D3D9CompositorDevice.h"
 #include "Patches/WindowedWidescreen/NativeWindowPolicy.h"
 #include "Patches/WindowedWidescreen/PassClassifier.h"
-#include "Patches/WindowedWidescreen/WindowedWidescreenPatchTransaction.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenProfile.h"
 #include "Patches/WindowedWidescreen/WindowedWidescreenSettings.h"
 
 #include <cstdint>
@@ -45,7 +45,7 @@ namespace gc::windowed_widescreen
         std::optional<NativeWindowPolicyError> window_policy_error;
         std::optional<renderer_device_loss::RendererResourceError>
             resource_error;
-        std::optional<WidescreenInstallError> install_error;
+        std::optional<game_version::PlanError> plan_error;
         std::optional<CompositorError> compositor_error;
         D3D9CompositorFailure d3d_failure{};
     };
@@ -185,14 +185,6 @@ namespace gc::windowed_widescreen
         RenderDimensionAxis axis,
         const RenderDimensionHookActions& actions) noexcept;
 
-    struct NativeViewport
-    {
-        float x{};
-        float y{};
-        float width{};
-        float height{};
-    };
-
     struct ViewportResetHookActions
     {
         void* context{};
@@ -205,23 +197,12 @@ namespace gc::windowed_widescreen
         const NativeViewport* viewport,
         const ViewportResetHookActions& actions) noexcept;
 
-    struct HudOrthographicArguments
-    {
-        float left{};
-        float right{};
-        float bottom{};
-        float top{};
-        float near_plane{};
-        float far_plane{};
-    };
-
     void ApplyNativeHudOrthographicArguments(
         HudOrthographicArguments& arguments) noexcept;
 
     [[nodiscard]] std::expected<void, WindowedWidescreenError>
     ApplyClipGateHook(
-        std::uintptr_t image_base,
-        std::uint32_t live_continuation_rva,
+        std::uintptr_t continuation,
         std::uint32_t& instruction_pointer) noexcept;
 
     struct MousePollHookActions
@@ -236,20 +217,12 @@ namespace gc::windowed_widescreen
         std::uintptr_t owner,
         std::uint32_t* output,
         const ResolutionModel& resolution,
+        const WidescreenNativeLayout& layout,
         const MousePollHookActions& actions) noexcept;
 
-    struct WindowedWidescreenInitializationGateActions
-    {
-        void* context{};
-        bool (*initialize_enabled)(void*) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<void, WindowedWidescreenError>
-    RunWindowedWidescreenInitializationGate(
-        bool enabled,
-        const WindowedWidescreenInitializationGateActions& actions) noexcept;
-
-    [[nodiscard]] std::expected<void, WindowedWidescreenError>
-    WindowedWidescreenPatchInit(
-        WindowedWidescreenSettings settings) noexcept;
+    [[nodiscard]] std::expected<void, WindowedWidescreenError> PrepareWidescreenRuntime(
+        WindowedWidescreenSettings, const game_version::ApprovedVersionedPlan&,
+        const runtime_image::RuntimeImage&) noexcept;
+    void CompleteWidescreenStartup() noexcept;
+    [[noreturn]] void AbortWidescreenStartup(const WindowedWidescreenError&) noexcept;
 } // namespace gc::windowed_widescreen

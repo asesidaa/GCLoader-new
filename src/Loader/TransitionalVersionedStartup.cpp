@@ -14,6 +14,7 @@
 #include "Patches/TestModeTiming/TestModeTimingProfile.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossProfile.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenPatch.h"
 #include "plog/Log.h"
 #include <format>
 
@@ -155,6 +156,33 @@ void InstallTransitionalRendererDeviceLoss() noexcept {
         Install(std::visit([](const auto& selection) {
             return renderer_device_loss::BuildRendererDeviceLossPlan(selection.build, selection.variant);
         }, *g_detection));
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalWidescreen(const windowed_widescreen::WindowedWidescreenSettings& settings) noexcept {
+    using namespace game_version;
+    try {
+        if (!settings.enabled()) return;
+        if (!g_detection) diagnostics::AbortProcess({});
+        const auto image = runtime_image::RuntimeImage::MainModule();
+        if (!image) diagnostics::AbortProcess(FormatStartupInstallError({
+            .stage = StartupInstallStage::image_binding, .memory = image.error()}));
+        const auto wide = std::visit([&](const auto& selection) {
+            return windowed_widescreen::BuildWidescreenPlan(selection.build, selection.variant, true, *image);
+        }, *g_detection);
+        if (!wide) diagnostics::AbortProcess(FormatPlanError(wide.error()));
+        VersionedPlanSet plans;
+        if (const auto required = plans.Require({FeatureId::windowed_widescreen, false, true}); !required)
+            diagnostics::AbortProcess(FormatPlanError(required.error()));
+        if (const auto added = plans.Add(wide->feature_plan()); !added)
+            diagnostics::AbortProcess(FormatPlanError(added.error()));
+        const auto approved = plans.Validate(*image, *g_detection);
+        if (!approved) diagnostics::AbortProcess(FormatPlanError(approved.error()));
+        if (const auto prepared = windowed_widescreen::PrepareWidescreenRuntime(settings, *approved, *image); !prepared)
+            windowed_widescreen::AbortWidescreenStartup(prepared.error());
+        if (const auto installed = InstallApprovedVersionedPlan(
+                *approved, *image, hooking::HookRegistry::ProcessLifetime()); !installed)
+            diagnostics::AbortProcess(FormatStartupInstallError(installed.error()));
+        windowed_widescreen::CompleteWidescreenStartup();
     } catch (...) { diagnostics::AbortProcess({}); }
 }
 void InstallTransitionalOptionalPatches(const config::ValidatedConfig& settings) noexcept {

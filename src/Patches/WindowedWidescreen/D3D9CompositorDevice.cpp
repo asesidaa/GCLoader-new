@@ -18,6 +18,7 @@ namespace gc::windowed_widescreen
 
         [[nodiscard]] bool ReadRendererPointers(
             const std::uintptr_t renderer_owner,
+            const WidescreenNativeLayout& layout,
             IDirect3DDevice9*& device,
             HWND& window) noexcept
         {
@@ -26,7 +27,7 @@ namespace gc::windowed_widescreen
             if (renderer_owner == 0 ||
                 renderer_owner >
                     std::numeric_limits<std::uintptr_t>::max() -
-                        kRendererWindowOffset)
+                        layout.renderer_owner_window_offset)
             {
                 return false;
             }
@@ -34,9 +35,9 @@ namespace gc::windowed_widescreen
             __try
             {
                 device = *reinterpret_cast<IDirect3DDevice9* const*>(
-                    renderer_owner + kRendererDeviceOffset);
+                    renderer_owner + layout.renderer_owner_device_offset);
                 window = *reinterpret_cast<HWND const*>(
-                    renderer_owner + kRendererWindowOffset);
+                    renderer_owner + layout.renderer_owner_window_offset);
                 return device != nullptr && window != nullptr;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -89,8 +90,9 @@ namespace gc::windowed_widescreen
 
     D3D9CompositorDevice::D3D9CompositorDevice(
         ResolutionModel resolution,
-        const GameplayHudPlacement base_gameplay_hud_placement) noexcept
-        : resolution_{resolution},
+        const GameplayHudPlacement base_gameplay_hud_placement,
+        const WidescreenNativeLayout layout) noexcept
+        : layout_{layout}, resolution_{resolution},
           base_gameplay_hud_placement_{base_gameplay_hud_placement}
     {
     }
@@ -127,7 +129,7 @@ namespace gc::windowed_widescreen
 
         IDirect3DDevice9* raw_device = nullptr;
         HWND window = nullptr;
-        if (!ReadRendererPointers(renderer_owner, raw_device, window))
+        if (!ReadRendererPointers(renderer_owner, layout_, raw_device, window))
         {
             return Fail(
                 D3D9CompositorStage::renderer_pointer_read,

@@ -361,6 +361,8 @@ const char* MemoryStageName(MemoryStage stage) noexcept {
     case MemoryStage::restore_protection: return "restore_protection";
     case MemoryStage::read_back: return "read_back";
     case MemoryStage::compare_exchange: return "compare_exchange";
+    case MemoryStage::publish_original: return "publish_original";
+    case MemoryStage::register_vtable_slot: return "register_vtable_slot";
     }
     return "unknown";
 }

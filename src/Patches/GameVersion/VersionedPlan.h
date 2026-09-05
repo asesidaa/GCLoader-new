@@ -1,6 +1,7 @@
 #pragma once
 #include "Patches/GameVersion/BuildDetector.h"
 #include "Patches/RuntimeImage/RuntimeImage.h"
+#include "Patches/RuntimeImage/VtableSlotHook.h"
 #include "Platform/Win32/Hooking/HookPlan.h"
 #include <vector>
 
@@ -37,6 +38,7 @@ struct GlobalVtableSlotOperation final {
     SiteContract contract;
     void* expected{};
     void* replacement{};
+    runtime_image::VtableOriginalPublisher original;
 };
 struct ReadOnlyContractOperation final { SiteContract contract; };
 using VersionedOperation = std::variant<BytePatchOperation, InlineHookOperation,

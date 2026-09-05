@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Patches/WindowedWidescreen/ResolutionModel.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -63,10 +64,11 @@ namespace gc::windowed_widescreen
     [[nodiscard]] std::expected<
         PreparedWindowPlacement,
         NativeWindowPolicyError>
-    PrepareFixedWindowPlacement(OutputSize client_size) noexcept;
+    PrepareFixedWindowPlacement(OutputSize client_size, std::uint32_t style) noexcept;
 
     [[nodiscard]] std::expected<void, NativeWindowPolicyError>
     ValidateAndPlaceRendererWindow(
         std::uintptr_t renderer_owner,
-        const PreparedWindowPlacement& placement) noexcept;
+        const PreparedWindowPlacement& placement,
+        const WidescreenNativeLayout& layout) noexcept;
 } // namespace gc::windowed_widescreen

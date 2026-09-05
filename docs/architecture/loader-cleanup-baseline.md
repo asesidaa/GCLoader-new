@@ -858,3 +858,27 @@ configuration passed using build-cleanup-msvc32-debug and
 build-cleanup-msvc32-release. Existing dependency caches were left in place.
 No callback-recorder tests, native fake APIs, runtime deployment, or
 game/NESYS acceptance were performed.
+
+## Post-migration global vtable ownership (Plan06g)
+
+The frozen pre-cleanup inventory above is unchanged. Widescreen now installs
+exactly two checked game-owned global vtable slots: MovieClip accept at slot
+RVA 0x002BE0E0 (table 0x002BE0CC + 0x14, original target 0x000E0CD0) and
+DrawTraverse shape visit at slot RVA 0x002BB798 (table 0x002BB74C + 0x4C,
+original target 0x000CC880). Both affect existing and future game objects.
+RuntimeImage publishes typed originals before expected-pointer CAS and
+requires exact protection restoration/read-back. Its process-lifetime slot
+registry retains identities/outcomes and never reverses a slot on detach.
+
+Production uses zero SafetyHook VmtHook and zero VmHook. The separate Test
+Mode Timing carrier-vtable construction remains one mechanism: it constructs
+a table for a game-owned carrier and does not replace either global slot.
+Widescreen's remaining 18 inline and 16 mid hooks belong to HookRegistry.
+Its 40 byte contracts and nine pointer contracts include the two global slots
+once each, preserving all 42 prior byte rows plus nine pointer rows without
+duplicate pointer encodings. Disabled Widescreen contributes no contracts,
+reset hooks or vtable replacements. Native evidence and ABI/layout details
+are recorded in loader-cleanup-versioned-native-evidence.md.
+
+Both full builds and all five existing CTest cases per configuration passed.
+This is static/build evidence only; no game or GUI runtime acceptance occurred.

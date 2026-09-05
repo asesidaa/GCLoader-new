@@ -1,16 +1,10 @@
 #pragma once
-
+#include "Patches/GameVersion/VersionedPlan.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <span>
 
-namespace gc::windowed_widescreen
-{
-    inline constexpr std::uintptr_t kWidescreenPreferredImageBase =
-        0x00400000;
-    inline constexpr std::size_t kWidescreenMaximumPatternSize = 24;
-
+namespace gc::windowed_widescreen {
     enum class WidescreenContractSite : std::uint8_t
     {
         none,
@@ -64,62 +58,6 @@ namespace gc::windowed_widescreen
         network_status_shape_draw_visit,
         common_3d_render,
     };
-
-    enum class WidescreenHookKind : std::uint8_t
-    {
-        read_only,
-        inline_hook,
-        mid_hook,
-        vtable_hook,
-    };
-
-    struct BytePattern
-    {
-        std::array<std::byte, kWidescreenMaximumPatternSize> bytes{};
-        std::uint8_t size{};
-
-        [[nodiscard]] constexpr std::span<const std::byte> view()
-        const noexcept
-        {
-            return valid()
-                       ? std::span{bytes}.first(size)
-                       : std::span<const std::byte>{};
-        }
-
-        [[nodiscard]] constexpr bool valid() const noexcept
-        {
-            return size > 0 && size <= bytes.size();
-        }
-    };
-
-    template <std::uint8_t... Values>
-    [[nodiscard]] consteval BytePattern BytePatternOf() noexcept
-    {
-        static_assert(
-            sizeof...(Values) > 0 &&
-            sizeof...(Values) <= kWidescreenMaximumPatternSize);
-        BytePattern pattern{};
-        pattern.size = static_cast<std::uint8_t>(sizeof...(Values));
-        std::size_t index{};
-        ((pattern.bytes[index++] = static_cast<std::byte>(Values)), ...);
-        return pattern;
-    }
-
-    struct WidescreenByteContract
-    {
-        WidescreenContractSite site{WidescreenContractSite::none};
-        std::uint32_t rva{};
-        BytePattern pattern{};
-        WidescreenHookKind hook_kind{WidescreenHookKind::read_only};
-    };
-
-    struct WidescreenPointerContract
-    {
-        WidescreenContractSite site{WidescreenContractSite::none};
-        std::uint32_t pointer_rva{};
-        std::uint32_t target_rva{};
-    };
-
     enum class WidescreenCallingConvention : std::uint8_t
     {
         cdecl_call,
@@ -127,7 +65,6 @@ namespace gc::windowed_widescreen
         mid_context,
         read_only,
     };
-
     struct WidescreenFunctionAbi
     {
         WidescreenContractSite site{WidescreenContractSite::none};
@@ -136,37 +73,66 @@ namespace gc::windowed_widescreen
         };
         std::uint8_t argument_count{};
     };
-
-    inline constexpr std::size_t kMainConfigVtableRva = 0x002AE62C;
-    inline constexpr std::size_t kRendererOwnerDeviceOffset = 0x08;
-    inline constexpr std::size_t kRendererOwnerWindowOffset = 0x8C;
-    inline constexpr std::size_t kRendererOwnerStyleOffset = 0x98;
-    inline constexpr std::uint32_t kFixedDecoratedWindowStyle = 0x00CA0000;
-    inline constexpr std::size_t kBatchQueuePointerRva = 0x003F24FC;
-    inline constexpr std::size_t kBatchQueueCount = 4;
-    inline constexpr std::size_t kBatchQueueStride = 24;
-    inline constexpr std::size_t kBatchPendingCountOffset = 24;
-    inline constexpr std::size_t kMouseXWord = 0;
-    inline constexpr std::size_t kMouseYWord = 1;
-    inline constexpr std::size_t kMouseValidWord = 6;
-    inline constexpr std::size_t kMovieClipInstanceVtableRva = 0x002BE0CC;
-    inline constexpr std::size_t kMovieClipAcceptVtableOffset = 0x14;
-    inline constexpr std::size_t kMovieClipAcceptTargetRva = 0x000E0CD0;
-    inline constexpr std::size_t kMovieClipDrawVisitorVtableRva = 0x002BB74C;
-    inline constexpr std::size_t kMovieClipShapeDrawVtableOffset = 0x4C;
-    inline constexpr std::size_t kMovieClipShapeDrawTargetRva = 0x000CC880;
-    inline constexpr std::size_t kMovieClipInstanceNameOffset = 0x120;
-    inline constexpr std::size_t kMovieClipInstanceNameHashOffset = 0x140;
-
-    [[nodiscard]] std::span<const WidescreenByteContract>
-    WindowedWidescreenByteContracts() noexcept;
-
-    [[nodiscard]] std::span<const WidescreenPointerContract>
-    WindowedWidescreenPointerContracts() noexcept;
-
-    [[nodiscard]] std::span<const WidescreenFunctionAbi>
-    WindowedWidescreenFunctionAbis() noexcept;
-
-    [[nodiscard]] const char* WidescreenContractSiteName(
-        WidescreenContractSite site) noexcept;
+struct WidescreenNativeLayout final {
+    runtime_image::Rva main_config_vtable{};
+    runtime_image::Rva batch_queue_pointer{};
+    runtime_image::Rva movie_clip_draw_visitor_vtable{};
+    runtime_image::Rva common_2d_vtable{};
+    runtime_image::Rva common_3d_vtable{};
+    std::size_t renderer_owner_device_offset{};
+    std::size_t renderer_owner_window_offset{};
+    std::size_t renderer_owner_style_offset{};
+    std::uint32_t fixed_decorated_window_style{};
+    std::size_t batch_queue_stride{};
+    std::size_t batch_pending_count_offset{};
+    std::size_t mouse_x_word{};
+    std::size_t mouse_y_word{};
+    std::size_t mouse_valid_word{};
+    std::size_t movie_clip_name_offset{};
+    std::size_t movie_clip_name_hash_offset{};
+    std::uint32_t movie_clip_name_hash_multiplier{};
+    std::size_t combo_entry_frame_offset{};
+    std::size_t tune_effect_collection_offset{};
+    std::size_t pointer_collection_begin_offset{};
+    std::size_t pointer_collection_end_offset{};
+    std::size_t network_status_visitor_matrix_stack_offset{};
+};
+struct NativeViewport;
+namespace native {
+using ConfigApply = int(__cdecl*)(int);
+using OwnerCall = int(__thiscall*)(void*);
+using IntDimension = int(__cdecl*)();
+using FloatDimension = float(__cdecl*)();
+using ResolutionSet = int(__cdecl*)(int, int);
+using TargetDimensionSet = int(__cdecl*)(int);
+using ViewportReset = int(__cdecl*)(const NativeViewport*);
+using MousePoll = POINT*(__thiscall*)(void*, std::uint32_t*);
+using ConfigDimensionSetter = int(__thiscall*)(void*, int, int);
+using ConfigResizeSetter = void(__thiscall*)(void*, int);
+using ConfigMinmaxSetter = void(__thiscall*)(void*, int, int);
+using ConfigModeSetter = int(__thiscall*)(void*, int, int, int, int);
+using BatchFlush = void(__cdecl*)();
+using MovieClipAccept = int(__thiscall*)(void*, void*);
+using ShapeDrawVisit = void(__thiscall*)(void*, void*);
+}
+struct WidescreenGameAbi final {
+    WidescreenNativeLayout layout;
+    std::uintptr_t main_config_vtable{};
+    std::uintptr_t batch_queue_pointer{};
+    std::uintptr_t movie_clip_draw_visitor_vtable{};
+    std::uintptr_t common_2d_vtable{};
+    std::uintptr_t common_3d_vtable{};
+    std::uintptr_t clip_continuation{};
+    native::BatchFlush batch_flush{};
+    native::ConfigDimensionSetter config_width_setter{};
+    native::ConfigDimensionSetter config_height_setter{};
+    native::ConfigResizeSetter config_resize_setter{};
+    native::ConfigMinmaxSetter config_minmax_setter{};
+    native::ConfigModeSetter config_mode_setter{};
+};
+struct WindowedWidescreenProfile;
+[[nodiscard]] std::expected<WidescreenGameAbi, game_version::PlanError>
+BuildWidescreenGameAbi(const runtime_image::RuntimeImage&,
+    const WindowedWidescreenProfile&, const game_version::ApprovedVersionedPlan&) noexcept;
+[[nodiscard]] const char* WidescreenContractSiteName(WidescreenContractSite) noexcept;
 } // namespace gc::windowed_widescreen

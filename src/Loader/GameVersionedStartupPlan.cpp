@@ -9,6 +9,7 @@
 #include "Patches/Countdown/CountdownProfile.h"
 #include "Patches/TestModeTiming/TestModeTimingProfile.h"
 #include "Patches/RendererDeviceLoss/RendererDeviceLossProfile.h"
+#include "Patches/WindowedWidescreen/WindowedWidescreenProfile.h"
 #include <array>
 
 namespace gc::loader {
@@ -92,7 +93,17 @@ PrepareGameVersionedStartup(HMODULE process_module, const config::ValidatedConfi
     if (const auto result = append(renderer_device_loss::BuildRendererDeviceLossPlan(
             build, variant), after_compatibility); !result)
         return std::unexpected(result.error());
-    // Remaining families join in06g-06h. This entry point stays dormant until
+    if (settings.windowed_widescreen().enabled()) {
+        if (const auto required = plans.Require({game_version::FeatureId::windowed_widescreen, false, true}); !required)
+            return std::unexpected(StartupPlanError{.plan = required.error()});
+        const auto widescreen = windowed_widescreen::BuildWidescreenPlan(build, variant, true, *image);
+        if (!widescreen) return std::unexpected(StartupPlanError{.plan = widescreen.error()});
+        constexpr std::array after_renderer_and_test_mode{
+            game_version::FeatureId::renderer_device_loss, game_version::FeatureId::test_mode_timing};
+        if (const auto result = append(widescreen->feature_plan(), after_renderer_and_test_mode); !result)
+            return std::unexpected(result.error());
+    }
+    // Remaining families join in06h. This entry point stays dormant until
     // Plan09 switches all versioned startup through one complete barrier.
     auto approved = plans.Validate(*image, *detected);
     if (!approved) return std::unexpected(StartupPlanError{.plan = approved.error()});

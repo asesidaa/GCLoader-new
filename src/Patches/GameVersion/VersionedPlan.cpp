@@ -29,7 +29,7 @@ bool ValidPayload(const VersionedOperation& operation) noexcept {
             return contract.kind == VersionedOperationKind::mid_hook && value.callback;
         } else if constexpr (std::is_same_v<T, GlobalVtableSlotOperation>) {
             return contract.kind == VersionedOperationKind::global_vtable_slot &&
-                value.expected && value.replacement &&
+                value.expected && value.replacement && value.original.storage && value.original.publish &&
                 PointerMatches(contract.original, value.expected) &&
                 PointerMatches(contract.installed, value.replacement);
         } else return contract.kind == VersionedOperationKind::read_only_contract;

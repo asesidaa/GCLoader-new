@@ -5,37 +5,11 @@
 
 namespace gc::windowed_widescreen
 {
-    namespace
-    {
-        constexpr std::uintptr_t kCommon2DVtableRva = 0x002F9AFC;
-        constexpr std::uintptr_t kCommon3DVtableRva = 0x002FB218;
-
-        [[nodiscard]] std::uintptr_t RelocateOrZero(
-            const std::uintptr_t image_base,
-            const std::uintptr_t rva) noexcept
-        {
-            if (image_base >
-                std::numeric_limits<std::uintptr_t>::max() - rva)
-            {
-                return 0;
-            }
-            return image_base + rva;
-        }
-    } // namespace
-
-    PassClassifier::PassClassifier(const std::uintptr_t image_base) noexcept
-        : PassClassifier{image_base, {}}
-    {
-    }
-
     PassClassifier::PassClassifier(
-        const std::uintptr_t image_base,
-        const PassClassifierDiagnosticSink diagnostics) noexcept
-        : common_2d_vtable_{RelocateOrZero(image_base, kCommon2DVtableRva)},
-          common_3d_vtable_{RelocateOrZero(image_base, kCommon3DVtableRva)},
-          diagnostics_{diagnostics}
-    {
-    }
+        std::uintptr_t common_2d_vtable, std::uintptr_t common_3d_vtable,
+        PassClassifierDiagnosticSink diagnostics) noexcept
+        : common_2d_vtable_{common_2d_vtable}, common_3d_vtable_{common_3d_vtable},
+          diagnostics_{diagnostics} {}
 
     RenderSpace PassClassifier::ClassifyTask(
         const std::uintptr_t task_vtable) noexcept

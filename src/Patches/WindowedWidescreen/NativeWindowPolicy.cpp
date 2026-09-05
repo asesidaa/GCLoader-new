@@ -57,6 +57,7 @@ namespace gc::windowed_widescreen
 
         [[nodiscard]] bool ReadRendererWindowContract(
             const std::uintptr_t renderer_owner,
+            const WidescreenNativeLayout& layout,
             HWND& window,
             std::uint32_t& stored_style) noexcept
         {
@@ -65,16 +66,16 @@ namespace gc::windowed_widescreen
             if (renderer_owner == 0 ||
                 renderer_owner >
                     std::numeric_limits<std::uintptr_t>::max() -
-                        kRendererOwnerStyleOffset)
+                        layout.renderer_owner_style_offset)
             {
                 return false;
             }
             __try
             {
                 window = *reinterpret_cast<HWND const*>(
-                    renderer_owner + kRendererOwnerWindowOffset);
+                    renderer_owner + layout.renderer_owner_window_offset);
                 stored_style = *reinterpret_cast<const std::uint32_t*>(
-                    renderer_owner + kRendererOwnerStyleOffset);
+                    renderer_owner + layout.renderer_owner_style_offset);
                 return window != nullptr;
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
@@ -179,7 +180,7 @@ namespace gc::windowed_widescreen
     }
 
     std::expected<PreparedWindowPlacement, NativeWindowPolicyError>
-    PrepareFixedWindowPlacement(const OutputSize client_size) noexcept
+    PrepareFixedWindowPlacement(const OutputSize client_size, const std::uint32_t style) noexcept
     {
         if (client_size.width == 0 || client_size.height == 0 ||
             client_size.width >
@@ -201,7 +202,7 @@ namespace gc::windowed_widescreen
         };
         if (!AdjustWindowRectEx(
                 &outer,
-                kFixedDecoratedWindowStyle,
+                style,
                 FALSE,
                 0))
         {
@@ -246,19 +247,21 @@ namespace gc::windowed_widescreen
         return PreparedWindowPlacement{
             .client_size = client_size,
             .outer = *selected,
-            .style = kFixedDecoratedWindowStyle,
+            .style = style,
         };
     }
 
     std::expected<void, NativeWindowPolicyError>
     ValidateAndPlaceRendererWindow(
         const std::uintptr_t renderer_owner,
-        const PreparedWindowPlacement& placement) noexcept
+        const PreparedWindowPlacement& placement,
+        const WidescreenNativeLayout& layout) noexcept
     {
         HWND window = nullptr;
         std::uint32_t stored_style{};
         if (!ReadRendererWindowContract(
                 renderer_owner,
+                layout,
                 window,
                 stored_style))
         {

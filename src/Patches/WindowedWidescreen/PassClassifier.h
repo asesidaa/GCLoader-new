@@ -27,9 +27,9 @@ namespace gc::windowed_widescreen
     public:
         static constexpr std::size_t kUnknownIdentityCapacity = 32;
 
-        explicit PassClassifier(std::uintptr_t image_base) noexcept;
         PassClassifier(
-            std::uintptr_t image_base,
+            std::uintptr_t common_2d_vtable,
+            std::uintptr_t common_3d_vtable,
             PassClassifierDiagnosticSink diagnostics) noexcept;
 
         [[nodiscard]] RenderSpace ClassifyTask(
