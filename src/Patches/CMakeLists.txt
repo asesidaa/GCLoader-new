@@ -28,6 +28,7 @@ add_library(gc_runtime_patches STATIC
         Framerate/FramerateMonitor.cpp
         Framerate/FramerateTimingProfile.cpp
         Framerate/FramerateGameProfile.cpp
+        RendererDeviceLoss/RendererDeviceLossProfile.cpp
         RendererDeviceLoss/RendererDeviceLossPatch.cpp
         RendererDeviceLoss/RendererResourceLifecycle.cpp
         Countdown/CountdownProfile.cpp

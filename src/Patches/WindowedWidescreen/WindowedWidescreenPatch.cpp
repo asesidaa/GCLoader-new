@@ -5,6 +5,7 @@
 #include "SystemPath/StartupFatal.h"
 
 #include <Windows.h>
+#include "Diagnostics/FatalProcess.h"
 #include <plog/Log.h>
 #include <safetyhook.hpp>
 
@@ -163,8 +164,6 @@ namespace gc::windowed_widescreen
             std::optional<renderer_device_loss::RendererResourceError>
             last_resource_error;
             std::optional<CompositorError> last_compositor_error;
-            std::optional<renderer_device_loss::RendererResetHookPairError>
-            last_reset_hook_error;
             bool pending_batches_reported{};
             std::atomic_bool gameplay_frame_active{};
             std::atomic_uint32_t frame_sequence{};
@@ -186,7 +185,6 @@ namespace gc::windowed_widescreen
 
         std::unique_ptr<WindowedWidescreenRuntime> g_runtime_owner;
         std::atomic<WindowedWidescreenRuntime*> g_callback_runtime{};
-        std::atomic_bool g_runtime_fatal_published{};
         std::atomic<std::uintptr_t> g_movie_clip_accept_original{};
         std::atomic<std::uintptr_t> g_shape_draw_visit_original{};
         thread_local std::uint32_t g_network_status_native_scope_depth{};
@@ -343,14 +341,11 @@ namespace gc::windowed_widescreen
             {
                 log = "WindowedWidescreen: fatal rendering invariant";
             }
-            gc::system_path::PublishStartupFatal(
-                g_runtime_fatal_published,
-                log,
+            gc::diagnostics::AbortProcess({
+                std::move(log),
                 L"The windowed widescreen renderer could not continue safely. "
                 L"Check the GCLoader log for the failing stage.",
-                L"GCLoader windowed widescreen error",
-                0xE7);
-            std::abort();
+                L"GCLoader windowed widescreen error"});
         }
 
         [[nodiscard]] bool ProductionRead(
@@ -541,6 +536,26 @@ namespace gc::windowed_widescreen
                 .flush = &FlushNativeBatches,
                 .empty = &NativeBatchesAreEmpty,
             });
+            const auto failure_publisher =
+                renderer_device_loss::RendererDeviceLossSetResetFailureActions({
+                    .context = runtime,
+                    .failure = +[](void* opaque_runtime,
+                        renderer_device_loss::RendererResetLifecycleStage stage,
+                        renderer_device_loss::RendererResourceError error) noexcept {
+                        auto* owner = static_cast<WindowedWidescreenRuntime*>(opaque_runtime);
+                        PublishRuntimeFatal({
+                            .stage = stage == renderer_device_loss::RendererResetLifecycleStage::before_reset
+                                ? WindowedWidescreenOperationStage::reset_pre
+                                : WindowedWidescreenOperationStage::reset_post,
+                            .resource_error = error,
+                            .d3d_failure = owner->device.last_failure(),
+                        });
+                    },
+                });
+            if (!failure_publisher) {
+                runtime->last_resource_error = failure_publisher.error();
+                return false;
+            }
             g_callback_runtime.store(runtime, std::memory_order_release);
             const auto attached =
                 renderer_device_loss::RendererDeviceLossAttachResource(
@@ -591,65 +606,6 @@ namespace gc::windowed_widescreen
                 return false;
             }
             auto& runtime = **context->candidate_owner;
-
-            if (site == WidescreenContractSite::reset_pre)
-            {
-                const auto* post_contract = FindProductionContract(
-                    WidescreenContractSite::reset_post);
-                if (post_contract == nullptr)
-                {
-                    return false;
-                }
-                const auto prepared = renderer_device_loss::
-                    RendererDeviceLossPrepareResetHooksDisabled(
-                        address,
-                        runtime.image_base + post_contract->rva,
-                        renderer_device_loss::RendererResetFailureActions{
-                            .context = &runtime,
-                            .failure = +[](
-                            void* opaque_runtime,
-                            const renderer_device_loss::
-                            RendererResetLifecycleStage stage,
-                            const renderer_device_loss::
-                            RendererResourceError error) noexcept
-                            {
-                                auto* failed_runtime = static_cast<
-                                    WindowedWidescreenRuntime*>(
-                                    opaque_runtime);
-                                if (failed_runtime == nullptr)
-                                {
-                                    return;
-                                }
-                                PublishRuntimeFatal(
-                                    WindowedWidescreenError{
-                                        .stage = stage ==
-                                                 renderer_device_loss::
-                                                 RendererResetLifecycleStage::
-                                                 before_reset
-                                                     ? WindowedWidescreenOperationStage::
-                                                     reset_pre
-                                                     : WindowedWidescreenOperationStage::
-                                                     reset_post,
-                                        .resource_error = error,
-                                        .d3d_failure = failed_runtime->device.
-                                                                       last_failure(),
-                                    });
-                            },
-                        });
-                if (!prepared)
-                {
-                    runtime.last_reset_hook_error = prepared.error();
-                    return false;
-                }
-                return true;
-            }
-            if (site == WidescreenContractSite::reset_post)
-            {
-                return renderer_device_loss::
-                    RendererDeviceLossResetHookPairState() ==
-                    renderer_device_loss::
-                    RendererResetHookPairState::disabled;
-            }
 
             if (runtime.hook_count >= runtime.hooks.size())
             {
@@ -747,25 +703,6 @@ namespace gc::windowed_widescreen
             {
                 return false;
             }
-            if (site == WidescreenContractSite::reset_pre)
-            {
-                const auto enabled = renderer_device_loss::
-                    RendererDeviceLossEnableResetHooks();
-                if (!enabled)
-                {
-                    (*context->candidate_owner)->last_reset_hook_error =
-                        enabled.error();
-                    return false;
-                }
-                return true;
-            }
-            if (site == WidescreenContractSite::reset_post)
-            {
-                return renderer_device_loss::
-                    RendererDeviceLossResetHookPairState() ==
-                    renderer_device_loss::
-                    RendererResetHookPairState::active;
-            }
             auto* hook = FindHook(**context->candidate_owner, site);
             if (hook == nullptr)
             {
@@ -816,12 +753,6 @@ namespace gc::windowed_widescreen
             if (context == nullptr || context->candidate_owner == nullptr ||
                 !*context->candidate_owner)
             {
-                return;
-            }
-            if (site == WidescreenContractSite::reset_pre ||
-                site == WidescreenContractSite::reset_post)
-            {
-                renderer_device_loss::RendererDeviceLossResetHooks();
                 return;
             }
             if (auto* hook = FindHook(**context->candidate_owner, site))
@@ -2369,10 +2300,6 @@ namespace gc::windowed_widescreen
             }
         }
 
-        void RendererOwnedResetHookSentinel(safetyhook::Context&) noexcept
-        {
-        }
-
         template <typename Value>
         [[nodiscard]] Value CallDimensionOriginal(
             WindowedWidescreenRuntime& runtime,
@@ -3484,11 +3411,11 @@ namespace gc::windowed_widescreen
                 },
                 WidescreenHookRequest{
                     WidescreenContractSite::reset_pre,
-                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)
+                    reinterpret_cast<void*>(&renderer_device_loss::OnWidescreenBeforeReset)
                 },
                 WidescreenHookRequest{
                     WidescreenContractSite::reset_post,
-                    reinterpret_cast<void*>(&RendererOwnedResetHookSentinel)
+                    reinterpret_cast<void*>(&renderer_device_loss::OnWidescreenAfterReset)
                 },
             };
             const auto installed = InstallWindowedWidescreenHooks(
@@ -3523,8 +3450,6 @@ namespace gc::windowed_widescreen
                 if (candidate)
                 {
                     error.resource_error = candidate->last_resource_error;
-                    error.reset_hook_error =
-                        candidate->last_reset_hook_error;
                 }
                 return finish(error);
             }

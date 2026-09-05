@@ -46,8 +46,6 @@ namespace gc::windowed_widescreen
         std::optional<renderer_device_loss::RendererResourceError>
             resource_error;
         std::optional<WidescreenInstallError> install_error;
-        std::optional<renderer_device_loss::RendererResetHookPairError>
-            reset_hook_error;
         std::optional<CompositorError> compositor_error;
         D3D9CompositorFailure d3d_failure{};
     };

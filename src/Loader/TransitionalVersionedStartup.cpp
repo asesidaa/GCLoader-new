@@ -13,6 +13,7 @@
 #include "Patches/Countdown/CountdownProfile.h"
 #include "Patches/TestModeTiming/TestModeTimingProfile.h"
 #include "Patches/TestModeTiming/TimingSettingsPatch.h"
+#include "Patches/RendererDeviceLoss/RendererDeviceLossProfile.h"
 #include "plog/Log.h"
 #include <format>
 
@@ -46,6 +47,10 @@ void Install(std::expected<game_version::FeaturePlan, game_version::PlanError> p
     }
     if (profile->feature == FeatureId::test_mode_timing) {
         if (const auto prepared = test_mode_timing::PrepareTestModeTimingRuntime(*approved, *image); !prepared)
+            diagnostics::AbortProcess(FormatPlanError(prepared.error()));
+    }
+    if (profile->feature == FeatureId::renderer_device_loss) {
+        if (const auto prepared = renderer_device_loss::PrepareRendererDeviceLossRuntime(*approved, *image); !prepared)
             diagnostics::AbortProcess(FormatPlanError(prepared.error()));
     }
     if (const auto result = InstallApprovedVersionedPlan(
@@ -141,6 +146,14 @@ void InstallTransitionalTestModeTiming() noexcept {
         if (!g_detection) diagnostics::AbortProcess({});
         Install(std::visit([](const auto& selection) {
             return test_mode_timing::BuildTestModeTimingPlan(selection.build, selection.variant);
+        }, *g_detection));
+    } catch (...) { diagnostics::AbortProcess({}); }
+}
+void InstallTransitionalRendererDeviceLoss() noexcept {
+    try {
+        if (!g_detection) diagnostics::AbortProcess({});
+        Install(std::visit([](const auto& selection) {
+            return renderer_device_loss::BuildRendererDeviceLossPlan(selection.build, selection.variant);
         }, *g_detection));
     } catch (...) { diagnostics::AbortProcess({}); }
 }

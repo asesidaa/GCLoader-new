@@ -244,14 +244,6 @@ namespace
                 << (error.resource_error
                     ? static_cast<unsigned>(*error.resource_error)
                     : 0U)
-                << " reset_stage="
-                << (error.reset_hook_error
-                    ? static_cast<unsigned>(error.reset_hook_error->stage)
-                    : 0U)
-                << " reset_site="
-                << (error.reset_hook_error
-                    ? static_cast<unsigned>(error.reset_hook_error->site)
-                    : 0U)
                 << " d3d_stage="
                 << static_cast<unsigned>(error.d3d_failure.stage)
                 << " hresult=" << error.d3d_failure.result;
@@ -475,12 +467,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             PLOG_DEBUG
                 << "Test-mode timing settings initialization complete!";
 
-            if (!gc::renderer_device_loss::RendererDeviceLossPatchInit())
-            {
-                PLOG_ERROR
-                    << "RendererDeviceLossPatch: fail-closed DLL attach";
-                return FALSE;
-            }
+            gc::loader::InstallTransitionalRendererDeviceLoss();
             PLOG_DEBUG
                 << "Renderer device-loss retry initialization complete!";
 

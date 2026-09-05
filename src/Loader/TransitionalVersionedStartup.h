@@ -8,6 +8,7 @@ namespace gc::loader {
 // Removed at Plan09's single global-startup cutover.
 void InstallTransitionalFramerate(const framerate::FramerateSettings&, audio::AudioBackend) noexcept;
 void InstallTransitionalTestModeTiming() noexcept;
+void InstallTransitionalRendererDeviceLoss() noexcept;
 void InstallTransitionalGameCompatibility() noexcept;
 void InstallTransitionalOptionalPatches(const config::ValidatedConfig&) noexcept;
 void InstallTransitionalSwitchInput(const switch_input::SwitchInputSettings&) noexcept;

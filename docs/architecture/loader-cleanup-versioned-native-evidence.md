@@ -473,3 +473,80 @@ Loader adapter retains the current staging until Plan09's complete cutover.
 Debug and RelWithDebInfo builds and all five existing tests passed in both
 configurations. No test-mode UI, persistence, live setter or object-lifetime
 runtime acceptance was performed.
+
+## Plan06f: Renderer Device Loss
+
+The saved read-only IDA batch
+`.codex-tmp/loader-cleanup-renderer-device-loss-profile.py` compared all ten
+contracts against IDA bytes and both executable variants using IDA's file
+mapping. All matched. The table records decoded physical hook spans; each
+longer original signature is retained as a preflight dependency.
+
+| Site | RVA | Physical span | Original signature |
+| --- | --- | --- | --- |
+| device_lost_tail | 0xE67D8 | 6 | 89 BE 18 01 00 00 89 BE 1C 01 00 00 |
+| vertex_buffer_result | 0xE79F7 | 7 | 85 C0 7C 59 8B 4F 0C |
+| index_buffer_result | 0xE7A84 | 9 | 85 C0 7D 13 68 E4 A5 71 00 |
+| vertex_buffer_lock_guard | 0xE5578 | 9 | 3B F9 72 05 E8 66 00 02 00 |
+| direct_lock_result | 0xE691E | 5 | 8B 4C 24 14 51 8B 8E E4 01 00 00 |
+| buffered_unlock_result | 0xE5662 | 9 | 85 C0 7D 13 68 E4 A5 71 00 |
+| initializer_epilogue | 0xE7EE9 | read-only | 5F 5E 5B 8B E5 5D C3 |
+| vertex_buffer_lock_failure | 0xE55E2 | read-only | 5F 5E 89 18 89 58 04 5B 59 C2 08 00 |
+| direct_batch_cleanup | 0xE6AD6 | read-only | 8B B6 E4 01 00 00 8B 5E 10 39 5E 0C |
+| buffered_unlock_continuation | 0xE5679 | read-only | 8B 86 80 04 00 00 8B 8E 44 07 00 00 |
+
+Native control-flow and field ownership:
+- Device-lost tail belongs to renderer cleanup RVA `0x0E66E0`. ESI retains
+  the renderer, and EDI is zero while native COM slots and counters are
+  cleared. Existing extra cleanup clears the byte initialized flag, detaches
+  the index-buffer holder's pointer before calling IUnknown::Release, and
+  leaves native register effects to the relocated instructions.
+- Both buffer-result hooks belong to renderer initialization RVA `0x0E72C0`.
+  Its entry saves ECX in ESI, tests byte [ESI+484h], and sets it to one before
+  allocation. EAX is the signed HRESULT returned through D3D vtable slots
+  +68h/+6Ch. Negative results clear the initialized flag and jump to the
+  verified epilogue (POP EDI/ESI/EBX, restore stack/frame, RET). Nonnegative
+  results keep the native path. Index-buffer installation at VA `0x4E7A9B`
+  dereferences the holder pointer at renderer +778h; its first pointer is the
+  COM resource. These are byte and pointer fields respectively.
+- Buffered vertex lock belongs to RVA `0x0E5540`. ESI is the renderer,
+  EBX is zero, ECX is the buffer count, and EDI is the current buffer index.
+  Only their existing zero/zero/zero failure condition redirects. The
+  pointer at original ESP+14h is the caller's output pair; the callback
+  copies that pointer to EAX. The verified failure tail clears both 32-bit
+  outputs with EBX and returns with RET 8. Output pointer/range checks remain.
+- Direct-lock result belongs to RVA `0x0E6800`, immediately after the
+  buffer Lock call (+2Ch). Signed-negative EAX redirects to queue cleanup,
+  which switches ESI to renderer +1E4h and drains native batches, bypassing
+  copy/draw work. Successful lock preserves all native work.
+- Buffered unlock belongs to RVA `0x0E5610`, immediately after Unlock
+  (+30h). On signed-negative EAX, the callback reaches the native completion
+  path at `0x0E5679`, which advances +480h by +744h and clears pending
+  fields. It does not introduce a second cleanup or change success behavior.
+- The Widescreen reset owner is RVA `0x05B270`; it saves ECX in ESI at
+  VA `0x45B279`, retains that owner through the post-reset site, and pops
+  ESI only at VA `0x45B47C`. The after-reset callback therefore continues
+  to receive the renderer owner from context.esi. Widescreen owns the site
+  contracts and their enabled binding in Plan06g.
+
+RendererDeviceLossProfile contains six mid operations followed by four
+read-only continuations and a concrete three-field layout. The runtime
+copies immutable layout and resolved addresses and owns resource lifecycle
+state before HookRegistry enables the first core hook. RendererInstallActions,
+local preflight, six core hook objects, reset-pair transaction and both
+renderer-owned Widescreen hook objects are removed.
+
+RendererResourceLifecycle behavior is unchanged. The genuine cross-feature
+RendererResetFailureActions boundary is retained (Plan01 classified keep);
+a typed resource-failure publisher cannot return past failure. Widescreen
+preserves its richer D3D error details and now uses the common AbortProcess
+publisher. The existing Widescreen adapter binds these behavior callbacks
+as its ordinary mid-hook requests until Plan06g replaces that remaining
+adapter with the Widescreen profile and common registry. Renderer code no
+longer receives Widescreen hook addresses or owns hook creation.
+
+The dormant complete plan requires all ten renderer contracts after Game
+Compatibility. The temporary Loader adapter publishes runtime state before
+installing the same six sites in manifest order. Debug and RelWithDebInfo
+builds and all five existing tests passed in both configurations. No D3D
+device-loss/reset/retry/resource-recovery runtime acceptance was performed.
