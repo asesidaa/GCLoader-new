@@ -48,30 +48,11 @@ namespace gc::audio
         Create(const CLSID& clsid) noexcept = 0;
     };
 
-    struct AsioComActions
-    {
-        void* context{};
-        HRESULT (*create_instance)(
-            void* context,
-            REFCLSID class_id,
-            LPUNKNOWN outer,
-            DWORD class_context,
-            REFIID interface_id,
-            void** output) noexcept{};
-    };
-
-    [[nodiscard]] AsioComActions ProductionAsioComActions() noexcept;
-
     class ProductionAsioDriverFactory final : public IAsioDriverFactory
     {
     public:
-        explicit ProductionAsioDriverFactory(
-            AsioComActions actions = ProductionAsioComActions()) noexcept;
-
         std::expected<std::unique_ptr<IAsioDriver>, AsioFailure>
         Create(const CLSID& clsid) noexcept override;
 
-    private:
-        AsioComActions actions_;
     };
 } // namespace gc::audio

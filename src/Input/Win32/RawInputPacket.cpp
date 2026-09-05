@@ -61,21 +61,16 @@ namespace gc::input
         }
     } // namespace
 
-    RawInputPacketBuffer::RawInputPacketBuffer(RawInputApi api)
-        : api_(api)
-    {
-    }
-
     std::expected<const RAWINPUT*, std::string> RawInputPacketBuffer::Read(
         HRAWINPUT handle)
     {
-        if (handle == nullptr || api_.get_raw_input_data == nullptr)
+        if (handle == nullptr)
         {
             return std::unexpected("Raw Input packet reader is not initialized");
         }
 
         UINT required_size = 0;
-        const UINT query_result = api_.get_raw_input_data(
+        const UINT query_result = ::GetRawInputData(
             handle,
             RID_INPUT,
             nullptr,
@@ -102,7 +97,7 @@ namespace gc::input
             }
 
             UINT read_size = static_cast<UINT>(bytes_.size());
-            const UINT read_result = api_.get_raw_input_data(
+            const UINT read_result = ::GetRawInputData(
                 handle,
                 RID_INPUT,
                 bytes_.data(),

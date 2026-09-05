@@ -86,6 +86,9 @@ target_link_libraries(iDmacDrv32 PRIVATE
         tomlplusplus::tomlplusplus
 )
 
+target_link_libraries(gc_rfid_feature PRIVATE gc_platform_win32)
+target_link_libraries(iDmacDrv32 PRIVATE gc_platform_win32)
+
 set(DEF_FILE
         "${CMAKE_CURRENT_SOURCE_DIR}/Driver/iDmac/iDmacDrv32.def")
 if (MSVC)

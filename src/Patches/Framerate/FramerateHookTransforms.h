@@ -18,10 +18,6 @@ enum class FramerateHookTransformError {
 };
 
 
-using RuntimeReadU32 = bool (*)(
-    std::uintptr_t address,
-    std::uint32_t& value) noexcept;
-
 void RedirectEaxToAuthoredOperand(
     safetyhook::Context& context,
     const AuthoredFrameOperand& operand) noexcept;
@@ -47,14 +43,13 @@ MapPlayerPositionAssetFrame(
     safetyhook::Context& context,
     const FramerateTimingProfile& profile,
     const FramerateNativeLayout& layout,
-    RuntimeReadU32 read_u32) noexcept;
+    std::uint32_t remaining) noexcept;
 
 [[nodiscard]] std::expected<void, FramerateHookTransformError>
 PreparePlayerPositionDenominator(
     safetyhook::Context& context,
     const FramerateTimingProfile& profile,
     PlayerPositionDurationOperand& operand,
-    const FramerateNativeLayout& layout,
-    RuntimeReadU32 read_u32) noexcept;
+    std::uint32_t raw_duration) noexcept;
 
 } // namespace gc::framerate

@@ -1,4 +1,5 @@
 #include <WinSock2.h>
+#include "Platform/Win32/Utf.h"
 #include <windows.h>
 #include <atomic>
 #include <exception>
@@ -30,7 +31,6 @@
 #include "Diagnostics/CrashDumpHandler.h"
 #include "Diagnostics/FatalProcess.h"
 #include "Loader/NonVersionedHookPlan.h"
-#include "SystemPath/StartupFatal.h"
 #include "SystemPath/TtxInitGuard.h"
 
 #ifndef _M_IX86
@@ -74,51 +74,14 @@ namespace
     {
         constexpr std::wstring_view fallback =
             L"GCLoader startup failed. Check loader-log.txt for details.";
-        try
-        {
-            if (value.empty() ||
-                value.size() > static_cast<std::size_t>(
-                    std::numeric_limits<int>::max()))
-            {
-                return std::wstring{fallback};
-            }
-            const auto source_size = static_cast<int>(value.size());
-            const int required = MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                nullptr,
-                0);
-            if (required <= 0)
-            {
-                return std::wstring{fallback};
-            }
-            std::wstring converted(static_cast<std::size_t>(required), L'\0');
-            if (MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                converted.data(),
-                required) != required)
-            {
-                return std::wstring{fallback};
-            }
-            return converted;
-        }
-        catch (...)
-        {
-            return std::wstring{fallback};
-        }
+        if (value.empty()) return std::wstring{fallback};
+        return gc::platform::win32::Utf8ToWide(value).value_or(std::wstring{fallback});
     }
 
     void PublishConfigurationStartupFatal(
         const gc::loader::StartupConfigurationError& error) noexcept
     {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 1;
-        constexpr std::wstring_view title =
+        constexpr wchar_t title[] =
             L"GCLoader configuration error";
         try
         {
@@ -127,95 +90,77 @@ namespace
                 gc::loader::StartupConfigurationStageName(error.stage),
                 error.message);
             const auto modal = Utf8ToWideOrFallback(error.message);
-            gc::system_path::PublishStartupFatal(
-                published,
+            gc::diagnostics::AbortProcess({
                 log,
                 modal,
-                title,
-                exit_code);
+                title});
             return;
         }
         catch (...)
         {
         }
 
-        gc::system_path::PublishStartupFatal(
-            published,
+        gc::diagnostics::AbortProcess({
             "Configuration startup failed while formatting diagnostics",
             L"GCLoader could not load or validate config.toml. Check the "
             L"loader log for details.",
-            title,
-            exit_code);
+            title});
     }
 
     void PublishConfigurationRoleMismatchFatal(
         gc::nesys_service::ProcessRole role) noexcept
     {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 1;
         try
         {
             const auto log = std::format(
                 "Configuration startup role mismatch requested={}",
                 gc::nesys_service::ProcessRoleName(role));
-            gc::system_path::PublishStartupFatal(
-                published,
+            gc::diagnostics::AbortProcess({
                 log,
                 L"GCLoader prepared configuration for the wrong process role. "
                 L"The process was stopped before publishing feature state.",
-                L"GCLoader configuration error",
-                exit_code);
+                L"GCLoader configuration error"});
             return;
         }
         catch (...)
         {
         }
 
-        gc::system_path::PublishStartupFatal(
-            published,
+        gc::diagnostics::AbortProcess({
             "Configuration startup role mismatch",
             L"GCLoader prepared configuration for the wrong process role.",
-            L"GCLoader configuration error",
-            exit_code);
+            L"GCLoader configuration error"});
     }
 
     void PublishInputConfigurationFatal(std::string_view error) noexcept
     {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 22;
-        constexpr std::wstring_view title =
+        constexpr wchar_t title[] =
             L"GCLoader input setup error";
         try
         {
             const auto log = std::format(
                 "Input polling configuration failed error={}", error);
-            gc::system_path::PublishStartupFatal(
-                published,
+            gc::diagnostics::AbortProcess({
                 log,
                 Utf8ToWideOrFallback(error),
-                title,
-                exit_code);
+                title});
             return;
         }
         catch (...)
         {
         }
 
-        gc::system_path::PublishStartupFatal(
-            published,
+        gc::diagnostics::AbortProcess({
             "Input polling configuration failed",
             L"GCLoader could not publish the validated input settings. Check "
             L"loader-log.txt for details.",
-            title,
-            exit_code);
+            title});
     }
 
     void PublishImeSuppressionFatal(
         const gc::input::ImeSuppressionError& error) noexcept
     {
-        static std::atomic_bool published{false};
-        constexpr DWORD exit_code = 27;
-        constexpr std::wstring_view title =
+        constexpr wchar_t title[] =
             L"GCLoader input method setup error";
 
         try
@@ -233,25 +178,21 @@ namespace
                 << L"\n\nThe game was stopped before creating its input window "
                 L"because an active IME could consume gameplay keys or show "
                 L"a composition window.";
-            gc::system_path::PublishStartupFatal(
-                published,
+            gc::diagnostics::AbortProcess({
                 log.str(),
                 modal.str(),
-                title,
-                exit_code);
+                title});
             return;
         }
         catch (...)
         {
         }
 
-        gc::system_path::PublishStartupFatal(
-            published,
+        gc::diagnostics::AbortProcess({
             "Input IME suppression failed",
             L"GCLoader could not disable input method editors for the game "
             L"process. Check loader-log.txt for details.",
-            title,
-            exit_code);
+            title});
     }
 }
 

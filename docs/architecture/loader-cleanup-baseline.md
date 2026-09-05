@@ -1059,3 +1059,170 @@ configuration passed after this migration. The dependency audit finds all
 direct reflect-cpp includes and links only under src/Config. These checks
 cover the production configuration and codec contracts, not GUI or game
 runtime acceptance.
+
+## Plan 08: Win32 primitives and seam closure
+
+The leaf gc_platform_win32 target now owns strict UTF conversion, captured
+Win32 error formatting, and move-only ordinary HANDLE ownership. UTF errors
+also retain the length/sizing/writing/allocation stage so existing callers can
+preserve their diagnostic text. CloseHandle-only reset preserves ambient
+LastError; explicit checked closes retain their failure contracts.
+
+The real Win32Primitives test uses unnamed events, strict Unicode conversions,
+and captured error formatting. ConfigStartup continues to exercise the real
+startup coordinator with whole-operation read/root/probe/persist outcomes,
+production parsing/compilation, and serialization. It proves validation before
+side effects, combined repair persistence before publication, and no publication
+on persistence failure. It does not claim that fake filesystem writes,
+replacement cleanup, or root-directory retries exercise the filesystem.
+
+Audio construction and diagnostics were separated here to remove factory and
+reporter forwarding interfaces without reproducing their tables in callers.
+AudioRuntimeState owns its controller and concrete backend composition;
+ProductionAudioObserver owns its backend value and initialization snapshot.
+DirectSound adapters obtain the published controller directly. The startup
+AudioFeature entry point is the remaining Plan 09 migration. ASIO control-panel
+session execution now belongs to the ConfigGUI child-mode implementation, which
+waits for panel windows before driver Exit and COM/owner teardown.
+
+Renderer, framerate, test-mode timing, and widescreen callbacks call their
+production helpers directly. Native memory SEH guards, original-call order,
+widescreen activation gates, resource detach-before-release, and live timing
+write order are preserved. Carrier lifecycle and renderer/compositor resource
+boundaries remain. No native fake, fixture, hook execution, or target-process
+test was added.
+
+### Text-conversion audit exceptions
+
+- Config/RegistryConfig.cpp retains CP_ACP with WC_NO_BEST_FIT_CHARS,
+  used-default rejection, and the bounded NESYS service registry path contract.
+- SystemPath/SystemPathRouter.cpp retains CP_ACP for incoming ANSI API paths.
+- Audio/Asio/AsioDriver.cpp retains the bounded vendor ANSI-to-UTF-16 first
+  conversion; its second UTF-8 conversion uses the shared helper and retains
+  the byte-escape fallback.
+- Locale/JapaneseLocaleCompatibility.* retains intercepted code-page semantics,
+  typed API declarations, and export names; these are not UTF helper copies.
+- ControllerCatalog's remaining API names are stage-specific diagnostic labels.
+- FormatMessageW has exactly one production call, in Win32Error.cpp. Ttx applies
+  its existing additional trailing-space presentation trim after that helper.
+
+### HANDLE audit exceptions
+
+| Remaining direct close or specialized owner | Required lifetime/error rule |
+|---|---|
+| Platform/Win32/UniqueHandle.h | Shared CloseHandle-only owner; normalizes both empty sentinels. |
+| Config/ConfigDocument.cpp | Releases then checks CloseHandle after write/flush; reports close failure before replacement. |
+| TestModeStorage/NativeStorageProbe.cpp | Releases then checks close; records cleanup errors before probe-file removal. |
+| Input/Polling/InputPollingRuntime.cpp | Timer cancellation and worker stop-event creation/start/join/failure ordering stay with the worker. |
+| Audio/Wasapi/ExclusiveAudioEngine.cpp and WasapiEndpoint.cpp | Event closure follows render/monitor-thread and COM endpoint shutdown. |
+| Audio/Asio/AsioOutputBackend.cpp | Checked startup/shutdown event closes occur after driver/thread coordination. |
+| tools/ConfigGUI/AudioOperationWorker.cpp | Cancellation event outlives the panel worker and is closed after Shutdown. |
+| Patches/TestModeTiming/SystemConfigTimingStore.* | Retained Win32FileApi owns atomic replacement, flush, close and cleanup failure sequencing. |
+| Nesys/Launcher/NesysServiceLauncher.* | Retained ServiceChildApi coordinates suspended child resume/wait/terminate/close; injection thread uses shared HANDLE ownership. |
+| Audio/Asio/AsioIsolatedProcess.cpp | Shared HANDLE owner replaces the local wrapper; process/job/thread/pipe sequencing stays in the isolated-operation owner. |
+| Rfid/CardReaderInterface.cpp | Specialized pipe owner disconnects before its shared HANDLE member closes. |
+| Rfid/Win32FileHandlers.cpp | CloseHandle is a shared-dispatch callback name handling borrowed intercepted values, not an OS close. |
+| tools/CardReaderTestClient/send_card.py | Independent Python client closes its owned pipe; C++ RAII is not applicable. |
+
+Registry keys, COM pointers, sockets, MMCSS registrations, SafetyHook records,
+borrowed callback handles, and intentional process-lifetime owners retain their
+domain ownership.
+
+### Final disposition of the 72 baseline seams
+
+All 48 remove rows have no remaining symbol/caller in src/tests/tools.
+All 24 keep rows retain the specified production boundary; the original
+Kernel32 table's storage moved into Kernel32Dispatcher during Plan 05.
+These are source audits, not tests of native behavior. Plan 09 may relocate
+these owners without changing their disposition.
+
+| Baseline seam | Final decision | Current evidence |
+|---|---|---|
+| `OriginalKernel32Api` | retained | `src/Win32Hooks/Kernel32Dispatcher.h`: retained as private typed original slots in the process-lifetime dispatcher (Plan 05 rename). |
+| `OriginalJapaneseLocaleApi` | retained | `src/Locale/JapaneseLocaleCompatibility.h` |
+| `ConfigReadActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `StartupConfigurationActions` | retained | `src/Loader/StartupConfiguration.h` |
+| `AtomicConfigWriteActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `DirectoryActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `StartupFatalActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `platform::hooking::ResolverApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `platform::hooking::MinHookApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `nesys_service::MinHookApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `TtxGuardInstallActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `TtxGuardRuntimeActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `GameBinaryPatchActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `FramerateMemoryApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `TimingMemoryApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `WidescreenInstallActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `HidApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `ForegroundApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RawInputApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `XInputApi` | retained | `src/Input/Win32/XInputApi.h` |
+| `ImeSuppressionActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `CardWorkerApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `FeatureHookLayerActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RawInputMessageSink` | retained | `src/Input/Win32/Win32InputWindow.h` |
+| `ControllerStateView` | retained | `src/Input/Win32/XInputController.h` |
+| `ServiceChildApi` | retained | `src/Nesys/Launcher/NesysServiceLauncher.h` |
+| `AsioComActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IAsioDriver` | retained | `src/Audio/Asio/AsioDriver.h` |
+| `IAsioDriverFactory` | retained | `src/Audio/AudioBackendComposition.h` |
+| `AsioRegistryActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IAsioRegistrySource` | retained | `src/Audio/AudioBackendComposition.h` |
+| `IAsioIsolatedProcessActions` | retained | `src/Audio/Asio/AsioProbeClient.h` |
+| `IAsioProbeClient` | retained | `src/Audio/Asio/AsioProbeClient.h` |
+| `IAsioControlPanelClient` | retained | `src/Audio/Asio/AsioControlPanelClient.h` |
+| `AsioControlPanelActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IWasapiApi` | retained | `src/Audio/Wasapi/WasapiEndpoint.h` |
+| `WasapiPresentedOutputClockActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IPresentedOutputClock` | retained | `src/Audio/Mixer/AudioRenderCore.h` |
+| `ExactJudgementTimeline` | retained | `src/Audio/ExactJudgementTimeline.h` |
+| `IAudioEngineServices` | retained | `src/Audio/AudioBackendComposition.h` |
+| `IAudioEngineController` | retained | `src/Audio/AudioBackendController.h` |
+| `IAudioBackendControllerFactory` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IWasapiOutputBackendFactory` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IAsioOutputBackendFactory` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IAudioBackendControllerReporter` | removed | No symbol or caller remains in src, tests, or tools. |
+| `IAudioEngineObserver` | retained | `src/Audio/AudioDiagnostics.h` |
+| `AudioMinHookApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `AudioResolverApi` | removed | No symbol or caller remains in src, tests, or tools. |
+| `AudioPatchPlatformActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RendererResetHookPairActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RendererResetFailureActions` | retained | `src/Patches/RendererDeviceLoss/RendererDeviceLossPatch.h` |
+| `RendererDeviceLostActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RendererInstallActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `CompositorDeviceActions` | retained | `src/Patches/WindowedWidescreen/NativeCanvasCompositor.h` |
+| `NativeBatchActions` | retained | `src/Patches/WindowedWidescreen/D3D9CompositorDevice.h` |
+| `ConfigApplyHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `WindowDeviceHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `LogicalResolutionSetHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `LogicalTargetDimensionSetHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `FrameBoundaryHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `TaskDispatchHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RenderSpaceHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `RenderDimensionHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `ViewportResetHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `MousePollHookActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `WindowedWidescreenInitializationGateActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `FrameratePlatformActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `TimingRenderActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `CarrierLifecycleActions` | retained | `src/Patches/TestModeTiming/TimingSettingsPatch.h` |
+| `TimingCommitActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `TimingLiveActions` | removed | No symbol or caller remains in src, tests, or tools. |
+| `Win32FileApi` | retained | `src/Patches/TestModeTiming/SystemConfigTimingStore.h` |
+
+### Plan 08 verification
+
+Full MSVC x86 Debug and RelWithDebInfo builds passed, followed by 6/6 CTest
+cases in each configuration (Win32Primitives, ExactWasapiClockCompatibility,
+ExactHistoryIsolation, ImeSuppression, ConfigContract, ConfigStartup).
+The final incremental build logs contain no compiler warnings or errors.
+git diff --check passed. Existing build/dependency caches were preserved.
+Source removals used CLion patch operations; no shell filesystem deletion or
+move was performed.
+
+This remains static/build proof. Target startup, Win32 detours, native timing,
+renderer reset, ASIO/WASAPI hardware, child processes, RFID/storage and GUI
+acceptance are untested. The game still uses the explicitly temporary startup
+adapter until the complete Plan 09 cutover; this intermediate DLL is not a
+deployment checkpoint.

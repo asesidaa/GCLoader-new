@@ -1,3 +1,9 @@
+add_executable(gc_win32_primitives_tests
+        Platform/Win32PrimitivesTests.cpp
+)
+target_link_libraries(gc_win32_primitives_tests PRIVATE gc_platform_win32)
+add_test(NAME Win32Primitives COMMAND gc_win32_primitives_tests)
+
 add_executable(gc_exact_wasapi_clock_compatibility_tests
         Audio/Wasapi/ExactWasapiClockCompatibilityTests.cpp
 )

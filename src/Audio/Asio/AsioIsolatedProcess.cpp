@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: CC0-1.0
+#include "Platform/Win32/UniqueHandle.h"
 
 #include "Audio/Asio/AsioIsolatedProcess.h"
 
@@ -19,40 +20,7 @@
 namespace gc::audio {
 namespace {
 
-class UniqueHandle {
-public:
-    UniqueHandle() = default;
-    explicit UniqueHandle(HANDLE handle) noexcept : handle_(handle) {}
-    ~UniqueHandle() { reset(); }
-
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept
-        : handle_(other.release()) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept {
-        if (this != &other) {
-            reset(other.release());
-        }
-        return *this;
-    }
-
-    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
-    [[nodiscard]] bool valid() const noexcept {
-        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-    }
-    HANDLE release() noexcept {
-        return std::exchange(handle_, nullptr);
-    }
-    void reset(HANDLE handle = nullptr) noexcept {
-        if (valid()) {
-            CloseHandle(handle_);
-        }
-        handle_ = handle;
-    }
-
-private:
-    HANDLE handle_{};
-};
+using gc::platform::win32::UniqueHandle;
 
 class AttributeList {
 public:
@@ -372,7 +340,7 @@ AsioIsolatedProcessOutcome ProductionAsioIsolatedProcessActions::Run(
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
             nullptr)};
-        if (!child_stderr.valid()) {
+        if (!static_cast<bool>(child_stderr)) {
             return ProcessOutcome(
                 AsioIsolatedProcessStatus::create_failed,
                 GetLastError());
@@ -435,7 +403,7 @@ AsioIsolatedProcessOutcome ProductionAsioIsolatedProcessActions::Run(
         child_stderr.reset();
 
         UniqueHandle job{CreateJobObjectW(nullptr, nullptr)};
-        if (!job.valid() || !ConfigureKillOnCloseJob(job.get()) ||
+        if (!static_cast<bool>(job) || !ConfigureKillOnCloseJob(job.get()) ||
             !AssignProcessToJobObject(job.get(), process.get())) {
             const auto error = GetLastError();
             TerminateSuspendedProcess(process.get());
@@ -455,7 +423,7 @@ AsioIsolatedProcessOutcome ProductionAsioIsolatedProcessActions::Run(
             &reader,
             0,
             nullptr)};
-        if (!reader_thread.valid()) {
+        if (!static_cast<bool>(reader_thread)) {
             const auto error = GetLastError();
             job.reset();
             WaitForSingleObject(process.get(), INFINITE);

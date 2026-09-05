@@ -66,13 +66,7 @@ MapPlayerPositionAssetFrame(
     safetyhook::Context& context,
     const FramerateTimingProfile& profile,
     const FramerateNativeLayout& layout,
-    RuntimeReadU32 read_u32) noexcept {
-    std::uint32_t remaining{};
-    const std::uint32_t address =
-        context.edx + context.ecx * 4U + layout.player_position_remaining;
-    if (read_u32 == nullptr || !read_u32(address, remaining)) {
-        return std::unexpected(FramerateHookTransformError::MemoryRead);
-    }
+    std::uint32_t remaining) noexcept {
     const auto mapped = MapPlayerPositionElapsedToAuthored60(
         profile, context.eax, remaining);
     if (!mapped) {
@@ -89,13 +83,7 @@ PreparePlayerPositionDenominator(
     safetyhook::Context& context,
     const FramerateTimingProfile& profile,
     PlayerPositionDurationOperand& operand,
-    const FramerateNativeLayout& layout,
-    RuntimeReadU32 read_u32) noexcept {
-    std::uint32_t raw_duration{};
-    const std::uint32_t address = context.eax + layout.player_position_duration;
-    if (read_u32 == nullptr || !read_u32(address, raw_duration)) {
-        return std::unexpected(FramerateHookTransformError::MemoryRead);
-    }
+    std::uint32_t raw_duration) noexcept {
     const auto scaled = ScalePositiveDuration(profile, raw_duration);
     if (!scaled) {
         return std::unexpected(

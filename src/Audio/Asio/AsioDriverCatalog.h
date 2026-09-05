@@ -35,29 +35,11 @@ ResolveAsioDriver(
     IAsioRegistrySource& source,
     std::string_view utf8_name) noexcept;
 
-struct AsioRegistryActions {
-    void* context{};
-    std::expected<std::vector<AsioRegistryValue>, AsioFailure> (*read)(
-        void* context,
-        HKEY root,
-        std::wstring_view path,
-        REGSAM access) noexcept{};
-};
-
-[[nodiscard]] AsioRegistryActions
-ProductionAsioRegistryActions() noexcept;
-
 class ProductionAsioRegistrySource final : public IAsioRegistrySource {
 public:
-    explicit ProductionAsioRegistrySource(
-        AsioRegistryActions actions =
-            ProductionAsioRegistryActions()) noexcept;
-
     std::expected<std::vector<AsioRegistryValue>, AsioFailure>
     Read32BitRegistrations() noexcept override;
 
-private:
-    AsioRegistryActions actions_;
 };
 
 } // namespace gc::audio

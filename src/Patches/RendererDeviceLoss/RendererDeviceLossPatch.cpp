@@ -19,8 +19,7 @@ struct RendererDeviceLossRuntime final {
 };
 std::unique_ptr<RendererDeviceLossRuntime> g_runtime_owner;
 
-bool ProductionClearInitialized(
-    void*,
+bool ClearInitialized(
     std::uintptr_t renderer,
     std::size_t offset) noexcept {
     if (renderer == 0 || offset != g_runtime_owner->layout.initialized_offset ||
@@ -36,8 +35,7 @@ bool ProductionClearInitialized(
     }
 }
 
-bool ProductionDetachIndexBuffer(
-    void*,
+bool DetachIndexBuffer(
     std::uintptr_t renderer,
     std::size_t offset,
     std::uintptr_t& detached) noexcept {
@@ -63,8 +61,7 @@ bool ProductionDetachIndexBuffer(
     }
 }
 
-bool ProductionReleaseIndexBuffer(
-    void*,
+bool ReleaseIndexBuffer(
     std::uintptr_t buffer) noexcept {
     if (buffer == 0) {
         return true;
@@ -78,8 +75,7 @@ bool ProductionReleaseIndexBuffer(
     }
 }
 
-bool ProductionReadPointer(
-    void*,
+bool ReadPointer(
     std::uintptr_t address,
     std::uintptr_t& value) noexcept {
     __try {
@@ -102,125 +98,39 @@ bool ApplyNegativeResultRedirect(
     return true;
 }
 
-} // namespace
-
-// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
-// ReSharper disable once CppParameterMayBeConstPtrOrRef
-void OnDeviceLostTail(safetyhook::Context& context) noexcept {
-    try {
-        static_cast<void>(ApplyRendererDeviceLostCleanup(
-            context,
-            g_runtime_owner->layout,
-            {
-                .clear_initialized = ProductionClearInitialized,
-                .detach_index_buffer = ProductionDetachIndexBuffer,
-                .release_index_buffer = ProductionReleaseIndexBuffer,
-            }));
-    } catch (...) {
-    }
-}
-
-void OnVertexBufferCreateResult(
-    safetyhook::Context& context) noexcept {
-    try {
-        static_cast<void>(ApplyRendererDeviceLossRetry(
-            context,
-            g_runtime_owner->layout,
-            g_runtime_owner->targets,
-            {
-                .clear_initialized = ProductionClearInitialized,
-            }));
-    } catch (...) {
-    }
-}
-
-void OnIndexBufferCreateResult(
-    safetyhook::Context& context) noexcept {
-    try {
-        static_cast<void>(ApplyRendererDeviceLossRetry(
-            context,
-            g_runtime_owner->layout,
-            g_runtime_owner->targets,
-            {
-                .clear_initialized = ProductionClearInitialized,
-            }));
-    } catch (...) {
-    }
-}
-
-void OnVertexBufferLockGuard(
-    safetyhook::Context& context) noexcept {
-    try {
-        static_cast<void>(ApplyRendererDeviceLossDrawSkip(
-            context,
-            g_runtime_owner->layout,
-            g_runtime_owner->targets,
-            {
-                .read_pointer = ProductionReadPointer,
-            }));
-    } catch (...) {
-    }
-}
-
-void OnDirectLockResult(safetyhook::Context& context) noexcept {
-    try {
-        static_cast<void>(ApplyRendererDeviceLossDirectLockSkip(
-            context,
-            g_runtime_owner->targets));
-    } catch (...) {
-    }
-}
-
-void OnBufferedUnlockResult(safetyhook::Context& context) noexcept {
-    try {
-        static_cast<void>(ApplyRendererDeviceLossUnlockCompletion(
-            context,
-            g_runtime_owner->targets));
-    } catch (...) {
-    }
-}
-
-
 bool ApplyRendererDeviceLostCleanup(
     const safetyhook::Context& context,
-    const RendererNativeLayout& layout,
-    const RendererDeviceLostActions& actions) noexcept {
-    if (context.esi == 0 || actions.clear_initialized == nullptr ||
-        actions.detach_index_buffer == nullptr ||
-        actions.release_index_buffer == nullptr) {
+    const RendererNativeLayout& layout) noexcept {
+    if (context.esi == 0) {
         return false;
     }
-    if (!actions.clear_initialized(
-            actions.context,
+    if (!ClearInitialized(
             context.esi,
             layout.initialized_offset)) {
         return false;
     }
 
     std::uintptr_t detached = 0;
-    if (!actions.detach_index_buffer(
-            actions.context,
+    if (!DetachIndexBuffer(
             context.esi,
             layout.index_buffer_holder_offset,
             detached)) {
         return false;
     }
     return detached == 0 ||
-           actions.release_index_buffer(actions.context, detached);
+           ReleaseIndexBuffer(detached);
 }
 
 bool ApplyRendererDeviceLossRetry(
     safetyhook::Context& context,
     const RendererNativeLayout& layout,
-    const RendererNativeTargets& targets,
-    RendererInitializedWriter writer) noexcept {
+    const RendererNativeTargets& targets) noexcept {
     if (static_cast<std::int32_t>(context.eax) >= 0) {
         return false;
     }
-    if (context.esi == 0 || writer.clear_initialized == nullptr ||
+    if (context.esi == 0 ||
         targets.initializer_epilogue == 0 ||
-        !writer.clear_initialized(
-            writer.context,
+        !ClearInitialized(
             context.esi,
             layout.initialized_offset)) {
         return false;
@@ -234,19 +144,16 @@ bool ApplyRendererDeviceLossRetry(
 bool ApplyRendererDeviceLossDrawSkip(
     safetyhook::Context& context,
     const RendererNativeLayout& layout,
-    const RendererNativeTargets& targets,
-    RendererStackPointerReader reader) noexcept {
+    const RendererNativeTargets& targets) noexcept {
     if (targets.vertex_buffer_lock_failure == 0 || context.ecx != 0 ||
         context.edi != 0 || context.ebx != 0 ||
-        reader.read_pointer == nullptr ||
         context.esp > std::numeric_limits<std::uint32_t>::max() -
                           layout.vertex_buffer_lock_output_stack_offset) {
         return false;
     }
 
     std::uintptr_t output_pair = 0;
-    if (!reader.read_pointer(
-            reader.context,
+    if (!ReadPointer(
             static_cast<std::uintptr_t>(context.esp) +
                 layout.vertex_buffer_lock_output_stack_offset,
             output_pair) ||
@@ -275,6 +182,71 @@ bool ApplyRendererDeviceLossUnlockCompletion(
     return ApplyNegativeResultRedirect(
         context,
         targets.buffered_unlock_continuation);
+}
+
+
+} // namespace
+
+// SafetyHook requires a mutable Context reference in the mid-hook callback ABI.
+// ReSharper disable once CppParameterMayBeConstPtrOrRef
+void OnDeviceLostTail(safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLostCleanup(
+            context,
+            g_runtime_owner->layout));
+    } catch (...) {
+    }
+}
+
+void OnVertexBufferCreateResult(
+    safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossRetry(
+            context,
+            g_runtime_owner->layout,
+            g_runtime_owner->targets));
+    } catch (...) {
+    }
+}
+
+void OnIndexBufferCreateResult(
+    safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossRetry(
+            context,
+            g_runtime_owner->layout,
+            g_runtime_owner->targets));
+    } catch (...) {
+    }
+}
+
+void OnVertexBufferLockGuard(
+    safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossDrawSkip(
+            context,
+            g_runtime_owner->layout,
+            g_runtime_owner->targets));
+    } catch (...) {
+    }
+}
+
+void OnDirectLockResult(safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossDirectLockSkip(
+            context,
+            g_runtime_owner->targets));
+    } catch (...) {
+    }
+}
+
+void OnBufferedUnlockResult(safetyhook::Context& context) noexcept {
+    try {
+        static_cast<void>(ApplyRendererDeviceLossUnlockCompletion(
+            context,
+            g_runtime_owner->targets));
+    } catch (...) {
+    }
 }
 
 

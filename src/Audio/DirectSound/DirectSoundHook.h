@@ -3,6 +3,6 @@
 #include "Platform/Win32/Hooking/HookPlan.h"
 namespace gc::audio {
 [[nodiscard]] std::expected<void, hooking::HookError> AddDirectSoundHook(
-    hooking::HookPlan&, IAudioBackendControllerFactory&, IAudioBackendControllerReporter&) noexcept;
+    hooking::HookPlan&) noexcept;
 [[nodiscard]] bool IsAudioHookCommitted() noexcept;
 }

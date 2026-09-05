@@ -33,3 +33,4 @@ target_link_libraries(gc_nesys PUBLIC
         gc_nesys_network_config
         safetyhook::safetyhook
 )
+target_link_libraries(gc_nesys PRIVATE gc_platform_win32)

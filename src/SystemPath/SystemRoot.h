@@ -55,19 +55,8 @@ struct PreparedRoot {
     bool configured_path_changed{};
 };
 
-struct DirectoryActions {
-    void* context{};
-    bool (*create_directories)(
-        void*,
-        const std::filesystem::path&,
-        std::error_code&) noexcept{};
-};
-
-[[nodiscard]] DirectoryActions ProductionDirectoryActions() noexcept;
-
 [[nodiscard]] std::expected<PreparedRoot, RootPrepareError>
 PrepareGameSystemRoot(
-    RootPrepareRequest request,
-    DirectoryActions actions = ProductionDirectoryActions()) noexcept;
+    RootPrepareRequest request) noexcept;
 
 } // namespace gc::system_path

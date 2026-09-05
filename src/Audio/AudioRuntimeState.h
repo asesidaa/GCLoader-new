@@ -2,6 +2,8 @@
 #include "Audio/AudioSettings.h"
 #include "Platform/Win32/Hooking/HookPlan.h"
 namespace gc::audio {
+class IAudioEngineController;
+[[nodiscard]] IAudioEngineController* GetOrCreatePublishedAudioController() noexcept;
 enum class AudioRuntimeStage : std::uint8_t { already_prepared, construction };
 struct AudioRuntimeError final {
     AudioRuntimeStage stage{};

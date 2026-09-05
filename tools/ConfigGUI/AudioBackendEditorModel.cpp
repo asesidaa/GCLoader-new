@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: CC0-1.0
+#include "Platform/Win32/Utf.h"
 
 #include "AudioBackendEditorModel.h"
 
@@ -24,33 +25,9 @@ namespace
 {
     std::optional<std::wstring> Utf8ToWide(std::string_view text)
     {
-        if (text.empty())
-        {
-            return std::wstring{};
-        }
-        const auto count = MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            text.data(),
-            static_cast<int>(text.size()),
-            nullptr,
-            0);
-        if (count <= 0)
-        {
-            return std::nullopt;
-        }
-        std::wstring wide(static_cast<std::size_t>(count), L'\0');
-        if (MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            text.data(),
-            static_cast<int>(text.size()),
-            wide.data(),
-            count) != count)
-        {
-            return std::nullopt;
-        }
-        return wide;
+        auto converted = gc::platform::win32::Utf8ToWide(text);
+        if (!converted) return std::nullopt;
+        return std::move(*converted);
     }
 
     bool EqualInsensitive(
@@ -543,8 +520,7 @@ std::string DescribeAsioFailure(
 std::expected<void, std::string> ValidateAndWriteConfig(
     const std::filesystem::path& path,
     const gc::config::ConfigDocument& config,
-    gc::audio::IAsioProbeClient& asio_probe,
-    const gc::config::AtomicConfigWriteActions& write_actions) noexcept
+    gc::audio::IAsioProbeClient& asio_probe) noexcept
 {
     try
     {
@@ -581,8 +557,7 @@ std::expected<void, std::string> ValidateAndWriteConfig(
 
         const auto persisted = gc::config::WriteConfigDocumentAtomically(
             path,
-            config,
-            write_actions);
+            config);
         if (!persisted.has_value())
         {
             return std::unexpected(persisted.error().message);

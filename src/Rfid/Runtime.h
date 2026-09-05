@@ -5,29 +5,16 @@
 #include <Windows.h>
 
 #include <atomic>
-#include <chrono>
 #include <expected>
 #include <mutex>
 
 namespace gc::rfid {
 
-using CardWorkerEntry = void (*)(void*) noexcept;
-
-struct CardWorkerApi {
-    std::expected<void, DWORD> (*start_detached)(
-        CardWorkerEntry entry, void* context) noexcept;
-    SHORT (*get_async_key_state)(int virtual_key) noexcept;
-    void (*sleep_for)(std::chrono::milliseconds duration) noexcept;
-};
-
-[[nodiscard]] CardWorkerApi ProductionCardWorkerApi() noexcept;
 [[nodiscard]] HANDLE EmulatedComHandle() noexcept;
 
 class Runtime {
 public:
-    explicit Runtime(
-        int card_virtual_key,
-        const CardWorkerApi& worker_api = ProductionCardWorkerApi()) noexcept;
+    explicit Runtime(int card_virtual_key) noexcept;
 
     [[nodiscard]] std::expected<HANDLE, DWORD> OpenCom2() noexcept;
     void CloseCom2() noexcept;
@@ -40,7 +27,6 @@ private:
     void RunCardReaderWorker() noexcept;
 
     int card_virtual_key_{};
-    CardWorkerApi worker_api_{};
     ComPortState port_{};
     std::once_flag worker_once_;
     std::once_flag card_reader_worker_once_;

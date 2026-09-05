@@ -19,29 +19,6 @@ using TtxUdlInitFn = int(__cdecl*)(
     unsigned int,
     unsigned int);
 
-struct TtxGuardRuntimeActions {
-    void* context{};
-    int (*call_original)(
-        void*,
-        unsigned int,
-        unsigned int,
-        unsigned int,
-        unsigned int) noexcept{};
-    DWORD (*get_last_error)(void*) noexcept{};
-    void (*publish_failure)(
-        void*,
-        DWORD,
-        const RuntimeRoot&) noexcept{};
-};
-
-[[nodiscard]] int InvokeTtxUdlInitGuard(
-    unsigned int priority,
-    unsigned int game_version,
-    unsigned int update_step,
-    unsigned int update_options,
-    const RuntimeRoot& root,
-    const TtxGuardRuntimeActions& actions) noexcept;
-
 class TtxInitGuard {
 public:
     explicit TtxInitGuard(RuntimeRoot root);
@@ -62,12 +39,11 @@ private:
         unsigned int game_version,
         unsigned int update_step,
         unsigned int update_options) noexcept;
-    void PublishFailure(DWORD error) noexcept;
+    [[noreturn]] void PublishFailure(DWORD error) noexcept;
 
     static std::atomic<TtxInitGuard*> active_;
     RuntimeRoot root_;
     TtxUdlInitFn original_{};
-    std::atomic_bool failure_published_{};
 };
 
 } // namespace gc::system_path

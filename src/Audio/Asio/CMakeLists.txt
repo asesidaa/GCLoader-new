@@ -1,7 +1,6 @@
 add_library(gc_asio STATIC
         AsioBufferRules.cpp
         AsioCapabilityProbe.cpp
-        AsioControlPanel.cpp
         AsioControlPanelClient.cpp
         AsioDriver.cpp
         AsioDriverCatalog.cpp
@@ -18,3 +17,4 @@ target_link_libraries(gc_asio PUBLIC
         ole32
         advapi32
 )
+target_link_libraries(gc_asio PRIVATE gc_platform_win32)

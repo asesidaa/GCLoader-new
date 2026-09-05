@@ -280,7 +280,6 @@ namespace gc::framerate
                 FramerateTimingProfile profile_value,
                 FramerateMonitor monitor_value,
                 std::int64_t frequency_value,
-                const FrameratePlatformActions& platform_value,
                 GameplayAudioClockPlan audio_clock_plan_value,
                 std::optional<GameplaySongClock>
                 gameplay_song_clock_value) noexcept
@@ -288,7 +287,6 @@ namespace gc::framerate
                   monitor{std::move(monitor_value)},
                   authored_clock{profile},
                   qpc_frequency{frequency_value},
-                  platform{platform_value},
                   audio_clock_plan{audio_clock_plan_value},
                   gameplay_song_clock{
                       std::move(gameplay_song_clock_value)
@@ -300,7 +298,6 @@ namespace gc::framerate
             FramerateMonitor monitor;
             Authored60PhaseClock authored_clock;
             std::int64_t qpc_frequency{};
-            FrameratePlatformActions platform{};
             GameplayAudioClockPlan audio_clock_plan{
                 GameplayAudioClockPlan::OriginalWatchdog
             };
@@ -314,7 +311,6 @@ namespace gc::framerate
             PlayerPositionDurationOperand player_position_duration_operand{};
             FramerateRuntimeCounters counters;
             FramerateMenuRuntimeCounters menu_counters;
-            std::atomic_bool fatal_published{false};
             std::atomic_bool authored_60hz_tick{true};
             std::int64_t previous_stats_qpc{};
         };
@@ -478,9 +474,7 @@ namespace gc::framerate
         void FatalRuntimeConversion(std::string_view operation) noexcept
         {
             ReportFramerateRuntimeFailure(
-                operation,
-                g_runtime->fatal_published,
-                g_runtime->platform);
+                operation);
         }
 
         [[nodiscard]] std::expected<game_version::VersionedOperation, game_version::PlanError>
@@ -1046,9 +1040,7 @@ namespace gc::framerate
             if (!ReadU32Safe(context.eax + g_runtime->layout.palette_counter, counter))
             {
                 ReportFramerateRuntimeFailure(
-                    "palette counter read failed",
-                    g_runtime->fatal_published,
-                    g_runtime->platform);
+                    "palette counter read failed");
                 return;
             }
             context.eflags = ApplyCmp32Flags(
@@ -1525,8 +1517,11 @@ namespace gc::framerate
 
         void HookPlayerPositionAssetFrame(safetyhook::Context& context)
         {
-            if (!MapPlayerPositionAssetFrame(
-                context, g_runtime->profile, g_runtime->layout, &ReadU32Safe))
+            std::uint32_t remaining{};
+            const std::uint32_t address = context.edx + context.ecx * 4U +
+                g_runtime->layout.player_position_remaining;
+            if (!ReadU32Safe(address, remaining) || !MapPlayerPositionAssetFrame(
+                context, g_runtime->profile, g_runtime->layout, remaining))
             {
                 FatalRuntimeConversion(
                     "player-position asset-frame mapping");
@@ -1538,12 +1533,11 @@ namespace gc::framerate
 
         void HookPlayerPositionDenominator(safetyhook::Context& context)
         {
-            if (!PreparePlayerPositionDenominator(
-                context,
-                g_runtime->profile,
-                g_runtime->player_position_duration_operand,
-                g_runtime->layout,
-                &ReadU32Safe))
+            std::uint32_t duration{};
+            const std::uint32_t address = context.eax + g_runtime->layout.player_position_duration;
+            if (!ReadU32Safe(address, duration) || !PreparePlayerPositionDenominator(
+                context, g_runtime->profile,
+                g_runtime->player_position_duration_operand, duration))
             {
                 FatalRuntimeConversion(
                     "player-position denominator scaling");
@@ -1614,10 +1608,7 @@ namespace gc::framerate
                     observation.measured_fps,
                     observation.relative_error,
                     observation.interval_count);
-                if (g_runtime->platform.log_info != nullptr)
-                {
-                    g_runtime->platform.log_info(message.c_str());
-                }
+                PLOG_INFO << message;
             }
             catch (...)
             {
@@ -1790,9 +1781,7 @@ namespace gc::framerate
             if (!QueryPerformanceCounter(&now))
             {
                 ReportFramerateClockFailure(
-                    g_runtime->profile.target_fps(),
-                    g_runtime->fatal_published,
-                    g_runtime->platform);
+                    g_runtime->profile.target_fps());
                 return;
             }
 
@@ -1805,15 +1794,11 @@ namespace gc::framerate
                     break;
                 case FramerateDecision::FatalMismatch:
                     ReportFramerateMismatch(
-                        *observation,
-                        g_runtime->fatal_published,
-                        g_runtime->platform);
+                        *observation);
                     break;
                 case FramerateDecision::FatalClock:
                     ReportFramerateClockFailure(
-                        g_runtime->profile.target_fps(),
-                        g_runtime->fatal_published,
-                        g_runtime->platform);
+                        g_runtime->profile.target_fps());
                     break;
                 case FramerateDecision::WindowMatch:
                 case FramerateDecision::WindowMismatch:
@@ -1890,7 +1875,7 @@ std::expected<PreparedFrameratePlan, game_version::PlanError> BuildFrameratePlan
             song_clock.emplace(std::move(*clock));
         }
         g_runtime.emplace(std::move(*timing), std::move(*monitor), frequency.QuadPart,
-            ProductionFrameratePlatformActions(), audio_plan, std::move(song_clock));
+            audio_plan, std::move(song_clock));
         // Runtime addresses used by replacement operands now have process lifetime.
         g_runtime->game_profile = game;
         g_runtime->layout = game->layout;
@@ -1976,7 +1961,7 @@ void CompleteFramerateStartup(const game_version::ApprovedVersionedPlan& plan) n
         return site.contract().feature == game_version::FeatureId::framerate;
     });
     if (!included) return;
-    ReportFramerateStartup(g_runtime->profile, g_runtime->startup_summary, g_runtime->platform);
+    ReportFramerateStartup(g_runtime->profile, g_runtime->startup_summary);
     PLOG_INFO << "FrameratePatch: versioned startup committed direct_writes="
         << g_runtime->startup_summary.direct_write_count << " hooks=" << g_runtime->startup_summary.hook_count;
     PLOG_INFO << "FrameratePatch: menu_timing startup policy=corrected contracts=6 temporary=0";

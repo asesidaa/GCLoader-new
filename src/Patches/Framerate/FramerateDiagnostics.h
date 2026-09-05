@@ -5,7 +5,6 @@
 #include "Patches/Framerate/FramerateTimingProfile.h"
 
 #include <Windows.h>
-#include <atomic>
 // ReSharper disable once CppUnusedIncludeDirective
 #include <cstddef>
 #include <cstdint>
@@ -13,15 +12,6 @@
 #include <string_view>
 
 namespace gc::framerate {
-
-struct FrameratePlatformActions {
-    void (*log_info)(const char*);
-    void (*log_warning)(const char*);
-    void (*log_error)(const char*);
-    void (*show_error)(const char*);
-    void (*terminate_process)(DWORD);
-    void (*fail_fast)();
-};
 
 struct FramerateStartupPatchSummary {
     std::size_t direct_write_count{};
@@ -39,13 +29,9 @@ struct FramerateEffectRuntimeStats {
     std::uint64_t player_modulo_mappings{};
 };
 
-[[nodiscard]] FrameratePlatformActions ProductionFrameratePlatformActions()
-    noexcept;
-
 void ReportFramerateStartup(
     const FramerateTimingProfile& profile,
-    const FramerateStartupPatchSummary& summary,
-    const FrameratePlatformActions& actions) noexcept;
+    const FramerateStartupPatchSummary& summary) noexcept;
 
 [[nodiscard]] std::string FormatFramerateEffectRuntimeStats(
     const FramerateEffectRuntimeStats& stats);
@@ -54,24 +40,13 @@ void ReportFramerateStartup(
     std::uint32_t target_fps,
     double measured_fps) noexcept;
 
-void ReportFramerateMismatch(
-    const FramerateObservation& observation,
-    std::atomic_bool& publication_latch,
-    const FrameratePlatformActions& actions) noexcept;
+[[noreturn]] void ReportFramerateMismatch(
+    const FramerateObservation& observation) noexcept;
 
-void ReportFramerateClockFailure(
-    std::uint32_t target_fps,
-    std::atomic_bool& publication_latch,
-    const FrameratePlatformActions& actions) noexcept;
+[[noreturn]] void ReportFramerateClockFailure(
+    std::uint32_t target_fps) noexcept;
 
-void ReportFramerateRuntimeFailure(
-    std::string_view detail,
-    std::atomic_bool& publication_latch,
-    const FrameratePlatformActions& actions) noexcept;
-
-void ReportFramerateInitializationFailure(
-    std::string_view detail,
-    std::atomic_bool& publication_latch,
-    const FrameratePlatformActions& actions) noexcept;
+[[noreturn]] void ReportFramerateRuntimeFailure(
+    std::string_view detail) noexcept;
 
 } // namespace gc::framerate

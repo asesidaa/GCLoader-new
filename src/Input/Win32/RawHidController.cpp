@@ -30,16 +30,6 @@ namespace gc::input
                 static_cast<std::uint32_t>(status));
         }
 
-        bool HidApiComplete(const HidApi& api) noexcept
-        {
-            return api.get_raw_input_device_info != nullptr &&
-                api.get_caps != nullptr &&
-                api.get_button_caps != nullptr &&
-                api.get_value_caps != nullptr &&
-                api.get_usages != nullptr &&
-                api.get_usage_value != nullptr;
-        }
-
         std::pair<std::uint32_t, std::uint32_t> UsageRange(
             const HIDP_BUTTON_CAPS& cap)
         {
@@ -195,16 +185,11 @@ namespace gc::input
     } // namespace
 
     std::expected<RawHidController, std::string> RawHidController::Open(
-        const RawHidDeviceInfo& device,
-        HidApi api)
+        const RawHidDeviceInfo& device)
     {
         if (device.raw_device == nullptr || device.device_path.empty())
         {
             return std::unexpected("Raw HID device identity is incomplete");
-        }
-        if (!HidApiComplete(api))
-        {
-            return std::unexpected("HID API table is incomplete");
         }
 
         RawHidController controller;
@@ -213,10 +198,9 @@ namespace gc::input
             .device_id = device.device_path,
         };
         controller.raw_device_ = device.raw_device;
-        controller.api_ = api;
 
         UINT preparsed_size = 0;
-        if (api.get_raw_input_device_info(
+        if (::GetRawInputDeviceInfoW(
             device.raw_device,
             RIDI_PREPARSEDDATA,
             nullptr,
@@ -232,7 +216,7 @@ namespace gc::input
 
         controller.preparsed_data_.resize(preparsed_size);
         UINT writable_size = preparsed_size;
-        if (api.get_raw_input_device_info(
+        if (::GetRawInputDeviceInfoW(
             device.raw_device,
             RIDI_PREPARSEDDATA,
             controller.preparsed_data_.data(),
@@ -249,7 +233,7 @@ namespace gc::input
 
         auto* preparsed = reinterpret_cast<PHIDP_PREPARSED_DATA>(
             controller.preparsed_data_.data());
-        NTSTATUS status = api.get_caps(preparsed, &controller.caps_);
+        NTSTATUS status = ::HidP_GetCaps(preparsed, &controller.caps_);
         if (status != HIDP_STATUS_SUCCESS)
         {
             return std::unexpected(HidFailure("HidP_GetCaps", status));
@@ -264,7 +248,7 @@ namespace gc::input
         if (!button_caps.empty())
         {
             USHORT count = static_cast<USHORT>(button_caps.size());
-            status = api.get_button_caps(
+            status = ::HidP_GetButtonCaps(
                 HidP_Input,
                 button_caps.data(),
                 &count,
@@ -282,7 +266,7 @@ namespace gc::input
         if (!value_caps.empty())
         {
             USHORT count = static_cast<USHORT>(value_caps.size());
-            status = api.get_value_caps(
+            status = ::HidP_GetValueCaps(
                 HidP_Input,
                 value_caps.data(),
                 &count,
@@ -611,7 +595,7 @@ namespace gc::input
             if (state.kind == ControlKind::Button)
             {
                 ULONG usage_count = static_cast<ULONG>(button_scratch_.size());
-                const NTSTATUS status = api_.get_usages(
+                const NTSTATUS status = ::HidP_GetUsages(
                     HidP_Input,
                     state.usage_page,
                     state.link_collection,
@@ -640,7 +624,7 @@ namespace gc::input
             }
 
             ULONG raw_value = 0;
-            const NTSTATUS status = api_.get_usage_value(
+            const NTSTATUS status = ::HidP_GetUsageValue(
                 HidP_Input,
                 state.usage_page,
                 state.link_collection,

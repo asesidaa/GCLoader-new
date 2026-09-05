@@ -1,4 +1,5 @@
 #include "Rfid/CardReaderInterface.h"
+#include "Platform/Win32/UniqueHandle.h"
 
 #include "Rfid/CardData.h"
 #include "Rfid/CardReaderProtocol.h"
@@ -92,18 +93,18 @@ public:
 
     ~PipeHandle()
     {
-        if (value_ == INVALID_HANDLE_VALUE) {
+        if (!value_) {
             return;
         }
         if (connected_) {
-            DisconnectNamedPipe(value_);
+            DisconnectNamedPipe(value_.get());
         }
-        CloseHandle(value_);
+
     }
 
     [[nodiscard]] HANDLE Get() const noexcept
     {
-        return value_;
+        return value_.get();
     }
 
     void MarkConnected() noexcept
@@ -112,7 +113,7 @@ public:
     }
 
 private:
-    HANDLE value_{INVALID_HANDLE_VALUE};
+    gc::platform::win32::UniqueHandle value_;
     bool connected_{};
 };
 
@@ -200,7 +201,7 @@ ServeOneCardReaderConnection(
             static_cast<DWORD>(kRequestByteCount + 1),
             0,
             &security_attributes)};
-        if (pipe.Get() == INVALID_HANDLE_VALUE) {
+        if (pipe.Get() == nullptr) {
             return std::unexpected(GetLastError());
         }
 

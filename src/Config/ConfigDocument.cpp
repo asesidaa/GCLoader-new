@@ -1,11 +1,13 @@
 #include "Config/ConfigDocument.h"
+#include "Platform/Win32/UniqueHandle.h"
+#include "Platform/Win32/Utf.h"
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <format>
-#include <fstream>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -151,32 +153,15 @@ namespace gc::config
                 return std::unexpected(
                     "legacy registry path root is not valid UTF-8 path text");
             }
-            const auto source_size = static_cast<int>(value.size());
-            const int required = MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                nullptr,
-                0);
-            if (required <= 0)
+            auto converted = gc::platform::win32::Utf8ToWide(value);
+            if (!converted)
             {
                 return std::unexpected(
-                    "legacy registry path root is not valid UTF-8 path text");
+                    converted.error().stage == gc::platform::win32::UtfStage::writing
+                        ? "legacy registry path root could not be decoded from UTF-8"
+                        : "legacy registry path root is not valid UTF-8 path text");
             }
-
-            std::wstring normalized(static_cast<std::size_t>(required), L'\0');
-            if (MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                normalized.data(),
-                required) != required)
-            {
-                return std::unexpected(
-                    "legacy registry path root could not be decoded from UTF-8");
-            }
+            auto normalized = std::move(*converted);
             for (wchar_t& character : normalized)
             {
                 if (character == L'/')
@@ -438,38 +423,34 @@ namespace gc::config
             return config_path.parent_path() / name;
         }
 
-        std::expected<void, std::string> ProductionWrite(
-            void*,
+        std::expected<void, std::string> WriteTemporaryConfig(
             const std::filesystem::path& path,
-            std::string_view serialized) noexcept
+            std::string_view serialized,
+            bool& created) noexcept
         {
             try
             {
-                std::ofstream output{
-                    path,
-                    std::ios::binary | std::ios::trunc
-                };
-                if (!output)
+                platform::win32::UniqueHandle output{CreateFileW(
+                    path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL, nullptr)};
+                if (!output) return std::unexpected("could not open temporary file");
+                created = true;
+                std::size_t offset{};
+                while (offset < serialized.size())
                 {
-                    return std::unexpected("could not open temporary file");
+                    const DWORD requested = static_cast<DWORD>((std::min)(
+                        serialized.size() - offset,
+                        static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
+                    DWORD written{};
+                    if (!WriteFile(output.get(), serialized.data() + offset,
+                                   requested, &written, nullptr) || written == 0)
+                        return std::unexpected("could not write temporary file");
+                    offset += written;
                 }
-                output.write(
-                    serialized.data(),
-                    static_cast<std::streamsize>(serialized.size()));
-                if (!output)
-                {
-                    return std::unexpected("could not write temporary file");
-                }
-                output.flush();
-                if (!output)
-                {
+                if (!FlushFileBuffers(output.get()))
                     return std::unexpected("could not flush temporary file");
-                }
-                output.close();
-                if (output.fail())
-                {
+                if (!CloseHandle(output.release()))
                     return std::unexpected("could not close temporary file");
-                }
                 return {};
             }
             catch (const std::exception& error)
@@ -482,8 +463,7 @@ namespace gc::config
             }
         }
 
-        std::expected<void, std::string> ProductionReplace(
-            void*,
+        std::expected<void, std::string> ReplaceConfigFile(
             const std::filesystem::path& destination,
             const std::filesystem::path& replacement) noexcept
         {
@@ -514,8 +494,7 @@ namespace gc::config
             }
         }
 
-        void ProductionRemove(
-            void*,
+        void RemoveTemporaryConfig(
             const std::filesystem::path& path) noexcept
         {
             DeleteFileW(path.c_str());
@@ -621,20 +600,10 @@ namespace gc::config
         }
     }
 
-    AtomicConfigWriteActions ProductionAtomicConfigWriteActions() noexcept
-    {
-        return {
-            .write = &ProductionWrite,
-            .replace = &ProductionReplace,
-            .remove = &ProductionRemove,
-        };
-    }
-
     std::expected<void, ConfigPersistenceError>
     WriteConfigDocumentAtomically(
         const std::filesystem::path& config_path,
-        const ConfigDocument& config,
-        const AtomicConfigWriteActions& actions) noexcept
+        const ConfigDocument& config) noexcept
     {
         bool temporary_may_exist = false;
         std::filesystem::path temporary;
@@ -649,18 +618,6 @@ namespace gc::config
                     .message = "Config write target path must not be empty",
                 });
             }
-            if (actions.write == nullptr ||
-                actions.replace == nullptr ||
-                actions.remove == nullptr)
-            {
-                return std::unexpected(ConfigPersistenceError{
-                    .stage = ConfigPersistenceStage::temporary_write,
-                    .message =
-                    "Config write actions are incomplete for '" +
-                    target + "'",
-                });
-            }
-
             auto serialized = SerializeConfigDocument(config);
             if (!serialized)
             {
@@ -671,14 +628,11 @@ namespace gc::config
             }
             stage = ConfigPersistenceStage::temporary_write;
             temporary = MakeTemporaryPath(config_path);
-            temporary_may_exist = true;
-            auto write_result = actions.write(
-                actions.context,
-                temporary,
-                *serialized);
+            auto write_result = WriteTemporaryConfig(
+                temporary, *serialized, temporary_may_exist);
             if (!write_result)
             {
-                actions.remove(actions.context, temporary);
+                if (temporary_may_exist) RemoveTemporaryConfig(temporary);
                 temporary_may_exist = false;
                 return std::unexpected(ConfigPersistenceError{
                     .stage = ConfigPersistenceStage::temporary_write,
@@ -689,13 +643,12 @@ namespace gc::config
             }
 
             stage = ConfigPersistenceStage::atomic_replace;
-            auto replace_result = actions.replace(
-                actions.context,
+            auto replace_result = ReplaceConfigFile(
                 config_path,
                 temporary);
             if (!replace_result)
             {
-                actions.remove(actions.context, temporary);
+                if (temporary_may_exist) RemoveTemporaryConfig(temporary);
                 temporary_may_exist = false;
                 return std::unexpected(ConfigPersistenceError{
                     .stage = ConfigPersistenceStage::atomic_replace,
@@ -709,10 +662,7 @@ namespace gc::config
         }
         catch (const std::exception& error)
         {
-            if (temporary_may_exist && actions.remove != nullptr)
-            {
-                actions.remove(actions.context, temporary);
-            }
+            if (temporary_may_exist) RemoveTemporaryConfig(temporary);
             return std::unexpected(ConfigPersistenceError{
                 .stage = stage,
                 .message =
@@ -722,10 +672,7 @@ namespace gc::config
         }
         catch (...)
         {
-            if (temporary_may_exist && actions.remove != nullptr)
-            {
-                actions.remove(actions.context, temporary);
-            }
+            if (temporary_may_exist) RemoveTemporaryConfig(temporary);
             return std::unexpected(ConfigPersistenceError{
                 .stage = stage,
                 .message = "Config persistence failed unexpectedly",

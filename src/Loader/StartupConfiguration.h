@@ -15,22 +15,17 @@
 
 namespace gc::loader
 {
-    struct ConfigReadActions
-    {
-        void* context{};
-        std::expected<std::string, std::string> (*read)(
-            void*,
-            const std::filesystem::path&) noexcept{};
-    };
-
     struct StartupConfigurationActions
     {
-        ConfigReadActions config_read;
+        void* context{};
+        std::expected<std::string, std::string> (*read_config)(
+            void*, const std::filesystem::path&) noexcept{};
         testmode_storage::NativeStorageProbeResult (*probe_native_storage)(
             void*) noexcept{};
-        void* probe_context{};
-        system_path::DirectoryActions directories;
-        config::AtomicConfigWriteActions config_write;
+        std::expected<system_path::PreparedRoot, system_path::RootPrepareError>
+            (*prepare_system_root)(void*, system_path::RootPrepareRequest) noexcept{};
+        std::expected<void, config::ConfigPersistenceError> (*persist_config)(
+            void*, const std::filesystem::path&, const config::ConfigDocument&) noexcept{};
     };
 
     enum class StartupConfigurationStage : std::uint8_t

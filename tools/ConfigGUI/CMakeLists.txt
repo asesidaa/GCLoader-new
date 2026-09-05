@@ -65,3 +65,5 @@ target_link_libraries(ConfigGUI PRIVATE
         gc_config_gui_host
         gc_config_gui_model
 )
+target_link_libraries(ConfigGUI PRIVATE gc_platform_win32)
+target_link_libraries(gc_config_gui_model PRIVATE gc_platform_win32)

@@ -1,4 +1,5 @@
 #include "SystemPath/SystemRoot.h"
+#include "Platform/Win32/Utf.h"
 
 #include <Windows.h>
 
@@ -20,35 +21,15 @@ PathFromUtf8(std::string_view value) noexcept {
             return std::unexpected(
                 std::make_error_code(std::errc::invalid_argument));
         }
-        const auto source_size = static_cast<int>(value.size());
-        const int required = MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            source_size,
-            nullptr,
-            0);
-        if (required <= 0) {
-            return std::unexpected(
-                std::error_code{
-                    static_cast<int>(GetLastError()),
-                    std::system_category()});
+        auto native = gc::platform::win32::Utf8ToWide(value);
+        if (!native) {
+            if (native.error().stage == gc::platform::win32::UtfStage::allocation)
+                return std::unexpected(
+                    std::make_error_code(std::errc::not_enough_memory));
+            return std::unexpected(std::error_code{
+                static_cast<int>(native.error().win32_error), std::system_category()});
         }
-
-        std::wstring native(static_cast<std::size_t>(required), L'\0');
-        if (MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                native.data(),
-                required) != required) {
-            return std::unexpected(
-                std::error_code{
-                    static_cast<int>(GetLastError()),
-                    std::system_category()});
-        }
-        return std::filesystem::path{std::move(native)};
+        return std::filesystem::path{std::move(*native)};
     } catch (const std::bad_alloc&) {
         return std::unexpected(
             std::make_error_code(std::errc::not_enough_memory));
@@ -102,28 +83,13 @@ std::expected<PreparedRoot, RootPrepareError> EnsureTree(
     bool configured_path_changed,
     RootPrepareStage stage,
     bool registry_enabled,
-    bool configured_was_default,
-    DirectoryActions actions) noexcept {
+    bool configured_was_default) noexcept {
     std::filesystem::path current_path = runtime.resolved_path;
     try {
-        if (actions.create_directories == nullptr) {
-            return std::unexpected(RootPrepareError{
-                .stage = stage,
-                .path = current_path,
-                .error = std::make_error_code(
-                    std::errc::invalid_argument),
-                .registry_enabled = registry_enabled,
-                .configured_was_default = configured_was_default,
-            });
-        }
-
         for (const std::wstring_view leaf : kRequiredTreeLeaves) {
             current_path = runtime.resolved_path / leaf;
             std::error_code error;
-            actions.create_directories(
-                actions.context,
-                current_path,
-                error);
+            std::filesystem::create_directories(current_path, error);
             if (error) {
                 return std::unexpected(RootPrepareError{
                     .stage = stage,
@@ -166,22 +132,6 @@ std::expected<PreparedRoot, RootPrepareError> EnsureTree(
     }
 }
 
-bool ProductionCreateDirectories(
-    void*,
-    const std::filesystem::path& path,
-    std::error_code& error) noexcept {
-    try {
-        return std::filesystem::create_directories(path, error);
-    } catch (const std::bad_alloc&) {
-        error = std::make_error_code(std::errc::not_enough_memory);
-    } catch (const std::filesystem::filesystem_error& failure) {
-        error = failure.code();
-    } catch (...) {
-        error = std::make_error_code(std::errc::io_error);
-    }
-    return false;
-}
-
 RootPrepareError InvalidConfiguredPathError(
     const RootPrepareRequest& request,
     std::error_code error) {
@@ -195,15 +145,8 @@ RootPrepareError InvalidConfiguredPathError(
 
 } // namespace
 
-DirectoryActions ProductionDirectoryActions() noexcept {
-    return {
-        .create_directories = &ProductionCreateDirectories,
-    };
-}
-
 std::expected<PreparedRoot, RootPrepareError> PrepareGameSystemRoot(
-    RootPrepareRequest request,
-    DirectoryActions actions) noexcept {
+    RootPrepareRequest request) noexcept {
     try {
         const std::filesystem::path logical_root{kLogicalSystemRoot};
         if (!request.registry_enabled) {
@@ -217,8 +160,7 @@ std::expected<PreparedRoot, RootPrepareError> PrepareGameSystemRoot(
                 false,
                 RootPrepareStage::configured_tree,
                 false,
-                true,
-                actions);
+                true);
         }
 
         auto configured_path = PathFromUtf8(request.configured_path);
@@ -251,8 +193,7 @@ std::expected<PreparedRoot, RootPrepareError> PrepareGameSystemRoot(
             false,
             RootPrepareStage::configured_tree,
             true,
-            configured_is_default,
-            actions);
+            configured_is_default);
         if (configured) {
             return configured;
         }
@@ -272,8 +213,7 @@ std::expected<PreparedRoot, RootPrepareError> PrepareGameSystemRoot(
             true,
             RootPrepareStage::fallback_tree,
             true,
-            true,
-            actions);
+            true);
     } catch (const std::bad_alloc&) {
         return std::unexpected(InvalidConfiguredPathError(
             request,

@@ -9,24 +9,11 @@
 
 namespace gc::audio {
 
-struct WasapiPresentedOutputClockActions
-{
-    void* context{};
-    bool (*query_performance_counter)(
-        void* context,
-        std::uint64_t* ticks) noexcept{};
-    std::uint64_t qpc_frequency{};
-};
-
-[[nodiscard]] WasapiPresentedOutputClockActions
-ProductionWasapiPresentedOutputClockActions() noexcept;
-
 class WasapiPresentedOutputClock final : public IPresentedOutputClock
 {
 public:
     WasapiPresentedOutputClock(
-        std::uint32_t output_sample_rate,
-        const WasapiPresentedOutputClockActions& actions) noexcept;
+        std::uint32_t output_sample_rate, std::uint64_t qpc_frequency) noexcept;
 
     void Publish(
         std::uint64_t presented_output_frame,
@@ -38,7 +25,7 @@ public:
 
 private:
     std::uint32_t output_sample_rate_{};
-    WasapiPresentedOutputClockActions actions_{};
+    std::uint64_t qpc_frequency_{};
     PresentedClockPublication publication_;
 };
 

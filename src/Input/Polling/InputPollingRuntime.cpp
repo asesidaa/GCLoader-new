@@ -1,4 +1,5 @@
 #include "Input/Polling/InputPollingRuntime.h"
+#include "Platform/Win32/Utf.h"
 
 #include "Input/Polling/ForegroundPolicy.h"
 #include "Input/Polling/GameplayTransitionJournal.h"
@@ -136,37 +137,7 @@ namespace gc::input
 
         std::string WideToUtf8(std::wstring_view value)
         {
-            if (value.empty())
-            {
-                return {};
-            }
-            const int count = WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                value.data(),
-                static_cast<int>(value.size()),
-                nullptr,
-                0,
-                nullptr,
-                nullptr);
-            if (count <= 0)
-            {
-                return {};
-            }
-            std::string result(static_cast<std::size_t>(count), '\0');
-            if (WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                value.data(),
-                static_cast<int>(value.size()),
-                result.data(),
-                count,
-                nullptr,
-                nullptr) != count)
-            {
-                return {};
-            }
-            return result;
+            return gc::platform::win32::WideToUtf8(value).value_or(std::string{});
         }
 
         const char* InputModeName(InputMode mode) noexcept
@@ -199,11 +170,7 @@ namespace gc::input
             NativeInputWorker(HANDLE stop_event, InputSettings settings)
                 : settings_(std::move(settings)),
                   stop_event_(stop_event),
-                  foreground_api_{
-                      .get_foreground_window = GetForegroundWindow,
-                      .get_window_thread_process_id = GetWindowThreadProcessId,
-                      .current_process_id = GetCurrentProcessId(),
-                  }
+                  current_process_id_(GetCurrentProcessId())
             {
             }
 
@@ -638,7 +605,12 @@ namespace gc::input
 
             bool CheckForeground()
             {
-                const bool foreground = IsCurrentProcessForeground(foreground_api_);
+                const HWND window = GetForegroundWindow();
+                DWORD process_id{};
+                const bool foreground = window != nullptr &&
+                    current_process_id_ != 0 &&
+                    GetWindowThreadProcessId(window, &process_id) != 0 &&
+                    process_id == current_process_id_;
                 const auto transition = foreground_tracker_.Update(foreground);
                 if (transition.changed)
                 {
@@ -724,7 +696,7 @@ namespace gc::input
             HANDLE timer_{};
             std::unique_ptr<Win32InputWindow> window_;
             RawInputPacketBuffer packets_;
-            ForegroundApi foreground_api_;
+            const DWORD current_process_id_;
             ForegroundTransitionTracker foreground_tracker_;
             std::vector<KeyboardBinding> keyboard_bindings_;
             std::vector<ControllerBinding> controller_bindings_;

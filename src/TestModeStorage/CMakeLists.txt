@@ -9,3 +9,4 @@ target_include_directories(gc_test_mode_storage PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_test_mode_storage PUBLIC gc_win32_hooks)
+target_link_libraries(gc_test_mode_storage PRIVATE gc_platform_win32)

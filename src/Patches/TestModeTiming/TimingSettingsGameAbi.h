@@ -85,21 +85,9 @@ struct TimingGameAbi {
 };
 
 
-struct TimingLiveActions {
-    void* context{};
-    bool (*write_game_time_offset)(void*, int) noexcept{};
-    bool (*write_judg_time_offset)(void*, int) noexcept{};
-    void* (*get_timing_manager)(void*) noexcept{};
-    bool (*set_game_time)(void*, void*, int) noexcept{};
-    bool (*set_judg_time)(void*, void*, int) noexcept{};
-};
-
-
 struct TestModeTimingProfile;
 [[nodiscard]] std::expected<TimingGameAbi, game_version::PlanError> BuildTimingGameAbi(
     const runtime_image::RuntimeImage&, const TestModeTimingProfile&,
     const game_version::ApprovedVersionedPlan&) noexcept;
-[[nodiscard]] TimingLiveActions ProductionTimingLiveActions(const TimingGameAbi&) noexcept;
-[[nodiscard]] bool ApplyLiveTiming(TimingOffsets, const TimingLiveActions&) noexcept;
 [[nodiscard]] bool ApplyLiveTiming(const TimingGameAbi&, TimingOffsets) noexcept;
 }

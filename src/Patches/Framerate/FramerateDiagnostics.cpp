@@ -1,4 +1,6 @@
 #include "Patches/Framerate/FramerateDiagnostics.h"
+#include "Diagnostics/FatalProcess.h"
+#include "Platform/Win32/Utf.h"
 
 #include <plog/Log.h>
 
@@ -14,41 +16,6 @@ namespace gc::framerate
 {
     namespace
     {
-        void ProductionLogInfo(const char* text)
-        {
-            PLOG_INFO << text;
-        }
-
-        void ProductionLogWarning(const char* text)
-        {
-            PLOG_WARNING << text;
-        }
-
-        void ProductionLogError(const char* text)
-        {
-            PLOG_ERROR << text;
-        }
-
-        void ProductionShowError(const char* text)
-        {
-            MessageBoxA(
-                nullptr,
-                text,
-                "GCLoader framerate error",
-                MB_OK | MB_ICONERROR);
-        }
-
-        void ProductionTerminateProcess(DWORD code)
-        {
-            TerminateProcess(GetCurrentProcess(), code);
-        }
-
-        void ProductionFailFast()
-        {
-            RaiseFailFastException(nullptr, nullptr, 0);
-            std::abort();
-        }
-
         template <typename Action>
         void InvokeNoexcept(Action&& action) noexcept
         {
@@ -61,67 +28,20 @@ namespace gc::framerate
             }
         }
 
-        void PublishFatal(
-            const std::string& log,
-            std::string_view modal,
-            DWORD exit_code,
-            std::atomic_bool& publication_latch,
-            const FrameratePlatformActions& actions) noexcept
+        [[noreturn]] void PublishFatal(std::string log, std::string_view modal) noexcept
         {
-            bool expected = false;
-            if (!publication_latch.compare_exchange_strong(expected, true))
-            {
-                return;
-            }
-
-            InvokeNoexcept([&]
-            {
-                if (actions.log_error != nullptr)
-                {
-                    actions.log_error(log.c_str());
-                }
-            });
-            const std::string modal_text{modal};
-            InvokeNoexcept([&]
-            {
-                if (actions.show_error != nullptr)
-                {
-                    actions.show_error(modal_text.c_str());
-                }
-            });
-            InvokeNoexcept([&]
-            {
-                if (actions.terminate_process != nullptr)
-                {
-                    actions.terminate_process(exit_code);
-                }
-            });
-            InvokeNoexcept([&]
-            {
-                if (actions.fail_fast != nullptr)
-                {
-                    actions.fail_fast();
-                }
-            });
+            try {
+                diagnostics::AbortProcess({
+                    std::move(log),
+                    platform::win32::Utf8ToWide(modal).value_or(L"GCLoader framerate validation failed."),
+                    L"GCLoader framerate error"});
+            } catch (...) { diagnostics::AbortProcess({}); }
         }
     } // namespace
 
-    FrameratePlatformActions ProductionFrameratePlatformActions() noexcept
-    {
-        return {
-            ProductionLogInfo,
-            ProductionLogWarning,
-            ProductionLogError,
-            ProductionShowError,
-            ProductionTerminateProcess,
-            ProductionFailFast,
-        };
-    }
-
     void ReportFramerateStartup(
         const FramerateTimingProfile& profile,
-        const FramerateStartupPatchSummary& summary,
-        const FrameratePlatformActions& actions) noexcept
+        const FramerateStartupPatchSummary& summary) noexcept
     {
         InvokeNoexcept([&]
         {
@@ -183,10 +103,7 @@ namespace gc::framerate
                 << " required_streak=3"
                 << " built_in_limiter=unpatched"
                 << " external_cap_must_equal_target=true";
-            if (actions.log_info != nullptr)
-            {
-                actions.log_info(stream.str().c_str());
-            }
+            PLOG_INFO << stream.str();
         });
 
         if (!profile.gameplay_validated())
@@ -197,10 +114,7 @@ namespace gc::framerate
                     "FrameratePatch: target_fps={} is formula-driven and not "
                     "individually gameplay-validated",
                     profile.target_fps());
-                if (actions.log_warning != nullptr)
-                {
-                    actions.log_warning(message.c_str());
-                }
+                PLOG_WARNING << message;
             });
         }
     }
@@ -228,95 +142,96 @@ namespace gc::framerate
         return std::fabs(measured_fps - 60.0) / 60.0 <= 0.03;
     }
 
-    void ReportFramerateMismatch(
-        const FramerateObservation& observation,
-        std::atomic_bool& publication_latch,
-        const FrameratePlatformActions& actions) noexcept
+    [[noreturn]] void ReportFramerateMismatch(
+        const FramerateObservation& observation) noexcept
     {
-        std::ostringstream log;
-        log << "FrameratePatch: external cap validation failed"
-            << " target_fps=" << observation.target_fps
-            << " measured_fps=" << observation.measured_fps
-            << " relative_error=" << observation.relative_error
-            << " interval_count=" << observation.interval_count
-            << " failed_windows=" << observation.mismatching_streak
-            << " storage_overflowed="
-            << (observation.storage_overflowed ? "true" : "false");
-
-        std::ostringstream modal;
-        modal << "GCLoader measured " << observation.measured_fps
-            << " FPS, but target_fps is " << observation.target_fps << ".\n\n"
-            << "GCLoader does not apply a frame cap. Configure your driver or RTSS "
-            "cap to exactly match target_fps, ensure the system can sustain it, "
-            "then restart the game.";
-        if (ShouldSuggestIntervalModeOne(
-            observation.target_fps, observation.measured_fps))
+        try
         {
-            modal << "\n\nThe game appears to be held near its built-in 60 FPS limit. "
-                "Set IntervalMode = 1, keep the external cap enabled, and restart.";
+            std::ostringstream log;
+            log << "FrameratePatch: external cap validation failed"
+                << " target_fps=" << observation.target_fps
+                << " measured_fps=" << observation.measured_fps
+                << " relative_error=" << observation.relative_error
+                << " interval_count=" << observation.interval_count
+                << " failed_windows=" << observation.mismatching_streak
+                << " storage_overflowed="
+                << (observation.storage_overflowed ? "true" : "false");
+
+            std::ostringstream modal;
+            modal << "GCLoader measured " << observation.measured_fps
+                << " FPS, but target_fps is " << observation.target_fps << ".\n\n"
+                << "GCLoader does not apply a frame cap. Configure your driver or RTSS "
+                "cap to exactly match target_fps, ensure the system can sustain it, "
+                "then restart the game.";
+            if (ShouldSuggestIntervalModeOne(
+                observation.target_fps, observation.measured_fps))
+            {
+                modal << "\n\nThe game appears to be held near its built-in 60 FPS limit. "
+                    "Set IntervalMode = 1, keep the external cap enabled, and restart.";
+            }
+
+            PublishFatal(
+                log.str(),
+                modal.str());
         }
-
-        PublishFatal(
-            log.str(),
-            modal.str(),
-            ERROR_INVALID_DATA,
-            publication_latch,
-            actions);
+        catch (...)
+        {
+            diagnostics::AbortProcess({
+                "FrameratePatch: fatal diagnostics formatting failed",
+                L"GCLoader encountered a framerate error. Check the loader log.",
+                L"GCLoader framerate error",
+            });
+        }
     }
 
-    void ReportFramerateClockFailure(
-        std::uint32_t target_fps,
-        std::atomic_bool& publication_latch,
-        const FrameratePlatformActions& actions) noexcept
+    [[noreturn]] void ReportFramerateClockFailure(
+        std::uint32_t target_fps) noexcept
     {
-        const auto clock_log = std::format(
-            "FrameratePatch: QPC cadence clock failed target_fps={}", target_fps);
-        constexpr std::string_view clock_modal =
-            "GCLoader could not measure the external frame cap because the "
-            "high-resolution clock failed. Restart the game; if the error repeats, "
-            "keep target_fps at 60 and report the loader log.";
-        PublishFatal(
-            clock_log,
-            clock_modal,
-            ERROR_INVALID_DATA,
-            publication_latch,
-            actions);
+        try
+        {
+            const auto clock_log = std::format(
+                "FrameratePatch: QPC cadence clock failed target_fps={}", target_fps);
+            constexpr std::string_view clock_modal =
+                "GCLoader could not measure the external frame cap because the "
+                "high-resolution clock failed. Restart the game; if the error repeats, "
+                "keep target_fps at 60 and report the loader log.";
+            PublishFatal(
+                clock_log,
+                clock_modal);
+        }
+        catch (...)
+        {
+            diagnostics::AbortProcess({
+                "FrameratePatch: fatal diagnostics formatting failed",
+                L"GCLoader encountered a framerate error. Check the loader log.",
+                L"GCLoader framerate error",
+            });
+        }
     }
 
-    void ReportFramerateRuntimeFailure(
-        std::string_view detail,
-        std::atomic_bool& publication_latch,
-        const FrameratePlatformActions& actions) noexcept
+    [[noreturn]] void ReportFramerateRuntimeFailure(
+        std::string_view detail) noexcept
     {
-        const auto runtime_log = std::format(
-            "FrameratePatch: runtime timing conversion failed detail={}", detail);
-        constexpr std::string_view runtime_modal =
-            "GCLoader encountered an unsafe runtime framerate conversion and stopped "
-            "the game to avoid mixed timing domains. Restart the game and report the "
-            "loader log.";
-        PublishFatal(
-            runtime_log,
-            runtime_modal,
-            ERROR_INVALID_DATA,
-            publication_latch,
-            actions);
+        try
+        {
+            const auto runtime_log = std::format(
+                "FrameratePatch: runtime timing conversion failed detail={}", detail);
+            constexpr std::string_view runtime_modal =
+                "GCLoader encountered an unsafe runtime framerate conversion and stopped "
+                "the game to avoid mixed timing domains. Restart the game and report the "
+                "loader log.";
+            PublishFatal(
+                runtime_log,
+                runtime_modal);
+        }
+        catch (...)
+        {
+            diagnostics::AbortProcess({
+                "FrameratePatch: fatal diagnostics formatting failed",
+                L"GCLoader encountered a framerate error. Check the loader log.",
+                L"GCLoader framerate error",
+            });
+        }
     }
 
-    void ReportFramerateInitializationFailure(
-        std::string_view detail,
-        std::atomic_bool& publication_latch,
-        const FrameratePlatformActions& actions) noexcept
-    {
-        const auto initialization_log = std::format(
-            "FrameratePatch: initialization failed detail={}", detail);
-        constexpr std::string_view initialization_modal =
-            "GCLoader could not install the complete framerate patch set and stopped "
-            "the game. The loader log contains the failed stage and rollback status.";
-        PublishFatal(
-            initialization_log,
-            initialization_modal,
-            ERROR_DLL_INIT_FAILED,
-            publication_latch,
-            actions);
-    }
 } // namespace gc::framerate

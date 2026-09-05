@@ -2,9 +2,9 @@
 
 #include "Input/Win32/ControllerCatalog.h"
 #include "Input/Win32/ControllerStateView.h"
-#include "Input/Win32/HidApi.h"
 
 #include <Windows.h>
+#include <hidsdi.h>
 #include <hidpi.h>
 
 #include <cstddef>
@@ -25,8 +25,7 @@ public:
     RawHidController& operator=(const RawHidController&) = delete;
 
     [[nodiscard]] static std::expected<RawHidController, std::string> Open(
-        const RawHidDeviceInfo& device,
-        HidApi api = ProductionHidApi());
+        const RawHidDeviceInfo& device);
 
     [[nodiscard]] std::expected<bool, std::string> Apply(
         HANDLE source_device,
@@ -77,7 +76,6 @@ private:
 
     ControllerIdentity identity_;
     HANDLE raw_device_{};
-    HidApi api_{};
     HIDP_CAPS caps_{};
     std::vector<std::byte> preparsed_data_;
     std::vector<ControlState> states_;

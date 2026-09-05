@@ -30,8 +30,7 @@ public:
     AudioOperationWorker() noexcept;
     AudioOperationWorker(
         std::unique_ptr<gc::audio::IAsioProbeClient> probe_client,
-        std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client,
-        const gc::config::AtomicConfigWriteActions& write_actions) noexcept;
+        std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client) noexcept;
     ~AudioOperationWorker();
 
     AudioOperationWorker(const AudioOperationWorker&) = delete;
@@ -68,7 +67,6 @@ private:
     HANDLE panel_cancellation_event_{};
     std::unique_ptr<gc::audio::IAsioProbeClient> probe_client_;
     std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client_;
-    gc::config::AtomicConfigWriteActions write_actions_{};
     std::optional<gc::audio::AsioProbeResult> inspection_result_;
     std::optional<std::expected<
         gc::audio::AsioControlPanelCompletion,

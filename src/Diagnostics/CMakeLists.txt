@@ -10,3 +10,4 @@ target_link_libraries(gc_crash_dump PUBLIC
         gc_hooking
         dbghelp
 )
+target_link_libraries(gc_crash_dump PRIVATE gc_platform_win32)

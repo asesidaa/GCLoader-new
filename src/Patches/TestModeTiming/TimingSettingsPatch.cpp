@@ -143,8 +143,7 @@ bool CallSetSelection(
     }
 }
 
-bool DrawNativeTitle(void* opaque, const char* text) noexcept {
-    auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+bool DrawNativeTitle(TimingRuntimeState& runtime, const char* text) noexcept {
     __try {
         runtime.abi.draw_title(
             GameText(text), GameText(text), GameText(text), 4);
@@ -154,8 +153,7 @@ bool DrawNativeTitle(void* opaque, const char* text) noexcept {
     }
 }
 
-bool SetNativeTitlePosition(void* opaque, int x, int y) noexcept {
-    auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+bool SetNativeTitlePosition(TimingRuntimeState& runtime, int x, int y) noexcept {
     __try {
         runtime.abi.set_title_position(x, y);
         return true;
@@ -165,12 +163,11 @@ bool SetNativeTitlePosition(void* opaque, int x, int y) noexcept {
 }
 
 bool SetNativeCell(
-    void* opaque,
+    TimingRuntimeState& runtime,
     void* grid,
     int row,
     int column,
     const char* text) noexcept {
-    auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
     __try {
         runtime.abi.set_cell_text(
             grid, row, column, GameText(text));
@@ -180,25 +177,13 @@ bool SetNativeCell(
     }
 }
 
-bool DrawNativeHelp(void* opaque, const char* text) noexcept {
-    auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
+bool DrawNativeHelp(TimingRuntimeState& runtime, const char* text) noexcept {
     __try {
         runtime.abi.draw_help(GameText(text), GameText(text), 4, 0);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
-}
-
-TimingRenderActions ProductionRenderActions(
-    TimingRuntimeState& runtime) noexcept {
-    return {
-        .context = &runtime,
-        .draw_title = DrawNativeTitle,
-        .set_title_position = SetNativeTitlePosition,
-        .set_cell = SetNativeCell,
-        .draw_help = DrawNativeHelp,
-    };
 }
 
 bool SelectionToRow(int selection, TimingRow* row) noexcept {
@@ -314,10 +299,9 @@ CarrierLifecycleActions RuntimeLifecycleActions(
 }
 
 bool RuntimeSave(
-    void* opaque,
+    TimingRuntimeState& runtime,
     TimingOffsets offsets,
     SaveOutcome* outcome) noexcept {
-    auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
     auto saved = runtime.store.Save(offsets);
     if (!saved) {
         runtime.last_store_error = saved.error();
@@ -328,17 +312,8 @@ bool RuntimeSave(
     return true;
 }
 
-bool RuntimeApplyLive(void* opaque, TimingOffsets offsets) noexcept {
-    const auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
-    return ApplyLiveTiming(runtime.abi, offsets);
-}
-
-void RuntimeStatusChanged(void*, SaveStatus) noexcept {
-}
-
-void RuntimeSaveFailed(void* opaque) noexcept {
+void RuntimeSaveFailed(TimingRuntimeState& runtime) noexcept {
     try {
-        const auto& runtime = *static_cast<TimingRuntimeState*>(opaque);
         if (!runtime.last_store_error) {
             PLOG_ERROR << "TestModeTiming: system.cfg save failed"
                        << " path=" << runtime.store.path().string()
@@ -355,7 +330,7 @@ void RuntimeSaveFailed(void* opaque) noexcept {
     }
 }
 
-void RuntimeApplyFailed(void*) noexcept {
+void RuntimeApplyFailed() noexcept {
     try {
         PLOG_FATAL
             << "TestModeTiming: persisted values but live ABI apply failed";
@@ -364,7 +339,6 @@ void RuntimeApplyFailed(void*) noexcept {
 }
 
 void RuntimeSaveSucceeded(
-    void*,
     TimingOffsets before,
     TimingOffsets staged,
     SaveOutcome outcome) noexcept {
@@ -378,19 +352,6 @@ void RuntimeSaveSucceeded(
                           : "already matched");
     } catch (...) {
     }
-}
-
-TimingCommitActions ProductionCommitActions(
-    TimingRuntimeState& runtime) noexcept {
-    return {
-        .context = &runtime,
-        .save = RuntimeSave,
-        .apply_live = RuntimeApplyLive,
-        .status_changed = RuntimeStatusChanged,
-        .save_failed = RuntimeSaveFailed,
-        .apply_failed = RuntimeApplyFailed,
-        .save_succeeded = RuntimeSaveSucceeded,
-    };
 }
 
 std::expected<std::filesystem::path, DWORD> ResolveConfigPath() {
@@ -419,7 +380,7 @@ bool SetMainMenuCell(
     void* grid,
     int row,
     const char* text) noexcept {
-    return SetNativeCell(&runtime, grid, row, 0, text);
+    return SetNativeCell(runtime, grid, row, 0, text);
 }
 
 void DegradeMainMenu(
@@ -471,6 +432,69 @@ private:
     bool restored_{};
 };
 
+bool RenderTimingSettings(
+    TimingRuntimeState& runtime,
+    void* grid) noexcept {
+    if (grid == nullptr) return false;
+    const auto& model = runtime.model;
+
+    const auto game_offset = FormatOffsetMs(model.staged().game_ms);
+    const auto judge_offset = FormatOffsetMs(model.staged().judge_ms);
+    if (!DrawNativeTitle(runtime, kTimingTitle) ||
+        !SetNativeTitlePosition(runtime, 4, 2) ||
+        !SetNativeCell(
+            runtime, grid, 0, 0, "MUSIC OFFSET") ||
+        !SetNativeCell(
+            runtime, grid, 0, 1, game_offset.data()) ||
+        !SetNativeCell(
+            runtime, grid, 1, 0, "JUDGE OFFSET") ||
+        !SetNativeCell(
+            runtime, grid, 1, 1, judge_offset.data()) ||
+        !SetNativeCell(
+            runtime, grid, 2, 0, "SAVE AND BACK") ||
+        !SetNativeCell(runtime, grid, 2, 1, "") ||
+        !SetNativeCell(runtime, grid, 3, 0, "CANCEL") ||
+        !SetNativeCell(runtime, grid, 3, 1, "")) {
+        return false;
+    }
+
+    const auto row = static_cast<std::size_t>(model.row());
+    if (row >= kTimingRowHelp.size()) {
+        return false;
+    }
+    const char* help = model.status() == SaveStatus::Failed
+        ? kTimingSaveFailureHelp
+        : kTimingRowHelp[row];
+    return DrawNativeHelp(runtime, help);
+}
+
+int CommitTimingSelection(TimingRuntimeState& runtime) noexcept {
+    auto& model = runtime.model;
+    const auto command = model.Confirm();
+    if (command == TimingCommand::None) return 0;
+    if (command == TimingCommand::Cancel) return CancelTimingEdit(model);
+    const auto before = model.original();
+    const auto staged = model.staged();
+    if (!model.dirty()) {
+        model.MarkSaveSucceeded();
+        return 1;
+    }
+    SaveOutcome outcome{};
+    if (!RuntimeSave(runtime, staged, &outcome)) {
+        model.MarkSaveFailed();
+        RuntimeSaveFailed(runtime);
+        return 0;
+    }
+    if (!ApplyLiveTiming(runtime.abi, staged)) {
+        model.MarkSaveFailed();
+        RuntimeApplyFailed();
+        return 0;
+    }
+    model.MarkSaveSucceeded();
+    RuntimeSaveSucceeded(before, staged, outcome);
+    return 1;
+}
+
 } // namespace
 
 std::array<std::uintptr_t, kSoundVtableSlots> BuildCarrierVtable(
@@ -488,46 +512,6 @@ std::array<std::uintptr_t, kSoundVtableSlots> BuildCarrierVtable(
     result[layout.increment_slot] = callbacks.increment;
     result[layout.decrement_slot] = callbacks.decrement;
     return result;
-}
-
-bool RenderTimingSettings(
-    const TimingSettingsModel& model,
-    void* grid,
-    const TimingRenderActions& actions) noexcept {
-    if (grid == nullptr || actions.draw_title == nullptr ||
-        actions.set_title_position == nullptr ||
-        actions.set_cell == nullptr || actions.draw_help == nullptr) {
-        return false;
-    }
-
-    const auto game_offset = FormatOffsetMs(model.staged().game_ms);
-    const auto judge_offset = FormatOffsetMs(model.staged().judge_ms);
-    if (!actions.draw_title(actions.context, kTimingTitle) ||
-        !actions.set_title_position(actions.context, 4, 2) ||
-        !actions.set_cell(
-            actions.context, grid, 0, 0, "MUSIC OFFSET") ||
-        !actions.set_cell(
-            actions.context, grid, 0, 1, game_offset.data()) ||
-        !actions.set_cell(
-            actions.context, grid, 1, 0, "JUDGE OFFSET") ||
-        !actions.set_cell(
-            actions.context, grid, 1, 1, judge_offset.data()) ||
-        !actions.set_cell(
-            actions.context, grid, 2, 0, "SAVE AND BACK") ||
-        !actions.set_cell(actions.context, grid, 2, 1, "") ||
-        !actions.set_cell(actions.context, grid, 3, 0, "CANCEL") ||
-        !actions.set_cell(actions.context, grid, 3, 1, "")) {
-        return false;
-    }
-
-    const auto row = static_cast<std::size_t>(model.row());
-    if (row >= kTimingRowHelp.size()) {
-        return false;
-    }
-    const char* help = model.status() == SaveStatus::Failed
-        ? kTimingSaveFailureHelp
-        : kTimingRowHelp[row];
-    return actions.draw_help(actions.context, help);
 }
 
 bool PrepareCarrierLayout(void* carrier, const TimingNativeLayout& layout) noexcept {
@@ -594,66 +578,6 @@ bool CreateTimingCarrier(
     return true;
 }
 
-int CommitTimingSelection(
-    TimingSettingsModel& model,
-    const TimingCommitActions& actions) noexcept {
-    const auto command = model.Confirm();
-    if (command == TimingCommand::None) {
-        return 0;
-    }
-    if (command == TimingCommand::Cancel) {
-        return CancelTimingEdit(model);
-    }
-
-    const auto before = model.original();
-    const auto staged = model.staged();
-    const auto notify_status = [&](SaveStatus status) noexcept {
-        if (actions.status_changed != nullptr) {
-            actions.status_changed(actions.context, status);
-        }
-    };
-
-    if (!model.dirty()) {
-        model.MarkSaveSucceeded();
-        notify_status(SaveStatus::Succeeded);
-        return 1;
-    }
-    if (actions.save == nullptr || actions.apply_live == nullptr) {
-        model.MarkSaveFailed();
-        notify_status(SaveStatus::Failed);
-        if (actions.save_failed != nullptr) {
-            actions.save_failed(actions.context);
-        }
-        return 0;
-    }
-
-    SaveOutcome outcome{};
-    if (!actions.save(actions.context, staged, &outcome)) {
-        model.MarkSaveFailed();
-        notify_status(SaveStatus::Failed);
-        if (actions.save_failed != nullptr) {
-            actions.save_failed(actions.context);
-        }
-        return 0;
-    }
-    if (!actions.apply_live(actions.context, staged)) {
-        model.MarkSaveFailed();
-        notify_status(SaveStatus::Failed);
-        if (actions.apply_failed != nullptr) {
-            actions.apply_failed(actions.context);
-        }
-        return 0;
-    }
-
-    model.MarkSaveSucceeded();
-    notify_status(SaveStatus::Succeeded);
-    if (actions.save_succeeded != nullptr) {
-        actions.save_succeeded(
-            actions.context, before, staged, outcome);
-    }
-    return 1;
-}
-
 int CancelTimingEdit(TimingSettingsModel& model) noexcept {
     model.Activate(model.original());
     return 1;
@@ -697,10 +621,7 @@ void* __fastcall CarrierRender(
         if (!ReadCarrierGrid(*g_runtime, self, &grid) ||
             !ReadIntField(grid, g_runtime->abi.layout.grid_selection, &selection) ||
             !SynchronizeSelection(*g_runtime, selection) ||
-            !RenderTimingSettings(
-                g_runtime->model,
-                grid,
-                ProductionRenderActions(*g_runtime))) {
+            !RenderTimingSettings(*g_runtime, grid)) {
             LogCallbackFailure("carrier_render");
             return nullptr;
         }
@@ -725,9 +646,7 @@ int __fastcall CarrierConfirm(
             LogCallbackFailure("carrier_confirm_selection");
             return 0;
         }
-        return CommitTimingSelection(
-            g_runtime->model,
-            ProductionCommitActions(*g_runtime));
+        return CommitTimingSelection(*g_runtime);
     } catch (...) {
         LogCallbackFailure("carrier_confirm_exception");
         return 0;
@@ -872,7 +791,7 @@ void* __fastcall MainRenderHook(
             self, frame, input);
         guard.Restore();
         if (route.draw_timing_help && g_runtime->carrier_ready &&
-            !DrawNativeHelp(g_runtime, kTimingMainHelp)) {
+            !DrawNativeHelp(*g_runtime, kTimingMainHelp)) {
             LogCallbackFailure("main_render_help");
         }
         return result;

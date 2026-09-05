@@ -10,19 +10,12 @@
 
 namespace gc::input {
 
-struct RawInputApi {
-    decltype(&GetRawInputData) get_raw_input_data{::GetRawInputData};
-};
-
 class RawInputPacketBuffer {
 public:
-    explicit RawInputPacketBuffer(RawInputApi api = {});
-
     [[nodiscard]] std::expected<const RAWINPUT*, std::string> Read(
         HRAWINPUT handle);
 
 private:
-    RawInputApi api_;
     std::vector<std::byte> bytes_;
 };
 

@@ -1,4 +1,5 @@
 #include "Patches/GameVersion/ImageIdentity.h"
+#include "Platform/Win32/UniqueHandle.h"
 
 #include <bcrypt.h>
 #include <limits>
@@ -7,13 +8,12 @@
 namespace gc::game_version {
 namespace {
 struct IdentityResources final {
-    HANDLE file{INVALID_HANDLE_VALUE};
+    platform::win32::UniqueHandle file;
     BCRYPT_ALG_HANDLE algorithm{};
     BCRYPT_HASH_HANDLE hash{};
     ~IdentityResources() {
         if (hash) BCryptDestroyHash(hash);
         if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
     }
 };
 template <typename T>
@@ -65,13 +65,13 @@ ReadLoadedExecutableIdentity(HMODULE module) noexcept {
         identity.size_of_image = nt.OptionalHeader.SizeOfImage;
 
         IdentityResources resources;
-        resources.file = CreateFileW(identity.path.c_str(), GENERIC_READ,
+        resources.file.reset(CreateFileW(identity.path.c_str(), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-        if (resources.file == INVALID_HANDLE_VALUE)
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+        if (!resources.file)
             return std::unexpected(IdentityError{IdentityStage::open_file, GetLastError()});
         LARGE_INTEGER length{};
-        if (!GetFileSizeEx(resources.file, &length))
+        if (!GetFileSizeEx(resources.file.get(), &length))
             return std::unexpected(IdentityError{IdentityStage::file_size, GetLastError()});
         if (length.QuadPart <= 0)
             return std::unexpected(IdentityError{IdentityStage::file_size, ERROR_BAD_EXE_FORMAT});
@@ -88,7 +88,7 @@ ReadLoadedExecutableIdentity(HMODULE module) noexcept {
         std::uint64_t total{};
         for (;;) {
             DWORD count{};
-            if (!ReadFile(resources.file, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr))
+            if (!ReadFile(resources.file.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr))
                 return std::unexpected(IdentityError{IdentityStage::file_read, GetLastError()});
             if (!count) break;
             total += count;

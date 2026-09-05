@@ -1,7 +1,6 @@
 add_library(gc_input_win32 STATIC
         Win32/ControllerBindingEvaluator.cpp
         Win32/ControllerCatalog.cpp
-        Win32/HidApi.cpp
         Win32/ImeSuppression.cpp
         Win32/InputCapture.cpp
         Win32/PhysicalKeyWin32.cpp
@@ -45,3 +44,5 @@ target_link_libraries(gc_input PUBLIC
         safetyhook::safetyhook
         winmm
 )
+target_link_libraries(gc_input_win32 PRIVATE gc_platform_win32)
+target_link_libraries(gc_input PRIVATE gc_platform_win32)

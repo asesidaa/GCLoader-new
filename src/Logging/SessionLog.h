@@ -1,4 +1,5 @@
 #pragma once
+#include "Platform/Win32/UniqueHandle.h"
 
 #include <Windows.h>
 
@@ -38,7 +39,7 @@ private:
     bool WriteLocked(std::string_view bytes) noexcept;
     void DisableLocked(const wchar_t* message) noexcept;
 
-    HANDLE file_{INVALID_HANDLE_VALUE};
+    gc::platform::win32::UniqueHandle file_;
     const std::uint64_t max_bytes_;
     std::uint64_t bytes_written_{0};
     bool capped_{false};

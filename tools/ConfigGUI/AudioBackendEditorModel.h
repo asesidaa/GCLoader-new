@@ -106,5 +106,4 @@ private:
 [[nodiscard]] std::expected<void, std::string> ValidateAndWriteConfig(
     const std::filesystem::path& path,
     const gc::config::ConfigDocument& config,
-    gc::audio::IAsioProbeClient& asio_probe,
-    const gc::config::AtomicConfigWriteActions& write_actions) noexcept;
+    gc::audio::IAsioProbeClient& asio_probe) noexcept;

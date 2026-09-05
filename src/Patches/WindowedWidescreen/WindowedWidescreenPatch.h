@@ -50,110 +50,6 @@ namespace gc::windowed_widescreen
         D3D9CompositorFailure d3d_failure{};
     };
 
-    struct ConfigApplyHookActions
-    {
-        void* context{};
-        int (*call_original)(void*, std::uintptr_t) noexcept{};
-        bool (*config_vtable_matches)(void*, std::uintptr_t) noexcept{};
-        bool (*set_width)(
-            void*, std::uintptr_t, std::uint32_t, int) noexcept{};
-        bool (*set_height)(
-            void*, std::uintptr_t, std::uint32_t, int) noexcept{};
-        bool (*set_resize)(
-            void*, std::uintptr_t, bool) noexcept{};
-        bool (*set_minmax)(
-            void*, std::uintptr_t, bool, bool) noexcept{};
-        bool (*set_mode)(
-            void*, std::uintptr_t, int, int, int, int) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunConfigApplyHook(
-        std::uintptr_t main_config_ptr,
-        OutputSize output_size,
-        const ConfigApplyHookActions& actions) noexcept;
-
-    struct WindowDeviceHookActions
-    {
-        void* context{};
-        int (*call_original)(void*, std::uintptr_t) noexcept{};
-        bool (*validate_and_place)(void*, std::uintptr_t) noexcept{};
-        bool (*activate_resources)(void*, std::uintptr_t) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunWindowDeviceHook(
-        std::uintptr_t renderer_owner,
-        const WindowDeviceHookActions& actions) noexcept;
-
-    enum class RenderDimensionAxis : std::uint8_t;
-
-    struct LogicalResolutionSetHookActions
-    {
-        void* context{};
-        int (*call_original)(
-            void*, std::uint32_t, std::uint32_t) noexcept{};
-        int (*set_target_width)(void*, std::uint32_t) noexcept{};
-        int (*set_target_height)(void*, std::uint32_t) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunLogicalResolutionSetHook(
-        std::uint32_t requested_width,
-        std::uint32_t requested_height,
-        const LogicalResolutionSetHookActions& actions) noexcept;
-
-    struct LogicalTargetDimensionSetHookActions
-    {
-        void* context{};
-        int (*call_original)(void*, std::uint32_t) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunLogicalTargetDimensionSetHook(
-        RenderDimensionAxis axis,
-        std::uint32_t requested_value,
-        const LogicalTargetDimensionSetHookActions& actions) noexcept;
-
-    struct FrameBoundaryHookActions
-    {
-        void* context{};
-        bool (*run_compositor)(void*) noexcept{};
-        int (*call_original)(void*, std::uintptr_t) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunFrameBoundaryHook(
-        std::uintptr_t renderer_owner,
-        const FrameBoundaryHookActions& actions,
-        WindowedWidescreenOperationStage stage) noexcept;
-
-    struct TaskDispatchHookActions
-    {
-        void* context{};
-        bool (*read_pointer)(
-            void*, std::uintptr_t, std::uintptr_t&) noexcept{};
-        RenderSpace (*classify_task)(void*, std::uintptr_t) noexcept{};
-        bool (*request_space)(void*, RenderSpace) noexcept{};
-        int (*call_original)(void*, std::uintptr_t) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunTaskDispatchHook(
-        std::uintptr_t task_node,
-        const TaskDispatchHookActions& actions) noexcept;
-
-    struct RenderSpaceHookActions
-    {
-        void* context{};
-        bool (*request_space)(void*, RenderSpace) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<void, WindowedWidescreenError>
-    RunGameplaySpaceHook(
-        GameplayPass pass,
-        const RenderSpaceHookActions& actions) noexcept;
-
     enum class RenderDimensionAxis : std::uint8_t
     {
         width,
@@ -169,34 +65,6 @@ namespace gc::windowed_widescreen
     [[nodiscard]] RenderQueryRoute ResolveRenderQueryRoute(
         bool compositor_frame_active) noexcept;
 
-    struct RenderDimensionHookActions
-    {
-        void* context{};
-        bool (*current_dimensions)(void*, RenderDimensions&) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<std::uint32_t, WindowedWidescreenError>
-    RunRenderDimensionInt(
-        RenderDimensionAxis axis,
-        const RenderDimensionHookActions& actions) noexcept;
-
-    [[nodiscard]] std::expected<float, WindowedWidescreenError>
-    RunRenderDimensionFloat(
-        RenderDimensionAxis axis,
-        const RenderDimensionHookActions& actions) noexcept;
-
-    struct ViewportResetHookActions
-    {
-        void* context{};
-        bool (*current_viewport)(void*, NativeViewport&) noexcept{};
-        int (*call_original)(void*, const NativeViewport*) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<int, WindowedWidescreenError>
-    RunViewportResetHook(
-        const NativeViewport* viewport,
-        const ViewportResetHookActions& actions) noexcept;
-
     void ApplyNativeHudOrthographicArguments(
         HudOrthographicArguments& arguments) noexcept;
 
@@ -204,21 +72,6 @@ namespace gc::windowed_widescreen
     ApplyClipGateHook(
         std::uintptr_t continuation,
         std::uint32_t& instruction_pointer) noexcept;
-
-    struct MousePollHookActions
-    {
-        void* context{};
-        std::uintptr_t (*call_original)(
-            void*, std::uintptr_t, std::uint32_t*) noexcept{};
-    };
-
-    [[nodiscard]] std::expected<std::uintptr_t, WindowedWidescreenError>
-    RunMouseDebugPollHook(
-        std::uintptr_t owner,
-        std::uint32_t* output,
-        const ResolutionModel& resolution,
-        const WidescreenNativeLayout& layout,
-        const MousePollHookActions& actions) noexcept;
 
     [[nodiscard]] std::expected<void, WindowedWidescreenError> PrepareWidescreenRuntime(
         WindowedWidescreenSettings, const game_version::ApprovedVersionedPlan&,

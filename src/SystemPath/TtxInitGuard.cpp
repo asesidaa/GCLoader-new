@@ -1,6 +1,8 @@
 #include "SystemPath/TtxInitGuard.h"
+#include "Platform/Win32/Utf.h"
+#include "Platform/Win32/Win32Error.h"
 
-#include "SystemPath/StartupFatal.h"
+#include "Diagnostics/FatalProcess.h"
 
 #include <format>
 #include <limits>
@@ -13,7 +15,6 @@ namespace gc::system_path
 {
     namespace
     {
-        constexpr DWORD kTtxRuntimeFailureExitCode = 22;
         constexpr char kTtxFallbackLog[] =
             "TtxUpdateDownloader initialization failed; startup was terminated "
             "before the unsafe status call";
@@ -25,39 +26,15 @@ namespace gc::system_path
 
         std::wstring Utf8ToWide(std::string_view value)
         {
-            if (value.empty())
+            auto converted = gc::platform::win32::Utf8ToWide(value);
+            if (!converted)
             {
-                return {};
+                if (converted.error().stage == gc::platform::win32::UtfStage::length)
+                    throw std::length_error{"UTF-8 path is too long"};
+                throw std::runtime_error{converted.error().stage == gc::platform::win32::UtfStage::writing
+                    ? "UTF-8 path conversion failed" : "invalid UTF-8 path"};
             }
-            if (value.size() > static_cast<std::size_t>(
-                std::numeric_limits<int>::max()))
-            {
-                throw std::length_error{"UTF-8 path is too long"};
-            }
-            const int size = static_cast<int>(value.size());
-            const int required = MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                size,
-                nullptr,
-                0);
-            if (required <= 0)
-            {
-                throw std::runtime_error{"invalid UTF-8 path"};
-            }
-            std::wstring result(static_cast<std::size_t>(required), L'\0');
-            if (MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                size,
-                result.data(),
-                required) != required)
-            {
-                throw std::runtime_error{"UTF-8 path conversion failed"};
-            }
-            return result;
+            return std::move(*converted);
         }
 
         std::string PathToUtf8(const std::filesystem::path& path)
@@ -71,66 +48,17 @@ namespace gc::system_path
 
         std::wstring Win32ErrorText(DWORD error)
         {
-            std::wstring result(512, L'\0');
-            const DWORD size = FormatMessageW(
-                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                nullptr,
-                error,
-                0,
-                result.data(),
-                static_cast<DWORD>(result.size()),
-                nullptr);
-            if (size == 0)
-            {
-                return L"unknown error";
-            }
-            result.resize(size);
-            while (!result.empty() &&
-                (result.back() == L'\r' || result.back() == L'\n' ||
-                    result.back() == L' '))
-            {
-                result.pop_back();
-            }
-            return result;
+            auto result = gc::platform::win32::FormatWin32Error(error);
+            if (!result) return L"unknown error";
+            // TTX's presentation contract also trims spaces after system CR/LF.
+            while (!result->empty() &&
+                   (result->back() == L' ' || result->back() == L'\r' || result->back() == L'\n'))
+                result->pop_back();
+            return std::move(*result);
         }
     } // namespace
 
     std::atomic<TtxInitGuard*> TtxInitGuard::active_{};
-
-    int InvokeTtxUdlInitGuard(
-        unsigned int priority,
-        unsigned int game_version,
-        unsigned int update_step,
-        unsigned int update_options,
-        const RuntimeRoot& root,
-        const TtxGuardRuntimeActions& actions) noexcept
-    {
-        if (actions.call_original == nullptr)
-        {
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return 0;
-        }
-
-        const int result = actions.call_original(
-            actions.context,
-            priority,
-            game_version,
-            update_step,
-            update_options);
-        if (result != 0)
-        {
-            return result;
-        }
-
-        const DWORD error = actions.get_last_error == nullptr
-                                ? ERROR_INVALID_FUNCTION
-                                : actions.get_last_error(actions.context);
-        if (actions.publish_failure != nullptr)
-        {
-            actions.publish_failure(actions.context, error, root);
-        }
-        return result;
-    }
 
     TtxInitGuard::TtxInitGuard(RuntimeRoot root)
         : root_{std::move(root)}
@@ -169,43 +97,14 @@ namespace gc::system_path
         unsigned int update_step,
         unsigned int update_options) noexcept
     {
-        return InvokeTtxUdlInitGuard(
-            priority,
-            game_version,
-            update_step,
-            update_options,
-            root_,
-            TtxGuardRuntimeActions{
-                .context = this,
-                .call_original = +[](
-                void* context,
-                unsigned int original_priority,
-                unsigned int original_game_version,
-                unsigned int original_update_step,
-                unsigned int original_update_options) noexcept
-                {
-                    auto& self = *static_cast<TtxInitGuard*>(context);
-                    return self.original_(
-                        original_priority,
-                        original_game_version,
-                        original_update_step,
-                        original_update_options);
-                },
-                .get_last_error = +[](void*) noexcept
-                {
-                    return GetLastError();
-                },
-                .publish_failure = +[](
-                void* context,
-                DWORD error,
-                const RuntimeRoot&) noexcept
-                {
-                    static_cast<TtxInitGuard*>(context)->PublishFailure(error);
-                },
-            });
+        if (original_ == nullptr) PublishFailure(ERROR_INVALID_FUNCTION);
+        const int result = original_(priority, game_version, update_step, update_options);
+        if (result != 0) return result;
+        const DWORD error = GetLastError();
+        PublishFailure(error);
     }
 
-    void TtxInitGuard::PublishFailure(DWORD error) noexcept
+    [[noreturn]] void TtxInitGuard::PublishFailure(DWORD error) noexcept
     {
         try
         {
@@ -234,23 +133,18 @@ namespace gc::system_path
                 error,
                 error_text);
 
-            PublishStartupFatal(
-                failure_published_,
+            diagnostics::AbortProcess({
                 log,
                 modal,
-                kTtxFatalTitle,
-                kTtxRuntimeFailureExitCode);
-            return;
+                kTtxFatalTitle});
         }
         catch (...)
         {
         }
 
-        PublishStartupFatal(
-            failure_published_,
+        diagnostics::AbortProcess({
             kTtxFallbackLog,
             kTtxFallbackModal,
-            kTtxFatalTitle,
-            kTtxRuntimeFailureExitCode);
+            kTtxFatalTitle});
     }
 } // namespace gc::system_path

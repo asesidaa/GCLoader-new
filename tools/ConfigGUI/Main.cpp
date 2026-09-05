@@ -1,4 +1,5 @@
 #include "AsioControlPanelMode.h"
+#include "Platform/Win32/Utf.h"
 #include "AsioProbeMode.h"
 #include "AudioBackendEditorModel.h"
 #include "AudioOperationWorker.h"
@@ -98,37 +99,7 @@ namespace
 
     std::string WideToUtf8(std::wstring_view value)
     {
-        if (value.empty())
-        {
-            return {};
-        }
-        const int count = WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            value.data(),
-            static_cast<int>(value.size()),
-            nullptr,
-            0,
-            nullptr,
-            nullptr);
-        if (count <= 0)
-        {
-            return {};
-        }
-        std::string result(static_cast<std::size_t>(count), '\0');
-        if (WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            value.data(),
-            static_cast<int>(value.size()),
-            result.data(),
-            count,
-            nullptr,
-            nullptr) != count)
-        {
-            return {};
-        }
-        return result;
+        return gc::platform::win32::WideToUtf8(value).value_or(std::string{});
     }
 
     std::expected<void, std::string> RegisterGuiRawInput(HWND window)

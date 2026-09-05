@@ -17,6 +17,8 @@ add_library(gc_audio STATIC
         Wasapi/OutputPacingTracker.cpp
         AudioPatch.cpp
         AudioRuntimeState.cpp
+        AudioBackendComposition.cpp
+        AudioDiagnostics.cpp
         Asio/AsioCloseHook.cpp
         Asio/AsioCloseProfile.cpp
         Wasapi/WasapiAudioTypes.cpp
@@ -42,3 +44,4 @@ target_link_libraries(gc_audio PUBLIC
         propsys
         user32
 )
+target_link_libraries(gc_audio PRIVATE gc_platform_win32 gc_fatal_process)

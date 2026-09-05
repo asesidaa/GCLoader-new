@@ -1,4 +1,5 @@
 #include "Config/RegistryConfig.h"
+#include "Platform/Win32/Utf.h"
 
 #include <Windows.h>
 
@@ -32,31 +33,14 @@ namespace
             return PathError("the system root is not valid UTF-8 path text");
         }
 
-        const auto source_size = static_cast<int>(value.size());
-        const int required = MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            source_size,
-            nullptr,
-            0);
-        if (required <= 0)
+        auto converted = gc::platform::win32::Utf8ToWide(value);
+        if (!converted)
         {
-            return PathError("the system root is not valid UTF-8 path text");
+            return PathError(converted.error().stage == gc::platform::win32::UtfStage::writing
+                ? "the system root could not be decoded from UTF-8"
+                : "the system root is not valid UTF-8 path text");
         }
-
-        std::wstring converted(static_cast<std::size_t>(required), L'\0');
-        if (MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            source_size,
-            converted.data(),
-            required) != required)
-        {
-            return PathError("the system root could not be decoded from UTF-8");
-        }
-        return converted;
+        return std::move(*converted);
     }
 
     std::expected<std::string, std::string> WideToServiceAnsi(

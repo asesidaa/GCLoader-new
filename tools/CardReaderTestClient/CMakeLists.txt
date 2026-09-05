@@ -7,6 +7,7 @@ target_include_directories(gc_card_reader_test_client_transport PUBLIC
 )
 
 add_executable(CardReaderTestClient WIN32 Main.cpp)
+target_link_libraries(gc_card_reader_test_client_transport PRIVATE gc_platform_win32)
 target_include_directories(CardReaderTestClient PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/tools

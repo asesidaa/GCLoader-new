@@ -25,8 +25,6 @@ namespace
 } // namespace
 
 AudioOperationWorker::AudioOperationWorker() noexcept
-    : write_actions_(
-        gc::config::ProductionAtomicConfigWriteActions())
 {
     try
     {
@@ -48,11 +46,9 @@ AudioOperationWorker::AudioOperationWorker() noexcept
 
 AudioOperationWorker::AudioOperationWorker(
     std::unique_ptr<gc::audio::IAsioProbeClient> probe_client,
-    std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client,
-    const gc::config::AtomicConfigWriteActions& write_actions) noexcept
+    std::unique_ptr<gc::audio::IAsioControlPanelClient> panel_client) noexcept
     : probe_client_(std::move(probe_client)),
-      panel_client_(std::move(panel_client)),
-      write_actions_(write_actions)
+      panel_client_(std::move(panel_client))
 {
     panel_cancellation_event_ = CreateEventW(
         nullptr,
@@ -225,8 +221,7 @@ std::expected<void, std::string> AudioOperationWorker::StartSave(
                     save_result_.emplace(ValidateAndWriteConfig(
                         path,
                         config,
-                        *probe_client_,
-                        write_actions_));
+                        *probe_client_));
                 }
                 catch (const std::exception& error)
                 {

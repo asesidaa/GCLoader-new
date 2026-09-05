@@ -52,20 +52,6 @@ BuildCarrierVtable(
     BaseUpdateFn base_update,
     const TimingNativeLayout& layout) noexcept;
 
-struct TimingRenderActions {
-    void* context{};
-    bool (*draw_title)(void*, const char*) noexcept{};
-    bool (*set_title_position)(void*, int, int) noexcept{};
-    bool (*set_cell)(
-        void*, void*, int, int, const char*) noexcept{};
-    bool (*draw_help)(void*, const char*) noexcept{};
-};
-
-[[nodiscard]] bool RenderTimingSettings(
-    const TimingSettingsModel& model,
-    void* grid,
-    const TimingRenderActions& actions) noexcept;
-
 [[nodiscard]] bool PrepareCarrierLayout(void* carrier, const TimingNativeLayout& layout) noexcept;
 
 struct CarrierLifecycleActions {
@@ -84,21 +70,6 @@ struct CarrierLifecycleActions {
     const CarrierLifecycleActions& actions,
     void** carrier_out,
     const TimingNativeLayout& layout) noexcept;
-
-struct TimingCommitActions {
-    void* context{};
-    bool (*save)(void*, TimingOffsets, SaveOutcome*) noexcept{};
-    bool (*apply_live)(void*, TimingOffsets) noexcept{};
-    void (*status_changed)(void*, SaveStatus) noexcept{};
-    void (*save_failed)(void*) noexcept{};
-    void (*apply_failed)(void*) noexcept{};
-    void (*save_succeeded)(
-        void*, TimingOffsets, TimingOffsets, SaveOutcome) noexcept{};
-};
-
-[[nodiscard]] int CommitTimingSelection(
-    TimingSettingsModel& model,
-    const TimingCommitActions& actions) noexcept;
 
 [[nodiscard]] int CancelTimingEdit(TimingSettingsModel& model) noexcept;
 

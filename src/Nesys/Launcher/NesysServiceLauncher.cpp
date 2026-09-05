@@ -1,4 +1,5 @@
 #include "Nesys/Launcher/NesysServiceLauncher.h"
+#include "Platform/Win32/UniqueHandle.h"
 
 #include "Nesys/NesysServiceProcess.h"
 
@@ -83,30 +84,30 @@ bool inject_current_dll(HANDLE process) noexcept {
             return false;
         }
 
-        HANDLE injection_thread = CreateRemoteThread(
+        gc::platform::win32::UniqueHandle injection_thread{CreateRemoteThread(
             process,
             nullptr,
             0,
             load_library,
             remote_path,
             0,
-            nullptr);
-        if (injection_thread == nullptr) {
+            nullptr)};
+        if (!injection_thread) {
             VirtualFreeEx(process, remote_path, 0, MEM_RELEASE);
             return false;
         }
 
         const DWORD wait =
-            WaitForSingleObject(injection_thread, 5000);
+            WaitForSingleObject(injection_thread.get(), 5000);
         if (wait != WAIT_OBJECT_0) {
-            CloseHandle(injection_thread);
+            injection_thread.reset();
             return false;
         }
 
         DWORD remote_module = 0;
         const BOOL got_exit_code =
-            GetExitCodeThread(injection_thread, &remote_module);
-        CloseHandle(injection_thread);
+            GetExitCodeThread(injection_thread.get(), &remote_module);
+        injection_thread.reset();
         VirtualFreeEx(process, remote_path, 0, MEM_RELEASE);
         if (got_exit_code == FALSE || remote_module == 0) {
             return false;

@@ -28,64 +28,6 @@ struct RendererNativeTargets final {
     std::uintptr_t buffered_unlock_continuation{};
 };
 
-struct RendererInitializedWriter {
-    void* context{};
-    bool (*clear_initialized)(
-        void*,
-        std::uintptr_t,
-        std::size_t) noexcept{};
-};
-
-struct RendererDeviceLostActions {
-    void* context{};
-    bool (*clear_initialized)(
-        void*,
-        std::uintptr_t,
-        std::size_t) noexcept{};
-    bool (*detach_index_buffer)(
-        void*,
-        std::uintptr_t,
-        std::size_t,
-        std::uintptr_t&) noexcept{};
-    bool (*release_index_buffer)(
-        void*,
-        std::uintptr_t) noexcept{};
-};
-
-[[nodiscard]] bool ApplyRendererDeviceLostCleanup(
-    const safetyhook::Context& context,
-    const RendererNativeLayout& layout,
-    const RendererDeviceLostActions& actions) noexcept;
-
-[[nodiscard]] bool ApplyRendererDeviceLossRetry(
-    safetyhook::Context& context,
-    const RendererNativeLayout& layout,
-    const RendererNativeTargets& targets,
-    RendererInitializedWriter writer) noexcept;
-
-struct RendererStackPointerReader {
-    void* context{};
-    bool (*read_pointer)(
-        void*,
-        std::uintptr_t,
-        std::uintptr_t&) noexcept{};
-};
-
-[[nodiscard]] bool ApplyRendererDeviceLossDrawSkip(
-    safetyhook::Context& context,
-    const RendererNativeLayout& layout,
-    const RendererNativeTargets& targets,
-    RendererStackPointerReader reader) noexcept;
-
-[[nodiscard]] bool ApplyRendererDeviceLossDirectLockSkip(
-    safetyhook::Context& context,
-    const RendererNativeTargets& targets) noexcept;
-
-[[nodiscard]] bool ApplyRendererDeviceLossUnlockCompletion(
-    safetyhook::Context& context,
-    const RendererNativeTargets& targets) noexcept;
-
-
 void OnDeviceLostTail(safetyhook::Context&) noexcept;
 void OnVertexBufferCreateResult(safetyhook::Context&) noexcept;
 void OnIndexBufferCreateResult(safetyhook::Context&) noexcept;

@@ -281,11 +281,12 @@ namespace gc::audio
             output_sample_rate_.store(
                 output_sample_rate, std::memory_order_release);
 
-            const auto presented_clock_actions =
-                ProductionWasapiPresentedOutputClockActions();
+            LARGE_INTEGER frequency{};
+            const std::uint64_t qpc_frequency =
+                QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0
+                    ? static_cast<std::uint64_t>(frequency.QuadPart) : 0;
             auto presented_clock = std::make_unique<WasapiPresentedOutputClock>(
-                output_sample_rate,
-                presented_clock_actions);
+                output_sample_rate, qpc_frequency);
             presented_clock_ = presented_clock.get();
             ma_result mixer_result = MA_ERROR;
             render_core_ = AudioRenderCore::Create(
@@ -329,8 +330,8 @@ namespace gc::audio
                 const auto endpoint_generation =
                     detail::NextExactJudgementTimelineGeneration();
                 if (endpoint_generation == 0 ||
-                    presented_clock_actions.qpc_frequency == 0 ||
-                    presented_clock_actions.qpc_frequency >
+                    qpc_frequency == 0 ||
+                    qpc_frequency >
                     static_cast<std::uint64_t>(
                         std::numeric_limits<std::int64_t>::max()))
                 {
@@ -349,7 +350,7 @@ namespace gc::audio
                     output_sample_rate,
                     initialization_.clock_frequency,
                     static_cast<std::int64_t>(
-                        presented_clock_actions.qpc_frequency),
+                        qpc_frequency),
                     frames);
                 if (exact_clock_ == nullptr ||
                     !detail::RegisterExactJudgementTimeline(exact_clock_))

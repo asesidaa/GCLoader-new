@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: CC0-1.0
+#include "Platform/Win32/Utf.h"
 
 #include "Audio/Asio/AsioDriverCatalog.h"
 
@@ -99,7 +100,6 @@ std::expected<std::wstring, AsioFailure> ReadClsidText(HKEY key) {
 
 std::expected<std::vector<AsioRegistryValue>, AsioFailure>
 ReadProductionRegistry(
-    void*,
     HKEY root,
     std::wstring_view path,
     REGSAM access) noexcept {
@@ -207,79 +207,31 @@ ReadProductionRegistry(
 
 std::expected<std::string, AsioFailure> WideToUtf8(
     std::wstring_view value) {
-    if (value.empty() ||
-        value.size() > static_cast<std::size_t>(
-            std::numeric_limits<int>::max())) {
-        return std::unexpected(RegistryFailure(
-            "ASIO registry name must be nonempty valid Unicode"));
+        if (value.empty() ||
+            value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            return std::unexpected(RegistryFailure("ASIO registry name must be nonempty valid Unicode"));
+        auto converted = gc::platform::win32::WideToUtf8(value);
+        if (!converted)
+            return std::unexpected(RegistryFailure(
+                converted.error().stage == gc::platform::win32::UtfStage::writing
+                    ? "ASIO registry name could not be encoded as UTF-8" : "ASIO registry name is not valid UTF-16",
+                converted.error().win32_error));
+        return std::move(*converted);
     }
-    const int input_size = static_cast<int>(value.size());
-    const int required = WideCharToMultiByte(
-        CP_UTF8,
-        WC_ERR_INVALID_CHARS,
-        value.data(),
-        input_size,
-        nullptr,
-        0,
-        nullptr,
-        nullptr);
-    if (required <= 0) {
-        return std::unexpected(RegistryFailure(
-            "ASIO registry name is not valid UTF-16",
-            GetLastError()));
-    }
-    std::string result(static_cast<std::size_t>(required), '\0');
-    if (WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            value.data(),
-            input_size,
-            result.data(),
-            required,
-            nullptr,
-            nullptr) != required) {
-        return std::unexpected(RegistryFailure(
-            "ASIO registry name could not be encoded as UTF-8",
-            GetLastError()));
-    }
-    return result;
-}
 
 std::expected<std::wstring, AsioFailure> Utf8ToWide(
     std::string_view value) {
-    if (value.empty() ||
-        value.size() > static_cast<std::size_t>(
-            std::numeric_limits<int>::max())) {
-        return std::unexpected(RegistryFailure(
-            "Configured ASIO registry name must be nonempty valid UTF-8"));
+        if (value.empty() ||
+            value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            return std::unexpected(RegistryFailure("Configured ASIO registry name must be nonempty valid UTF-8"));
+        auto converted = gc::platform::win32::Utf8ToWide(value);
+        if (!converted)
+            return std::unexpected(RegistryFailure(
+                converted.error().stage == gc::platform::win32::UtfStage::writing
+                    ? "Configured ASIO registry name could not be decoded" : "Configured ASIO registry name is not valid UTF-8",
+                converted.error().win32_error));
+        return std::move(*converted);
     }
-    const int input_size = static_cast<int>(value.size());
-    const int required = MultiByteToWideChar(
-        CP_UTF8,
-        MB_ERR_INVALID_CHARS,
-        value.data(),
-        input_size,
-        nullptr,
-        0);
-    if (required <= 0) {
-        return std::unexpected(RegistryFailure(
-            "Configured ASIO registry name is not valid UTF-8",
-            GetLastError()));
-    }
-    std::wstring result(static_cast<std::size_t>(required), L'\0');
-    if (MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            input_size,
-            result.data(),
-            required) != required) {
-        return std::unexpected(RegistryFailure(
-            "Configured ASIO registry name could not be decoded",
-            GetLastError()));
-    }
-    return result;
-}
 
 int CompareOrdinal(
     std::wstring_view left,
@@ -417,24 +369,9 @@ ResolveAsioDriver(
     }
 }
 
-AsioRegistryActions ProductionAsioRegistryActions() noexcept {
-    return {
-        .read = &ReadProductionRegistry,
-    };
-}
-
-ProductionAsioRegistrySource::ProductionAsioRegistrySource(
-    AsioRegistryActions actions) noexcept
-    : actions_(actions) {}
-
 std::expected<std::vector<AsioRegistryValue>, AsioFailure>
 ProductionAsioRegistrySource::Read32BitRegistrations() noexcept {
-    if (actions_.read == nullptr) {
-        return std::unexpected(RegistryFailure(
-            "ASIO registry actions are incomplete"));
-    }
-    return actions_.read(
-        actions_.context,
+    return ReadProductionRegistry(
         HKEY_LOCAL_MACHINE,
         L"SOFTWARE\\ASIO",
         KEY_READ | KEY_WOW64_32KEY);

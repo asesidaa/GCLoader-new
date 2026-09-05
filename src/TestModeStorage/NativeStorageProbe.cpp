@@ -1,4 +1,5 @@
 #include "TestModeStorage/NativeStorageProbe.h"
+#include "Platform/Win32/UniqueHandle.h"
 
 #include <array>
 #include <new>
@@ -66,7 +67,7 @@ NativeStorageProbeResult ProbeNativeStorage(
 {
     NativeStorageProbeResult result;
     std::array<wchar_t, MAX_PATH> path{};
-    HANDLE file = INVALID_HANDLE_VALUE;
+    gc::platform::win32::UniqueHandle file;
     bool temporary_created = false;
 
     try {
@@ -92,15 +93,15 @@ NativeStorageProbeResult ProbeNativeStorage(
             temporary_created = true;
             result.probe_path = path.data();
 
-            file = CreateFileW(
+            file.reset(CreateFileW(
                 path.data(),
                 GENERIC_WRITE,
                 0,
                 nullptr,
                 TRUNCATE_EXISTING,
                 FILE_ATTRIBUTE_TEMPORARY,
-                nullptr);
-            if (file == INVALID_HANDLE_VALUE) {
+                nullptr));
+            if (!file) {
                 RecordFailure(
                     result,
                     NativeStorageProbeStage::open_file,
@@ -111,7 +112,7 @@ NativeStorageProbeResult ProbeNativeStorage(
             constexpr unsigned char value{0};
             DWORD written{};
             const BOOL write_succeeded = WriteFile(
-                    file,
+                    file.get(),
                     &value,
                     sizeof(value),
                     &written,
@@ -126,7 +127,7 @@ NativeStorageProbeResult ProbeNativeStorage(
                     write_error);
                 break;
             }
-            if (!FlushFileBuffers(file)) {
+            if (!FlushFileBuffers(file.get())) {
                 RecordFailure(
                     result,
                     NativeStorageProbeStage::flush_file,
@@ -147,7 +148,7 @@ NativeStorageProbeResult ProbeNativeStorage(
             ERROR_INVALID_PARAMETER);
     }
 
-    if (file != INVALID_HANDLE_VALUE && !CloseHandle(file)) {
+    if (file && !CloseHandle(file.release())) {
         RecordCleanupFailure(result, GetLastError());
     }
     if (temporary_created && !DeleteFileW(path.data())) {

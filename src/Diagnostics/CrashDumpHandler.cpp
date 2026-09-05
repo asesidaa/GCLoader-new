@@ -1,4 +1,5 @@
 #include "Diagnostics/CrashDumpHandler.h"
+#include "Platform/Win32/UniqueHandle.h"
 
 
 #include <Windows.h>
@@ -216,35 +217,35 @@ void WriteCrashDump(EXCEPTION_POINTERS* exception) noexcept
         return;
     }
 
-    const HANDLE file = CreateFileW(
+    gc::platform::win32::UniqueHandle file{CreateFileW(
         g_dump_path.data(),
         GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+        nullptr)};
+    if (!file) {
         return;
     }
 
     bool written = WriteDumpAttempt(
-        file,
+        file.get(),
         exception,
         kComprehensiveDumpType);
-    if (!written && ResetDumpFile(file)) {
+    if (!written && ResetDumpFile(file.get())) {
         written = WriteDumpAttempt(
-            file,
+            file.get(),
             exception,
             kCompatibleFullDumpType);
     }
-    if (!written && ResetDumpFile(file)) {
+    if (!written && ResetDumpFile(file.get())) {
         static_cast<void>(WriteDumpAttempt(
-            file,
+            file.get(),
             exception,
             MiniDumpNormal));
     }
-    CloseHandle(file);
+
 }
 
 LONG InvokeDownstreamFilter(

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: CC0-1.0
 
 #include "Audio/AudioBackendController.h"
+#include "Audio/AudioBackendComposition.h"
+#include "Audio/AudioDiagnostics.h"
 
 #include "Audio/AudioContractFatal.h"
 
@@ -12,13 +14,8 @@ namespace gc::audio
 {
     AudioBackendController::AudioBackendController(
         AudioBackendControllerConfig config,
-        IWasapiOutputBackendFactory& wasapi_factory,
-        IAsioOutputBackendFactory& asio_factory,
-        IAudioBackendControllerReporter& reporter) noexcept
-        : config_(std::move(config)),
-          wasapi_factory_(wasapi_factory),
-          asio_factory_(asio_factory),
-          reporter_(reporter)
+        AudioBackendComposition& backends) noexcept
+        : config_(std::move(config)), backends_(backends)
     {
     }
 
@@ -41,7 +38,7 @@ namespace gc::audio
             {
                 return DS_OK;
             }
-            engine_ = asio_factory_.Start(game_window, config_.asio_request);
+            engine_ = backends_.StartAsio(game_window, config_.asio_request);
             if (engine_ == nullptr)
             {
                 FailAudioContract(
@@ -71,7 +68,7 @@ namespace gc::audio
         AudioStartupFailure wasapi_failure{};
         if (config_.requested_backend == AudioBackend::wasapi_exclusive)
         {
-            engine = wasapi_factory_.Start(
+            engine = backends_.StartWasapi(
                 config_.wasapi_configured_duration,
                 &wasapi_failure);
         }
@@ -81,12 +78,10 @@ namespace gc::audio
             return DS_OK;
         }
 
-        reporter_.FatalStartupFailure(AudioBackendStartupFailure{
+        AbortAudioBackendStartup(AudioBackendStartupFailure{
             .requested_backend = config_.requested_backend,
             .wasapi_failure = std::move(wasapi_failure),
         });
-        PublishResult(nullptr, State::failed);
-        return DSERR_NODRIVER;
     }
 
     AudioCursorModel AudioBackendController::cursor_model() const noexcept

@@ -1,1 +1,1 @@
-add_subdirectory(Win32/Hooking)
+add_subdirectory(Win32)

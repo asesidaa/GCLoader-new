@@ -4,3 +4,4 @@ target_include_directories(gc_logging PUBLIC
         ${plog_SOURCE_DIR}/include
 )
 target_link_libraries(gc_logging PUBLIC gc_nesys_process)
+target_link_libraries(gc_logging PUBLIC gc_platform_win32)

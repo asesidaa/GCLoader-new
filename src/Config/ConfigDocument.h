@@ -132,23 +132,6 @@ namespace gc::config
     [[nodiscard]] std::expected<std::string, ConfigDocumentLoadError>
     SerializeConfigDocument(const ConfigDocument& document) noexcept;
 
-    struct AtomicConfigWriteActions
-    {
-        void* context{};
-        std::expected<void, std::string> (*write)(
-            void*,
-            const std::filesystem::path&,
-            std::string_view) noexcept{};
-        std::expected<void, std::string> (*replace)(
-            void*,
-            const std::filesystem::path& destination,
-            const std::filesystem::path& replacement) noexcept{};
-        void (*remove)(void*, const std::filesystem::path&) noexcept{};
-    };
-
-    [[nodiscard]] AtomicConfigWriteActions
-    ProductionAtomicConfigWriteActions() noexcept;
-
     enum class ConfigPersistenceStage : std::uint8_t
     {
         serialize,
@@ -165,7 +148,5 @@ namespace gc::config
     [[nodiscard]] std::expected<void, ConfigPersistenceError>
     WriteConfigDocumentAtomically(
         const std::filesystem::path& path,
-        const ConfigDocument& document,
-        const AtomicConfigWriteActions& actions =
-            ProductionAtomicConfigWriteActions()) noexcept;
+        const ConfigDocument& document) noexcept;
 } // namespace gc::config

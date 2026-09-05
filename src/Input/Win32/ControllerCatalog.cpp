@@ -1,4 +1,6 @@
 #include "Input/Win32/ControllerCatalog.h"
+#include "Platform/Win32/UniqueHandle.h"
+#include "Platform/Win32/Utf.h"
 
 #include <hidsdi.h>
 
@@ -19,82 +21,30 @@ namespace gc::input
 
         std::expected<std::string, std::string> WideToUtf8(std::wstring_view value)
         {
-            if (value.empty())
-            {
-                return std::string{};
-            }
             if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-            {
                 return std::unexpected("Raw HID device path is too long");
-            }
-
-            const int source_size = static_cast<int>(value.size());
-            const int byte_count = WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                nullptr,
-                0,
-                nullptr,
-                nullptr);
-            if (byte_count == 0)
-            {
-                return std::unexpected(Win32Failure("WideCharToMultiByte(size)"));
-            }
-
-            std::string result(byte_count, '\0');
-            if (WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                result.data(),
-                byte_count,
-                nullptr,
-                nullptr) != byte_count)
-            {
-                return std::unexpected(Win32Failure("WideCharToMultiByte(data)"));
-            }
-            return result;
+            auto converted = gc::platform::win32::WideToUtf8(value);
+            if (!converted)
+                return std::unexpected(std::format(
+                    "{} failed with Win32 error {}",
+                    converted.error().stage == gc::platform::win32::UtfStage::writing
+                        ? "WideCharToMultiByte(data)" : "WideCharToMultiByte(size)",
+                    converted.error().win32_error));
+            return std::move(*converted);
         }
 
         std::expected<std::wstring, std::string> Utf8ToWide(std::string_view value)
         {
-            if (value.empty())
-            {
-                return std::wstring{};
-            }
             if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-            {
                 return std::unexpected("Configured Raw HID path is too long");
-            }
-
-            const int source_size = static_cast<int>(value.size());
-            const int character_count = MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                nullptr,
-                0);
-            if (character_count == 0)
-            {
-                return std::unexpected(Win32Failure("MultiByteToWideChar(size)"));
-            }
-
-            std::wstring result(character_count, L'\0');
-            if (MultiByteToWideChar(
-                CP_UTF8,
-                MB_ERR_INVALID_CHARS,
-                value.data(),
-                source_size,
-                result.data(),
-                character_count) != character_count)
-            {
-                return std::unexpected(Win32Failure("MultiByteToWideChar(data)"));
-            }
-            return result;
+            auto converted = gc::platform::win32::Utf8ToWide(value);
+            if (!converted)
+                return std::unexpected(std::format(
+                    "{} failed with Win32 error {}",
+                    converted.error().stage == gc::platform::win32::UtfStage::writing
+                        ? "MultiByteToWideChar(data)" : "MultiByteToWideChar(size)",
+                    converted.error().win32_error));
+            return std::move(*converted);
         }
 
         std::expected<std::wstring, std::string> DevicePath(HANDLE device)
@@ -135,25 +85,25 @@ namespace gc::input
 
         std::wstring ProductName(const std::wstring& path)
         {
-            const HANDLE device = CreateFileW(
+            gc::platform::win32::UniqueHandle device{CreateFileW(
                 path.c_str(),
                 0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 nullptr,
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL,
-                nullptr);
-            if (device == INVALID_HANDLE_VALUE)
+                nullptr)};
+            if (!device)
             {
                 return {};
             }
 
             std::array < wchar_t, 256 > name{};
             const BOOLEAN succeeded = HidD_GetProductString(
-                device,
+                device.get(),
                 name.data(),
                 static_cast<ULONG>(name.size() * sizeof(wchar_t)));
-            CloseHandle(device);
+            device.reset();
             return succeeded ? std::wstring(name.data()) : std::wstring{};
         }
 

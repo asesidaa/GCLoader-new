@@ -23,30 +23,7 @@ namespace gc::audio
         [[nodiscard]] virtual AudioCursorModel cursor_model() const noexcept = 0;
     };
 
-    class IAudioBackendControllerFactory
-    {
-    public:
-        virtual ~IAudioBackendControllerFactory() = default;
-        virtual IAudioEngineController* GetOrCreate() noexcept = 0;
-    };
-
-    class IWasapiOutputBackendFactory
-    {
-    public:
-        virtual ~IWasapiOutputBackendFactory() = default;
-        virtual std::unique_ptr<IAudioEngineServices> Start(
-            REFERENCE_TIME configured_duration,
-            AudioStartupFailure*) noexcept = 0;
-    };
-
-    class IAsioOutputBackendFactory
-    {
-    public:
-        virtual ~IAsioOutputBackendFactory() = default;
-        virtual std::unique_ptr<IAudioEngineServices> Start(
-            HWND game_window,
-            const AsioStreamRequest&) noexcept = 0;
-    };
+    class AudioBackendComposition;
 
     enum class ActiveAudioBackend : std::uint8_t
     {
@@ -69,23 +46,12 @@ namespace gc::audio
         AudioStartupFailure wasapi_failure;
     };
 
-    class IAudioBackendControllerReporter
-    {
-    public:
-        virtual ~IAudioBackendControllerReporter() = default;
-        virtual void FatalStartupFailure(
-            const AudioBackendStartupFailure&) noexcept = 0;
-        virtual void FatalControllerAllocationFailure() noexcept = 0;
-    };
-
     class AudioBackendController final : public IAudioEngineController
     {
     public:
         AudioBackendController(
             AudioBackendControllerConfig,
-            IWasapiOutputBackendFactory&,
-            IAsioOutputBackendFactory&,
-            IAudioBackendControllerReporter&) noexcept;
+            AudioBackendComposition&) noexcept;
 
         HRESULT StartForWindow(HWND game_window) noexcept override;
         [[nodiscard]] AudioCursorModel cursor_model() const noexcept override;
@@ -120,9 +86,7 @@ namespace gc::audio
             State) noexcept;
 
         AudioBackendControllerConfig config_;
-        IWasapiOutputBackendFactory& wasapi_factory_;
-        IAsioOutputBackendFactory& asio_factory_;
-        IAudioBackendControllerReporter& reporter_;
+        AudioBackendComposition& backends_;
         mutable std::mutex mutex_;
         std::condition_variable condition_;
         State state_{State::not_started};

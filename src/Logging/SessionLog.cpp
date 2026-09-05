@@ -26,15 +26,15 @@ BoundedSessionFile::BoundedSessionFile(
     const wchar_t* file_name,
     std::uint64_t max_bytes) noexcept
     : max_bytes_(max_bytes) {
-    file_ = CreateFileW(
+    file_.reset(CreateFileW(
         file_name,
         GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         CREATE_ALWAYS,
         FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    if (file_ == INVALID_HANDLE_VALUE) {
+        nullptr));
+    if (!file_) {
         failure_reported_ = true;
         OutputDebugStringW(
             L"GCLoader: failed to open the process session log.\n");
@@ -43,18 +43,12 @@ BoundedSessionFile::BoundedSessionFile(
 
 BoundedSessionFile::~BoundedSessionFile() {
     plog::util::MutexLock lock(mutex_);
-    if (file_ != INVALID_HANDLE_VALUE) {
-        CloseHandle(file_);
-        file_ = INVALID_HANDLE_VALUE;
-    }
+    file_.reset();
 }
 
 void BoundedSessionFile::DisableLocked(
     const wchar_t* message) noexcept {
-    if (file_ != INVALID_HANDLE_VALUE) {
-        CloseHandle(file_);
-        file_ = INVALID_HANDLE_VALUE;
-    }
+    file_.reset();
     if (!failure_reported_) {
         failure_reported_ = true;
         OutputDebugStringW(message);
@@ -72,7 +66,7 @@ bool BoundedSessionFile::WriteLocked(
                 std::numeric_limits<DWORD>::max())));
         DWORD written = 0;
         if (WriteFile(
-                file_,
+                file_.get(),
                 bytes.data() + offset,
                 request,
                 &written,
@@ -90,7 +84,7 @@ bool BoundedSessionFile::WriteLocked(
 
 bool BoundedSessionFile::Write(std::string_view bytes) noexcept {
     plog::util::MutexLock lock(mutex_);
-    if (file_ == INVALID_HANDLE_VALUE || capped_) {
+    if (!file_ || capped_) {
         return false;
     }
     if (bytes.empty()) {
@@ -113,8 +107,8 @@ bool BoundedSessionFile::Write(std::string_view bytes) noexcept {
 
 void BoundedSessionFile::Flush() noexcept {
     plog::util::MutexLock lock(mutex_);
-    if (file_ != INVALID_HANDLE_VALUE) {
-        FlushFileBuffers(file_);
+    if (file_) {
+        FlushFileBuffers(file_.get());
     }
 }
 

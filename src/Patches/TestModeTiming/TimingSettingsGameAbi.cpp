@@ -5,30 +5,27 @@
 
 namespace gc::test_mode_timing {
 namespace {
-const TimingGameAbi& AbiFromContext(void* context) noexcept {
-    return *static_cast<const TimingGameAbi*>(context);
-}
-bool ProductionWriteGameOffset(void* context, int value) noexcept {
+bool ProductionWriteGameOffset(const TimingGameAbi& abi, int value) noexcept {
     __try {
-        *AbiFromContext(context).game_time_offset = value;
+        *abi.game_time_offset = value;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-bool ProductionWriteJudgOffset(void* context, int value) noexcept {
+bool ProductionWriteJudgOffset(const TimingGameAbi& abi, int value) noexcept {
     __try {
-        *AbiFromContext(context).judg_time_offset = value;
+        *abi.judg_time_offset = value;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-void* ProductionGetTimingManager(void* context) noexcept {
+void* ProductionGetTimingManager(const TimingGameAbi& abi) noexcept {
     __try {
-        const auto get_manager = AbiFromContext(context).get_timing_manager;
+        const auto get_manager = abi.get_timing_manager;
         return get_manager();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
@@ -36,11 +33,11 @@ void* ProductionGetTimingManager(void* context) noexcept {
 }
 
 bool ProductionSetGameTime(
-    void* context,
+    const TimingGameAbi& abi,
     void* manager,
     int value) noexcept {
     __try {
-        const auto setter = AbiFromContext(context).set_game_time;
+        const auto setter = abi.set_game_time;
         setter(manager, value);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -49,11 +46,11 @@ bool ProductionSetGameTime(
 }
 
 bool ProductionSetJudgTime(
-    void* context,
+    const TimingGameAbi& abi,
     void* manager,
     int value) noexcept {
     __try {
-        const auto setter = AbiFromContext(context).set_judg_time;
+        const auto setter = abi.set_judg_time;
         setter(manager, value);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -127,47 +124,15 @@ std::expected<TimingGameAbi, game_version::PlanError> BuildTimingGameAbi(
     abi.game_time_offset = reinterpret_cast<int*>(*game);
     return abi;
 }
-TimingLiveActions
-ProductionTimingLiveActions(const TimingGameAbi& abi) noexcept {
-    return {
-        .context = const_cast<TimingGameAbi*>(&abi),
-        .write_game_time_offset = ProductionWriteGameOffset,
-        .write_judg_time_offset = ProductionWriteJudgOffset,
-        .get_timing_manager = ProductionGetTimingManager,
-        .set_game_time = ProductionSetGameTime,
-        .set_judg_time = ProductionSetJudgTime,
-    };
-}
-
-bool ApplyLiveTiming(
-    TimingOffsets offsets,
-    const TimingLiveActions& actions) noexcept {
-    if (actions.write_game_time_offset == nullptr ||
-        actions.write_judg_time_offset == nullptr ||
-        actions.get_timing_manager == nullptr ||
-        actions.set_game_time == nullptr ||
-        actions.set_judg_time == nullptr) {
+bool ApplyLiveTiming(const TimingGameAbi& abi, TimingOffsets offsets) noexcept {
+    if (!ProductionWriteGameOffset(abi, offsets.game_ms) ||
+        !ProductionWriteJudgOffset(abi, offsets.judge_ms)) {
         return false;
     }
-    if (!actions.write_game_time_offset(
-            actions.context, offsets.game_ms) ||
-        !actions.write_judg_time_offset(
-            actions.context, offsets.judge_ms)) {
-        return false;
-    }
-    void* manager = actions.get_timing_manager(actions.context);
+    void* manager = ProductionGetTimingManager(abi);
     return manager != nullptr &&
-        actions.set_game_time(
-            actions.context, manager, offsets.game_ms) &&
-        actions.set_judg_time(
-            actions.context, manager, offsets.judge_ms);
-}
-
-bool ApplyLiveTiming(
-    const TimingGameAbi& abi,
-    TimingOffsets offsets) noexcept {
-    return ApplyLiveTiming(
-        offsets, ProductionTimingLiveActions(abi));
+        ProductionSetGameTime(abi, manager, offsets.game_ms) &&
+        ProductionSetJudgTime(abi, manager, offsets.judge_ms);
 }
 
 } // namespace gc::test_mode_timing

@@ -17,7 +17,7 @@ namespace {
 native_abi::NativeLayout g_layout{};
 bool g_observe_lifecycle{};
 
-[[noreturn]] void PublishStartupFatal(
+[[noreturn]] void AbortStartup(
     AbsoluteJudgementFatalPredicate predicate, std::string_view details) noexcept {
     diagnostics::AbortProcess({
         std::format("AbsoluteJudgement: startup-fatal predicate_id={} predicate={} {}",
@@ -351,19 +351,19 @@ std::expected<void, game_version::PlanError> PrepareAbsoluteJudgementRuntime(
     // These concrete capabilities must be prepared before any lifecycle hook enables.
     // Input and audio own their ordinary APIs and do not depend on versioning.
     if (!input::PrepareGameplayTransitionTransport(enabled))
-        PublishStartupFatal(AbsoluteJudgementFatalPredicate::InputQpcFrequencyInvalidAtStageEntry,
+        AbortStartup(AbsoluteJudgementFatalPredicate::InputQpcFrequencyInvalidAtStageEntry,
             "stage=transport_prepare qpc_frequency_unavailable=1");
     const auto backend = settings.audio_backend();
     const auto expected_domain = settings.expected_clock_domain();
     if (enabled && backend == audio::AudioBackend::wasapi_exclusive && !expected_domain)
-        PublishStartupFatal(AbsoluteJudgementFatalPredicate::AudioBackendUnsupportedForAbsoluteJudgement,
+        AbortStartup(AbsoluteJudgementFatalPredicate::AudioBackendUnsupportedForAbsoluteJudgement,
             std::format("stage=capability configured_backend={}", static_cast<std::uint32_t>(backend)));
     if (enabled && settings.input_rate_hz() != 1000)
-        PublishStartupFatal(AbsoluteJudgementFatalPredicate::InputTransportRateNot1000,
+        AbortStartup(AbsoluteJudgementFatalPredicate::InputTransportRateNot1000,
             std::format("stage=capability configured_rate_hz={}", settings.input_rate_hz()));
     const bool observe_lifecycle = enabled || backend == audio::AudioBackend::asio;
     if (observe_lifecycle && !audio::IsAudioHookCommitted())
-        PublishStartupFatal(AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
+        AbortStartup(AbsoluteJudgementFatalPredicate::ExactAudioHookRouteUnavailable,
             "stage=capability audio_hook_committed=0");
     JudgementDiagnostics().SetStartupTargetFps(settings.target_fps());
     InitializeAbsoluteJudgementRuntime(profile->layout, targets, backend, enabled, expected_domain);
@@ -377,7 +377,7 @@ void CompleteAbsoluteJudgementStartup(const JudgementSettings& settings) noexcep
     if (enabled && (!detail::g_originals.pressed || !detail::g_originals.held ||
         !detail::g_originals.released || !detail::g_originals.direction ||
         !detail::g_originals.held_age || !detail::g_originals.timing_grade))
-        PublishStartupFatal(AbsoluteJudgementFatalPredicate::StartupHookTransactionInvalid,
+        AbortStartup(AbsoluteJudgementFatalPredicate::StartupHookTransactionInvalid,
             "stage=publication original_missing=1");
     JudgementDiagnostics().LogStartup({
         .enabled = enabled, .target_fps = settings.target_fps(),

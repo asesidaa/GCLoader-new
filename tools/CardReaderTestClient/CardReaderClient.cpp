@@ -1,4 +1,5 @@
 #include "CardReaderTestClient/CardReaderClient.h"
+#include "Platform/Win32/UniqueHandle.h"
 
 #include "Rfid/CardReaderProtocol.h"
 
@@ -11,33 +12,7 @@ namespace gc::rfid::card_reader_test_client
 {
     namespace
     {
-        class UniqueHandle
-        {
-        public:
-            explicit UniqueHandle(HANDLE value) noexcept
-                : value_{value}
-            {
-            }
-
-            UniqueHandle(const UniqueHandle&) = delete;
-            UniqueHandle& operator=(const UniqueHandle&) = delete;
-
-            ~UniqueHandle()
-            {
-                if (value_ != INVALID_HANDLE_VALUE)
-                {
-                    CloseHandle(value_);
-                }
-            }
-
-            [[nodiscard]] HANDLE Get() const noexcept
-            {
-                return value_;
-            }
-
-        private:
-            HANDLE value_{INVALID_HANDLE_VALUE};
-        };
+        using gc::platform::win32::UniqueHandle;
 
         SendResult Win32Failure(DWORD error) noexcept
         {
@@ -87,21 +62,21 @@ namespace gc::rfid::card_reader_test_client
                 0,
                 nullptr)
         };
-        if (pipe.Get() == INVALID_HANDLE_VALUE)
+        if (!pipe)
         {
             return Win32Failure(GetLastError());
         }
 
         DWORD mode = PIPE_READMODE_MESSAGE;
         if (!SetNamedPipeHandleState(
-            pipe.Get(), &mode, nullptr, nullptr))
+            pipe.get(), &mode, nullptr, nullptr))
         {
             return Win32Failure(GetLastError());
         }
 
         DWORD bytes_written{};
         if (!WriteFile(
-            pipe.Get(),
+            pipe.get(),
             card_number.data(),
             static_cast<DWORD>(card_number.size()),
             &bytes_written,
@@ -117,7 +92,7 @@ namespace gc::rfid::card_reader_test_client
         std::array < char, 8 > response{};
         DWORD bytes_read{};
         if (!ReadFile(
-            pipe.Get(),
+            pipe.get(),
             response.data(),
             static_cast<DWORD>(response.size()),
             &bytes_read,

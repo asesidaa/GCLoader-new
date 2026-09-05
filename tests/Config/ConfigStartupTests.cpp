@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <variant>
 
 namespace
@@ -57,145 +58,79 @@ namespace
         return source;
     }
 
-    struct FakeActions
+    // Substitute complete startup operations. Filesystem mechanics remain in
+    // their production owners; these cases exercise the startup coordinator.
+    struct StartupScenario
     {
         std::string source;
-        std::string destination_text;
-        std::string temporary_text;
-        std::filesystem::path temporary_path;
-        std::filesystem::path destination_path;
+        std::string persisted_text;
         int read_calls{};
         int probe_calls{};
-        int directory_calls{};
-        int write_calls{};
-        int replace_calls{};
-        int remove_calls{};
+        int root_calls{};
+        int persist_calls{};
         bool native_storage_available{true};
-        bool fail_first_directory{};
-        bool fail_replace{};
+        bool fail_persistence{};
+        gc::system_path::PreparedRoot prepared_root{
+            .runtime = {
+                .configured_path = "D:\\system",
+                .resolved_path = L"D:\\system",
+                .redirect_enabled = false,
+            },
+        };
     };
 
-    std::expected<std::string, std::string> FakeRead(
-        void* context,
-        const std::filesystem::path&) noexcept
+    std::expected<std::string, std::string> ReadConfig(
+        void* context, const std::filesystem::path&) noexcept
     {
-        auto& fake = *static_cast<FakeActions*>(context);
-        ++fake.read_calls;
-        try
-        {
-            return fake.source;
-        }
-        catch (...)
-        {
-            return std::unexpected(std::string{"fake read allocation failed"});
-        }
+        auto& scenario = *static_cast<StartupScenario*>(context);
+        ++scenario.read_calls;
+        return scenario.source;
     }
 
-    gc::testmode_storage::NativeStorageProbeResult FakeProbe(
-        void* context) noexcept
+    gc::testmode_storage::NativeStorageProbeResult ProbeStorage(void* context) noexcept
     {
-        auto& fake = *static_cast<FakeActions*>(context);
-        ++fake.probe_calls;
-        return {
-            .available = fake.native_storage_available,
-        };
+        auto& scenario = *static_cast<StartupScenario*>(context);
+        ++scenario.probe_calls;
+        return {.available = scenario.native_storage_available};
     }
 
-    bool FakeCreateDirectories(
-        void* context,
-        const std::filesystem::path&,
-        std::error_code& error) noexcept
+    std::expected<gc::system_path::PreparedRoot, gc::system_path::RootPrepareError>
+    PrepareRoot(void* context, gc::system_path::RootPrepareRequest) noexcept
     {
-        auto& fake = *static_cast<FakeActions*>(context);
-        ++fake.directory_calls;
-        if (fake.fail_first_directory && fake.directory_calls == 1)
-        {
-            error = std::make_error_code(std::errc::permission_denied);
-            return false;
-        }
-        error.clear();
-        return true;
+        auto& scenario = *static_cast<StartupScenario*>(context);
+        ++scenario.root_calls;
+        return scenario.prepared_root;
     }
 
-    std::expected<void, std::string> FakeWrite(
-        void* context,
-        const std::filesystem::path& path,
-        std::string_view text) noexcept
+    std::expected<void, gc::config::ConfigPersistenceError> PersistConfig(
+        void* context, const std::filesystem::path&,
+        const gc::config::ConfigDocument& document) noexcept
     {
-        auto& fake = *static_cast<FakeActions*>(context);
-        ++fake.write_calls;
-        try
-        {
-            fake.temporary_path = path;
-            fake.temporary_text.assign(text);
-            return {};
-        }
-        catch (...)
-        {
-            return std::unexpected(std::string{"fake write allocation failed"});
-        }
+        auto& scenario = *static_cast<StartupScenario*>(context);
+        ++scenario.persist_calls;
+        if (scenario.fail_persistence)
+            return std::unexpected(gc::config::ConfigPersistenceError{
+                .stage = gc::config::ConfigPersistenceStage::atomic_replace,
+                .message = "replacement operation failed",
+            });
+        auto serialized = gc::config::SerializeConfigDocument(document);
+        if (!serialized)
+            return std::unexpected(gc::config::ConfigPersistenceError{
+                .stage = gc::config::ConfigPersistenceStage::serialize,
+                .message = serialized.error().message,
+            });
+        scenario.persisted_text = std::move(*serialized);
+        return {};
     }
 
-    std::expected<void, std::string> FakeReplace(
-        void* context,
-        const std::filesystem::path& destination,
-        const std::filesystem::path& replacement) noexcept
-    {
-        auto& fake = *static_cast<FakeActions*>(context);
-        ++fake.replace_calls;
-        if (fake.fail_replace)
-        {
-            return std::unexpected(std::string{"injected replacement failure"});
-        }
-        try
-        {
-            if (replacement != fake.temporary_path)
-            {
-                return std::unexpected(
-                    std::string{"replacement did not use the written temporary"});
-            }
-            fake.destination_path = destination;
-            fake.destination_text = fake.temporary_text;
-            fake.temporary_text.clear();
-            return {};
-        }
-        catch (...)
-        {
-            return std::unexpected(std::string{"fake replace allocation failed"});
-        }
-    }
-
-    void FakeRemove(
-        void* context,
-        const std::filesystem::path& path) noexcept
-    {
-        auto& fake = *static_cast<FakeActions*>(context);
-        ++fake.remove_calls;
-        if (path == fake.temporary_path)
-        {
-            fake.temporary_text.clear();
-        }
-    }
-
-    gc::loader::StartupConfigurationActions ActionsFor(FakeActions& fake)
+    gc::loader::StartupConfigurationActions ActionsFor(StartupScenario& scenario)
     {
         return {
-            .config_read = {
-                .context = &fake,
-                .read = &FakeRead,
-            },
-            .probe_native_storage = &FakeProbe,
-            .probe_context = &fake,
-            .directories = {
-                .context = &fake,
-                .create_directories = &FakeCreateDirectories,
-            },
-            .config_write = {
-                .context = &fake,
-                .write = &FakeWrite,
-                .replace = &FakeReplace,
-                .remove = &FakeRemove,
-            },
+            .context = &scenario,
+            .read_config = &ReadConfig,
+            .probe_native_storage = &ProbeStorage,
+            .prepare_system_root = &PrepareRoot,
+            .persist_config = &PersistConfig,
         };
     }
 
@@ -220,25 +155,22 @@ namespace
 
     void ValidCurrentGameConfigPublishesWithoutWriting()
     {
-        FakeActions fake{
+        StartupScenario scenario{
             .source = ReadDistributedConfig(),
         };
-        fake.destination_text = fake.source;
 
         const auto result = gc::loader::PrepareProcessConfiguration(
             R"(C:\game\config.toml)",
             gc::nesys_service::ProcessRole::Game,
-            ActionsFor(fake));
+            ActionsFor(scenario));
 
         Expect(result.has_value(), "valid game config is prepared");
-        Expect(fake.read_calls == 1, "game config is read exactly once");
-        Expect(fake.probe_calls == 1, "game native storage is probed once");
+        Expect(scenario.read_calls == 1, "game config is read exactly once");
+        Expect(scenario.probe_calls == 1, "game native storage is probed once");
         Expect(
-            fake.directory_calls > 0,
-            "game system-root directories are prepared");
-        Expect(fake.write_calls == 0, "unchanged game config is not written");
-        Expect(fake.replace_calls == 0, "unchanged config is not replaced");
-        Expect(fake.remove_calls == 0, "unchanged config needs no cleanup");
+            scenario.root_calls > 0,
+            "game system-root preparation is requested");
+        Expect(scenario.persist_calls == 0, "unchanged game config is not written");
         if (!result)
         {
             return;
@@ -263,24 +195,21 @@ namespace
     void RecognizedMigrationPersistsExactlyOnce()
     {
         const auto current = ReadDistributedConfig();
-        FakeActions fake{
+        StartupScenario scenario{
             .source = ReplaceUnique(
                 current,
                 "audio_backend = 'directsound'",
                 "enable_wasapi_exclusive_audio = false"),
         };
-        fake.destination_text = fake.source;
 
         const auto result = gc::loader::PrepareProcessConfiguration(
             R"(C:\game\config.toml)",
             gc::nesys_service::ProcessRole::Game,
-            ActionsFor(fake));
+            ActionsFor(scenario));
 
         Expect(result.has_value(), "recognized migration is prepared");
-        Expect(fake.read_calls == 1, "migrated config is read once");
-        Expect(fake.write_calls == 1, "migration writes one temporary");
-        Expect(fake.replace_calls == 1, "migration replaces once");
-        Expect(fake.remove_calls == 0, "successful migration needs no cleanup");
+        Expect(scenario.read_calls == 1, "migrated config is read once");
+        Expect(scenario.persist_calls == 1, "migration persists exactly once");
         if (!result)
         {
             return;
@@ -301,7 +230,7 @@ namespace
         }
 
         const auto reparsed =
-            gc::config::ParseConfigDocument(fake.destination_text);
+            gc::config::ParseConfigDocument(scenario.persisted_text);
         Expect(reparsed.has_value(), "persisted migration strictly reparses");
         if (reparsed)
         {
@@ -315,31 +244,35 @@ namespace
         }
     }
 
-    void ApprovedRepairsShareOneAtomicReplacement()
+    void ApprovedRepairsShareOnePersistenceOperation()
     {
         const auto current = ReadDistributedConfig();
-        FakeActions fake{
+        StartupScenario scenario{
             .source = ReplaceUnique(
                 current,
                 "enabled = false",
                 "enabled = true"),
             .native_storage_available = false,
-            .fail_first_directory = true,
         };
-        fake.destination_text = fake.source;
+
+        scenario.prepared_root = {
+            .runtime = {
+                .configured_path = std::string{gc::system_path::kFallbackConfiguredPath},
+                .resolved_path = LR"(C:\game\system)",
+                .redirect_enabled = true,
+            },
+            .configured_path_changed = true,
+        };
 
         const auto result = gc::loader::PrepareProcessConfiguration(
             R"(C:\game\config.toml)",
             gc::nesys_service::ProcessRole::Game,
-            ActionsFor(fake));
+            ActionsFor(scenario));
 
         Expect(result.has_value(), "approved fallback repairs are prepared");
-        Expect(fake.probe_calls == 1, "fallback run probes native storage once");
-        Expect(
-            fake.directory_calls > 1,
-            "fallback retries directory preparation at the fallback root");
-        Expect(fake.write_calls == 1, "both repairs share one temporary write");
-        Expect(fake.replace_calls == 1, "both repairs share one replacement");
+        Expect(scenario.probe_calls == 1, "fallback run probes native storage once");
+        Expect(scenario.root_calls == 1, "startup prepares its system root once");
+        Expect(scenario.persist_calls == 1, "both repairs share one persistence operation");
         if (!result)
         {
             return;
@@ -363,7 +296,7 @@ namespace
         }
 
         const auto reparsed =
-            gc::config::ParseConfigDocument(fake.destination_text);
+            gc::config::ParseConfigDocument(scenario.persisted_text);
         Expect(reparsed.has_value(), "repaired document strictly reparses");
         if (reparsed)
         {
@@ -389,27 +322,25 @@ namespace
             current,
             "audio_backend = 'directsound'",
             "enable_wasapi_exclusive_audio = false");
-        FakeActions fake{
+        StartupScenario scenario{
             .source = ReplaceUnique(
                 std::move(migrated),
                 "target_fps = 60",
                 "target_fps = 59"),
         };
-        fake.destination_text = fake.source;
 
         const auto result = gc::loader::PrepareProcessConfiguration(
             R"(C:\game\config.toml)",
             gc::nesys_service::ProcessRole::Game,
-            ActionsFor(fake));
+            ActionsFor(scenario));
 
         Expect(!result.has_value(), "semantic-invalid migration is rejected");
-        Expect(fake.read_calls == 1, "semantic-invalid config is read once");
-        Expect(fake.probe_calls == 0, "semantic failure prevents game probe");
+        Expect(scenario.read_calls == 1, "semantic-invalid config is read once");
+        Expect(scenario.probe_calls == 0, "semantic failure prevents game probe");
         Expect(
-            fake.directory_calls == 0,
+            scenario.root_calls == 0,
             "semantic failure prevents directory preparation");
-        Expect(fake.write_calls == 0, "semantic failure performs no write");
-        Expect(fake.replace_calls == 0, "semantic failure performs no replace");
+        Expect(scenario.persist_calls == 0, "semantic failure performs no write");
         if (!result)
         {
             Expect(
@@ -422,34 +353,26 @@ namespace
         }
     }
 
-    void ReplacementFailurePublishesNothingAndRequestsCleanup()
+    void PersistenceFailurePublishesNothing()
     {
         const auto current = ReadDistributedConfig();
-        FakeActions fake{
+        StartupScenario scenario{
             .source = ReplaceUnique(
                 current,
                 "audio_backend = 'directsound'",
                 "enable_wasapi_exclusive_audio = false"),
-            .fail_replace = true,
+            .fail_persistence = true,
         };
-        fake.destination_text = fake.source;
-        const auto original_destination = fake.destination_text;
 
         const auto result = gc::loader::PrepareProcessConfiguration(
             R"(C:\game\config.toml)",
             gc::nesys_service::ProcessRole::Game,
-            ActionsFor(fake));
+            ActionsFor(scenario));
 
         Expect(!result.has_value(), "replacement failure publishes no settings");
-        Expect(fake.write_calls == 1, "replacement failure wrote a temporary");
-        Expect(fake.replace_calls == 1, "replacement failure was attempted once");
-        Expect(fake.remove_calls == 1, "replacement failure requests cleanup");
-        Expect(
-            fake.destination_text == original_destination,
-            "replacement failure retains the prior destination");
-        Expect(
-            fake.temporary_text.empty(),
-            "replacement failure cleans the fake temporary");
+        Expect(scenario.persist_calls == 1, "persistence failure was attempted once");
+        Expect(scenario.persisted_text.empty(),
+               "failed persistence is not marked successful");
         if (!result)
         {
             Expect(
@@ -461,23 +384,20 @@ namespace
 
     void NesysRoleReadsOnlyAndPublishesNesysSettings()
     {
-        FakeActions fake{
+        StartupScenario scenario{
             .source = ReadDistributedConfig(),
         };
-        fake.destination_text = fake.source;
 
         const auto result = gc::loader::PrepareProcessConfiguration(
             R"(C:\game\config.toml)",
             gc::nesys_service::ProcessRole::Service,
-            ActionsFor(fake));
+            ActionsFor(scenario));
 
         Expect(result.has_value(), "NESYS config is prepared");
-        Expect(fake.read_calls == 1, "NESYS config is read exactly once");
-        Expect(fake.probe_calls == 0, "NESYS never runs game storage probe");
-        Expect(fake.directory_calls == 0, "NESYS never prepares game directories");
-        Expect(fake.write_calls == 0, "NESYS never writes config");
-        Expect(fake.replace_calls == 0, "NESYS never replaces config");
-        Expect(fake.remove_calls == 0, "NESYS never requests write cleanup");
+        Expect(scenario.read_calls == 1, "NESYS config is read exactly once");
+        Expect(scenario.probe_calls == 0, "NESYS never runs game storage probe");
+        Expect(scenario.root_calls == 0, "NESYS never prepares game directories");
+        Expect(scenario.persist_calls == 0, "NESYS never writes config");
         if (!result)
         {
             return;
@@ -502,9 +422,9 @@ int main()
 {
     ValidCurrentGameConfigPublishesWithoutWriting();
     RecognizedMigrationPersistsExactlyOnce();
-    ApprovedRepairsShareOneAtomicReplacement();
+    ApprovedRepairsShareOnePersistenceOperation();
     SemanticFailurePreventsGameSideEffectsAndWrites();
-    ReplacementFailurePublishesNothingAndRequestsCleanup();
+    PersistenceFailurePublishesNothing();
     NesysRoleReadsOnlyAndPublishesNesysSettings();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

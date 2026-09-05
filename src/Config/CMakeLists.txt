@@ -15,3 +15,4 @@ target_link_libraries(gc_config PUBLIC
         tomlplusplus::tomlplusplus
         reflectcpp
 )
+target_link_libraries(gc_config PRIVATE gc_platform_win32)

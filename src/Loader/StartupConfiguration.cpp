@@ -121,7 +121,7 @@ namespace gc::loader
             nesys_service::ProcessRole role,
             const StartupConfigurationActions& actions)
         {
-            if (actions.config_read.read == nullptr)
+            if (actions.read_config == nullptr)
             {
                 return Error(
                     StartupConfigurationStage::read,
@@ -137,15 +137,13 @@ namespace gc::loader
                     StartupConfigurationStage::system_path,
                     "Native-storage probe action is missing");
             }
-            if (actions.directories.create_directories == nullptr)
+            if (actions.prepare_system_root == nullptr)
             {
                 return Error(
                     StartupConfigurationStage::system_path,
                     "System-path directory action is missing");
             }
-            if (actions.config_write.write == nullptr ||
-                actions.config_write.replace == nullptr ||
-                actions.config_write.remove == nullptr)
+            if (actions.persist_config == nullptr)
             {
                 return Error(
                     StartupConfigurationStage::persistence,
@@ -195,12 +193,15 @@ namespace gc::loader
     ProductionStartupConfigurationActions() noexcept
     {
         return {
-            .config_read = {
-                .read = &ProductionRead,
-            },
+            .read_config = &ProductionRead,
             .probe_native_storage = &ProductionProbe,
-            .directories = system_path::ProductionDirectoryActions(),
-            .config_write = config::ProductionAtomicConfigWriteActions(),
+            .prepare_system_root = +[](void*, system_path::RootPrepareRequest request) noexcept {
+                return system_path::PrepareGameSystemRoot(request);
+            },
+            .persist_config = +[](void*, const std::filesystem::path& path,
+                                 const config::ConfigDocument& document) noexcept {
+                return config::WriteConfigDocumentAtomically(path, document);
+            },
         };
     }
 
@@ -225,8 +226,8 @@ namespace gc::loader
                 return std::unexpected(std::move(*invalid));
             }
 
-            auto text = actions.config_read.read(
-                actions.config_read.context,
+            auto text = actions.read_config(
+                actions.context,
                 config_path);
             if (!text)
             {
@@ -277,14 +278,13 @@ namespace gc::loader
 
             auto candidate = std::move(parsed->document);
             const auto native_storage = actions.probe_native_storage(
-                actions.probe_context);
-            auto prepared_root = system_path::PrepareGameSystemRoot(
-                {
+                actions.context);
+            auto prepared_root = actions.prepare_system_root(
+                actions.context, {
                     .registry_enabled = candidate.registry().enabled(),
                     .configured_path = candidate.registry().system_path(),
                     .config_directory = config_path.parent_path(),
-                },
-                actions.directories);
+                });
             if (!prepared_root)
             {
                 return std::unexpected(Error(
@@ -324,10 +324,8 @@ namespace gc::loader
             if (must_persist)
             {
                 active_stage = StartupConfigurationStage::persistence;
-                auto persisted = config::WriteConfigDocumentAtomically(
-                    config_path,
-                    candidate,
-                    actions.config_write);
+                auto persisted = actions.persist_config(
+                    actions.context, config_path, candidate);
                 if (!persisted)
                 {
                     return std::unexpected(Error(

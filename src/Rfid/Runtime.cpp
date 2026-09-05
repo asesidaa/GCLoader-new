@@ -14,7 +14,7 @@ namespace gc::rfid {
 namespace {
 
 std::expected<void, DWORD> StartDetached(
-    CardWorkerEntry entry,
+    void (*entry)(void*) noexcept,
     void* context) noexcept
 {
     try {
@@ -27,44 +27,22 @@ std::expected<void, DWORD> StartDetached(
     }
 }
 
-SHORT GetAsyncKeyStateAdapter(int virtual_key) noexcept
-{
-    return ::GetAsyncKeyState(virtual_key);
-}
-
-void SleepFor(std::chrono::milliseconds duration) noexcept
-{
-    std::this_thread::sleep_for(duration);
-}
-
 } // namespace
-
-CardWorkerApi ProductionCardWorkerApi() noexcept
-{
-    return {
-        .start_detached = StartDetached,
-        .get_async_key_state = GetAsyncKeyStateAdapter,
-        .sleep_for = SleepFor,
-    };
-}
 
 HANDLE EmulatedComHandle() noexcept
 {
     return reinterpret_cast<HANDLE>(std::uintptr_t{0x1337});
 }
 
-Runtime::Runtime(
-    int card_virtual_key,
-    const CardWorkerApi& worker_api) noexcept
-    : card_virtual_key_{card_virtual_key},
-      worker_api_{worker_api}
+Runtime::Runtime(int card_virtual_key) noexcept
+    : card_virtual_key_{card_virtual_key}
 {
 }
 
 std::expected<HANDLE, DWORD> Runtime::OpenCom2() noexcept
 {
     std::call_once(worker_once_, [this] {
-        const auto started = worker_api_.start_detached(
+        const auto started = StartDetached(
             CardWorkerMain, this);
         if (started) {
             worker_started_.store(true, std::memory_order_release);
@@ -80,7 +58,7 @@ std::expected<HANDLE, DWORD> Runtime::OpenCom2() noexcept
     }
 
     std::call_once(card_reader_worker_once_, [this] {
-        const auto started = worker_api_.start_detached(
+        const auto started = StartDetached(
             CardReaderWorkerMain, this);
         if (!started) {
             try {
@@ -122,12 +100,12 @@ void Runtime::RunCardWorker() noexcept
     for (;;) {
         const bool key_is_down =
             card_virtual_key_ != 0 &&
-            (worker_api_.get_async_key_state(card_virtual_key_) & 0x8000) != 0;
+            (::GetAsyncKeyState(card_virtual_key_) & 0x8000) != 0;
         if (key_is_down && !key_was_down) {
             port_.device_state().card_scan.Arm();
         }
         key_was_down = key_is_down;
-        worker_api_.sleep_for(std::chrono::milliseconds{100});
+        std::this_thread::sleep_for(std::chrono::milliseconds{100});
     }
 }
 
@@ -153,7 +131,7 @@ void Runtime::RunCardReaderWorker() noexcept
             }
             infrastructure_error_logged = true;
         }
-        worker_api_.sleep_for(std::chrono::seconds{1});
+        std::this_thread::sleep_for(std::chrono::seconds{1});
     }
 }
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: CC0-1.0
+#include "Platform/Win32/Utf.h"
 
 #include "Audio/Asio/AsioDriver.h"
 
@@ -150,22 +151,6 @@ namespace gc::audio
             IASIO* driver_{};
         };
 
-        HRESULT ProductionCreateInstance(
-            void*,
-            REFCLSID class_id,
-            LPUNKNOWN outer,
-            DWORD class_context,
-            REFIID interface_id,
-            void** output) noexcept
-        {
-            return CoCreateInstance(
-                class_id,
-                outer,
-                class_context,
-                interface_id,
-                output);
-        }
-
         AsioFailure ComFailure(HRESULT result, std::string detail)
         {
             return {
@@ -224,33 +209,8 @@ namespace gc::audio
                 return EscapeBytes(bounded);
             }
 
-            const int utf8_size = WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                wide.data(),
-                wide_size,
-                nullptr,
-                0,
-                nullptr,
-                nullptr);
-            if (utf8_size <= 0)
-            {
-                return EscapeBytes(bounded);
-            }
-            std::string utf8(static_cast<std::size_t>(utf8_size), '\0');
-            if (WideCharToMultiByte(
-                CP_UTF8,
-                WC_ERR_INVALID_CHARS,
-                wide.data(),
-                wide_size,
-                utf8.data(),
-                utf8_size,
-                nullptr,
-                nullptr) != utf8_size)
-            {
-                return EscapeBytes(bounded);
-            }
-            return utf8;
+            auto utf8 = gc::platform::win32::WideToUtf8(wide);
+            return utf8 ? std::move(*utf8) : EscapeBytes(bounded);
         }
         catch (...)
         {
@@ -265,29 +225,9 @@ namespace gc::audio
         }
     }
 
-    AsioComActions ProductionAsioComActions() noexcept
-    {
-        return {
-            .create_instance = &ProductionCreateInstance,
-        };
-    }
-
-    ProductionAsioDriverFactory::ProductionAsioDriverFactory(
-        AsioComActions actions) noexcept
-        : actions_(actions)
-    {
-    }
-
     std::expected<std::unique_ptr<IAsioDriver>, AsioFailure>
     ProductionAsioDriverFactory::Create(const CLSID& clsid) noexcept
     {
-        if (actions_.create_instance == nullptr)
-        {
-            return std::unexpected(ComFailure(
-                E_POINTER,
-                "ASIO COM actions are incomplete"));
-        }
-
         std::unique_ptr<AsioDriver> wrapped;
         try
         {
@@ -301,8 +241,7 @@ namespace gc::audio
         }
 
         void* raw{};
-        const HRESULT result = actions_.create_instance(
-            actions_.context,
+        const HRESULT result = CoCreateInstance(
             clsid,
             nullptr,
             CLSCTX_INPROC_SERVER,
