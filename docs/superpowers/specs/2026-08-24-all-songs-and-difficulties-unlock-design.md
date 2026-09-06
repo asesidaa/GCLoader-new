@@ -2,6 +2,13 @@
 
 **Status:** Approved on 2026-08-24
 
+The original evidence and one-site implementation below describe 4.71 (also
+called 4.74 for this binary). The 2.06 correction uses 13 guarded writes because
+song membership and EXTRA availability are separate native consumers. See the
+[complete 2.06 correction and consumer census](../../reverse-engineering/gc206-complete-song-unlock-2026-09-06.md)
+for selection, sorting, random choice, badges, preserved progression behavior,
+the user's runtime confirmation, and the regression checklist.
+
 ## Goal
 
 Add an opt-in GCLoader runtime patch that makes every song, authored
