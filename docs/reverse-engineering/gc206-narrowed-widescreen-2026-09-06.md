@@ -3,6 +3,8 @@
 Date: 2026-09-06. Baseline: `634ce44`, the operator-confirmed 4.74 correction.
 Status: operator confirmed the 2.06 fix works and authorized cleanup/commit.
 Temporary separator traces and successful per-clip correction logs are removed.
+The operator also confirmed the subsequent LAN viewport/matrix pairing fix
+and authorized its commit; the original port is commit `f10ea02`.
 
 ## Native target and ownership
 
@@ -253,6 +255,52 @@ DLL is `build-msvc32-release/dist/iDmacDrv32.dll`, SHA-256
 Build evidence: `.codex-tmp/widescreen-206-20260906/separator-cleanup-build.log`.
 This artifact differs from the operator-tested image only through the logging
 cleanup in this follow-up; no post-cleanup gameplay run was claimed.
+
+## LAN compression after separator acceptance
+
+After commit `f10ea02`, the operator reported that the LAN icon was compressed
+and displaced toward the ONLINE icon. The deployed DLL matches the cleanup
+artifact `07A3B0C9...AFB87A73`. The current log starts at 22:53:03 with the 2.06
+profile, output `2276x1280`, placement `left`, and 88 widescreen hooks. It
+contains no common-HUD failure warning; the removed shape traces are absent.
+
+The previous correction incorrectly treated native target binding as an
+unconditional viewport reset for each selected shape. Fresh IDA inspection of
+`4D9620` shows that the native device call at vtable offset `+148` executes
+only when desired target `GWDrawFunc+1324` differs from remembered target
+`+1328`, or when forced. The normal mesh/immediate submissions pass force=0.
+The cached target is then updated. A preceding separator draw can therefore
+leave a later LAN draw on the narrow viewport installed by its own clip scope.
+
+Applying `720/output_width` matrix compensation on that already narrow
+viewport compresses the icon a second time and moves its x coordinate toward
+the left. This is the native/source explanation consistent with the reported
+symptom; the post-cleanup log does not directly record the LAN viewport.
+
+The candidate removes the order dependency by explicitly selecting full-output
+viewport/scissor immediately before the existing matrix compensation. The
+matrix is validated first. Selection remains exactly the LAN icon and the
+2.06 separator; ONLINE, the surrounding header, menus, and stage effects do
+not enter this matrix path. `UseFullOutputViewportForHudShape` requires an
+active selected Flash draw in physical gameplay and rejects native-projection
+HUD scopes. It uses the existing viewport action, leaving projection, target,
+texture/material cache, depth state and logical dimensions unchanged.
+
+Both supported selected-draw profiles use this pairing for their already
+selected matrix-compensated shapes. The native renderer may now keep or
+rebind its target without changing the coordinate space assumed by the
+matrix. The terminal visitor restores the original matrix, and the existing
+outer clip scope restores its saved viewport/scissor/depth state. No native
+patch sites, byte guards, or hook counts change. No new tracing is added.
+The operator subsequently reported "Now it is fixed" and authorized committing
+this follow-up. This accepts the reported LAN regression; it does not claim
+every song or placement configuration was exercised.
+
+Both complete Debug and Release builds passed for this follow-up, and CLion
+reported no errors in the three changed source files. Release output is
+`build-msvc32-release/dist/iDmacDrv32.dll`, SHA-256
+`0B69956ED71BD34C6FA79BADD780F68B6D173EA647D94662135BF6BE3988C18E`.
+Build log: `.codex-tmp/widescreen-206-20260906/lan-viewport-pair-build.log`.
 
 ## Verification and operator run
 

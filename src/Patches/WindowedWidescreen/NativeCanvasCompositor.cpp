@@ -413,6 +413,21 @@ namespace gc::windowed_widescreen
         return {};
     }
 
+    bool NativeCanvasCompositor::UseFullOutputViewportForHudShape() noexcept
+    {
+        const auto current = render_space_policy_.CurrentSpace();
+        if (!current || *current != RenderSpace::physical_3d ||
+            !gameplay_hud_draw_active_ || native_hud_projection_active_)
+            return false;
+
+        // Native Flash target binding may either reset the viewport or skip
+        // the bind when its target cache matches. Give compensated shapes the
+        // same full-output viewport in both cases. Do not change logical
+        // dimensions, projection, render targets or texture/material state.
+        return actions_.set_full_viewport_and_scissor(
+            actions_.context, RenderSpace::physical_3d);
+    }
+
     std::expected<void, CompositorError>
     NativeCanvasCompositor::EndGameplayHudDraw() noexcept
     {

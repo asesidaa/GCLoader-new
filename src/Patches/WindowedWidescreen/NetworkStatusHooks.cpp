@@ -226,14 +226,16 @@ private:
     return clip == CommonHudClip::local || clip == CommonHudClip::header_separator;
 }
 
-// These selected shapes reset the hardware viewport to full output during
-// native target binding. Compensate only their composed x coordinates and
-// restore the visitor matrix before the next shape or sibling clip.
+// Native target binding resets the viewport only when the cached target changes.
+// Pair full-output x compensation with an explicit full-output viewport so a
+// preceding separator/icon cannot cause a second horizontal compression.
+// Restore the visitor matrix before the next shape or sibling clip; the
+// enclosing selected clip restores the viewport/scissor after its subtree.
 class ScopedCommonHudShapeMatrix final
 {
 public:
     ScopedCommonHudShapeMatrix(
-        const WindowedWidescreenRuntime& runtime,
+        WindowedWidescreenRuntime& runtime,
         void* const visitor) noexcept
     {
         const auto output = runtime.resolution.output_size();
@@ -260,6 +262,13 @@ public:
         {
             return;
         }
+
+        // Apply this only inside the selected Flash scope, after validating the
+        // matrix. The native renderer can now keep or rebind its target without
+        // changing the coordinate space assumed by the compensation below.
+        if (runtime.abi.selected_hud_draws_only &&
+            !runtime.compositor.UseFullOutputViewportForHudShape())
+            return;
 
         auto corrected = original_;
         const auto horizontal_scale =

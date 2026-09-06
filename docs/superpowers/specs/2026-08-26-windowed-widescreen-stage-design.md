@@ -37,11 +37,17 @@ clip hook selects that definition plus its direct parent, only for 2.06, and
 applies the configured top-bar viewport. Runtime tracing shows its terminal
 shape resets that viewport to full output, so only the selected separator's
 shape receives the same scoped x-matrix compensation as the local-network
-icon. The visitor matrix is restored immediately after native submission.
+icon. Native target binding can skip a matching cached target, so each
+matrix-compensated shape explicitly selects full-output viewport/scissor
+before its draw. This prevents a preceding separator from leaving LAN
+compensation on an already narrow viewport. The visitor matrix is restored
+immediately after native submission; the enclosing clip restores its viewport.
 Three read-only field guards support this identity; the rest of the common
 header remains unselected. Temporary separator traces and successful per-clip
 messages were removed after acceptance; startup status and capped failure
 warnings remain.
+The subsequent LAN compression report is addressed by this viewport/matrix
+pairing fix; the operator confirmed it works and authorized the commit.
 See the [2.06 port evidence](../../reverse-engineering/gc206-narrowed-widescreen-2026-09-06.md)
 and [initial implementation record](../../reverse-engineering/gc206-implementation-2026-09-06.md).
 

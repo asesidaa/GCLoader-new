@@ -97,6 +97,10 @@ namespace gc::windowed_widescreen
         BeginGameplayHudDraw(GameplayHudPlacement placement,
             bool native_projection = false) noexcept;
 
+        // Only for selected Flash shapes whose x matrix compensates full output.
+        // The enclosing HUD draw scope retains ownership of viewport restoration.
+        [[nodiscard]] bool UseFullOutputViewportForHudShape() noexcept;
+
         [[nodiscard]] std::expected<void, CompositorError>
         EndGameplayHudDraw() noexcept;
 

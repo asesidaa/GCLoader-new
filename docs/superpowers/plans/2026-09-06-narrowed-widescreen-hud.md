@@ -87,3 +87,11 @@ See the [2.06 native and build record](../../reverse-engineering/gc206-narrowed-
 - [x] Operator confirmation using the standard build output; the deployed DLL matches the matrix-follow-up artifact and the 22:46 log records corrected/restored coordinates.
 - [x] Remove temporary separator traces and hardware snapshots; remove successful per-clip correction messages, keeping startup status and capped failure warnings.
 - [x] Verify both complete presets and CLion diagnostics after cleanup. The authorized commit is limited to widescreen source and its evidence/design/plan documents; unrelated working-tree changes remain separate.
+
+## 7. LAN compression after commit f10ea02
+
+- [x] Match the deployed cleanup DLL and inspect the latest 2.06 log.
+- [x] Recheck native target binding in IDA: `4D9620` skips a matching cached target, so a viewport reset is conditional rather than guaranteed per icon.
+- [x] Pair full-output viewport/scissor with the existing selected-shape matrix compensation, inside the enclosing Flash clip scope. Preserve exact selection and native material state; add no tracing or native patch sites.
+- [x] Build both complete presets and inspect the changed source through CLion. Release output remains in the standard preset directory.
+- [x] Operator confirmed the reported LAN regression is fixed and authorized the commit. Retain ONLINE/separator and other placement configurations in the broader regression checklist without implying exhaustive coverage.
