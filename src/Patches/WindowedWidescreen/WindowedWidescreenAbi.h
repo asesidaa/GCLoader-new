@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace gc::windowed_widescreen {
     enum class WidescreenContractSite : std::uint8_t
@@ -109,6 +110,9 @@ namespace gc::windowed_widescreen {
         stage_players_draw_end,
         timed_text_draw_begin,
         timed_text_draw_end,
+        movie_clip_definition_getter,
+        movie_clip_parent_assignment,
+        movie_definition_name_getter,
     };
     enum class WidescreenCallingConvention : std::uint8_t
     {
@@ -149,6 +153,11 @@ struct WidescreenNativeLayout final {
     std::size_t pointer_collection_begin_offset{};
     std::size_t pointer_collection_end_offset{};
     std::size_t network_status_visitor_matrix_stack_offset{};
+    // Empty symbol disables separator selection on builds without this contract.
+    std::string_view gameplay_header_separator_symbol{};
+    std::size_t movie_clip_definition_offset{};
+    std::size_t movie_clip_parent_offset{};
+    std::size_t movie_definition_name_offset{};
 };
 struct NativeViewport;
 namespace native {

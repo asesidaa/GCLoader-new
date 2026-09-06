@@ -16,19 +16,34 @@ mixed-pass assumptions below.
 
 The narrowed correction is implemented with 88 hooks. On 2026-09-06 the
 operator reported that the 4.74 issues appeared fixed, including the ONLINE
-follow-up, and authorized committing it before porting to 2.06. This commit
-retains 2.06's existing 83-hook policy; the port is the next change.
+follow-up; that correction was committed as `634ce44`. The subsequent 2.06
+port also uses 88 hooks; the operator subsequently confirmed it works after
+the dotted-separator follow-up and authorized cleanup/commit.
 See the [native evidence, exact sites, and runtime checklist](../../reverse-engineering/widescreen-background-projection-followup-2026-09-06.md).
 
 ## GC 2.06 profile, 2026-09-06
 
-The older game now has all 86 byte and nine pointer contracts for the same
-83-hook placement policy. Its `CTune` effect collection is `+0x1D60`, and
+The older game's narrowed port has 94 byte and nine pointer contracts for the
+same 88-hook selected-draw policy. Its `CTune` effect collection is `+0x1D60`, and
 the native Test Mode pass uses `0x207F3C/0x207F41`. The six judgement text
 and nine reached tutorial slots remain shared; initialized-but-unselected
 tutorial slot B7 remains excluded. Native contracts and both build presets
-pass; the operator confirmations below concern 4.71, not 2.06. See the
-[2.06 implementation record](../../reverse-engineering/gc206-implementation-2026-09-06.md).
+pass; the operator confirmed the reported 2.06 fix after the separator follow-up.
+The old `bar_names` mapping incorrectly selected the opening title; the port
+moves that pair to the actual top-bar details and centers the opening title
+and player list separately. Its additional dotted separator is the unnamed
+`UNIQUE_150` child of `imc_head` in both language assets. The existing Flash
+clip hook selects that definition plus its direct parent, only for 2.06, and
+applies the configured top-bar viewport. Runtime tracing shows its terminal
+shape resets that viewport to full output, so only the selected separator's
+shape receives the same scoped x-matrix compensation as the local-network
+icon. The visitor matrix is restored immediately after native submission.
+Three read-only field guards support this identity; the rest of the common
+header remains unselected. Temporary separator traces and successful per-clip
+messages were removed after acceptance; startup status and capped failure
+warnings remain.
+See the [2.06 port evidence](../../reverse-engineering/gc206-narrowed-widescreen-2026-09-06.md)
+and [initial implementation record](../../reverse-engineering/gc206-implementation-2026-09-06.md).
 
 ## Placement containment correction, 2026-09-06
 

@@ -382,7 +382,7 @@ constexpr std::array kOrder{
     WidescreenContractSite::hundred_digits_end,
     WidescreenContractSite::effect_packet_end,
 };
-// Keep the 2.06 contract set unchanged until the current target is accepted.
+// Both builds share selected-draw callbacks; their native sites remain separate.
 constexpr std::array kCenteredUiSites{
     WidescreenContractSite::stage_title_draw_begin,
     WidescreenContractSite::stage_title_draw_end,
@@ -391,7 +391,7 @@ constexpr std::array kCenteredUiSites{
     WidescreenContractSite::timed_text_draw_begin,
     WidescreenContractSite::timed_text_draw_end,
 };
-constexpr auto kAbis471 = [] {
+constexpr auto kSelectedAbis = [] {
     std::array<WidescreenFunctionAbi, kAbis.size() - 1 + kCenteredUiSites.size()> result{};
     auto out = result.begin();
     for (const auto& row : kAbis)
@@ -401,7 +401,7 @@ constexpr auto kAbis471 = [] {
         *out++ = {site, WidescreenCallingConvention::mid_context, 1};
     return result;
 }();
-constexpr auto kOrder471 = [] {
+constexpr auto kSelectedOrder = [] {
     std::array<WidescreenContractSite, kOrder.size() - 1 + kCenteredUiSites.size()> result{};
     auto out = result.begin();
     for (const auto site : kOrder)
@@ -413,7 +413,7 @@ constexpr auto kOrder471 = [] {
 constexpr auto CountBytes(VersionedOperationKind kind) {
     return std::ranges::count_if(kBytes, [kind](const auto& row) { return row.contract.kind == kind; });
 }
-static_assert(kBytes.size() == 91 && kPointers.size() == 9 && kAbis471.size() == 88 && kOrder471.size() == 88);
+static_assert(kBytes.size() == 91 && kPointers.size() == 9 && kSelectedAbis.size() == 88 && kSelectedOrder.size() == 88);
 static_assert(CountBytes(VersionedOperationKind::inline_hook) == 18);
 static_assert(CountBytes(VersionedOperationKind::mid_hook) == 68);
 static_assert(CountBytes(VersionedOperationKind::read_only_contract) == 5);
@@ -425,6 +425,15 @@ static_assert(std::ranges::count_if(kPointers, [](const auto& row) {
 }) == 7);
 // 2.06: selected draw boundaries and native ownership rechecked in IDA.
 constexpr std::array kBytes206{
+    WidescreenByteContract{WidescreenContractSite::movie_clip_definition_getter, {FeatureId::windowed_widescreen, "movie_clip_definition_getter", VersionedOperationKind::read_only_contract, 0xC6930, 7, PatternOf<0x8B, 0x81, 0x18, 0x01, 0x00, 0x00, 0xC3>(), {}, 0, SiteDisposition::verify_only}},
+    WidescreenByteContract{WidescreenContractSite::movie_clip_parent_assignment, {FeatureId::windowed_widescreen, "movie_clip_parent_assignment", VersionedOperationKind::read_only_contract, 0xD19F5, 6, PatternOf<0x89, 0xBE, 0x50, 0x01, 0x00, 0x00>(), {}, 0, SiteDisposition::verify_only}},
+    WidescreenByteContract{WidescreenContractSite::movie_definition_name_getter, {FeatureId::windowed_widescreen, "movie_definition_name_getter", VersionedOperationKind::read_only_contract, 0xC6AD0, 4, PatternOf<0x8B, 0x41, 0x10, 0xC3>(), {}, 0, SiteDisposition::verify_only}},
+    WidescreenByteContract{WidescreenContractSite::stage_title_draw_begin, {FeatureId::windowed_widescreen, "stage_title_draw_begin", VersionedOperationKind::mid_hook, 0x216A64, 5, PatternOf<0xE8, 0x27, 0x47, 0xFA, 0xFF>(), {}, 91}},
+    WidescreenByteContract{WidescreenContractSite::stage_title_draw_end, {FeatureId::windowed_widescreen, "stage_title_draw_end", VersionedOperationKind::mid_hook, 0x216A69, 6, PatternOf<0x8B, 0x85, 0x4C, 0xFE, 0xFF, 0xFF>(), {}, 92}},
+    WidescreenByteContract{WidescreenContractSite::stage_players_draw_begin, {FeatureId::windowed_widescreen, "stage_players_draw_begin", VersionedOperationKind::mid_hook, 0x216A7A, 5, PatternOf<0xE8, 0x41, 0x46, 0xFA, 0xFF>(), {}, 93}},
+    WidescreenByteContract{WidescreenContractSite::stage_players_draw_end, {FeatureId::windowed_widescreen, "stage_players_draw_end", VersionedOperationKind::mid_hook, 0x216A7F, 6, PatternOf<0x8B, 0x95, 0x4C, 0xFE, 0xFF, 0xFF>(), {}, 94}},
+    WidescreenByteContract{WidescreenContractSite::timed_text_draw_begin, {FeatureId::windowed_widescreen, "timed_text_draw_begin", VersionedOperationKind::mid_hook, 0x216ADD, 5, PatternOf<0xE8, 0x4E, 0x8A, 0xF8, 0xFF>(), {}, 95}},
+    WidescreenByteContract{WidescreenContractSite::timed_text_draw_end, {FeatureId::windowed_widescreen, "timed_text_draw_end", VersionedOperationKind::mid_hook, 0x216AE2, 6, PatternOf<0xD9, 0x05, 0x5C, 0x9C, 0x6B, 0x00>(), {}, 96}},
     WidescreenByteContract{WidescreenContractSite::bar_difficulty_a_begin, {FeatureId::windowed_widescreen, "bar_difficulty_a_begin", VersionedOperationKind::mid_hook, 0x1BD6E8, 5, PatternOf<0xE8, 0xC3, 0x61, 0xF9, 0xFF>(), {}, 47}},
     WidescreenByteContract{WidescreenContractSite::bar_difficulty_a_end, {FeatureId::windowed_widescreen, "bar_difficulty_a_end", VersionedOperationKind::mid_hook, 0x1BD6ED, 5, PatternOf<0x83, 0xC4, 0x18, 0xEB, 0x36>(), {}, 48}},
     WidescreenByteContract{WidescreenContractSite::bar_difficulty_b_begin, {FeatureId::windowed_widescreen, "bar_difficulty_b_begin", VersionedOperationKind::mid_hook, 0x1BD720, 5, PatternOf<0xE8, 0x8B, 0x61, 0xF9, 0xFF>(), {}, 49}},
@@ -463,13 +472,13 @@ constexpr std::array kBytes206{
     WidescreenByteContract{WidescreenContractSite::bar_player_panel_end, {FeatureId::windowed_widescreen, "bar_player_panel_end", VersionedOperationKind::mid_hook, 0x1BE376, 5, PatternOf<0xE8, 0x35, 0x2E, 0xE4, 0xFF>(), {}, 82}},
     WidescreenByteContract{WidescreenContractSite::bar_status_panel_begin, {FeatureId::windowed_widescreen, "bar_status_panel_begin", VersionedOperationKind::mid_hook, 0x1BE3C8, 5, PatternOf<0xE8, 0x63, 0xBE, 0xFF, 0xFF>(), {}, 83}},
     WidescreenByteContract{WidescreenContractSite::bar_status_panel_end, {FeatureId::windowed_widescreen, "bar_status_panel_end", VersionedOperationKind::mid_hook, 0x1BE3CD, 5, PatternOf<0xE8, 0xAE, 0x5F, 0xE8, 0xFF>(), {}, 84}},
-    WidescreenByteContract{WidescreenContractSite::bar_names_end, {FeatureId::windowed_widescreen, "bar_names_end", VersionedOperationKind::mid_hook, 0x216A69, 6, PatternOf<0x8B, 0x85, 0x4C, 0xFE, 0xFF, 0xFF>(), {}, 85}},
+    WidescreenByteContract{WidescreenContractSite::bar_names_end, {FeatureId::windowed_widescreen, "bar_names_end", VersionedOperationKind::mid_hook, 0x216A95, 7, PatternOf<0xC7, 0x45, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF>(), {}, 85}},
     WidescreenByteContract{WidescreenContractSite::chain_label_end, {FeatureId::windowed_widescreen, "chain_label_end", VersionedOperationKind::mid_hook, 0x1BDCA8, 7, PatternOf<0x51, 0xD9, 0x45, 0xD8, 0xD9, 0x1C, 0x24>(), {}, 86}},
     WidescreenByteContract{WidescreenContractSite::chain_digits_end, {FeatureId::windowed_widescreen, "chain_digits_end", VersionedOperationKind::mid_hook, 0x1BDCF5, 10, PatternOf<0x83, 0xC4, 0x20, 0xC7, 0x45, 0xCC, 0x00, 0x00, 0x00, 0x00>(), {}, 87}},
     WidescreenByteContract{WidescreenContractSite::chain_glow_end, {FeatureId::windowed_widescreen, "chain_glow_end", VersionedOperationKind::mid_hook, 0x1BDDB1, 5, PatternOf<0xE9, 0x4B, 0xFF, 0xFF, 0xFF>(), {}, 88}},
     WidescreenByteContract{WidescreenContractSite::hundred_digits_end, {FeatureId::windowed_widescreen, "hundred_digits_end", VersionedOperationKind::mid_hook, 0x1BDF07, 8, PatternOf<0x83, 0xC4, 0x20, 0xE8, 0x71, 0x64, 0xE8, 0xFF>(), {}, 89}},
     WidescreenByteContract{WidescreenContractSite::effect_packet_end, {FeatureId::windowed_widescreen, "effect_packet_end", VersionedOperationKind::mid_hook, 0x1CDC19, 10, PatternOf<0x8B, 0x4D, 0xAC, 0xC7, 0x41, 0x70, 0x00, 0x00, 0x00, 0x00>(), {}, 90}},
-    WidescreenByteContract{WidescreenContractSite::bar_names_begin, {FeatureId::windowed_widescreen, "bar_names_begin", VersionedOperationKind::mid_hook, 0x216A64, 5, PatternOf<0xE8, 0x27, 0x47, 0xFA, 0xFF>(), {}, 38}},
+    WidescreenByteContract{WidescreenContractSite::bar_names_begin, {FeatureId::windowed_widescreen, "bar_names_begin", VersionedOperationKind::mid_hook, 0x216A90, 5, PatternOf<0xE8, 0x1B, 0x43, 0xFA, 0xFF>(), {}, 38}},
     WidescreenByteContract{WidescreenContractSite::chain_glow_begin, {FeatureId::windowed_widescreen, "chain_glow_begin", VersionedOperationKind::mid_hook, 0x1BDDA9, 5, PatternOf<0xE8, 0xF2, 0x73, 0xFE, 0xFF>(), {}, 41}},
     WidescreenByteContract{WidescreenContractSite::hundred_digits_begin, {FeatureId::windowed_widescreen, "hundred_digits_begin", VersionedOperationKind::mid_hook, 0x1BDF02, 5, PatternOf<0xE8, 0x99, 0x72, 0xFE, 0xFF>(), {}, 42}},
     WidescreenByteContract{WidescreenContractSite::effect_packet_allocated, {FeatureId::windowed_widescreen, "effect_packet_allocated", VersionedOperationKind::mid_hook, 0x1CD700, 7, PatternOf<0x89, 0x45, 0xF4, 0x83, 0x7D, 0xF4, 0x00>(), {}, 44}},
@@ -498,7 +507,6 @@ constexpr std::array kBytes206{
     WidescreenByteContract{WidescreenContractSite::gameplay_track, {FeatureId::windowed_widescreen, "gameplay_track", VersionedOperationKind::mid_hook, 0x1C35B8, 5, PatternOf<0xE8, 0x03, 0x38, 0x05, 0x00, 0x8B, 0x4D, 0xC8>(), {}, 23}},
     WidescreenByteContract{WidescreenContractSite::gameplay_effects, {FeatureId::windowed_widescreen, "gameplay_effects", VersionedOperationKind::mid_hook, 0x1C3608, 5, PatternOf<0xE8, 0x53, 0x1F, 0x05, 0x00, 0xE8, 0x6E, 0x0D, 0xE8, 0xFF>(), {}, 24}},
     WidescreenByteContract{WidescreenContractSite::gameplay_effects_end, {FeatureId::windowed_widescreen, "gameplay_effects_end", VersionedOperationKind::mid_hook, 0x1C360D, 5, PatternOf<0xE8, 0x6E, 0x0D, 0xE8, 0xFF>(), {}, 25}},
-    WidescreenByteContract{WidescreenContractSite::gameplay_hud_projection, {FeatureId::windowed_widescreen, "gameplay_hud_projection", VersionedOperationKind::mid_hook, 0x20C8EA, 5, PatternOf<0xE8, 0x91, 0xB5, 0xFA, 0xFF, 0x8B, 0xB5, 0x24, 0xFF, 0xFF, 0xFF, 0x81, 0xC6, 0xD0, 0x00, 0x00>(), {}, 26}},
     WidescreenByteContract{WidescreenContractSite::chain_label_begin, {FeatureId::windowed_widescreen, "chain_label_begin", VersionedOperationKind::mid_hook, 0x1BDCA3, 5, PatternOf<0xE8, 0x88, 0xC5, 0xFF, 0xFF>(), {}, 27}},
     WidescreenByteContract{WidescreenContractSite::chain_digits_begin, {FeatureId::windowed_widescreen, "chain_digits_begin", VersionedOperationKind::mid_hook, 0x1BDCF0, 5, PatternOf<0xE8, 0xAB, 0x74, 0xFE, 0xFF>(), {}, 36}},
     WidescreenByteContract{WidescreenContractSite::gameplay_feedback_draw_begin, {FeatureId::windowed_widescreen, "gameplay_feedback_draw_begin", VersionedOperationKind::mid_hook, 0x1CDD38, 5, PatternOf<0xE8, 0x83, 0x0D, 0x00, 0x00>(), {}, 29}},
@@ -541,8 +549,9 @@ constexpr std::array<WidescreenPointerContract, 9> kPointers206{{
         VersionedOperationKind::global_vtable_slot, 0x27DE18, 4,
         PatternOf<0x70, 0x18, 0x4C, 0x00>(), {}, 9}, 0xC1870}
 }};
+static_assert(kBytes206.size() == 94 && kPointers206.size() == 9);
 constexpr WindowedWidescreenProfile Make206(GameImageVariant variant) {
-    return {GameBuild::groove_coaster_206, variant, kBytes206, kPointers206, kAbis, kOrder, {
+    return {GameBuild::groove_coaster_206, variant, kBytes206, kPointers206, kSelectedAbis, kSelectedOrder, {
         .main_config_vtable = 0x26F604,
         .batch_queue_pointer = 0x3AA95C,
         .movie_clip_draw_visitor_vtable = 0x27DDCC,
@@ -566,10 +575,14 @@ constexpr WindowedWidescreenProfile Make206(GameImageVariant variant) {
         .pointer_collection_begin_offset = 0xC,
         .pointer_collection_end_offset = 0x10,
         .network_status_visitor_matrix_stack_offset = 0x1A0,
-    }};
+        .gameplay_header_separator_symbol = "UNIQUE_150",
+        .movie_clip_definition_offset = 0x118,
+        .movie_clip_parent_offset = 0x150,
+        .movie_definition_name_offset = 0x10,
+    }, true};
 }
 constexpr WindowedWidescreenProfile Make(GameImageVariant variant) {
-    return {GameBuild::groove_coaster_471, variant, kBytes, kPointers, kAbis471, kOrder471, {
+    return {GameBuild::groove_coaster_471, variant, kBytes, kPointers, kSelectedAbis, kSelectedOrder, {
         .main_config_vtable = 0x2AE62C,
         .batch_queue_pointer = 0x3F24FC,
         .movie_clip_draw_visitor_vtable = 0x2BB74C,

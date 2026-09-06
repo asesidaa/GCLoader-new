@@ -103,6 +103,9 @@ std::expected<WidescreenGameAbi, game_version::PlanError> BuildWidescreenGameAbi
         switch (site)
         {
         case WidescreenContractSite::none: return "none";
+        case WidescreenContractSite::movie_clip_definition_getter: return "movie_clip_definition_getter";
+        case WidescreenContractSite::movie_clip_parent_assignment: return "movie_clip_parent_assignment";
+        case WidescreenContractSite::movie_definition_name_getter: return "movie_definition_name_getter";
         case WidescreenContractSite::stage_title_draw_begin: return "stage_title_draw_begin";
         case WidescreenContractSite::stage_title_draw_end: return "stage_title_draw_end";
         case WidescreenContractSite::stage_players_draw_begin: return "stage_players_draw_begin";

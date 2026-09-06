@@ -195,7 +195,7 @@ void GameplayEffectsMid(safetyhook::Context& context) noexcept
                 gameplay_hud_placement,
             });
     }
-    // The current target's mixed pass also owns stage fades and rectangle lines.
+    // The mixed pass also owns stage fades and rectangle lines on both builds.
     // Its native projection and output dimensions remain the default.
     if (runtime->abi.selected_hud_draws_only) {
         if (!RequestRuntimeSpace(runtime, RenderSpace::physical_3d))
@@ -472,12 +472,12 @@ void TimedTextDrawEndMid(safetyhook::Context&) noexcept
 {
     auto* runtime = GameplayRuntime();
     if (!runtime) return;
-    // 64A2FD also receives the native branch that skips timed text.
+    // 4.74 64A2FD / 2.06 616AE2 also receive the branch that skips timed text.
     if (runtime->gameplay_feedback_draw_scope == GameplayFeedbackDrawScope::none) return;
     EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::timed_text);
 }
 
-// Retained for 2.06 until the projection-consumer correction is accepted and ported.
+// Legacy whole-pass callback; selected-draw profiles do not install it.
 [[nodiscard]] bool TryApplyNativeHudOrthographicArguments(
     const std::uint32_t stack_pointer) noexcept
 {

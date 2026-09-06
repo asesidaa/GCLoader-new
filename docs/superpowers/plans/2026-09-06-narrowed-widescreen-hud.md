@@ -56,4 +56,34 @@ Files: WindowedWidescreenAbi.*, WindowedWidescreenProfile.*, stage spec and nati
 
 - [x] The operator reported on 2026-09-06 that the 4.74 issues appeared fixed after the ONLINE follow-up and authorized commit followed by the 2.06 port. This accepts the reported regressions; the broader song/configuration checklist remains a regression checklist, not a claim that every case was run.
 
-Implementation verification: both complete Debug/Release preset builds passed; CLion inspections reported no errors; all six new native spans match IDA and have no interior branch targets. The 2.06 byte/pointer tables, layout, base ABI and install order are unchanged. No runtime trace was needed for the established draw ownership. See the evidence record for the built DLL identity and outstanding runtime observations.
+Implementation verification for the 4.74 commit: both complete Debug/Release preset builds passed; CLion inspections reported no errors; all six new native spans match IDA and have no interior branch targets. The 2.06 byte/pointer tables, layout, base ABI and install order were unchanged at that commit. No runtime trace was needed for the established draw ownership.
+
+## 5. Authorized 2.06 port after commit 634ce44
+
+- [x] Trace the old projection, background/visualizer/rectangle consumers, selected packet submission, title/player/timed-text helpers and Flash binding cache directly in IDA.
+- [x] Correct the old bar-name mapping: opening title at 616A64 is centered; top-bar details at 616A90 follow the configured placement.
+- [x] Add six centered-draw contracts, move the bar pair, remove the old projection hook and enable the existing narrowed policy. Preserve 4.74 contracts and behavior.
+- [x] Verify all 100 2.06 widescreen contracts against IDA/executable bytes, instruction boundaries and cross-feature overlap. Build both complete presets and inspect through CLion.
+- [x] Operator reported the 2.06 fix works after the separator follow-up and authorized cleanup/commit. Deployment and process actions were not performed by the agent; the broader regression checklist is not a claim of exhaustive coverage.
+
+See the [2.06 native and build record](../../reverse-engineering/gc206-narrowed-widescreen-2026-09-06.md) for exact sites, DLL identity and the runtime checklist.
+
+## 6. 2.06 dotted header separator
+
+- [x] Identify the separator in both native language assets: `imc_head -> UNIQUE_150 -> UNIQUE_149 -> UNIQUE_148`, a 720 x 2 line at stable y=80.
+- [x] Verify MovieClip definition/name fields and the direct-parent assignment in IDA. Add three read-only guards; reuse the existing clip hook with exact definition plus parent selection, enabled only by the 2.06 profile.
+- [x] Apply configured top-bar placement with the existing Flash viewport scope and capped correction log. Keep native projection/material lifetime.
+- [x] Verify all 103 native contracts, build both complete presets and inspect the source through CLion. Hook count remains 88.
+- [x] Operator confirmed the separator fix works in the diagnostic run and authorized cleanup/commit. Other placement configurations and songs remain regression-checklist items rather than inferred acceptance.
+
+### Separator runtime follow-up
+
+- [x] Inspect the 21:13 operator log: exact separator selection and wrapper success are present, but the operator reports the visual defect remains.
+- [x] Recheck terminal-shape/native target-binding paths in IDA. Add bounded, separator-only hardware viewport and composed-matrix snapshots without changing placement logic.
+- [x] Build both complete presets and inspect the three diagnostic source files with CLion. DLL/PDB output must remain in the standard preset directories; the operator rejected temporary artifact copies.
+- [x] Inspect the 22:33 diagnostic run: all seven samples show the selected separator's native shape draw resetting viewport/scissor from 720 to 2276 wide while retaining the authored matrix.
+- [x] Extend the existing terminal-shape matrix correction only to the exact 2.06 separator, restore the matrix after native submission, and retain bounded corrected/restored snapshots for confirmation.
+- [x] Build both complete presets and inspect the matrix follow-up with CLion. Diff validation passed; Release DLL is in `build-msvc32-release/dist`. Removed the two earlier temporary DLL/PDB copies.
+- [x] Operator confirmation using the standard build output; the deployed DLL matches the matrix-follow-up artifact and the 22:46 log records corrected/restored coordinates.
+- [x] Remove temporary separator traces and hardware snapshots; remove successful per-clip correction messages, keeping startup status and capped failure warnings.
+- [x] Verify both complete presets and CLion diagnostics after cleanup. The authorized commit is limited to widescreen source and its evidence/design/plan documents; unrelated working-tree changes remain separate.

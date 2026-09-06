@@ -5,7 +5,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <iomanip>
 #include <limits>
 #include <span>
 #include <string_view>
@@ -27,35 +26,36 @@ static_assert(sizeof(std::uintptr_t) == sizeof(std::uint32_t));
     }
     return value;
 }
-enum class NetworkStatusClip : std::uint8_t
+enum class CommonHudClip : std::uint8_t
 {
     none,
     nesys,
     local,
+    header_separator,
 };
 thread_local std::uint32_t g_network_status_native_scope_depth{};
-thread_local NetworkStatusClip g_network_status_active_clip{
-    NetworkStatusClip::none};
-thread_local bool g_network_status_local_matrix_corrected{};
+thread_local CommonHudClip g_network_status_active_clip{
+    CommonHudClip::none};
+thread_local bool g_common_hud_shape_matrix_corrected{};
 
 class NetworkStatusNativeScope final
 {
 public:
     explicit NetworkStatusNativeScope(
-        const NetworkStatusClip clip) noexcept
+        const CommonHudClip clip) noexcept
         : previous_clip_{g_network_status_active_clip},
-          previous_local_matrix_corrected_{
-              g_network_status_local_matrix_corrected}
+          previous_shape_matrix_corrected_{
+              g_common_hud_shape_matrix_corrected}
     {
         ++g_network_status_native_scope_depth;
         g_network_status_active_clip = clip;
-        g_network_status_local_matrix_corrected = false;
+        g_common_hud_shape_matrix_corrected = false;
     }
 
     ~NetworkStatusNativeScope() noexcept
     {
-        g_network_status_local_matrix_corrected =
-            previous_local_matrix_corrected_;
+        g_common_hud_shape_matrix_corrected =
+            previous_shape_matrix_corrected_;
         g_network_status_active_clip = previous_clip_;
         if (g_network_status_native_scope_depth != 0)
         {
@@ -63,9 +63,9 @@ public:
         }
     }
 
-    [[nodiscard]] bool local_matrix_corrected() const noexcept
+    [[nodiscard]] bool shape_matrix_corrected() const noexcept
     {
-        return g_network_status_local_matrix_corrected;
+        return g_common_hud_shape_matrix_corrected;
     }
 
     NetworkStatusNativeScope(const NetworkStatusNativeScope&) = delete;
@@ -73,8 +73,8 @@ public:
         const NetworkStatusNativeScope&) = delete;
 
 private:
-    NetworkStatusClip previous_clip_{NetworkStatusClip::none};
-    bool previous_local_matrix_corrected_{};
+    CommonHudClip previous_clip_{CommonHudClip::none};
+    bool previous_shape_matrix_corrected_{};
 };
 
 [[nodiscard]] bool RuntimeCStringEquals(
@@ -94,39 +94,60 @@ private:
         actual[expected.size()] == '\0';
 }
 
-[[nodiscard]] NetworkStatusClip IdentifyNetworkStatusClip(
+[[nodiscard]] bool IsGameplayHeaderSeparator(
+    const WidescreenNativeLayout& layout, const std::uintptr_t address) noexcept
+{
+    if (layout.gameplay_header_separator_symbol.empty())
+        return false;
+
+    // 2.06 common.rvb/common_eng.rvb: imc_head -> unnamed UNIQUE_150.
+    // Match the definition AND its direct parent, never the whole header.
+    std::uintptr_t definition{}, definition_name{}, parent{}, parent_name{};
+    return ReadRuntimePointer(nullptr, address + layout.movie_clip_definition_offset, definition) &&
+        definition != 0 &&
+        ReadRuntimePointer(nullptr, definition + layout.movie_definition_name_offset, definition_name) &&
+        RuntimeCStringEquals(definition_name, layout.gameplay_header_separator_symbol) &&
+        ReadRuntimePointer(nullptr, address + layout.movie_clip_parent_offset, parent) &&
+        parent != 0 &&
+        ReadRuntimePointer(nullptr, parent + layout.movie_clip_name_offset, parent_name) &&
+        RuntimeCStringEquals(parent_name, "imc_head");
+}
+
+[[nodiscard]] CommonHudClip IdentifyCommonHudClip(
     const WidescreenNativeLayout& layout, void* const movie_clip) noexcept
 {
     if (movie_clip == nullptr)
     {
-        return NetworkStatusClip::none;
+        return CommonHudClip::none;
     }
 
     const auto address = reinterpret_cast<std::uintptr_t>(movie_clip);
+    if (IsGameplayHeaderSeparator(layout, address))
+        return CommonHudClip::header_separator;
     std::uint32_t name_hash{};
     if (!ProductionRead(
         nullptr,
         address + layout.movie_clip_name_hash_offset,
         std::as_writable_bytes(std::span{&name_hash, 1})))
     {
-        return NetworkStatusClip::none;
+        return CommonHudClip::none;
     }
 
-    NetworkStatusClip target = NetworkStatusClip::none;
+    CommonHudClip target = CommonHudClip::none;
     std::string_view expected_name{};
     if (name_hash == MovieClipNameHash(kNetworkStatusNesysClipName, layout))
     {
-        target = NetworkStatusClip::nesys;
+        target = CommonHudClip::nesys;
         expected_name = kNetworkStatusNesysClipName;
     }
     else if (name_hash == MovieClipNameHash(kNetworkStatusLocalClipName, layout))
     {
-        target = NetworkStatusClip::local;
+        target = CommonHudClip::local;
         expected_name = kNetworkStatusLocalClipName;
     }
     else
     {
-        return NetworkStatusClip::none;
+        return CommonHudClip::none;
     }
 
     std::uintptr_t name_address{};
@@ -136,7 +157,7 @@ private:
             name_address) ||
         !RuntimeCStringEquals(name_address, expected_name))
     {
-        return NetworkStatusClip::none;
+        return CommonHudClip::none;
     }
     return target;
 }
@@ -154,13 +175,15 @@ private:
         vtable == runtime.abi.movie_clip_draw_visitor_vtable;
 }
 
-[[nodiscard]] constexpr const char* NetworkStatusClipName(
-    const NetworkStatusClip clip) noexcept
+[[nodiscard]] constexpr const char* CommonHudClipName(
+    const CommonHudClip clip) noexcept
 {
-    return clip == NetworkStatusClip::nesys
+    return clip == CommonHudClip::nesys
                ? "imc_ico_n"
-               : clip == NetworkStatusClip::local
+               : clip == CommonHudClip::local
                ? "imc_ico_l"
+               : clip == CommonHudClip::header_separator
+               ? "header_separator"
                : "none";
 }
 
@@ -197,10 +220,19 @@ private:
     return address <= region_end && matrix_size <= region_end - address;
 }
 
-class ScopedLocalNetworkStatusMatrix final
+[[nodiscard]] constexpr bool RequiresCommonHudShapeMatrix(
+    const CommonHudClip clip) noexcept
+{
+    return clip == CommonHudClip::local || clip == CommonHudClip::header_separator;
+}
+
+// These selected shapes reset the hardware viewport to full output during
+// native target binding. Compensate only their composed x coordinates and
+// restore the visitor matrix before the next shape or sibling clip.
+class ScopedCommonHudShapeMatrix final
 {
 public:
-    ScopedLocalNetworkStatusMatrix(
+    ScopedCommonHudShapeMatrix(
         const WindowedWidescreenRuntime& runtime,
         void* const visitor) noexcept
     {
@@ -246,7 +278,7 @@ public:
         applied_ = true;
     }
 
-    ~ScopedLocalNetworkStatusMatrix() noexcept
+    ~ScopedCommonHudShapeMatrix() noexcept
     {
         if (applied_)
         {
@@ -257,10 +289,10 @@ public:
         }
     }
 
-    ScopedLocalNetworkStatusMatrix(
-        const ScopedLocalNetworkStatusMatrix&) = delete;
-    ScopedLocalNetworkStatusMatrix& operator=(
-        const ScopedLocalNetworkStatusMatrix&) = delete;
+    ScopedCommonHudShapeMatrix(
+        const ScopedCommonHudShapeMatrix&) = delete;
+    ScopedCommonHudShapeMatrix& operator=(
+        const ScopedCommonHudShapeMatrix&) = delete;
 
     [[nodiscard]] bool applied() const noexcept
     {
@@ -292,16 +324,12 @@ void __fastcall NetworkStatusShapeDrawVisitDetour(
     if (runtime != nullptr && RuntimeCallbacksAreActive(*runtime) &&
         definition != nullptr &&
         g_network_status_native_scope_depth != 0 &&
-        g_network_status_active_clip == NetworkStatusClip::local &&
+        RequiresCommonHudShapeMatrix(g_network_status_active_clip) &&
         runtime->gameplay_frame_active.load(std::memory_order_acquire))
     {
-        const ScopedLocalNetworkStatusMatrix corrected{
-            *runtime,
-            visitor};
+        const ScopedCommonHudShapeMatrix corrected{*runtime, visitor};
         if (corrected.applied())
-        {
-            g_network_status_local_matrix_corrected = true;
-        }
+            g_common_hud_shape_matrix_corrected = true;
         CallShapeDrawVisitOriginal(visitor, definition);
         return;
     }
@@ -319,53 +347,32 @@ void __fastcall NetworkStatusShapeDrawVisitDetour(
 
 }
 
-void LogNetworkStatusCorrection(
+void LogCommonHudCorrection(
     WindowedWidescreenRuntime& runtime,
-    const NetworkStatusClip clip,
-    void* const movie_clip,
+    const CommonHudClip clip,
     const RenderSpace space,
     const char* const action,
     const bool succeeded) noexcept
 {
-    const auto clip_bit = clip == NetworkStatusClip::nesys ? 0U : 1U;
-    const auto outcome_bit = succeeded ? 0U : 2U;
-    const auto log_bit = 1U << (clip_bit + outcome_bit);
+    if (succeeded)
+        return;
+
+    // At most one failure warning per selected clip; successful draws are silent.
+    const auto log_bit = 1U << (static_cast<unsigned>(clip) - 1U);
     const auto previous = runtime.network_status_log_mask.fetch_or(
         log_bit,
         std::memory_order_relaxed);
     if ((previous & log_bit) != 0)
-    {
         return;
-    }
+
     try
     {
-        if (succeeded)
-        {
-            PLOG_INFO
-                << "WindowedWidescreen network-status clip correction"
-                << " clip="
-                << NetworkStatusClipName(clip)
-                << " object=0x" << std::hex
-                << reinterpret_cast<std::uintptr_t>(movie_clip)
-                << std::dec
-                << " frame="
-                << runtime.frame_sequence.load(
-                    std::memory_order_relaxed)
-                << " space=" << static_cast<int>(space)
-                << " action=" << action;
-        }
-        else
-        {
-            PLOG_WARNING
-                << "WindowedWidescreen network-status clip correction"
-                << " failed clip="
-                << NetworkStatusClipName(clip)
-                << " frame="
-                << runtime.frame_sequence.load(
-                    std::memory_order_relaxed)
-                << " space=" << static_cast<int>(space)
-                << " action=" << action;
-        }
+        PLOG_WARNING
+            << "WindowedWidescreen common-HUD clip correction"
+            << " failed clip=" << CommonHudClipName(clip)
+            << " frame=" << runtime.frame_sequence.load(std::memory_order_relaxed)
+            << " space=" << static_cast<int>(space)
+            << " action=" << action;
     }
     catch (...)
     {
@@ -397,8 +404,8 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
     {
         return original();
     }
-    const auto clip = IdentifyNetworkStatusClip(runtime->abi.layout, movie_clip);
-    if (clip == NetworkStatusClip::none ||
+    const auto clip = IdentifyCommonHudClip(runtime->abi.layout, movie_clip);
+    if (clip == CommonHudClip::none ||
         !runtime->compositor.frame_active())
     {
         return original();
@@ -416,10 +423,9 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
         if (!runtime->compositor.ReapplyGameplayHudPlacement(
                 runtime->settings.gameplay_hud_placement()))
         {
-            LogNetworkStatusCorrection(
+            LogCommonHudCorrection(
                 *runtime,
                 clip,
-                movie_clip,
                 *current_space,
                 "gameplay-hud-base-begin",
                 false);
@@ -428,29 +434,30 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
 
         int result{};
         bool restored{};
-        bool local_matrix_corrected{};
+        bool shape_matrix_corrected{};
         {
             const NetworkStatusNativeScope native_scope{clip};
             result = original();
-            local_matrix_corrected =
-                native_scope.local_matrix_corrected();
+            shape_matrix_corrected =
+                native_scope.shape_matrix_corrected();
             restored = runtime->compositor.
                 ReapplyGameplayHudPlacement(previous).has_value();
         }
-        const bool corrected = clip != NetworkStatusClip::local ||
-            local_matrix_corrected;
-        LogNetworkStatusCorrection(
+        const bool corrected = !RequiresCommonHudShapeMatrix(clip) ||
+            shape_matrix_corrected;
+        LogCommonHudCorrection(
             *runtime,
             clip,
-            movie_clip,
             *current_space,
             !restored
                 ? "gameplay-hud-base-restore"
                 : corrected
-                ? clip == NetworkStatusClip::local
+                ? clip == CommonHudClip::local
                       ? "gameplay-hud-local-matrix"
+                      : clip == CommonHudClip::header_separator
+                      ? "gameplay-hud-separator-matrix"
                       : "gameplay-hud-base"
-                : "gameplay-hud-local-matrix-unavailable",
+                : "gameplay-hud-shape-matrix-unavailable",
             restored && corrected);
         return result;
     }
@@ -464,8 +471,8 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
     }
 
     // GWDrawFunc caches bound textures/materials across sibling clips
-    // (4E3CA0/4E44E0). A full D3D state restore after a clip invalidates
-    // that cache. Current-target Flash draws need only a viewport scope;
+    // (4.74 4E3CA0/4E44E0; 2.06 4D8DE0/4D9620). Full state restoration
+    // after a clip invalidates that cache. Flash needs only a viewport scope;
     // their own projection and native pipeline retain their normal lifetime.
     const auto begun = viewport_scope
         ? runtime->compositor.BeginGameplayHudDraw(
@@ -474,10 +481,9 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
             runtime->settings.gameplay_hud_placement());
     if (!begun)
     {
-        LogNetworkStatusCorrection(
+        LogCommonHudCorrection(
             *runtime,
             clip,
-            movie_clip,
             *current_space,
             viewport_scope ? "physical-viewport-begin" : "physical-base-overlay-begin",
             false);
@@ -486,30 +492,31 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
 
     int result{};
     bool ended{};
-    bool local_matrix_corrected{};
+    bool shape_matrix_corrected{};
     {
         const NetworkStatusNativeScope native_scope{clip};
         result = original();
-        local_matrix_corrected =
-            native_scope.local_matrix_corrected();
+        shape_matrix_corrected =
+            native_scope.shape_matrix_corrected();
         const auto ended_result = viewport_scope
             ? runtime->compositor.EndGameplayHudDraw()
             : runtime->compositor.EndPhysicalGameplayHudOverlay();
         ended = ended_result.has_value();
     }
-    const bool corrected = clip != NetworkStatusClip::local ||
-        local_matrix_corrected;
+    const bool corrected = !RequiresCommonHudShapeMatrix(clip) ||
+        shape_matrix_corrected;
     const char* action = viewport_scope ? "physical-viewport" : "physical-base-overlay";
     if (!ended)
         action = viewport_scope ? "physical-viewport-end" : "physical-base-overlay-end";
     else if (!corrected)
-        action = "physical-local-matrix-unavailable";
-    else if (clip == NetworkStatusClip::local)
+        action = "physical-shape-matrix-unavailable";
+    else if (clip == CommonHudClip::local)
         action = viewport_scope ? "physical-viewport-local-matrix" : "physical-local-matrix";
-    LogNetworkStatusCorrection(
+    else if (clip == CommonHudClip::header_separator)
+        action = viewport_scope ? "physical-viewport-separator-matrix" : "physical-separator-matrix";
+    LogCommonHudCorrection(
         *runtime,
         clip,
-        movie_clip,
         *current_space,
         action,
         ended && corrected);

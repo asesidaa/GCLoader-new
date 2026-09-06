@@ -3,6 +3,12 @@
 Date: 2026-09-06. Implementation baseline: `86807302a17677abab9871f6d72b657c94ee67b5`.
 Status: implemented inline and compiled; real-process acceptance not performed.
 
+The widescreen counts and mapping below describe the initial implementation.
+The [subsequent narrowed widescreen port](gc206-narrowed-widescreen-2026-09-06.md)
+supersedes its 83-hook policy with 88 hooks and corrects the title/top-bar
+ownership mapping. The operator confirmed that fix works after its dotted-line
+follow-up and authorized cleanup/commit. Other feature records below are unchanged.
+
 ## Implemented scope
 
 One DLL now selects game 2.06 or 4.71 and independently selects NESYS 2.86.1
@@ -113,4 +119,3 @@ Compilation and native contract agreement do not establish runtime behavior.
 
 See the [native audit](gc206-new-patches-2026-09-06.md) and
 [implementation plan](../superpowers/plans/2026-09-06-gc206-version-support.md).
-

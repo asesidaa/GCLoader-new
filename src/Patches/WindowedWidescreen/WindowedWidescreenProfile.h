@@ -46,11 +46,11 @@ struct WindowedWidescreenProfile final {
     std::span<const WidescreenFunctionAbi> function_abis;
     std::span<const WidescreenContractSite> hook_order;
     WidescreenNativeLayout layout;
-    // Versioned policy; 2.06 retains its existing mixed-pass behavior until ported.
+    // Native consumers must be verified before enabling selected-draw projection.
     bool selected_hud_draws_only{};
 };
 struct PreparedWidescreenPlan final {
-    std::array<game_version::VersionedOperation, 100> operations;
+    std::array<game_version::VersionedOperation, 103> operations;
     std::size_t count{};
     [[nodiscard]] game_version::FeaturePlan feature_plan() const noexcept {
         return {game_version::FeatureId::windowed_widescreen,
