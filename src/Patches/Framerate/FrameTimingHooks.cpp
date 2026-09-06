@@ -162,7 +162,8 @@ void HookStageBgmPreload(safetyhook::Context& context)
 void HookTuneCountdownCompare(safetyhook::Context& context)
 {
     std::uint32_t countdown{};
-    if (!ReadU32Safe(context.edx + g_runtime->layout.tune_countdown, countdown))
+    if (!ReadU32Safe(FrameRegister(context, g_runtime->layout.tune_countdown_owner) +
+        g_runtime->layout.tune_countdown, countdown))
     {
         FatalRuntimeConversion("countdown compare read");
         return;
@@ -256,7 +257,7 @@ void HookAudioResyncPolicy(safetyhook::Context& context)
     if (suppressed)
     {
         context.eip = static_cast<std::uint32_t>(
-            NativeTarget(FramerateNativeTarget::audio_resync_epilogue));
+            NativeTarget(FramerateNativeTarget::audio_resync_continuation));
     }
 }
 

@@ -22,6 +22,19 @@ independently.
 
 ## Supported Binary and Evidence
 
+The 2026-09-06 port adds the 2.06 profile documented in the
+[native audit](../../reverse-engineering/gc206-new-patches-2026-09-06.md).
+The same five-operation feature uses text/marker RVAs `0x5ABF0/0x49FB9`,
+IsMute/AutoPlay loads `0x30B1A/0x30AFA`, and a different no-save operation:
+`0x1EF52A: 74 0F -> 90 90`. The older game has no `expconfig.cfg` no-save
+flag. This branch bypasses card request construction and enters native state
+13, retaining completion through state 17. Native CSV export at `0x1AF100`
+exits on the auto-play getter before opening a file. The following detailed
+parser discussion describes 4.71. Both profiles retain the single setting,
+save-before-auto-play installation order and activation after complete install.
+The 2.06 behavior is statically verified and compiled; runtime acceptance is
+pending in the [implementation record](../../reverse-engineering/gc206-implementation-2026-09-06.md).
+
 The supported analysis target is `H:\gc\game471.exe.i64`, with preferred image
 base `0x00400000`.
 

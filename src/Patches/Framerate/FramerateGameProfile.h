@@ -2,10 +2,11 @@
 #include "Patches/Framerate/FramerateNativeAbi.h"
 #include "Patches/Framerate/FramerateEffectTiming.h"
 #include "Patches/GameVersion/VersionedPlan.h"
+#include <optional>
+#include <span>
 
 namespace gc::framerate {
-// Operand carriers for the verified 4.71 instruction layouts. No older build
-// can use them without an explicitly available game profile.
+// Operand carriers shared by the verified 4.71 and 2.06 instruction layouts.
 struct AuthoredFrameOperand {
     std::array<std::byte, 0x18> padding{};
     float frame_milliseconds{1000.0F / 60.0F};
@@ -31,6 +32,7 @@ struct FramerateWriteContract final {
 struct FramerateHookContract final {
     FramerateHookId id;
     game_version::SiteContract site;
+    std::optional<FramerateRegister> authored_operand_register;
 };
 struct FramerateTargetContract final {
     FramerateNativeTarget id;
@@ -39,9 +41,9 @@ struct FramerateTargetContract final {
 struct FramerateGameProfile final {
     game_version::GameBuild build;
     game_version::GameImageVariant variant;
-    std::array<FramerateWriteContract, 17> writes;
-    std::array<FramerateHookContract, 53> hooks;
-    std::array<FramerateTargetContract, 10> targets;
+    std::span<const FramerateWriteContract> writes;
+    std::span<const FramerateHookContract> hooks;
+    std::span<const FramerateTargetContract> targets;
     FramerateNativeLayout layout;
     EffectTimingManifestSummary effect_timing;
 };

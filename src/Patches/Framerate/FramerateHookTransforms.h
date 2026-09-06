@@ -18,6 +18,9 @@ enum class FramerateHookTransformError {
 };
 
 
+[[nodiscard]] std::uint32_t& FrameRegister(
+    safetyhook::Context& context, FramerateRegister selected) noexcept;
+
 void RedirectEaxToAuthoredOperand(
     safetyhook::Context& context,
     const AuthoredFrameOperand& operand) noexcept;
@@ -29,9 +32,10 @@ void RedirectEdxToAuthoredOperand(
     const AuthoredFrameOperand& operand) noexcept;
 
 [[nodiscard]] std::expected<void, FramerateHookTransformError>
-MapCountdownAssetFrame(
+MapFrameRegisterToAuthored60(
     safetyhook::Context& context,
-    const FramerateTimingProfile& profile) noexcept;
+    const FramerateTimingProfile& profile,
+    FramerateRegister source) noexcept;
 
 [[nodiscard]] std::expected<void, FramerateHookTransformError>
 ScalePlayerPositionDurationEax(

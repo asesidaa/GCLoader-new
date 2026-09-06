@@ -39,36 +39,74 @@ constexpr std::array<DeltaCall, 32> kCalls{{
     {0x20B124, 0x20B129, "delta_0020b124"},
     {0x20B143, 0x20B148, "delta_0020b143"},
 }};
-consteval bool ValidCalls() {
-    for (const auto& call : kCalls) {
-        const auto displacement = std::int64_t{kGlobalFrameDeltaSeconds} - call.resume;
+// Thirteen native pairs; 2.06 has no later UnlockReward/Trophy pairs.
+constexpr runtime_image::Rva kGlobalFrameDeltaSeconds206 = 0x00203F80;
+constexpr std::array<DeltaCall, 26> kCalls206{{
+    {0x193580, 0x193585, "delta_00193580"},
+    {0x19359F, 0x1935A4, "delta_0019359f"},
+    {0x193880, 0x193885, "delta_00193880"},
+    {0x19389F, 0x1938A4, "delta_0019389f"},
+    {0x18B7C4, 0x18B7C9, "delta_0018b7c4"},
+    {0x18B7E3, 0x18B7E8, "delta_0018b7e3"},
+    {0x18F692, 0x18F697, "delta_0018f692"},
+    {0x18F6B1, 0x18F6B6, "delta_0018f6b1"},
+    {0x196764, 0x196769, "delta_00196764"},
+    {0x196783, 0x196788, "delta_00196783"},
+    {0x19BC88, 0x19BC8D, "delta_0019bc88"},
+    {0x19BCA7, 0x19BCAC, "delta_0019bca7"},
+    {0x19F3F4, 0x19F3F9, "delta_0019f3f4"},
+    {0x19F413, 0x19F418, "delta_0019f413"},
+    {0x19F1FF, 0x19F204, "delta_0019f1ff"},
+    {0x19F21E, 0x19F223, "delta_0019f21e"},
+    {0x1DAF54, 0x1DAF59, "delta_001daf54"},
+    {0x1DAF73, 0x1DAF78, "delta_001daf73"},
+    {0x1DB0D4, 0x1DB0D9, "delta_001db0d4"},
+    {0x1DB0F3, 0x1DB0F8, "delta_001db0f3"},
+    {0x1DCF54, 0x1DCF59, "delta_001dcf54"},
+    {0x1DCF73, 0x1DCF78, "delta_001dcf73"},
+    {0x1DECA1, 0x1DECA6, "delta_001deca1"},
+    {0x1DECC0, 0x1DECC5, "delta_001decc0"},
+    {0x1E0844, 0x1E0849, "delta_001e0844"},
+    {0x1E0863, 0x1E0868, "delta_001e0863"},
+}};
+template<std::size_t N>
+consteval bool ValidCalls(const std::array<DeltaCall, N>& calls, runtime_image::Rva delta) {
+    for (const auto& call : calls) {
+        const auto displacement = std::int64_t{delta} - call.resume;
         if (call.resume != call.call + 5 || displacement < (std::numeric_limits<std::int32_t>::min)() ||
             displacement > (std::numeric_limits<std::int32_t>::max)()) return false;
     }
     return true;
 }
-static_assert(ValidCalls());
-CountdownProfile MakeProfile(GameImageVariant variant) noexcept {
-    CountdownProfile profile{GameBuild::groove_coaster_471, variant, {}};
-    for (std::size_t index = 0; index < kCalls.size(); ++index) {
-        const auto& call = kCalls[index];
+static_assert(ValidCalls(kCalls, kGlobalFrameDeltaSeconds));
+static_assert(ValidCalls(kCalls206, kGlobalFrameDeltaSeconds206));
+template<std::size_t N>
+constexpr auto Operations(const std::array<DeltaCall, N>& calls, runtime_image::Rva delta) noexcept {
+    std::array<VersionedOperation, N> operations{};
+    for (std::size_t index = 0; index < calls.size(); ++index) {
+        const auto& call = calls[index];
         auto original = runtime_image::PatternOf<0xE8, 0, 0, 0, 0>();
         const auto displacement = static_cast<std::uint32_t>(
-            static_cast<std::int32_t>(std::int64_t{kGlobalFrameDeltaSeconds} - call.resume));
+            static_cast<std::int32_t>(std::int64_t{delta} - call.resume));
         for (std::size_t byte = 0; byte < sizeof(displacement); ++byte)
             original.bytes[byte + 1] = static_cast<std::byte>((displacement >> (byte * 8)) & 0xFF);
         constexpr auto frozen = runtime_image::PatternOf<0xD9, 0xEE, 0x90, 0x90, 0x90>();
-        profile.operations[index] = BytePatchOperation{{FeatureId::countdown, call.name,
+        operations[index] = BytePatchOperation{{FeatureId::countdown, call.name,
             VersionedOperationKind::byte_patch, call.call, 5, original, frozen,
             static_cast<std::uint32_t>(index)}, frozen};
     }
-    return profile;
+    return operations;
 }
+constexpr auto kOperations471 = Operations(kCalls, kGlobalFrameDeltaSeconds);
+constexpr auto kOperations206 = Operations(kCalls206, kGlobalFrameDeltaSeconds206);
 }
 const CountdownProfile* ProfileFor(GameBuild build, GameImageVariant variant) noexcept {
     static const std::array profiles{
-        MakeProfile(GameImageVariant::clean), MakeProfile(GameImageVariant::legacy_patched),
-        MakeProfile(GameImageVariant::locally_verified)};
+        CountdownProfile{GameBuild::groove_coaster_471, GameImageVariant::clean, kOperations471},
+        CountdownProfile{GameBuild::groove_coaster_471, GameImageVariant::legacy_patched, kOperations471},
+        CountdownProfile{GameBuild::groove_coaster_471, GameImageVariant::locally_verified, kOperations471},
+        CountdownProfile{GameBuild::groove_coaster_206, GameImageVariant::clean, kOperations206},
+        CountdownProfile{GameBuild::groove_coaster_206, GameImageVariant::locally_verified, kOperations206}};
     for (const auto& profile : profiles)
         if (profile.build == build && profile.variant == variant) return &profile;
     return nullptr;

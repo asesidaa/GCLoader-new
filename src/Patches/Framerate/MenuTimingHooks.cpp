@@ -54,7 +54,8 @@ IdentifyUnlockRewardPromptHold(
     void* self,
     MovieClipAdvanceContext context) noexcept
 {
-    if (context != MovieClipAdvanceContext::Ordinary)
+    if (!g_runtime->layout.unlock_reward_prompt_available ||
+        context != MovieClipAdvanceContext::Ordinary)
     {
         return std::nullopt;
     }

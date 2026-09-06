@@ -3,6 +3,8 @@
 #include <cstdint>
 
 namespace gc::framerate {
+enum class FramerateRegister { eax, ecx, edx };
+
 enum class FramerateHookId {
     MovieClipGoto,
     MovieClipAdvance,
@@ -68,7 +70,7 @@ enum class GameplayAudioClockPlan : std::uint8_t {
 
 
 enum class FramerateNativeTarget {
-    audio_resync_epilogue,
+    audio_resync_continuation,
     get_sound_manager,
     get_group_cursor,
     get_config,
@@ -110,6 +112,10 @@ struct FramerateNativeLayout final {
     std::uint32_t song_clock_skip{};
     std::uint32_t effect_advance_skip{};
     std::uint32_t player_position_skip{};
+    FramerateRegister tune_countdown_owner{};
+    FramerateRegister countdown_asset_source{};
+    FramerateRegister tutorial_elapsed_source{};
+    bool unlock_reward_prompt_available{};
 };
 using MovieClipGotoFn = char(__thiscall*)(void*, int, int);
 using MovieClipAdvanceFn = char(__thiscall*)(void*, char, char);

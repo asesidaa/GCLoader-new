@@ -1,5 +1,15 @@
 # Windowed Widescreen Stage Design
 
+## GC 2.06 profile, 2026-09-06
+
+The older game now has all 86 byte and nine pointer contracts for the same
+83-hook placement policy. Its `CTune` effect collection is `+0x1D60`, and
+the native Test Mode pass uses `0x207F3C/0x207F41`. The six judgement text
+and nine reached tutorial slots remain shared; initialized-but-unselected
+tutorial slot B7 remains excluded. Native contracts and both build presets
+pass; the operator confirmations below concern 4.71, not 2.06. See the
+[2.06 implementation record](../../reverse-engineering/gc206-implementation-2026-09-06.md).
+
 ## Placement containment correction, 2026-09-06
 
 Initial runtime observations showed that the placement scopes were too broad.

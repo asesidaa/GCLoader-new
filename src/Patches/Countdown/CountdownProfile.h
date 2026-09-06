@@ -1,10 +1,11 @@
 #pragma once
 #include "Patches/GameVersion/VersionedPlan.h"
+#include <span>
 namespace gc::timer_freeze {
 struct CountdownProfile final {
     game_version::GameBuild build;
     game_version::GameImageVariant variant;
-    std::array<game_version::VersionedOperation, 32> operations;
+    std::span<const game_version::VersionedOperation> operations;
 };
 [[nodiscard]] const CountdownProfile* ProfileFor(
     game_version::GameBuild, game_version::GameImageVariant) noexcept;

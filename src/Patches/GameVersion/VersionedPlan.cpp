@@ -59,14 +59,20 @@ PlanContext Context(const Detection& detection) noexcept {
 bool ValidContext(const PlanContext& context) noexcept {
     if (const auto* build = std::get_if<GameBuild>(&context.build)) {
         const auto* variant = std::get_if<GameImageVariant>(&context.variant);
-        return *build == GameBuild::groove_coaster_471 && variant &&
+        const bool supported = *build == GameBuild::groove_coaster_471 ||
+            *build == GameBuild::groove_coaster_206;
+        return supported && variant &&
             ((context.proof == DetectionProof::exact_known_hash &&
-              (*variant == GameImageVariant::clean || *variant == GameImageVariant::legacy_patched)) ||
+              (*variant == GameImageVariant::clean ||
+               (*build == GameBuild::groove_coaster_471 && *variant == GameImageVariant::legacy_patched))) ||
              (context.proof == DetectionProof::complete_local_contract &&
               *variant == GameImageVariant::locally_verified));
     }
     const auto* variant = std::get_if<nesys_service::NesysImageVariant>(&context.variant);
-    return std::get<nesys_service::NesysBuild>(context.build) == nesys_service::NesysBuild::service_297 &&
+    const auto build = std::get<nesys_service::NesysBuild>(context.build);
+    const bool supported = build == nesys_service::NesysBuild::service_297 ||
+        build == nesys_service::NesysBuild::service_2861;
+    return supported &&
         variant && ((context.proof == DetectionProof::exact_known_hash &&
                      *variant == nesys_service::NesysImageVariant::original) ||
                     (context.proof == DetectionProof::complete_local_contract &&

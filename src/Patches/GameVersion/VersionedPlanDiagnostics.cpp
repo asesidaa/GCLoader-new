@@ -12,7 +12,18 @@ std::string FormatContractBytes(const runtime_image::BytePattern& pattern) {
 }
 namespace {
 const char* BuildName(const SelectedBuild& build) noexcept {
-    return std::holds_alternative<GameBuild>(build) ? "groove_coaster_471" : "nesys_service_297";
+    if (const auto* game = std::get_if<GameBuild>(&build)) {
+        switch (*game) {
+        case GameBuild::groove_coaster_471: return "groove_coaster_471";
+        case GameBuild::groove_coaster_206: return "groove_coaster_206";
+        }
+    } else {
+        switch (std::get<nesys_service::NesysBuild>(build)) {
+        case nesys_service::NesysBuild::service_297: return "nesys_service_297";
+        case nesys_service::NesysBuild::service_2861: return "nesys_service_2861";
+        }
+    }
+    return "unknown";
 }
 const char* VariantName(const SelectedVariant& variant) noexcept {
     if (const auto* game = std::get_if<GameImageVariant>(&variant)) {

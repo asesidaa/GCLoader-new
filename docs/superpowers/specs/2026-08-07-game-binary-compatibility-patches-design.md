@@ -2,6 +2,16 @@
 
 Date: 2026-08-07
 
+The 2026-09-06 port adds game 2.06 and independently selected NESYS 2.86.1
+profiles through the refactored startup plan. Its compatibility writes are
+`0xA3FF6` (mouse), `0xF7E9B` (dongle failure), `0xF90F6` (transmit)
+and `0x2B68C7` (COM character). Known SHA-256 identities select their exact
+profile; unknown hashes require structural selection and full local
+contracts. Only the known 4.71 variant admits already-installed compatibility
+writes. See the [port record](../../reverse-engineering/gc206-implementation-2026-09-06.md).
+The historical 4.71 evidence below remains applicable; current installation
+uses the shared approval barrier and fatal failure, without reverse rollback.
+
 ## Context
 
 GCLoader has historically run with `H:\gc\game471.exe`. That executable is a

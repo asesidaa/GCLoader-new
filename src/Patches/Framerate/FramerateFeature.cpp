@@ -12,7 +12,7 @@ bool TargetRequired(FramerateNativeTarget target, const FramerateHookPlan& hooks
         return std::ranges::any_of(hooks.view(), [&](const auto& hook) { return hook.id == id; });
     };
     switch (target) {
-    case FramerateNativeTarget::audio_resync_epilogue: return has(FramerateHookId::AudioResyncPolicy);
+    case FramerateNativeTarget::audio_resync_continuation: return has(FramerateHookId::AudioResyncPolicy);
     case FramerateNativeTarget::get_sound_manager:
     case FramerateNativeTarget::get_group_cursor:
     case FramerateNativeTarget::get_config: return has(FramerateHookId::GameplaySongClock);

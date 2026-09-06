@@ -3,6 +3,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <utility>
 
 namespace gc::framerate {
 
@@ -15,6 +16,16 @@ std::uint32_t OperandAddress(const void* operand) noexcept {
 }
 
 } // namespace
+
+std::uint32_t& FrameRegister(
+    safetyhook::Context& context, FramerateRegister selected) noexcept {
+    switch (selected) {
+    case FramerateRegister::eax: return context.eax;
+    case FramerateRegister::ecx: return context.ecx;
+    case FramerateRegister::edx: return context.edx;
+    }
+    std::unreachable();
+}
 
 void RedirectEaxToAuthoredOperand(
     safetyhook::Context& context,
@@ -35,16 +46,18 @@ void RedirectEdxToAuthoredOperand(
 }
 
 std::expected<void, FramerateHookTransformError>
-MapCountdownAssetFrame(
+MapFrameRegisterToAuthored60(
     safetyhook::Context& context,
-    const FramerateTimingProfile& profile) noexcept {
+    const FramerateTimingProfile& profile,
+    FramerateRegister source) noexcept {
+    auto& value = FrameRegister(context, source);
     const auto mapped = MapPositiveTargetFrameToAuthored60(
-        profile, context.ecx);
+        profile, value);
     if (!mapped) {
         return std::unexpected(
             FramerateHookTransformError::ProfileConversion);
     }
-    context.ecx = mapped.value();
+    value = mapped.value();
     return {};
 }
 

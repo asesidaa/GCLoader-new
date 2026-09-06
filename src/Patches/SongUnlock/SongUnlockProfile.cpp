@@ -14,6 +14,14 @@ constexpr std::array<VersionedOperation, 1> kOperations{
         PatternOf<0xE9, 0x1E, 0x02, 0x00, 0x00, 0x90>(), 0},
         PatternOf<0xE9, 0x1E, 0x02, 0x00, 0x00, 0x90>()},
 };
+// 2.06 uses the system-config +0x24 all-song path at RVA 0x2240E4.
+constexpr std::array<VersionedOperation, 1> kOperations206{
+    BytePatchOperation{{FeatureId::song_unlock, "availability_branch",
+        VersionedOperationKind::byte_patch, 0x00223F10, 6,
+        PatternOf<0x0F, 0x85, 0xCE, 0x01, 0x00, 0x00>(),
+        PatternOf<0xE9, 0xCF, 0x01, 0x00, 0x00, 0x90>(), 0},
+        PatternOf<0xE9, 0xCF, 0x01, 0x00, 0x00, 0x90>()},
+};
 }
 std::expected<game_version::FeaturePlan, game_version::PlanError> BuildSongUnlockPlan(
     game_version::GameBuild build, game_version::GameImageVariant variant, bool enabled) noexcept {
@@ -22,6 +30,9 @@ std::expected<game_version::FeaturePlan, game_version::PlanError> BuildSongUnloc
         (variant == GameImageVariant::clean || variant == GameImageVariant::legacy_patched ||
          variant == GameImageVariant::locally_verified))
         return FeaturePlan{FeatureId::song_unlock, kOperations, {}};
+    if (build == GameBuild::groove_coaster_206 &&
+        (variant == GameImageVariant::clean || variant == GameImageVariant::locally_verified))
+        return FeaturePlan{FeatureId::song_unlock, kOperations206, {}};
     return std::unexpected(PlanError{.stage = PlanStage::unsupported_feature, .feature = FeatureId::song_unlock});
 }
 }

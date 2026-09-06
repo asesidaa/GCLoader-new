@@ -289,7 +289,8 @@ void HookAuthoredOperandEdx(safetyhook::Context& context)
 
 void HookGameplayCountdownAssetFrame(safetyhook::Context& context)
 {
-    if (!MapCountdownAssetFrame(context, g_runtime->profile))
+    if (!MapFrameRegisterToAuthored60(context, g_runtime->profile,
+        g_runtime->layout.countdown_asset_source))
     {
         FatalRuntimeConversion(
             "gameplay countdown asset-frame mapping");
@@ -357,7 +358,8 @@ void HookEffectFlowItemFrame(safetyhook::Context& context)
 
 void HookEffectTutorialElapsed(safetyhook::Context& context)
 {
-    if (!MapEffectFrameEdxToAuthored60(context, g_runtime->profile))
+    if (!MapFrameRegisterToAuthored60(context, g_runtime->profile,
+        g_runtime->layout.tutorial_elapsed_source))
     {
         FatalRuntimeConversion(
             "effect tutorial elapsed authored-frame mapping");

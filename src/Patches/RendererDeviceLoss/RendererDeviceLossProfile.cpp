@@ -51,10 +51,65 @@ RendererDeviceLossProfile Make(GameImageVariant variant) {
     }}, {.initialized_offset = 0x484, .index_buffer_holder_offset = 0x778,
          .vertex_buffer_lock_output_stack_offset = 0x14}};
 }
+// GC 2.06 native contracts; see the September 6 port audit.
+RendererDeviceLossProfile Make206(GameImageVariant variant) {
+    return {GameBuild::groove_coaster_206, variant, {{
+        MidHookOperation{
+            {FeatureId::renderer_device_loss, "device_lost_tail", VersionedOperationKind::mid_hook,
+             0xDB7E8, 6, PatternOf<0x89, 0xBE, 0x18, 0x01, 0x00, 0x00, 0x89, 0xBE, 0x1C, 0x01, 0x00, 0x00>(), {}, 0},
+            &OnDeviceLostTail},
+        MidHookOperation{
+            {FeatureId::renderer_device_loss, "vertex_buffer_result", VersionedOperationKind::mid_hook,
+             0xDCA07, 7, PatternOf<0x85, 0xC0, 0x7C, 0x59, 0x8B, 0x4F, 0x0C>(), {}, 1},
+            &OnVertexBufferCreateResult},
+        MidHookOperation{
+            {FeatureId::renderer_device_loss, "index_buffer_result", VersionedOperationKind::mid_hook,
+             0xDCA94, 9, PatternOf<0x85, 0xC0, 0x7D, 0x13, 0x68, 0x5C, 0x76, 0x6D, 0x00>(), {}, 2},
+            &OnIndexBufferCreateResult},
+        MidHookOperation{
+            {FeatureId::renderer_device_loss, "vertex_buffer_lock_guard", VersionedOperationKind::mid_hook,
+             0xDA6B8, 9, PatternOf<0x3B, 0xF9, 0x72, 0x05, 0xE8, 0x36, 0x01, 0x02, 0x00>(), {}, 3},
+            &OnVertexBufferLockGuard},
+        MidHookOperation{
+            {FeatureId::renderer_device_loss, "direct_lock_result", VersionedOperationKind::mid_hook,
+             0xDB92E, 5, PatternOf<0x8B, 0x4C, 0x24, 0x14, 0x51, 0x8B, 0x8E, 0xE4, 0x01, 0x00, 0x00>(), {}, 4},
+            &OnDirectLockResult},
+        MidHookOperation{
+            {FeatureId::renderer_device_loss, "buffered_unlock_result", VersionedOperationKind::mid_hook,
+             0xDA7A2, 9, PatternOf<0x85, 0xC0, 0x7D, 0x13, 0x68, 0x5C, 0x76, 0x6D, 0x00>(), {}, 5},
+            &OnBufferedUnlockResult},
+        ReadOnlyContractOperation{
+            {FeatureId::renderer_device_loss, "initializer_epilogue", VersionedOperationKind::read_only_contract,
+             0xDCEF9, 7, PatternOf<0x5F, 0x5E, 0x5B, 0x8B, 0xE5, 0x5D, 0xC3>(), {}, 0,
+             SiteDisposition::verify_only}},
+        ReadOnlyContractOperation{
+            {FeatureId::renderer_device_loss, "vertex_buffer_lock_failure", VersionedOperationKind::read_only_contract,
+             0xDA722, 12, PatternOf<0x5F, 0x5E, 0x89, 0x18, 0x89, 0x58, 0x04, 0x5B, 0x59, 0xC2, 0x08, 0x00>(), {}, 0,
+             SiteDisposition::verify_only}},
+        ReadOnlyContractOperation{
+            {FeatureId::renderer_device_loss, "direct_batch_cleanup", VersionedOperationKind::read_only_contract,
+             0xDBAE6, 12, PatternOf<0x8B, 0xB6, 0xE4, 0x01, 0x00, 0x00, 0x8B, 0x5E, 0x10, 0x39, 0x5E, 0x0C>(), {}, 0,
+             SiteDisposition::verify_only}},
+        ReadOnlyContractOperation{
+            {FeatureId::renderer_device_loss, "buffered_unlock_continuation", VersionedOperationKind::read_only_contract,
+             0xDA7B9, 12, PatternOf<0x8B, 0x86, 0x80, 0x04, 0x00, 0x00, 0x8B, 0x8E, 0x44, 0x07, 0x00, 0x00>(), {}, 0,
+             SiteDisposition::verify_only}},
+    }}, {.initialized_offset = 0x484, .index_buffer_holder_offset = 0x778,
+         .vertex_buffer_lock_output_stack_offset = 0x14}};
+}
 }
 const RendererDeviceLossProfile* ProfileFor(
     game_version::GameBuild build, game_version::GameImageVariant variant) noexcept {
     using namespace game_version;
+    if (build == GameBuild::groove_coaster_206) {
+        static const auto clean206 = Make206(GameImageVariant::clean);
+        static const auto verified206 = Make206(GameImageVariant::locally_verified);
+        switch (variant) {
+        case GameImageVariant::clean: return &clean206;
+        case GameImageVariant::locally_verified: return &verified206;
+        case GameImageVariant::legacy_patched: return nullptr;
+        }
+    }
     if (build != GameBuild::groove_coaster_471) return nullptr;
     static const auto clean = Make(GameImageVariant::clean);
     static const auto patched = Make(GameImageVariant::legacy_patched);
