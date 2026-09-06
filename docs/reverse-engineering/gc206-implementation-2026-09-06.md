@@ -7,7 +7,12 @@ The widescreen counts and mapping below describe the initial implementation.
 The [subsequent narrowed widescreen port](gc206-narrowed-widescreen-2026-09-06.md)
 supersedes its 83-hook policy with 88 hooks and corrects the title/top-bar
 ownership mapping. The operator confirmed that fix works after its dotted-line
-follow-up and authorized cleanup/commit. Other feature records below are unchanged.
+follow-up and authorized cleanup/commit. The
+[countdown correction](gc206-countdown-fix-2026-09-06.md) supersedes the initial
+thirteen-pair countdown mapping below with fifteen pairs, correcting song
+selection and adding course selection and event-score results. The operator
+confirmed the countdown correction works on 2026-09-07. Other feature records
+below are unchanged.
 
 ## Implemented scope
 

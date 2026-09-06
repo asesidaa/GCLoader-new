@@ -39,17 +39,24 @@ constexpr std::array<DeltaCall, 32> kCalls{{
     {0x20B124, 0x20B129, "delta_0020b124"},
     {0x20B143, 0x20B148, "delta_0020b143"},
 }};
-// Thirteen native pairs; 2.06 has no later UnlockReward/Trophy pairs.
+// Fifteen native pairs. Only add countdowns with an independent player-confirm
+// path; timeouts that are the sole way to advance must keep running.
+// Native ownership and exit paths: docs/reverse-engineering/gc206-countdown-fix-2026-09-06.md.
 constexpr runtime_image::Rva kGlobalFrameDeltaSeconds206 = 0x00203F80;
-constexpr std::array<DeltaCall, 26> kCalls206{{
+constexpr std::array<DeltaCall, 30> kCalls206{{
     {0x193580, 0x193585, "delta_00193580"},
     {0x19359F, 0x1935A4, "delta_0019359f"},
     {0x193880, 0x193885, "delta_00193880"},
     {0x19389F, 0x1938A4, "delta_0019389f"},
     {0x18B7C4, 0x18B7C9, "delta_0018b7c4"},
     {0x18B7E3, 0x18B7E8, "delta_0018b7e3"},
-    {0x18F692, 0x18F697, "delta_0018f692"},
-    {0x18F6B1, 0x18F6B6, "delta_0018f6b1"},
+    // SelectMusic: flt_7AA650 is the visible timer. The earlier pair at
+    // 0x18F692/0x18F6B1 decrements the input-repeat delay flt_7AA63C.
+    {0x18F6F6, 0x18F6FB, "select_music_countdown_compare"},
+    {0x18F715, 0x18F71A, "select_music_countdown_store"},
+    // EventCourse: input 14 confirms independently of flt_7AA560 reaching zero.
+    {0x198874, 0x198879, "event_course_countdown_compare"},
+    {0x198893, 0x198898, "event_course_countdown_store"},
     {0x196764, 0x196769, "delta_00196764"},
     {0x196783, 0x196788, "delta_00196783"},
     {0x19BC88, 0x19BC8D, "delta_0019bc88"},
@@ -68,6 +75,9 @@ constexpr std::array<DeltaCall, 26> kCalls206{{
     {0x1DECC0, 0x1DECC5, "delta_001decc0"},
     {0x1E0844, 0x1E0849, "delta_001e0844"},
     {0x1E0863, 0x1E0868, "delta_001e0863"},
+    // ResultEventScore: input 14 confirms independently of flt_79408C.
+    {0x1E2074, 0x1E2079, "event_score_result_countdown_compare"},
+    {0x1E2093, 0x1E2098, "event_score_result_countdown_store"},
 }};
 template<std::size_t N>
 consteval bool ValidCalls(const std::array<DeltaCall, N>& calls, runtime_image::Rva delta) {
