@@ -455,14 +455,22 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
         return result;
     }
 
+    const bool viewport_scope = runtime->abi.selected_hud_draws_only;
     if (*current_space != RenderSpace::physical_3d ||
-        runtime->compositor.physical_gameplay_hud_overlay_active())
+        runtime->compositor.physical_gameplay_hud_overlay_active() ||
+        (viewport_scope && runtime->compositor.gameplay_hud_draw_active()))
     {
         return original();
     }
 
-    const auto begun =
-        runtime->compositor.BeginPhysicalGameplayHudOverlay(
+    // GWDrawFunc caches bound textures/materials across sibling clips
+    // (4E3CA0/4E44E0). A full D3D state restore after a clip invalidates
+    // that cache. Current-target Flash draws need only a viewport scope;
+    // their own projection and native pipeline retain their normal lifetime.
+    const auto begun = viewport_scope
+        ? runtime->compositor.BeginGameplayHudDraw(
+            runtime->settings.gameplay_hud_placement(), false)
+        : runtime->compositor.BeginPhysicalGameplayHudOverlay(
             runtime->settings.gameplay_hud_placement());
     if (!begun)
     {
@@ -471,7 +479,7 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
             clip,
             movie_clip,
             *current_space,
-            "physical-base-overlay-begin",
+            viewport_scope ? "physical-viewport-begin" : "physical-base-overlay-begin",
             false);
         return original();
     }
@@ -484,24 +492,26 @@ int __fastcall NetworkStatusMovieClipAcceptDetour(
         result = original();
         local_matrix_corrected =
             native_scope.local_matrix_corrected();
-        const auto ended_result =
-            runtime->compositor.EndPhysicalGameplayHudOverlay();
+        const auto ended_result = viewport_scope
+            ? runtime->compositor.EndGameplayHudDraw()
+            : runtime->compositor.EndPhysicalGameplayHudOverlay();
         ended = ended_result.has_value();
     }
     const bool corrected = clip != NetworkStatusClip::local ||
         local_matrix_corrected;
+    const char* action = viewport_scope ? "physical-viewport" : "physical-base-overlay";
+    if (!ended)
+        action = viewport_scope ? "physical-viewport-end" : "physical-base-overlay-end";
+    else if (!corrected)
+        action = "physical-local-matrix-unavailable";
+    else if (clip == NetworkStatusClip::local)
+        action = viewport_scope ? "physical-viewport-local-matrix" : "physical-local-matrix";
     LogNetworkStatusCorrection(
         *runtime,
         clip,
         movie_clip,
         *current_space,
-        !ended
-            ? "physical-base-overlay-end"
-            : corrected
-            ? clip == NetworkStatusClip::local
-                  ? "physical-local-matrix"
-                  : "physical-base-overlay"
-            : "physical-local-matrix-unavailable",
+        action,
         ended && corrected);
     return result;
 }

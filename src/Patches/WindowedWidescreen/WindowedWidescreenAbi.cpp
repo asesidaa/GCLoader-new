@@ -34,7 +34,8 @@ std::expected<WidescreenGameAbi, game_version::PlanError> BuildWidescreenGameAbi
         if (const auto result = check(row.contract); !result) return std::unexpected(result.error());
     for (const auto& row : profile.pointer_contracts)
         if (const auto result = check(row.contract); !result) return std::unexpected(result.error());
-    WidescreenGameAbi abi{.layout = profile.layout};
+    WidescreenGameAbi abi{.layout = profile.layout, .hook_count = profile.hook_order.size(),
+        .selected_hud_draws_only = profile.selected_hud_draws_only};
     const auto resolve = [&](runtime_image::Rva rva, std::size_t size, std::string_view site)
         -> std::expected<std::uintptr_t, PlanError> {
         const auto address = image.Resolve({"WindowedWidescreen", site, rva}, size);
@@ -102,6 +103,12 @@ std::expected<WidescreenGameAbi, game_version::PlanError> BuildWidescreenGameAbi
         switch (site)
         {
         case WidescreenContractSite::none: return "none";
+        case WidescreenContractSite::stage_title_draw_begin: return "stage_title_draw_begin";
+        case WidescreenContractSite::stage_title_draw_end: return "stage_title_draw_end";
+        case WidescreenContractSite::stage_players_draw_begin: return "stage_players_draw_begin";
+        case WidescreenContractSite::stage_players_draw_end: return "stage_players_draw_end";
+        case WidescreenContractSite::timed_text_draw_begin: return "timed_text_draw_begin";
+        case WidescreenContractSite::timed_text_draw_end: return "timed_text_draw_end";
         case WidescreenContractSite::bar_difficulty_a_begin: return "bar_difficulty_a_begin";
         case WidescreenContractSite::bar_difficulty_a_end: return "bar_difficulty_a_end";
         case WidescreenContractSite::bar_difficulty_b_begin: return "bar_difficulty_b_begin";

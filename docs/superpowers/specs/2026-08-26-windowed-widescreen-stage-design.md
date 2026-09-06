@@ -1,5 +1,25 @@
 # Windowed Widescreen Stage Design
 
+## Background projection correction, 2026-09-06
+
+The later screenshot comparison exposed two remaining defects: CTune+110 is
+shared by the HUD, stage color background, and visualizers, while the expanding
+hundred-chain rectangle needs more than the centered 720-pixel viewport.
+The current-target correction leaves both the cached matrix and the mixed
+effects pass at output dimensions. Native projection, logical dimensions and
+viewport placement apply only inside the selected bar/counter/effect draws,
+plus explicit centered stage-title, stage-player-detail and timed-text draw
+scopes. Backgrounds, visualizers, rectangles and stage fades keep their native
+full-output state. There is no rectangle exception or shared projection hook.
+This supersedes the shared matrix-builder hook and centered native-width
+mixed-pass assumptions below.
+
+The narrowed correction is implemented with 88 hooks. On 2026-09-06 the
+operator reported that the 4.74 issues appeared fixed, including the ONLINE
+follow-up, and authorized committing it before porting to 2.06. This commit
+retains 2.06's existing 83-hook policy; the port is the next change.
+See the [native evidence, exact sites, and runtime checklist](../../reverse-engineering/widescreen-background-projection-followup-2026-09-06.md).
+
 ## GC 2.06 profile, 2026-09-06
 
 The older game now has all 86 byte and nine pointer contracts for the same

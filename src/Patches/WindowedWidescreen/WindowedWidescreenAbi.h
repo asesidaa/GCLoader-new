@@ -103,6 +103,12 @@ namespace gc::windowed_widescreen {
         chain_glow_end,
         hundred_digits_end,
         effect_packet_end,
+        stage_title_draw_begin,
+        stage_title_draw_end,
+        stage_players_draw_begin,
+        stage_players_draw_end,
+        timed_text_draw_begin,
+        timed_text_draw_end,
     };
     enum class WidescreenCallingConvention : std::uint8_t
     {
@@ -164,6 +170,8 @@ using ShapeDrawVisit = void(__thiscall*)(void*, void*);
 }
 struct WidescreenGameAbi final {
     WidescreenNativeLayout layout;
+    std::size_t hook_count{};
+    bool selected_hud_draws_only{};
     std::uintptr_t main_config_vtable{};
     std::uintptr_t batch_queue_pointer{};
     std::uintptr_t movie_clip_draw_visitor_vtable{};

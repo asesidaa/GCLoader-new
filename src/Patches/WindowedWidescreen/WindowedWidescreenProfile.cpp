@@ -9,6 +9,18 @@ namespace {
 using namespace game_version;
 using namespace runtime_image;
 constexpr std::array kBytes{
+    WidescreenByteContract{WidescreenContractSite::stage_title_draw_begin, {FeatureId::windowed_widescreen, "stage_title_draw_begin", VersionedOperationKind::mid_hook,
+             0x24A295, 5, PatternOf<0xE8, 0x06, 0x74, 0xF9, 0xFF>(), {}, 91}},
+    WidescreenByteContract{WidescreenContractSite::stage_title_draw_end, {FeatureId::windowed_widescreen, "stage_title_draw_end", VersionedOperationKind::mid_hook,
+             0x24A29A, 6, PatternOf<0x8B, 0x95, 0x54, 0xFE, 0xFF, 0xFF>(), {}, 92}},
+    WidescreenByteContract{WidescreenContractSite::stage_players_draw_begin, {FeatureId::windowed_widescreen, "stage_players_draw_begin", VersionedOperationKind::mid_hook,
+             0x24A2AB, 5, PatternOf<0xE8, 0x20, 0x82, 0xF9, 0xFF>(), {}, 93}},
+    WidescreenByteContract{WidescreenContractSite::stage_players_draw_end, {FeatureId::windowed_widescreen, "stage_players_draw_end", VersionedOperationKind::mid_hook,
+             0x24A2B0, 7, PatternOf<0xC7, 0x45, 0xFC, 0xFF, 0xFF, 0xFF, 0xFF>(), {}, 94}},
+    WidescreenByteContract{WidescreenContractSite::timed_text_draw_begin, {FeatureId::windowed_widescreen, "timed_text_draw_begin", VersionedOperationKind::mid_hook,
+             0x24A2F8, 5, PatternOf<0xE8, 0x83, 0xC6, 0xF7, 0xFF>(), {}, 95}},
+    WidescreenByteContract{WidescreenContractSite::timed_text_draw_end, {FeatureId::windowed_widescreen, "timed_text_draw_end", VersionedOperationKind::mid_hook,
+             0x24A2FD, 6, PatternOf<0xD9, 0x05, 0x80, 0xC2, 0x6F, 0x00>(), {}, 96}},
     WidescreenByteContract{WidescreenContractSite::bar_difficulty_a_begin, {FeatureId::windowed_widescreen, "bar_difficulty_a_begin", VersionedOperationKind::mid_hook,
              0x1E3F48, 5, PatternOf<0xE8, 0x33, 0x46, 0xF8, 0xFF>(), {}, 47}},
     WidescreenByteContract{WidescreenContractSite::bar_difficulty_a_end, {FeatureId::windowed_widescreen, "bar_difficulty_a_end", VersionedOperationKind::mid_hook,
@@ -155,8 +167,6 @@ constexpr std::array kBytes{
              0x263041, 5, PatternOf<0xE8, 0xFA, 0x5C, 0xFE, 0xFF, 0xE8, 0xD5, 0x0, 0xDF, 0xFF>(), {}, 24}},
     WidescreenByteContract{WidescreenContractSite::gameplay_effects_end, {FeatureId::windowed_widescreen, "gameplay_effects_end", VersionedOperationKind::mid_hook,
              0x263046, 5, PatternOf<0xE8, 0xD5, 0x0, 0xDF, 0xFF>(), {}, 25}},
-    WidescreenByteContract{WidescreenContractSite::gameplay_hud_projection, {FeatureId::windowed_widescreen, "gameplay_hud_projection", VersionedOperationKind::mid_hook,
-             0x23FDBA, 5, PatternOf<0xE8, 0xB1, 0xF3, 0xF9, 0xFF, 0x8B, 0xB5, 0x24, 0xFF, 0xFF, 0xFF, 0x81, 0xC6, 0xD0, 0x0, 0x0>(), {}, 26}},
     WidescreenByteContract{WidescreenContractSite::chain_label_begin, {FeatureId::windowed_widescreen, "chain_label_begin", VersionedOperationKind::mid_hook,
              0x1E4503, 5, PatternOf<0xE8, 0xA8, 0xD0, 0xFF, 0xFF>(), {}, 27}},
     WidescreenByteContract{WidescreenContractSite::chain_digits_begin, {FeatureId::windowed_widescreen, "chain_digits_begin", VersionedOperationKind::mid_hook,
@@ -372,12 +382,40 @@ constexpr std::array kOrder{
     WidescreenContractSite::hundred_digits_end,
     WidescreenContractSite::effect_packet_end,
 };
+// Keep the 2.06 contract set unchanged until the current target is accepted.
+constexpr std::array kCenteredUiSites{
+    WidescreenContractSite::stage_title_draw_begin,
+    WidescreenContractSite::stage_title_draw_end,
+    WidescreenContractSite::stage_players_draw_begin,
+    WidescreenContractSite::stage_players_draw_end,
+    WidescreenContractSite::timed_text_draw_begin,
+    WidescreenContractSite::timed_text_draw_end,
+};
+constexpr auto kAbis471 = [] {
+    std::array<WidescreenFunctionAbi, kAbis.size() - 1 + kCenteredUiSites.size()> result{};
+    auto out = result.begin();
+    for (const auto& row : kAbis)
+        if (row.site != WidescreenContractSite::gameplay_hud_projection)
+            *out++ = row;
+    for (const auto site : kCenteredUiSites)
+        *out++ = {site, WidescreenCallingConvention::mid_context, 1};
+    return result;
+}();
+constexpr auto kOrder471 = [] {
+    std::array<WidescreenContractSite, kOrder.size() - 1 + kCenteredUiSites.size()> result{};
+    auto out = result.begin();
+    for (const auto site : kOrder)
+        if (site != WidescreenContractSite::gameplay_hud_projection)
+            *out++ = site;
+    for (const auto site : kCenteredUiSites) *out++ = site;
+    return result;
+}();
 constexpr auto CountBytes(VersionedOperationKind kind) {
     return std::ranges::count_if(kBytes, [kind](const auto& row) { return row.contract.kind == kind; });
 }
-static_assert(kBytes.size() == 86 && kPointers.size() == 9 && kAbis.size() == 83 && kOrder.size() == 83);
+static_assert(kBytes.size() == 91 && kPointers.size() == 9 && kAbis471.size() == 88 && kOrder471.size() == 88);
 static_assert(CountBytes(VersionedOperationKind::inline_hook) == 18);
-static_assert(CountBytes(VersionedOperationKind::mid_hook) == 63);
+static_assert(CountBytes(VersionedOperationKind::mid_hook) == 68);
 static_assert(CountBytes(VersionedOperationKind::read_only_contract) == 5);
 static_assert(std::ranges::count_if(kPointers, [](const auto& row) {
     return row.contract.kind == VersionedOperationKind::global_vtable_slot;
@@ -531,7 +569,7 @@ constexpr WindowedWidescreenProfile Make206(GameImageVariant variant) {
     }};
 }
 constexpr WindowedWidescreenProfile Make(GameImageVariant variant) {
-    return {GameBuild::groove_coaster_471, variant, kBytes, kPointers, kAbis, kOrder, {
+    return {GameBuild::groove_coaster_471, variant, kBytes, kPointers, kAbis471, kOrder471, {
         .main_config_vtable = 0x2AE62C,
         .batch_queue_pointer = 0x3F24FC,
         .movie_clip_draw_visitor_vtable = 0x2BB74C,
@@ -555,7 +593,7 @@ constexpr WindowedWidescreenProfile Make(GameImageVariant variant) {
         .pointer_collection_begin_offset = 0xC,
         .pointer_collection_end_offset = 0x10,
         .network_status_visitor_matrix_stack_offset = 0x1A0,
-    }};
+    }, true};
 }
 }
 const WindowedWidescreenProfile* ProfileFor(
@@ -624,6 +662,18 @@ namespace gc::windowed_widescreen {
         using namespace game_version;
         using namespace detail;
         switch (site) {
+        case WidescreenContractSite::stage_title_draw_begin:
+            return MidHookOperation{contract, &StageTitleDrawBeginMid};
+        case WidescreenContractSite::stage_title_draw_end:
+            return MidHookOperation{contract, &StageTitleDrawEndMid};
+        case WidescreenContractSite::stage_players_draw_begin:
+            return MidHookOperation{contract, &StagePlayersDrawBeginMid};
+        case WidescreenContractSite::stage_players_draw_end:
+            return MidHookOperation{contract, &StagePlayersDrawEndMid};
+        case WidescreenContractSite::timed_text_draw_begin:
+            return MidHookOperation{contract, &TimedTextDrawBeginMid};
+        case WidescreenContractSite::timed_text_draw_end:
+            return MidHookOperation{contract, &TimedTextDrawEndMid};
         case WidescreenContractSite::bar_difficulty_a_begin:
             return MidHookOperation{contract, &BarDrawBeginMid};
         case WidescreenContractSite::bar_difficulty_a_end:

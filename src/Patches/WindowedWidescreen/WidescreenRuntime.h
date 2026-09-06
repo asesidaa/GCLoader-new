@@ -14,7 +14,7 @@ void ReportUnknownTaskCapacity(void*) noexcept;
 enum class GameplayFeedbackDrawScope : std::uint8_t
 {
     none,
-    bar, counter, direct_effect, effect_packet,
+    bar, counter, direct_effect, effect_packet, stage_title, stage_players, timed_text,
 };
 
 

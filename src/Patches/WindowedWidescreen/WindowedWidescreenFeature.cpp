@@ -112,6 +112,7 @@ std::unique_ptr<WindowedWidescreenRuntime> g_runtime_owner;
             << runtime.resolution.output_size().height
             << " native_rect=" << rect.left << ',' << rect.top << ',' << rect.right << ',' << rect.bottom
             << " hud_placement=" << GameplayHudPlacementName(runtime.settings.gameplay_hud_placement())
-            << " authored_stage_clip=bypassed placement_scope=selected_draws hooks=83 global_vtable_slots=2";
+            << " authored_stage_clip=bypassed placement_scope=selected_draws hooks="
+            << runtime.abi.hook_count << " global_vtable_slots=2";
     }
 } // namespace gc::windowed_widescreen

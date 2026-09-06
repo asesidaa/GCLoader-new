@@ -20,6 +20,7 @@ namespace gc::windowed_widescreen
         bool (*capture_hud_draw_state)(void*) noexcept{};
         bool (*restore_hud_draw_state)(void*) noexcept{};
         bool (*flush_hud_draw_batches)(void*) noexcept{};
+        bool (*set_native_hud_projection)(void*) noexcept{};
         bool (*draw_scene_center_to_native)(void*) noexcept{};
         bool (*draw_native_to_scene_center)(void*) noexcept{};
         bool (*draw_scene_to_backbuffer)(void*) noexcept{};
@@ -93,7 +94,8 @@ namespace gc::windowed_widescreen
         EndPhysicalGameplayHudOverlay() noexcept;
 
         [[nodiscard]] std::expected<void, CompositorError>
-        BeginGameplayHudDraw(GameplayHudPlacement placement) noexcept;
+        BeginGameplayHudDraw(GameplayHudPlacement placement,
+            bool native_projection = false) noexcept;
 
         [[nodiscard]] std::expected<void, CompositorError>
         EndGameplayHudDraw() noexcept;
@@ -117,7 +119,10 @@ namespace gc::windowed_widescreen
         [[nodiscard]] std::expected<RenderDimensions, RenderSpaceError>
         CurrentDimensions() const noexcept
         {
-            return render_space_policy_.CurrentDimensions();
+            const auto dimensions = render_space_policy_.CurrentDimensions();
+            if (!dimensions || !native_hud_projection_active_) return dimensions;
+            return SelectRenderDimensions(
+                RenderSpace::gameplay_hud, render_space_policy_.output_size());
         }
 
         [[nodiscard]] bool frame_active() const noexcept
@@ -166,6 +171,7 @@ namespace gc::windowed_widescreen
             GameplayHudPlacement::center};
         bool physical_gameplay_hud_overlay_active_{};
         bool gameplay_hud_draw_active_{};
+        bool native_hud_projection_active_{};
         GameplayHudPlacement enclosing_hud_placement_{GameplayHudPlacement::center};
     };
 } // namespace gc::windowed_widescreen

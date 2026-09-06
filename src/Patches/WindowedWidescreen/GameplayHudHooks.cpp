@@ -195,7 +195,15 @@ void GameplayEffectsMid(safetyhook::Context& context) noexcept
                 gameplay_hud_placement,
             });
     }
-    RequestGameplayPass(GameplayPass::orthographic_effects);
+    // The current target's mixed pass also owns stage fades and rectangle lines.
+    // Its native projection and output dimensions remain the default.
+    if (runtime->abi.selected_hud_draws_only) {
+        if (!RequestRuntimeSpace(runtime, RenderSpace::physical_3d))
+            PublishRenderRuntimeFatal(*runtime, {
+                .stage = WindowedWidescreenOperationStage::render_transition});
+    } else {
+        RequestGameplayPass(GameplayPass::orthographic_effects);
+    }
 }
 
 
@@ -218,7 +226,8 @@ void BeginSelectedDraw(WindowedWidescreenRuntime& runtime,
 {
     if (runtime.gameplay_feedback_draw_scope != GameplayFeedbackDrawScope::none)
         PlacementFailure(runtime);
-    const auto result = runtime.compositor.BeginGameplayHudDraw(placement);
+    const auto result = runtime.compositor.BeginGameplayHudDraw(
+        placement, runtime.abi.selected_hud_draws_only);
     if (!result) {
         runtime.last_compositor_error = result.error();
         PlacementFailure(runtime);
@@ -421,6 +430,54 @@ void TestModeNativeEndMid(safetyhook::Context&) noexcept
     }
 }
 
+void StageTitleDrawBeginMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    BeginSelectedDraw(*runtime, GameplayHudPlacement::center,
+        GameplayFeedbackDrawScope::stage_title);
+}
+
+void StageTitleDrawEndMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::stage_title);
+}
+
+void StagePlayersDrawBeginMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    BeginSelectedDraw(*runtime, GameplayHudPlacement::center,
+        GameplayFeedbackDrawScope::stage_players);
+}
+
+void StagePlayersDrawEndMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::stage_players);
+}
+
+void TimedTextDrawBeginMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    BeginSelectedDraw(*runtime, GameplayHudPlacement::center,
+        GameplayFeedbackDrawScope::timed_text);
+}
+
+void TimedTextDrawEndMid(safetyhook::Context&) noexcept
+{
+    auto* runtime = GameplayRuntime();
+    if (!runtime) return;
+    // 64A2FD also receives the native branch that skips timed text.
+    if (runtime->gameplay_feedback_draw_scope == GameplayFeedbackDrawScope::none) return;
+    EndSelectedDraw(*runtime, GameplayFeedbackDrawScope::timed_text);
+}
+
+// Retained for 2.06 until the projection-consumer correction is accepted and ported.
 [[nodiscard]] bool TryApplyNativeHudOrthographicArguments(
     const std::uint32_t stack_pointer) noexcept
 {

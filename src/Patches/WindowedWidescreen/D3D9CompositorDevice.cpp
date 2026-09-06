@@ -348,6 +348,7 @@ namespace gc::windowed_widescreen
 
     void D3D9CompositorDevice::Release() noexcept
     {
+        hud_draw_projection_changed_ = false;
         hud_draw_state_captured_ = false;
         game_state_captured_ = false;
         bound_target_ = BoundTarget::none;
@@ -387,6 +388,7 @@ namespace gc::windowed_widescreen
             .capture_hud_draw_state = &CaptureHudDrawStateAction,
             .restore_hud_draw_state = &RestoreHudDrawStateAction,
             .flush_hud_draw_batches = &FlushHudDrawBatches,
+            .set_native_hud_projection = &SetNativeHudProjection,
             .draw_scene_center_to_native = &DrawSceneCenterToNative,
             .draw_native_to_scene_center = &DrawNativeToSceneCenter,
             .draw_scene_to_backbuffer = &DrawSceneToBackbuffer,
@@ -696,15 +698,18 @@ namespace gc::windowed_widescreen
     bool D3D9CompositorDevice::RestoreHudDrawState() noexcept
     {
         if (!active_ || !device_ || !hud_draw_state_captured_) return false;
-        // Restore only state changed by placement. Native texture/matrix/blend
+        // Restore only state changed by this scope. Native world/texture/blend
         // changes inside the selected draw retain their normal lifetime.
+        const bool projection_restored = !hud_draw_projection_changed_ ||
+            SUCCEEDED(device_->SetTransform(D3DTS_PROJECTION, &hud_draw_projection_));
         const bool restored = SUCCEEDED(device_->SetViewport(&hud_draw_viewport_)) &&
             SUCCEEDED(device_->SetScissorRect(&hud_draw_scissor_)) &&
             SUCCEEDED(device_->SetRenderState(D3DRS_ZENABLE, hud_draw_depth_)) &&
             SUCCEEDED(device_->SetRenderState(D3DRS_ZWRITEENABLE, hud_draw_depth_write_)) &&
             SUCCEEDED(device_->SetRenderState(D3DRS_STENCILENABLE, hud_draw_stencil_));
         hud_draw_state_captured_ = false;
-        return restored;
+        hud_draw_projection_changed_ = false;
+        return projection_restored && restored;
     }
 
     bool D3D9CompositorDevice::CaptureHudDrawStateAction(void* context) noexcept
@@ -715,6 +720,25 @@ namespace gc::windowed_widescreen
     bool D3D9CompositorDevice::RestoreHudDrawStateAction(void* context) noexcept
     {
         return context && static_cast<D3D9CompositorDevice*>(context)->RestoreHudDrawState();
+    }
+
+    bool D3D9CompositorDevice::SetNativeHudProjection(void* context) noexcept
+    {
+        auto* owner = static_cast<D3D9CompositorDevice*>(context);
+        if (!owner || !owner->active_ || !owner->device_ ||
+            owner->bound_target_ != BoundTarget::wide_scene ||
+            !owner->hud_draw_state_captured_ || owner->hud_draw_projection_changed_)
+            return false;
+        if (FAILED(owner->device_->GetTransform(
+                D3DTS_PROJECTION, &owner->hud_draw_projection_))) return false;
+        owner->hud_draw_projection_changed_ = true;
+        const auto output = owner->resolution_.output_size();
+        auto projection = owner->hud_draw_projection_;
+        // Selected UI draws inherit the output-sized CTune orthographic matrix.
+        // Preserve its axis signs, origin and depth terms; never change CTune.
+        projection._11 *= static_cast<float>(output.width) / kNativeWidth;
+        projection._22 *= static_cast<float>(output.height) / kNativeHeight;
+        return SUCCEEDED(owner->device_->SetTransform(D3DTS_PROJECTION, &projection));
     }
 
     bool D3D9CompositorDevice::SetGameplayHudViewport(

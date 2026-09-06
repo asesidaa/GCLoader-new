@@ -1,5 +1,6 @@
 #pragma once
 #include "Patches/WindowedWidescreen/WindowedWidescreenAbi.h"
+#include <span>
 namespace gc::windowed_widescreen {
 // Native carriers and exact CTune effect ownership for selected feedback.
 using NativeBatchCounts = std::array<std::uint32_t, 4>;
@@ -40,14 +41,16 @@ struct WidescreenPointerContract final {
 struct WindowedWidescreenProfile final {
     game_version::GameBuild build;
     game_version::GameImageVariant variant;
-    std::array<WidescreenByteContract, 86> byte_contracts;
+    std::span<const WidescreenByteContract> byte_contracts;
     std::array<WidescreenPointerContract, 9> pointer_contracts;
-    std::array<WidescreenFunctionAbi, 83> function_abis;
-    std::array<WidescreenContractSite, 83> hook_order;
+    std::span<const WidescreenFunctionAbi> function_abis;
+    std::span<const WidescreenContractSite> hook_order;
     WidescreenNativeLayout layout;
+    // Versioned policy; 2.06 retains its existing mixed-pass behavior until ported.
+    bool selected_hud_draws_only{};
 };
 struct PreparedWidescreenPlan final {
-    std::array<game_version::VersionedOperation, 95> operations;
+    std::array<game_version::VersionedOperation, 100> operations;
     std::size_t count{};
     [[nodiscard]] game_version::FeaturePlan feature_plan() const noexcept {
         return {game_version::FeatureId::windowed_widescreen,

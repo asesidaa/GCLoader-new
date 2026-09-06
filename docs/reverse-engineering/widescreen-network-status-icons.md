@@ -337,6 +337,55 @@ matrix is never changed, non-gameplay instances never enter the scope, and an
 unreadable or non-writable visitor matrix fails open. The temporary pipeline,
 definition, and boundary diagnostics are not retained in the corrective image.
 
+### 2026-09-06 physical-pass texture-state regression
+
+After narrowing the current 4.74 mixed pass to physical output dimensions,
+the operator reported that the stage effects looked correct but the ONLINE
+graphic became a solid white block during gameplay. Menus remained correct.
+The 17:17:33 log reached `imc_ico_l` then `imc_ico_n` in the same frame 10605,
+both in space 0, using `physical-local-matrix` and `physical-base-overlay`.
+The deployed DLL matched the narrowed build
+`51E7DBB0968A4B391F389B0C6CA2DA0D6F14CCC08D85AB1C1220B6C3CFB7F15B`.
+
+Direct IDA analysis establishes the state-lifetime defect in that wrapper:
+
+- `ShapeInstance::Accept` reaches visitor `4CCC20`, then shape-definition
+  `Accept` at `4D56A0`, then shape drawing at `4CC880`.
+- The visitor uses `GWDrawFunc` (primary table `6BEC84`). Mesh drawing at
+  `4E4C10`, and the immediate vertex path `4E6800`, call `4E44E0(0)` to commit
+  material state before their D3D draw. This is not a forced state rebind.
+- `4E3CA0` compares desired texture at renderer `+264` with remembered bound
+  texture at `+288`; it skips binding when they match. It similarly caches
+  the texture transform at `+468/+464`. `4E3240` caches streams/indices,
+  `4E2D50` caches color/blend/sampler state, and `4E44E0` selects the effect
+  pass only when its tracked inputs change.
+- `BeginPhysicalGameplayHudOverlay` captures a full D3D state block before a
+  child, and its end restores that snapshot after the child. This undoes
+  native bindings while leaving the native renderer's caches at their new
+  values. The next child may therefore skip a binding that the wrapper undid.
+  The log establishes the sibling order; it does not record which particular
+  texture or shader binding produced the observed white pixels.
+- General queue flush `5C9B10` calls `5C8FA0` only for nonempty queues. Empty
+  flushes do not explain this issue. Nonempty flushes change streams and vertex
+  pipeline state, so the existing pipeline-preserving flush remains required.
+
+For the current profile only (`selected_hud_draws_only`), the exact named
+clips now use `BeginGameplayHudDraw(placement, false)` and its matching end.
+This preserves native Flash projection and texture/material lifetimes while
+temporarily applying the configured viewport, scissor and depth state. It
+restores the actual incoming placement state after submission, with no render
+target rebind or full-state rollback across the child. The existing local-LAN
+matrix compensation and scoped dimension queries remain unchanged. Nested
+selected draws are rejected before beginning another scope.
+
+The 2.06 branch retains its previous wrapper. No hook or protected-byte
+contract was added. Existing capped correction messages now identify the
+current branch as `physical-viewport-local-matrix` and `physical-viewport`;
+no per-frame tracing or environment switch was added. Debug and Release preset
+builds and CLion error inspection passed. The operator subsequently reported
+that the 4.74 issues appeared fixed and authorized committing the correction
+before the 2.06 port.
+
 ## Acceptance boundary
 
 Compilation and guarded-site installation can establish only that the patch is

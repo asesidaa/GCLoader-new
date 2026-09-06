@@ -153,6 +153,7 @@ namespace gc::windowed_widescreen
         static bool CaptureHudDrawStateAction(void* context) noexcept;
         static bool RestoreHudDrawStateAction(void* context) noexcept;
         static bool FlushHudDrawBatches(void* context) noexcept;
+        static bool SetNativeHudProjection(void* context) noexcept;
         static bool DrawSceneCenterToNative(void* context) noexcept;
         static bool DrawNativeToSceneCenter(void* context) noexcept;
         static bool DrawSceneToBackbuffer(void* context) noexcept;
@@ -178,6 +179,8 @@ namespace gc::windowed_widescreen
         bool active_{};
         bool game_state_captured_{};
         bool hud_draw_state_captured_{};
+        bool hud_draw_projection_changed_{};
+        D3DMATRIX hud_draw_projection_{};
         D3DVIEWPORT9 hud_draw_viewport_{};
         RECT hud_draw_scissor_{};
         DWORD hud_draw_depth_{}, hud_draw_depth_write_{}, hud_draw_stencil_{};

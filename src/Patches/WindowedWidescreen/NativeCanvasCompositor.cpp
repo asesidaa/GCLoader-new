@@ -383,13 +383,15 @@ namespace gc::windowed_widescreen
 
     std::expected<void, CompositorError>
     NativeCanvasCompositor::BeginGameplayHudDraw(
-        const GameplayHudPlacement placement) noexcept
+        const GameplayHudPlacement placement, const bool native_projection) noexcept
     {
         const auto current = render_space_policy_.CurrentSpace();
         if (!current) return PolicyFailure(current.error(), RenderSpace::gameplay_hud);
         if ((*current != RenderSpace::physical_3d && *current != RenderSpace::gameplay_hud) ||
-            gameplay_hud_draw_active_ || physical_gameplay_hud_overlay_active_ ||
+            gameplay_hud_draw_active_ ||
+            physical_gameplay_hud_overlay_active_ ||
             !actions_.capture_hud_draw_state || !actions_.restore_hud_draw_state ||
+            (native_projection && !actions_.set_native_hud_projection) ||
             !actions_.flush_hud_draw_batches)
             return std::unexpected(CompositorError{
                 .stage = CompositorStage::invalid_destination,
@@ -400,11 +402,14 @@ namespace gc::windowed_widescreen
             return FailAction(CompositorStage::pending_native_batches, *current, *current, false);
         if (!actions_.capture_hud_draw_state(actions_.context))
             return FailAction(CompositorStage::capture_game_state, *current, *current, false);
+        if (native_projection && !actions_.set_native_hud_projection(actions_.context))
+            return FailAction(CompositorStage::set_viewport_and_scissor, *current, *current, false);
         if (!actions_.set_gameplay_hud_viewport(actions_.context, placement))
             return FailAction(CompositorStage::set_gameplay_hud_viewport, *current, *current, false);
         enclosing_hud_placement_ = gameplay_hud_placement_;
         gameplay_hud_placement_ = placement;
         gameplay_hud_draw_active_ = true;
+        native_hud_projection_active_ = native_projection;
         return {};
     }
 
@@ -425,6 +430,7 @@ namespace gc::windowed_widescreen
             return FailAction(CompositorStage::restore_game_state, *current, *current, false);
         gameplay_hud_placement_ = enclosing_hud_placement_;
         gameplay_hud_draw_active_ = false;
+        native_hud_projection_active_ = false;
         return {};
     }
 
@@ -691,6 +697,7 @@ namespace gc::windowed_widescreen
 
     void NativeCanvasCompositor::ResetForDeviceLoss() noexcept
     {
+        native_hud_projection_active_ = false;
         gameplay_hud_draw_active_ = false;
         enclosing_hud_placement_ = base_gameplay_hud_placement_;
         render_space_policy_.ResetForDeviceLoss();
