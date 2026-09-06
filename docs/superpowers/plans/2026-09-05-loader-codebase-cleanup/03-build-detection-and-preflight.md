@@ -19,8 +19,8 @@
   to prove identity. Unknown hashes must validate every mandatory and enabled
   site before any operation is approved.
 - A known descriptor may represent an explicitly supported patched image.
-  Arbitrary hybrid or partially patched unknown images are rejected. Patched
-  site state is accepted only through an exact known patched-image descriptor.
+  As corrected on 2026-09-06, unknown images may contain a mixture of complete
+  original and installed byte-patch sites. Unrecognized required bytes fail.
 - Do not add an older-build RVA or ABI without direct current binary/IDA
   evidence. This plan creates the extension shape; it does not guess a 2.06
   profile.
@@ -314,11 +314,11 @@ This validation runs for known and unknown hashes.
 
 For `exact_known_hash`, use the feature profile's variant-specific site
 disposition and perform no contract `Read`. For `complete_local_contract`,
-read every site first and require the exact original contract for every
-operation that will mutate or hook the image; read-only contracts require
-their one exact expected state. An installed or mixed state on this path is a
-mismatch, even when its bytes equal a known replacement. Return no approved
-plan if any site fails. No operation installs while validation is running.
+read every site before approval. Byte patches matching the complete original
+contract are `install`; those matching the complete installed contract are
+`already_installed`. Classify each site independently. Hooks, global vtable
+slots, and read-only contracts require their exact original state. Return no
+approved plan if any site fails. No operation installs during validation.
 
 - [ ] **Step 4: Preserve all mismatch detail**
 
@@ -340,9 +340,9 @@ applicable, and underlying RuntimeImage error. Formatting lives in
 - [ ] **Step 1: Select candidates without mutation**
 
 For an unknown digest, filter the compiled build-descriptor array by i386
-machine, file size, preferred base, mapped image size, and other stable PE
-facts actually verified for that build. Return a typed error unless exactly
-one candidate remains.
+machine, preferred base, mapped image size, and timestamp. File size remains
+part of exact known identity only; unrelated data/overlay edits may change it.
+Return a typed error unless exactly one candidate remains.
 
 - [ ] **Step 2: Defer final acceptance to the complete plan**
 

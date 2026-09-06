@@ -18,8 +18,9 @@ auto Detect(HMODULE module, std::span<const KnownImageDescriptor<Build, Variant>
     }
     std::optional<Build> candidate;
     for (const auto& descriptor : known) {
+        // File length is part of exact identity, not the loaded-image contract:
+        // unrelated data or overlay edits may change it without moving any site.
         if (descriptor.machine != identity->machine ||
-            descriptor.file_size != identity->file_size ||
             descriptor.preferred_image_base != identity->preferred_image_base ||
             descriptor.size_of_image != identity->size_of_image ||
             descriptor.time_date_stamp != identity->time_date_stamp)

@@ -27,6 +27,20 @@ branch. Only the four compatibility sites differ between these coherent
 variants. Unknown hashes must match every contributed original contract;
 there is no local installed/mixed-byte classification in these feature profiles.
 
+Correction, 2026-09-06: the original-only fallback above caused an unrelated
+last-byte edit to a patched executable to fail at `native_mouse_events`, even
+though observed `90 90` equaled the declared installed form. `VersionedPlanSet`
+now classifies complete original/installed forms independently for byte patches
+and skips installed sites during execution. All required sites still pass the
+global barrier; hooks, pointer slots, and read-only contracts retain original
+checks. `BuildDetector` also permits changed on-disk file length on the fallback
+path while retaining the existing PE identity checks. Unrelated strings/data
+outside required contracts need no hash entry. This is a verifier correction;
+no native RVAs, byte patterns, ABIs, or IDB evidence changed. Both full Debug
+and Release builds passed. The user confirmed the reported issue was fixed
+on 2026-09-06; additional modified-executable variants were not independently
+run by the agent.
+
 The approved plan now owns each concrete operation and its resolved address.
 Byte replacements, original publisher slots, hook callbacks, pointer-slot
 values, memory kinds, dependency order and overlap checks are validated before

@@ -242,17 +242,24 @@ std::expected<ApprovedVersionedPlan, PlanError> VersionedPlanSet::ValidateContex
             }
         }
         if (context.proof == DetectionProof::complete_local_contract) {
-            for (const auto& site : sites) {
+            for (auto& site : sites) {
+                const auto& contract = site.contract();
                 const auto actual = image.Read(
-                    {FeatureName(site.contract().feature), site.contract().site, site.contract().rva},
-                    site.contract().original.size);
-                if (!actual || *actual != site.contract().original) {
-                    auto error = Error(PlanStage::contract_mismatch, context, site.contract());
-                    error.address = site.address;
-                    error.observed = actual ? *actual : actual.error().observed;
-                    if (!actual) error.memory = actual.error();
-                    return std::unexpected(error);
+                    {FeatureName(contract.feature), contract.site, contract.rva}, contract.original.size);
+                if (actual) {
+                    if (*actual == contract.original) continue;
+                    // Byte patches have a complete, feature-owned installed form.
+                    // Hooks and pointer slots still require their original contract.
+                    if (contract.kind == VersionedOperationKind::byte_patch && *actual == contract.installed) {
+                        site.disposition = SiteDisposition::already_installed;
+                        continue;
+                    }
                 }
+                auto error = Error(PlanStage::contract_mismatch, context, contract);
+                error.address = site.address;
+                error.observed = actual ? *actual : actual.error().observed;
+                if (!actual) error.memory = actual.error();
+                return std::unexpected(error);
             }
         }
         // Matching vtable consumers share the first physical exchange. Keep

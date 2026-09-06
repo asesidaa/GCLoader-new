@@ -22,8 +22,8 @@ constexpr auto Operations(SiteDisposition disposition, const std::array<Rva, 4>&
             PatternOf<0x31>(), PatternOf<0x32>(), 3, disposition}, PatternOf<0x32>(), runtime_image::MemoryKind::data},
     };
 }
-// Whole-image identity selects the coherent disposition; unknown images use
-// only original contracts. COM1/COM2 is data, not an instruction write.
+// Known image variants supply dispositions directly; unknown images classify
+// each site's original/installed bytes in preflight. COM1/COM2 is data.
 constexpr std::array<Rva, 4> kRvas471{0x000B0896, 0x00102C7B, 0x00103EE6, 0x002F7AC3};
 constexpr std::array<Rva, 4> kRvas206{0x000A3FF6, 0x000F7E9B, 0x000F90F6, 0x002B68C7};
 constexpr auto kOriginal = Operations(SiteDisposition::install, kRvas471);

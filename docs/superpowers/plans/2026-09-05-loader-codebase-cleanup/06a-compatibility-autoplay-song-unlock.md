@@ -15,8 +15,8 @@
 - Complete Plans 01 through 05 first.
 - Use `H:\gc\game471.exe.i64` to revalidate every RVA, byte prefix,
   instruction, ABI, and control-flow assumption before editing a manifest.
-- The two known 4.71 variants are coherent whole-image profiles. Do not accept
-  arbitrary partial GameCompatibility state on an unknown hash.
+- The two known 4.71 variants are coherent whole-image profiles. As corrected
+  on 2026-09-06, unknown hashes classify each complete byte-patch site locally.
 - Disabled AutoPlay or SongUnlock contributes no sites and no hook.
 - Complete-plan preflight precedes the first byte write or hook installation.
   Installation failure aborts; no reverse rollback exists.
@@ -130,8 +130,8 @@ actual contract before implementation.
 
 `ProfileFor(groove_coaster_471, clean)` marks all four `install`.
 `ProfileFor(groove_coaster_471, legacy_patched)` marks all four
-`already_installed`. `locally_verified` carries original contracts and lets the
-validator approve all four only when all are original.
+`already_installed`. `locally_verified` carries both byte forms and lets the
+validator derive `install` or `already_installed` independently at each site.
 
 - [ ] **Step 3: Remove eager installation**
 

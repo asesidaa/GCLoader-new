@@ -76,8 +76,8 @@ implementations.
 - SafetyHook v0.7.0 becomes the only third-party hooking dependency.
 - Hook and patch installation is fail-fast: detailed log, one popup, abort.
 - There is no reverse rollback, feature rollback, or global atomic activation.
-- Arbitrary partially patched executables are not a supported compatibility
-  contract. Explicit known patched-image hashes can be supported.
+- Unknown-hash byte patches may independently match their complete original
+  or installed forms. Unrecognized bytes at required sites are rejected.
 - Runtime handler state is complete before the corresponding hook is enabled.
 - No exception crosses DLL entry points, iDmac exports, hooks, COM calls, or
   audio callbacks.
@@ -106,7 +106,7 @@ implementations.
 - Adding or changing gameplay behavior.
 - Inventing RVAs or ABI facts for an older game version.
 - Making unsupported features silently disappear on an older build.
-- Accepting arbitrary hybrid or partially patched executables.
+- Accepting unrecognized modifications to required native contracts.
 - Adding a generic dependency-injection framework.
 - Adding a generic hook-backend interface.
 - Turning all patches and hooks into an untyped descriptor language.
@@ -222,6 +222,17 @@ the same file identity again.
 
 For unknown hashes, structural detection never mutates memory. Every mandatory
 and enabled site is locally verified before the candidate is accepted.
+
+Updated 2026-09-06: unrelated string/data edits do not require a new known
+hash. Candidate selection retains the machine, preferred image base, mapped
+image size, and timestamp checks; on-disk file length is only an exact-identity
+check, so unrelated overlay changes can also reach local verification.
+Each byte-patch site accepts its complete original form (`install`) or its
+complete installed form (`already_installed`). Different sites may have
+different states. Hooks, global vtable slots, and read-only contracts still
+require their original form. A failed read or any other required byte pattern
+rejects the entire plan before installation. This replaces the earlier
+original-only fallback rule in cleanup Plans 02, 03, and 06a.
 
 ## Feature-Owned Version Profiles
 
